@@ -9,66 +9,66 @@ logger = logging.getLogger("buffer_tracks")
 
 
 class TrackerInfoUpdateNode:
-    """Модуль обновления актуальных треков"""
+    """活动跟踪更新模块"""
 
     def __init__(self, config: dict) -> None:
         config_general = config["general"]
 
         self.size_buffer_analytics = (
             config_general["buffer_analytics"] * 60
-        )  # число секунд в буфере аналитики
-        # добавим мин времени жизни чтобы при расчете статистики были именно
-        # машины за последие buffer_analytics минут:
+        )  # 分析缓冲区中的秒数
+        # 添加最小生存时间，以便在计算统计信息时使用的是
+        # 最近buffer_analytics分钟内的车辆：
         self.size_buffer_analytics += config_general["min_time_life_track"]
-        self.buffer_tracks = {}  # Буфер актуальных треков
+        self.buffer_tracks = {}  # 活动跟踪缓冲区
 
     @profile_time 
     def process(self, frame_element: FrameElement) -> FrameElement:
-        # Выйти из обработки если это пришел VideoEndBreakElement а не FrameElement
+        # 如果输入是VideoEndBreakElement而不是FrameElement，则退出处理
         if isinstance(frame_element, VideoEndBreakElement):
             return frame_element
         assert isinstance(
             frame_element, FrameElement
-        ), f"TrackerInfoUpdateNode | Неправильный формат входного элемента {type(frame_element)}"
+        ), f"TrackerInfoUpdateNode | 输入元素格式错误 {type(frame_element)}"
 
         id_list = frame_element.id_list
 
         for i, id in enumerate(id_list):
-            # Обновление или создание нового трека
+            # 更新或创建新跟踪
             if id not in self.buffer_tracks:
-                # Создаем новый ключ
+                # 创建新键
                 self.buffer_tracks[id] = TrackElement(
                     id=id,
                     timestamp_first=frame_element.timestamp,
                 )
             else:
-                # Обновление времени последнего обнаружения
+                # 更新最后检测时间
                 self.buffer_tracks[id].update(frame_element.timestamp)
 
-            # Поиск первого пересечения с полигонами дорог
+            # 寻找与道路多边形的第一次交集
             if self.buffer_tracks[id].start_road is None:
                 self.buffer_tracks[id].start_road = intersects_central_point(
                     tracked_xyxy=frame_element.tracked_xyxy[i],
                     polygons=frame_element.roads_info,
                 )
-                # Проверка того, что отработка функции дала наконец-то актуальный номер дороги:
+                # 检查函数是否最终提供了实际的道路编号：
                 if self.buffer_tracks[id].start_road is not None:
-                    # Тогда сохраняем время такого момента:
+                    # 然后保存该时刻：
                     self.buffer_tracks[id].timestamp_init_road = frame_element.timestamp
 
-        # Удаление старых айдишников из словаря если их время жизни > size_buffer_analytics
+        # 如果id的生存时间> size_buffer_analytics，则从字典中删除旧id
         keys_to_remove = []
-        for key, track_element in sorted(self.buffer_tracks.items()):  # Сортируем элементы по ключу
+        for key, track_element in sorted(self.buffer_tracks.items()):  # 按键对元素进行排序
             if frame_element.timestamp - track_element.timestamp_first < self.size_buffer_analytics:
-                break  # Прерываем цикл, если значение time_delta больше check
+                break  # 如果time_delta大于check，则中断循环
             else:
-                keys_to_remove.append(key)  # Добавляем ключ для удаления
+                keys_to_remove.append(key)  # 添加要删除的键
 
         for key in keys_to_remove:
-            self.buffer_tracks.pop(key)  # Удаляем элемент из словаря
+            self.buffer_tracks.pop(key)  # 从字典中删除元素
             logger.info(f"Removed tracker with key {key}")
 
-        # Запись результатов обработки:
+        # 记录处理结果：
         frame_element.buffer_tracks = self.buffer_tracks
 
         return frame_element

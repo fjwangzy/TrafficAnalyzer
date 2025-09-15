@@ -9,11 +9,11 @@ from byte_tracker.byte_tracker_model import BYTETracker as ByteTracker
 
 
 class DetectionTrackingNodes:
-    """Модуль инференса модели детекции + трекинг алгоритма"""
+    """检测模型推理+跟踪算法模块"""
 
     def __init__(self, config) -> None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        print(f'Детекция будет производиться на {device}')
+        print(f'检测将在 {device} 上进行')
 
         config_yolo = config["detection_node"]
         self.model = YOLO(config_yolo["weight_pth"], task='detect')
@@ -25,24 +25,24 @@ class DetectionTrackingNodes:
 
         config_bytetrack= config["tracking_node"]
 
-        # ByteTrack param
+        # ByteTrack 参数
         first_track_thresh = config_bytetrack["first_track_thresh"]
         second_track_thresh = config_bytetrack["second_track_thresh"]
         match_thresh = config_bytetrack["match_thresh"]
         track_buffer = config_bytetrack["track_buffer"]
-        fps = 30  # ставим равным 30 чтобы track_buffer мерился в кадрах
+        fps = 30  # 设置为30，以便track_buffer以帧为单位
         self.tracker = ByteTracker(
             fps, first_track_thresh, second_track_thresh, match_thresh, track_buffer, 1
         )
 
     @profile_time
     def process(self, frame_element: FrameElement) -> FrameElement:
-        # Выйти из обработки если это пришел VideoEndBreakElement а не FrameElement
+        # 如果输入是VideoEndBreakElement而不是FrameElement，则退出处理
         if isinstance(frame_element, VideoEndBreakElement):
             return frame_element
         assert isinstance(
             frame_element, FrameElement
-        ), f"DetectionTrackingNodes | Неправильный формат входного элемента {type(frame_element)}"
+        ), f"DetectionTrackingNodes | 输入元素格式错误 {type(frame_element)}"
 
         frame = frame_element.frame.copy()
 
@@ -54,42 +54,42 @@ class DetectionTrackingNodes:
         frame_element.detected_cls = [self.classes[i] for i in detected_cls]
         frame_element.detected_xyxy = outputs[0].boxes.xyxy.cpu().int().tolist()
 
-        # Преподготовка данных на подачу в трекер
+        # 准备输入到跟踪器的数据
         detections_list = self._get_results_dor_tracker(outputs)
 
-        # Если детекций нет, то оправляем пустой массив
+        # 如果没有检测结果，则发送空数组
         if len(detections_list) == 0:
             detections_list = np.empty((0, 6))
 
         track_list = self.tracker.update(torch.tensor(detections_list), xyxy=True)
 
-        # Получение id list
+        # 获取id列表
         frame_element.id_list = [int(t.track_id) for t in track_list]
 
-        # Получение box list
+        # 获取box列表
         frame_element.tracked_xyxy = [list(t.tlbr.astype(int)) for t in track_list]
 
-        # Получение object class names
+        # 获取物体类名称
         frame_element.tracked_cls = [self.classes[int(t.class_name)] for t in track_list]
 
-        # Получение conf scores
+        # 获取置信度分数
         frame_element.tracked_conf = [t.score for t in track_list]
 
         return frame_element
 
     def _get_results_dor_tracker(self, results) -> np.ndarray:
-        # Приведение данных в правильную форму для трекера
+        # 将数据转换为跟踪器所需的正确格式
         detections_list = []
         for result in results[0]:
             class_id = result.boxes.cls.cpu().numpy().astype(int)
-            # трекаем те же классы что и детектируем
+            # 跟踪与检测相同的类
             if class_id[0] in self.classes_to_detect:
 
                 bbox = result.boxes.xyxy.cpu().numpy()
                 confidence = result.boxes.conf.cpu().numpy()
 
                 class_id_value = (
-                    2  # Будем все трекуемые объекты считать классом car чтобы не было ошибок
+                    2  # 我们将所有可跟踪对象视为car类以避免错误
                 )
 
                 merged_detection = [

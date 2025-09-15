@@ -7,28 +7,28 @@ from utils_local.utils import profile_time
 
 
 class CalcStatisticsNode:
-    """Модуль для расчета загруженности дорог (вычисление статистик)"""
+    """道路拥堵程度计算模块（统计计算）"""
 
     def __init__(self, config: dict) -> None:
         config_general = config["general"]
 
         self.time_buffer_analytics = config_general[
             "buffer_analytics"
-        ]  # размер времени буфера в минутах
+        ]  # 分析缓冲区的时间大小（分钟）
         self.min_time_life_track = config_general[
             "min_time_life_track"
-        ]  # минимальное время жизни трека в сек
+        ]  # 跟踪的最小生存时间（秒）
         self.count_cars_buffer_frames = config_general["count_cars_buffer_frames"]
-        self.cars_buffer = deque(maxlen=self.count_cars_buffer_frames)  # создали буфер значений
+        self.cars_buffer = deque(maxlen=self.count_cars_buffer_frames)  # 创建值缓冲区
 
     @profile_time 
     def process(self, frame_element: FrameElement) -> FrameElement:
-        # Выйти из обработки если это пришел VideoEndBreakElement а не FrameElement
+        # 如果输入是VideoEndBreakElement而不是FrameElement，则退出处理
         if isinstance(frame_element, VideoEndBreakElement):
             return frame_element
         assert isinstance(
             frame_element, FrameElement
-        ), f"CalcStatisticsNode | Неправильный формат входного элемента {type(frame_element)}"
+        ), f"CalcStatisticsNode | 输入元素格式错误 {type(frame_element)}"
 
         buffer_tracks = frame_element.buffer_tracks
         self.cars_buffer.append(len(frame_element.id_list))
@@ -41,9 +41,9 @@ class CalcStatisticsNode:
             3: 0,
             4: 0,
             5: 0,
-        }  # всего 5 дорог (занулим стартовое значение)
+        }  # 共5条道路（初始化为0）
 
-        # Посчитаем чило машин которые довно живут и имеют значения дороги приезда
+        # 计算已经存在较长时间且有来源道路值的车辆数量
         for _, track_element in buffer_tracks.items():
             if (
                 track_element.timestamp_last - track_element.timestamp_init_road
@@ -53,13 +53,13 @@ class CalcStatisticsNode:
                 key = track_element.start_road
                 roads_activity[key] += 1
 
-        # Переведем значения в размерность машин/мин согласно известному размеру буфера
+        # 根据已知的缓冲区大小将值转换为车辆/分钟
         for key in roads_activity:
             roads_activity[key] /= self.time_buffer_analytics
 
         info_dictionary['roads_activity'] = roads_activity
 
-        # Запись результатов обработки:
+        # 记录处理结果：
         frame_element.info = info_dictionary
 
         return frame_element

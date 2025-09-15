@@ -1,4 +1,3 @@
-```markdown
 # 环形交叉路口交通分析器
 **生产版本：支持多摄像头、InfluxDB时序数据库和Grafana仪表盘**
 
@@ -153,5 +152,3 @@ main
     └── multicamera
         ├── feature/triton
         └── feature/influx
-```
-```

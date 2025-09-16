@@ -1,6 +1,7 @@
-# Стриминг RTSP из mp4
+# 从mp4进行RTSP流传输
 
-Запустите mediamtx сервер:
+启动mediamtx服务器：
+
 ```
 cd test_videos/rtsp_streaming
 docker compose -p rtsp_server up -d --build

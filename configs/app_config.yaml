@@ -1,85 +1,79 @@
 # --------------------------------------------- HYDRA -----------------------------------------------------
-defaults:  
-  - _self_  
-  - override hydra/hydra_logging: disabled  
+defaults:
+  - _self_
+  - override hydra/hydra_logging: disabled
   - override hydra/job_logging: custom
 
 hydra:
   output_subdir: null
-  run:  
+  run:
     dir: .
 
 # ----------------------------------------------- PIPELINE -------------------------------------------------
 
 pipeline:
-  save_video : False  # Сохранение итогового видео обработки
-  show_in_web: True  # Отображение результатов обработки видеопотока в веб-интерфейсе (Flask) вместо cv2.imshow
-  send_info_kafka: True  # Отправлять ли инфо в кафку
+  save_video: False  # 保存处理后的最终视频
+  show_in_web: True  # 在Web界面（Flask）中显示视频流处理结果，而不是使用cv2.imshow
+  send_info_kafka: True  # 是否将信息发送到Kafka
 
 #--------------------------------------------------GENERAL--------------------------------------------------
 
 general:
-  colors_of_roads: # in bgr
+  colors_of_roads: # BGR 格式的颜色
     1: [102,204,255] #ffcc66
     2: [0,0,170] #aa0000
     3: [17,70,10] #0a3e11
     4: [120,56,126] #7e3878
     5: [30,105,215] #d2691e
-  buffer_analytics: 0.5  # Количество минут за которое производим расчет числа машин (скользящее окно расчета)
-  min_time_life_track: 3 # Минимальное количество секунд жизни трека чтобы учитывать его в статистике
-  count_cars_buffer_frames: 25 # Значение окна усреднеыния для расчета числа машин в текущем кадре (в frames)
+  buffer_analytics: 0.5  # 计算车辆数量所基于的时间窗口（分钟）（滑动计算窗口）
+  min_time_life_track: 3 # 轨迹被纳入统计所需的最小存活时间（秒）
+  count_cars_buffer_frames: 25 # 用于计算当前帧中车辆数量的平滑窗口大小（帧数）
 
 # ------------------------------------------------- NODES --------------------------------------------------
 
 video_reader:
-  src: ${oc.env:VIDEO_SRC} # путь до файла обработки или номер камеры (int) или ссылки на m3u8 / rtsp поток
-  skip_secs : 0  # считываем кадры раз в <skip_secs> секунд
-  roads_info: ${oc.env:ROADS_JSON} # json файл с координатами дорог на видео
-
+  src: ${oc.env:VIDEO_SRC} # 待处理文件的路径，或摄像头编号（int），或 m3u8 / rtsp 流链接
+  skip_secs: 0  # 每隔 <skip_secs> 秒读取一帧
+  roads_info: ${oc.env:ROADS_JSON} # 包含视频中道路坐标的 json 文件
 
 detection_node:
-  weight_pth: weights/yolov8m.pt  # Путь до модели .pt или .engine (TensorRT)
-  classes_to_detect: [2,3,5,7]  # весь транспорт из классов COCO
-  confidence: 0.10  # Порог уверенности детектора (чем больше значение, тем меньше находит)
-  iou: 0.7  # Порог NMS (чем больше значение, тем больше находит)
-  imgsz: 640  # Ресайз при инференсе (640 по умолчанию)
+  weight_pth: weights/yolov8m.pt  # 模型 .pt 或 .engine (TensorRT) 文件的路径
+  classes_to_detect: [2,3,5,7]  # 来自 COCO 数据集的全部交通工具类别
+  confidence: 0.10  # 检测器置信度阈值（值越大，检测到的目标越少）
+  iou: 0.7  # NMS 阈值（值越大，匹配到的目标越多）
+  imgsz: 640  # 推理时的图像缩放尺寸（默认为 640）
 
-
-tracking_node:  
-  # Использован ByteTrack (https://github.com/ifzhang/ByteTrack)
-  first_track_thresh: 0.5  # Пороговое значение для первичной инициализации трека
-  second_track_thresh: 0.10  # Пороговое значение для поддержания трека
-  match_thresh: 0.95  # Чем больше значение, тем больше может быть расстояние между соседними обнаруженими чтобы держать трек
-  track_buffer: 125  # Время жизни трека после исчезновения из поля зрения (измеряется в числе кадров)
-
+tracking_node:
+  # 使用 ByteTrack (https://github.com/ifzhang/ByteTrack)
+  first_track_thresh: 0.5  # 初始化新轨迹的阈值
+  second_track_thresh: 0.10  # 维持现有轨迹的阈值
+  match_thresh: 0.95  # 值越大，相邻帧中检测框的最大允许距离（用于维持轨迹）越大
+  track_buffer: 125  # 目标消失后轨迹保持存活的时间（以帧数为单位）
 
 show_node:
-  scale : 0.6  # Масштабирование итогового окна результатов при imshow=True
-  imshow: False  # Нужно ли выводить видео в процессе обработки
-  fps_counter_N_frames_stat : 15  # Окно усредения fsp счетчика
-  draw_fps_info : True  # Указывать ли fps обработки
-  show_roi: True  # Показывать ли регионы примыкающих дорог 
-  overlay_transparent_mask: False # Заливка регионов при show_roi=True (медленная операция)
-  show_only_yolo_detections : False  # Отображать лишь результаты детекции без учета трекинга и прочей логики кода
-  show_track_id_different_colors: False  # Отображать цвет бокса согласно id трека, а не логике прибытия объекта
-  show_info_statistics: False  # Вывод информации о статистике в отдельном окне справа от кадра
-
+  scale: 0.6  # 当 imshow=True 时，结果窗口的缩放比例
+  imshow: False  # 处理过程中是否需要显示视频窗口
+  fps_counter_N_frames_stat: 15  # FPS 计数器的平均窗口大小（帧数）
+  draw_fps_info: True  # 是否显示处理 FPS
+  show_roi: True  # 是否显示相邻道路的区域
+  overlay_transparent_mask: False # 当 show_roi=True 时是否填充区域（慢速操作）
+  show_only_yolo_detections: False  # 是否仅显示检测结果，而不显示跟踪和其他逻辑处理结果
+  show_track_id_different_colors: False  # 是否根据轨迹ID显示框颜色，而非根据对象来源逻辑
+  show_info_statistics: False  # 是否在画面右侧单独窗口中输出统计信息
 
 video_saver_node:
-  fps : 24  # при увеличении позволяет ускорить итоговое видео
-  out_folder : test_videos/videos_out  # в какую папку сохранить результат
+  fps: 24  # 增加此值可以加速最终输出视频
+  out_folder: test_videos/videos_out  # 结果输出文件夹
 
-
-kafka_producer_node: #// камера id
+kafka_producer_node: #// 摄像头 id
   bootstrap_servers: kafka:29092 #127.0.0.1:9092 #kafka:29092
   topic_name: ${oc.env:TOPIC_NAME}
-  how_often_sec: 1 # раз в сколько секунд отправлять результат
-  camera_id: ${oc.decode:${oc.env:CAMERA_ID}} 
+  how_often_sec: 1 # 每隔多少秒发送一次结果
+  camera_id: ${oc.decode:${oc.env:CAMERA_ID}}
 
-
-video_server_node: 
-  index_page: index.html  
-  host_ip: 0.0.0.0  # где именно поднять сервис (localhost или "0.0.0.0")
-  port: 8100  # На каком порту поднять
-  template_folder: ../utils_local/templates  # Путь до templates (там где html файл)
-  output_size : [800, 470]  # ресайз для отображения в flask
+video_server_node:
+  index_page: index.html
+  host_ip: 0.0.0.0  # 服务绑定的IP地址（localhost 或 "0.0.0.0"）
+  port: 8100  # 服务绑定的端口
+  template_folder: ../utils_local/templates  # 模板文件路径（存放 html 文件的地方）
+  output_size: [800, 470]  # 在flask中显示的图像缩放尺寸

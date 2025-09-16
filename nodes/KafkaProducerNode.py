@@ -23,11 +23,11 @@ class KafkaProducerNode:
 
         self.buffer_analytics_sec = (
             config["general"]["buffer_analytics"] * 60 + config["general"]["min_time_life_track"]
-        )  # столько по времени буфер набирается и информацию о статистеке выводить рано
+        )  # 这是缓冲区积累的时间，过早输出统计信息还为时过早
 
     @profile_time
     def process(self, frame_element: FrameElement):
-        # Выйти из обработки если это пришел VideoEndBreakElement а не FrameElement
+        # 如果是VideoEndBreakElement而不是FrameElement则退出处理
         if isinstance(frame_element, VideoEndBreakElement):
             return frame_element
 

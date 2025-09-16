@@ -11,4 +11,4 @@ services:
       - "8888:8888"  # HTTP (HLS, API, Prometheus)
       - "8889:8889"  # HTTPS (HLS, API, Prometheus)
     volumes:
-      - ./mediamtx.yml:/mediamtx.yml  # Конфигурационный файл
+      - ./mediamtx.yml:/mediamtx.yml  # 配置文件

@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 
 
 class VideoSaverNode:
-    """Модуль для сохранения видеопотока"""
+    """视频流保存模块"""
 
     def __init__(self, config: dict) -> None:
         self.fourcc = cv2.VideoWriter_fourcc("m", "p", "4", "v")
@@ -19,14 +19,14 @@ class VideoSaverNode:
         self._cv2_writer = None
 
     def process(self, frame_element: FrameElement) -> None:
-        # Выйти из обработки если это пришел VideoEndBreakElement а не FrameElement
+        # 如果是VideoEndBreakElement而不是FrameElement则退出处理
         if isinstance(frame_element, VideoEndBreakElement):
             self._cv2_writer.release()
-            print(f"Видео сохранено в папке {self.out_folder}")
+            print(f"视频已保存到文件夹 {self.out_folder}")
             return
         assert isinstance(
             frame_element, FrameElement
-        ), f"VideoSaverNode | Неправильный формат входного элемента {type(frame_element)}"
+        ), f"VideoSaverNode | 输入元素格式不正确 {type(frame_element)}"
 
         source = frame_element.source
         frame = frame_element.frame_result
@@ -47,14 +47,14 @@ class VideoSaverNode:
     def _init_cv2_writer(
         self, frame_width: int, frame_height: int, out_file_name: str, fps: float
     ) -> None:
-        """Инициализирует cv2.VideoWriter для записи файла в нужном разрешении file_extention:
+        """初始化cv2.VideoWriter以适当分辨率写入文件：
 
         Args:
-            frame_width (int): ширина кадра записываемого видео.
-            frame_height (int): высота кадра записываемого видео.
-            out_file_name (str): источник обрабатываемого видео
-                (для формирования названия записывааемого видео).
-            fps (float): количество кадров в секунду записываемого видео.
+            frame_width (int): 要写入视频的帧宽度。
+            frame_height (int): 要写入视频的帧高度。
+            out_file_name (str): 处理视频的来源
+                (用于形成要写入视频的名称)。
+            fps (float): 要写入视频的每秒帧数。
         """
         out_file_name = os.path.basename(out_file_name)
         Path(self.out_folder).mkdir(parents=True, exist_ok=True)

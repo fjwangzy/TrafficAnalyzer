@@ -53,7 +53,7 @@ class VideoServer(object):
         self._frame = cv2.resize(image, self.output_size)
 
     def process(self, frame_element: FrameElement):
-        # Выйти из обработки если это пришел VideoEndBreakElement а не FrameElement
+        # 如果是VideoEndBreakElement而不是FrameElement则退出处理
         if isinstance(frame_element, VideoEndBreakElement):
             return
         self.update_image(frame_element.frame_result)

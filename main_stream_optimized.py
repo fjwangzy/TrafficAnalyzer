@@ -20,7 +20,7 @@ PRINT_PROFILE_INFO = False
 
 
 def proc_frame_reader(queue_out: Queue, config: dict, time_sleep_start: int):
-    sleep_message = f"Система разогревается.. sleep({time_sleep_start})"
+    sleep_message = f"系统正在预热.. sleep({time_sleep_start})"
     for _ in tqdm(range(time_sleep_start), desc=sleep_message):
         sleep(1)
     video_reader = VideoReader(config["video_reader"])
@@ -103,12 +103,12 @@ def main(config) -> None:
         p.daemon = True
         p.start()
 
-    # Ждем, пока первый процесс завершится
+    # 等待第一个进程完成
     processes[0].join()
 
 
 if __name__ == "__main__":
-    # Проверяем и устанавливаем переменные окружения если их нет
+    # 检查并设置环境变量（如果不存在）
     check_and_set_env_var("VIDEO_SRC", "test_videos/test_video.mp4")
     check_and_set_env_var("ROADS_JSON", "configs/entry_exit_lanes.json")
     check_and_set_env_var("TOPIC_NAME", "statistics_1")

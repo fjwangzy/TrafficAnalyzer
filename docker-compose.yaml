@@ -39,7 +39,7 @@ services:
       KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
       KAFKA_OPTS: "-Djava.security.auth.login.config=/etc/kafka/kafka_server_jaas.conf"
       ZOOKEEPER_SASL_ENABLED: 'false'
-      KAFKA_LOG_RETENTION_HOURS: 24 # удаление сообщений через 24 часа
+      KAFKA_LOG_RETENTION_HOURS: 24 # 24小时后删除消息
       KAFKA_USERNAME: ${KAFKA_USERNAME}
       KAFKA_PASSWORD: ${KAFKA_PASSWORD}
     depends_on:

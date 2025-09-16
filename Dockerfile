@@ -14,9 +14,9 @@ RUN pip3 install "numpy<2"
 RUN pip3 install cython_bbox==0.1.5 lap==0.4.0 
 RUN pip3 install torch==2.3.1 torchvision==0.18.1 --index-url https://download.pytorch.org/whl/cu121
 
-# Сначала копируем только requirements.txt и устанавливаем зависимости
+#首先，仅复制 requirements.txt 并安装依赖
 COPY requirements.txt /app/
 RUN pip3 install -r requirements.txt
 
-# Затем копируем остальной код
+#然后，复制剩余的代码
 COPY . /app

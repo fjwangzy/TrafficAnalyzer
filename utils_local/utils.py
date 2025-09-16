@@ -9,15 +9,15 @@ logger_profile = logging.getLogger("profile")
 
 def check_and_set_env_var(var_name, value_new):
     """
-    Проверяет, установлена ли переменная окружения `var_name`. Если не установлена, 
-    присваивает ей значение `value_new`
+    检查环境变量 `var_name` 是否已设置。如果未设置，
+    则为其赋值 `value_new`
     """
     value = os.getenv(var_name)
     if value is None:
         os.environ[var_name] = str(value_new)
-        print(f"Значение {value_new} сохранено в переменную окружения {var_name}.")
+        print(f"值 {value_new} 已保存到环境变量 {var_name} 中。")
     else:
-        print(f"Переменная {var_name} уже установлена: {value}")
+        print(f"环境变量 {var_name} 已设置: {value}")
 
 
 def profile_time(func):
@@ -29,7 +29,7 @@ def profile_time(func):
 
         self = args[0]
         logger_profile.debug(
-            f"{self.__class__.__name__}.{func.__name__}, time spent {dt_msecs:.2f} msecs"
+            f"{self.__class__.__name__}.{func.__name__}, 耗时 {dt_msecs:.2f} 毫秒"
         )
         return out
 
@@ -38,19 +38,19 @@ def profile_time(func):
 
 class FPS_Counter:
     def __init__(self, calc_time_perion_N_frames: int) -> None:
-        """Счетчик FPS по ограниченным участкам видео (скользящему окну).
+        """基于视频有限部分（滑动窗口）的FPS计数器。
 
         Args:
-            calc_time_perion_N_frames (int): количество фреймов окна подсчета статистики.
+            calc_time_perion_N_frames (int): 统计窗口的帧数。
         """
         self.time_buffer = []
         self.calc_time_perion_N_frames = calc_time_perion_N_frames
 
     def calc_FPS(self) -> float:
-        """Производит рассчет FPS по нескольким кадрам видео.
+        """根据多个视频帧计算FPS。
 
         Returns:
-            float: значение FPS.
+            float: FPS值。
         """
         time_buffer_is_full = len(self.time_buffer) == self.calc_time_perion_N_frames
         t = time.time()
@@ -65,16 +65,16 @@ class FPS_Counter:
 
 
 def intersects_central_point(tracked_xyxy, polygons):
-    """Функция определяет присутвие центральной точки bbox в  области полигонов дорог
+    """该函数确定bbox中心点是否存在于道路多边形区域内
 
     Args:
-        tracked_xyxy: координаты bbox
-        polygons: словарь полигонов
+        tracked_xyxy: bbox坐标
+        polygons: 多边形字典
 
     Returns:
-        Лиибо None либо значение ключа (номер дороги - int)
+        要么是None，要么是键值（道路编号 - int）
     """
-    # Центральная точка bbox:
+    # bbox中心点：
     center_point = [
         (tracked_xyxy[0] + tracked_xyxy[2]) / 2,
         (tracked_xyxy[1] + tracked_xyxy[3]) / 2,

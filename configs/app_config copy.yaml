@@ -1,0 +1,85 @@
+# --------------------------------------------- HYDRA -----------------------------------------------------
+defaults:  
+  - _self_  
+  - override hydra/hydra_logging: disabled  
+  - override hydra/job_logging: custom
+
+hydra:
+  output_subdir: null
+  run:  
+    dir: .
+
+# ----------------------------------------------- PIPELINE -------------------------------------------------
+
+pipeline:
+  save_video : False  # Сохранение итогового видео обработки
+  show_in_web: True  # Отображение результатов обработки видеопотока в веб-интерфейсе (Flask) вместо cv2.imshow
+  send_info_kafka: True  # Отправлять ли инфо в кафку
+
+#--------------------------------------------------GENERAL--------------------------------------------------
+
+general:
+  colors_of_roads: # in bgr
+    1: [102,204,255] #ffcc66
+    2: [0,0,170] #aa0000
+    3: [17,70,10] #0a3e11
+    4: [120,56,126] #7e3878
+    5: [30,105,215] #d2691e
+  buffer_analytics: 0.5  # Количество минут за которое производим расчет числа машин (скользящее окно расчета)
+  min_time_life_track: 3 # Минимальное количество секунд жизни трека чтобы учитывать его в статистике
+  count_cars_buffer_frames: 25 # Значение окна усреднеыния для расчета числа машин в текущем кадре (в frames)
+
+# ------------------------------------------------- NODES --------------------------------------------------
+
+video_reader:
+  src: ${oc.env:VIDEO_SRC} # путь до файла обработки или номер камеры (int) или ссылки на m3u8 / rtsp поток
+  skip_secs : 0  # считываем кадры раз в <skip_secs> секунд
+  roads_info: ${oc.env:ROADS_JSON} # json файл с координатами дорог на видео
+
+
+detection_node:
+  weight_pth: weights/yolov8m.pt  # Путь до модели .pt или .engine (TensorRT)
+  classes_to_detect: [2,3,5,7]  # весь транспорт из классов COCO
+  confidence: 0.10  # Порог уверенности детектора (чем больше значение, тем меньше находит)
+  iou: 0.7  # Порог NMS (чем больше значение, тем больше находит)
+  imgsz: 640  # Ресайз при инференсе (640 по умолчанию)
+
+
+tracking_node:  
+  # Использован ByteTrack (https://github.com/ifzhang/ByteTrack)
+  first_track_thresh: 0.5  # Пороговое значение для первичной инициализации трека
+  second_track_thresh: 0.10  # Пороговое значение для поддержания трека
+  match_thresh: 0.95  # Чем больше значение, тем больше может быть расстояние между соседними обнаруженими чтобы держать трек
+  track_buffer: 125  # Время жизни трека после исчезновения из поля зрения (измеряется в числе кадров)
+
+
+show_node:
+  scale : 0.6  # Масштабирование итогового окна результатов при imshow=True
+  imshow: False  # Нужно ли выводить видео в процессе обработки
+  fps_counter_N_frames_stat : 15  # Окно усредения fsp счетчика
+  draw_fps_info : True  # Указывать ли fps обработки
+  show_roi: True  # Показывать ли регионы примыкающих дорог 
+  overlay_transparent_mask: False # Заливка регионов при show_roi=True (медленная операция)
+  show_only_yolo_detections : False  # Отображать лишь результаты детекции без учета трекинга и прочей логики кода
+  show_track_id_different_colors: False  # Отображать цвет бокса согласно id трека, а не логике прибытия объекта
+  show_info_statistics: False  # Вывод информации о статистике в отдельном окне справа от кадра
+
+
+video_saver_node:
+  fps : 24  # при увеличении позволяет ускорить итоговое видео
+  out_folder : test_videos/videos_out  # в какую папку сохранить результат
+
+
+kafka_producer_node: #// камера id
+  bootstrap_servers: kafka:29092 #127.0.0.1:9092 #kafka:29092
+  topic_name: ${oc.env:TOPIC_NAME}
+  how_often_sec: 1 # раз в сколько секунд отправлять результат
+  camera_id: ${oc.decode:${oc.env:CAMERA_ID}} 
+
+
+video_server_node: 
+  index_page: index.html  
+  host_ip: 0.0.0.0  # где именно поднять сервис (localhost или "0.0.0.0")
+  port: 8100  # На каком порту поднять
+  template_folder: ../utils_local/templates  # Путь до templates (там где html файл)
+  output_size : [800, 470]  # ресайз для отображения в flask

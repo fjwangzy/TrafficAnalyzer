@@ -188,7 +188,7 @@ class ShowNode:
             data_info = frame_element.info
 
             # 车辆数量文本
-            text_cars = f"Cars amount: {data_info['cars_amount']}"
+            text_cars = f"车辆总数: {data_info['cars_amount']}"
             # 文本起始坐标
             y = 55
             # 显示车辆数量文本
@@ -209,7 +209,7 @@ class ShowNode:
                 + 25
             )
             # 标题文本
-            text_info = "Traffic congestion:"
+            text_info = "道路拥堵情况:"
             # 显示标题
             cv2.putText(
                 img=black_image,
@@ -232,7 +232,7 @@ class ShowNode:
             if frame_element.timestamp >= self.buffer_analytics_sec:
                 # 显示道路信息
                 for key, value in data_info["roads_activity"].items():
-                    text_road = f"  road {key}: {value:.1f} cars/min"
+                    text_road = f"  道路 {key}: {value:.1f} 辆/分钟"
                     cv2.putText(
                         img=black_image,
                         text=text_road,
@@ -251,7 +251,7 @@ class ShowNode:
                     )
             else:
                 text_to_show = (
-                    f"   wait {round(self.buffer_analytics_sec - frame_element.timestamp)} sec"
+                    f"   等待 {round(self.buffer_analytics_sec - frame_element.timestamp)} 秒"
                 )
                 cv2.putText(
                     img=black_image,

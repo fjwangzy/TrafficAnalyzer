@@ -81,6 +81,7 @@ services:
       - "3111:3000"
     volumes:
       - ./services/grafana:/var/lib/grafana
+      - ./services/grafana/provisioning:/etc/grafana/provisioning
     networks:
       - prod_network
 
@@ -134,8 +135,8 @@ services:
     container_name: traffic_analyzer_camera_1
     command: python main_optimized.py
     environment:
-      - VIDEO_SRC=test_videos/test_video.mp4
-      - ROADS_JSON=configs/entry_exit_lanes.json
+      - VIDEO_SRC=test_videos/inter1.mp4
+      - ROADS_JSON=configs/inter1_lanes.json
       - TOPIC_NAME=statistics_1
       - CAMERA_ID=1
     volumes:
@@ -161,8 +162,8 @@ services:
     container_name: traffic_analyzer_camera_2
     command: python main_optimized.py
     environment:
-      - VIDEO_SRC=test_videos/longer_example.mp4
-      - ROADS_JSON=configs/entry_exit_lanes.json
+      - VIDEO_SRC=test_videos/inter2.mp4
+      - ROADS_JSON=configs/inter2_lanes.json
       - TOPIC_NAME=statistics_2
       - CAMERA_ID=2
     depends_on:

@@ -37,9 +37,9 @@ video_reader:
   roads_info: ${oc.env:ROADS_JSON} # 包含视频中道路坐标的 json 文件
 
 detection_node:
-  weight_pth: weights/yolov8m.pt  # 模型 .pt 或 .engine (TensorRT) 文件的路径
-  # weight_pth: weights/uav_best.pt  # 模型 .pt 或 .engine (TensorRT) 文件的路径
-  classes_to_detect: [2,3,5,7]  # 来自 COCO 数据集的全部交通工具类别
+  # weight_pth: weights/yolov8m.pt  # 模型 .pt 或 .engine (TensorRT) 文件的路径
+  weight_pth: weights/uav_best.pt  # 模型 .pt 或 .engine (TensorRT) 文件的路径
+  classes_to_detect: [2,3,4,5,6,7,8,9]  # uav_best.pt 的全部交通工具类别 (排除行人和人)
   confidence: 0.10  # 检测器置信度阈值（值越大，检测到的目标越少）
   iou: 0.7  # NMS 阈值（值越大，匹配到的目标越多）
   imgsz: 640  # 推理时的图像缩放尺寸（默认为 640）

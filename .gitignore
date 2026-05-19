@@ -18,3 +18,4 @@ services/grafana/alerting/1
 services/grafana/plugins
 services/triton
 services/influxdb_data
+services/grafana/grafana.db

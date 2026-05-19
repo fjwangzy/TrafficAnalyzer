@@ -107,6 +107,7 @@ graph TD;
 
 **main_stream_optimized_v2.py** — main_stream_optimized.py的改进版本。主要区别在于，当某个进程终止或崩溃时，另一个进程也会自动终止。通过 `process.is_alive()` 方法监控进程状态，从而实现了更可靠的进程生命周期管理。
 
+**generate_lanes车道标定** python d:\ai\TrafficAnalyzer\generate_lanes.py d:\ai\TrafficAnalyzer\test_videos\inter2.mp4 d:\ai\TrafficAnalyzer\configs\inter2_lanes.json
 ---
 
 ## 代码工作示例：

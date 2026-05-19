@@ -208,7 +208,7 @@
           "tags": []
         }
       ],
-      "title": "环岛区域车辆数",
+      "title": "路口车辆数",
       "transparent": true,
       "type": "timeseries"
     },

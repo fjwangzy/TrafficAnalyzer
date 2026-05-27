@@ -1,0 +1,3971 @@
+{
+  "version": "1.0.0",
+  "project": {
+    "name": "TrafficAnalyzer",
+    "languages": [
+      "python",
+      "yaml",
+      "json",
+      "dockerfile",
+      "markdown",
+      "shell",
+      "html",
+      "conf"
+    ],
+    "frameworks": [
+      "Flask",
+      "Hydra",
+      "Docker",
+      "Docker Compose",
+      "InfluxDB",
+      "Kafka",
+      "Grafana",
+      "Telegraf",
+      "Nginx",
+      "OpenCV",
+      "Ultralytics (YOLOv8)",
+      "ByteTrack",
+      "Shapely"
+    ],
+    "description": "环形交叉路口交通分析系统，通过处理视频（MP4 或 RTSP 流）实现车辆检测、多目标跟踪、各道路拥堵统计及 Grafana 可视化，支持多摄像头生产部署与 InfluxDB 时序数据库。",
+    "analyzedAt": "2026-05-26T10:52:02.909006+00:00",
+    "gitCommitHash": "e69acee53e8c8603d8376a26c4df5d5bd92d1aa3"
+  },
+  "nodes": [
+    {
+      "id": "file:elements/FrameElement.py",
+      "type": "file",
+      "name": "FrameElement.py",
+      "filePath": "elements/FrameElement.py",
+      "summary": "帧数据载体类，在节点式处理管道中传递原始帧、时间戳、道路多边形坐标、YOLO检测/ByteTrack跟踪结果及统计信息。所有管道节点通过读写该类的属性来协作完成视频分析流程。",
+      "tags": [
+        "data-model",
+        "data-carrier",
+        "pipeline",
+        "core"
+      ],
+      "complexity": "simple",
+      "languageNotes": "使用 Python 3.10+ 联合类型语法（np.ndarray | None）声明可选属性，依赖 numpy 处理帧图像数据。"
+    },
+    {
+      "id": "file:elements/VideoEndBreakElement.py",
+      "type": "file",
+      "name": "VideoEndBreakElement.py",
+      "filePath": "elements/VideoEndBreakElement.py",
+      "summary": "视频流结束哨兵元素类，继承自 FrameElement。当视频源耗尽时由 VideoReader 发出，各管道节点通过 isinstance 检查该类型来触发资源释放和进程退出逻辑。",
+      "tags": [
+        "data-model",
+        "sentinel",
+        "pipeline",
+        "control-flow"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:main_optimized.py",
+      "type": "file",
+      "name": "main_optimized.py",
+      "filePath": "main_optimized.py",
+      "summary": "三进程并行管道主入口，将视频分析拆分为读取+检测、跟踪+统计+Kafka、渲染+保存+Flask三个独立进程，通过 maxsize=50 的 Queue 传递 FrameElement，是处理 MP4 文件时的推荐启动方式。",
+      "tags": [
+        "entry-point",
+        "multiprocessing",
+        "pipeline",
+        "orchestration"
+      ],
+      "complexity": "moderate",
+      "languageNotes": "使用 multiprocessing.Process + Queue 实现生产者-消费者链，@hydra.main 装饰器从 configs/app_config.yaml 加载分层配置。"
+    },
+    {
+      "id": "file:main_stream_optimized_v2.py",
+      "type": "file",
+      "name": "main_stream_optimized_v2.py",
+      "filePath": "main_stream_optimized_v2.py",
+      "summary": "双进程实时流管道入口（v2版本），在 main_stream_optimized.py 基础上增加了 process.is_alive() 双向健康检查，当读取进程异常退出时处理进程自动终止，适用于 RTSP 实时流场景。",
+      "tags": [
+        "entry-point",
+        "multiprocessing",
+        "pipeline",
+        "real-time",
+        "fault-tolerance"
+      ],
+      "complexity": "moderate",
+      "languageNotes": "使用 queue.Full/Empty 异常实现非阻塞入队和超时出队，put_nowait 在队列满时丢弃旧帧以保证实时性。"
+    },
+    {
+      "id": "file:nodes/FlaskServerVideoNode.py",
+      "type": "file",
+      "name": "FlaskServerVideoNode.py",
+      "filePath": "nodes/FlaskServerVideoNode.py",
+      "summary": "Flask MJPEG 视频流服务节点，通过 /video 端点以 multipart/x-mixed-replace 协议持续推送 JPEG 编码帧，在守护线程中运行 HTTP 服务器，支持管道集成和独立调试两种模式。",
+      "tags": [
+        "service",
+        "streaming",
+        "flask",
+        "mjpeg",
+        "component"
+      ],
+      "complexity": "moderate",
+      "languageNotes": "使用 Flask Response 生成器实现 MJPEG 流，cv2.imencode 将 numpy 帧编码为 JPEG bytes，Thread daemon 模式确保主进程退出时自动清理。"
+    },
+    {
+      "id": "file:nodes/VideoReader.py",
+      "type": "file",
+      "name": "VideoReader.py",
+      "filePath": "nodes/VideoReader.py",
+      "summary": "视频帧读取节点，支持 MP4 文件、RTSP 流和本地摄像头三种输入源。通过生成器逐帧产出 FrameElement，从 JSON 配置加载道路多边形坐标，并在流结束时发出 VideoEndBreakElement 哨兵。",
+      "tags": [
+        "generator",
+        "input",
+        "video-capture",
+        "component",
+        "pipeline"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:nodes/VideoSaverNode.py",
+      "type": "file",
+      "name": "VideoSaverNode.py",
+      "filePath": "nodes/VideoSaverNode.py",
+      "summary": "视频保存节点，将渲染后的帧通过 OpenCV VideoWriter 写入 MP4 文件。采用惰性初始化策略，在接收首帧时根据实际分辨率创建写入器，收到 VideoEndBreakElement 时释放资源。",
+      "tags": [
+        "output",
+        "video-writer",
+        "component",
+        "pipeline"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:elements/FrameElement.py:FrameElement",
+      "type": "class",
+      "name": "FrameElement",
+      "filePath": "elements/FrameElement.py",
+      "lineRange": [
+        4,
+        42
+      ],
+      "summary": "帧数据载体类，包含原始帧、时间戳、道路信息、YOLO检测/跟踪结果、活动跟踪缓冲区及统计信息等属性，是整个节点式处理管道中各节点协作的核心数据对象。",
+      "tags": [
+        "data-model",
+        "data-carrier",
+        "core"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:elements/VideoEndBreakElement.py:VideoEndBreakElement",
+      "type": "class",
+      "name": "VideoEndBreakElement",
+      "filePath": "elements/VideoEndBreakElement.py",
+      "lineRange": [
+        4,
+        17
+      ],
+      "summary": "视频流结束哨兵类，继承自 FrameElement。仅存储 video_source 和 timestamp，各管道节点通过 isinstance 判断该类型来执行清理和退出逻辑。",
+      "tags": [
+        "sentinel",
+        "data-model",
+        "control-flow"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:main_optimized.py:proc_frame_reader_and_detection",
+      "type": "function",
+      "name": "proc_frame_reader_and_detection",
+      "filePath": "main_optimized.py",
+      "lineRange": [
+        21,
+        39
+      ],
+      "summary": "第一个子进程函数：预热后初始化 VideoReader 和 DetectionTrackingNodes，逐帧读取并执行 YOLOv8 检测+ByteTrack 跟踪，将结果放入输出队列，遇到 VideoEndBreakElement 时退出。",
+      "tags": [
+        "multiprocessing",
+        "pipeline",
+        "detection",
+        "worker"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:main_optimized.py:proc_tracker_update_and_calc",
+      "type": "function",
+      "name": "proc_tracker_update_and_calc",
+      "filePath": "main_optimized.py",
+      "lineRange": [
+        42,
+        66
+      ],
+      "summary": "第二个子进程函数：从输入队列获取帧元素，依次执行跟踪状态更新、统计计算和可选的 Kafka 生产，将处理结果放入输出队列，支持性能分析计时输出。",
+      "tags": [
+        "multiprocessing",
+        "pipeline",
+        "statistics",
+        "worker"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:main_optimized.py:proc_show_node",
+      "type": "function",
+      "name": "proc_show_node",
+      "filePath": "main_optimized.py",
+      "lineRange": [
+        69,
+        95
+      ],
+      "summary": "第三个子进程函数：从队列获取帧元素，执行 ShowNode 可视化渲染，可选地通过 VideoSaverNode 保存视频和通过 VideoServer 提供 Web 流服务，收到结束哨兵时退出。",
+      "tags": [
+        "multiprocessing",
+        "pipeline",
+        "rendering",
+        "worker"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:main_optimized.py:main",
+      "type": "function",
+      "name": "main",
+      "filePath": "main_optimized.py",
+      "lineRange": [
+        98,
+        128
+      ],
+      "summary": "Hydra 配置入口函数，创建两个 maxsize=50 的进程间队列和三个守护子进程（读取+检测、跟踪+统计、渲染+输出），通过 join 最后一个进程等待管道完成。",
+      "tags": [
+        "entry-point",
+        "orchestration",
+        "hydra",
+        "multiprocessing"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:main_stream_optimized_v2.py:proc_frame_reader",
+      "type": "function",
+      "name": "proc_frame_reader",
+      "filePath": "main_stream_optimized_v2.py",
+      "lineRange": [
+        23,
+        42
+      ],
+      "summary": "实时流场景的帧读取子进程函数：预热后逐帧读取并尝试非阻塞入队，队列满时丢弃旧帧以保证实时性，流结束时发出 VideoEndBreakElement 哨兵。",
+      "tags": [
+        "multiprocessing",
+        "real-time",
+        "non-blocking",
+        "worker"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:main_stream_optimized_v2.py:proc_proceessor",
+      "type": "function",
+      "name": "proc_proceessor",
+      "filePath": "main_stream_optimized_v2.py",
+      "lineRange": [
+        44,
+        93
+      ],
+      "summary": "实时流场景的处理链函数（主进程运行）：初始化全部处理节点，循环中检查读取进程存活状态实现故障联动，依次执行检测、跟踪、统计、Kafka、渲染、保存和Flask服务。",
+      "tags": [
+        "multiprocessing",
+        "real-time",
+        "fault-tolerance",
+        "pipeline"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:main_stream_optimized_v2.py:main",
+      "type": "function",
+      "name": "main",
+      "filePath": "main_stream_optimized_v2.py",
+      "lineRange": [
+        96,
+        107
+      ],
+      "summary": "Hydra 配置入口函数：创建容量为 2 的队列和帧读取子进程，主进程直接运行处理链。适用于实时 RTSP 流场景，低延迟优先。",
+      "tags": [
+        "entry-point",
+        "hydra",
+        "real-time",
+        "orchestration"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:nodes/FlaskServerVideoNode.py:VideoServer",
+      "type": "class",
+      "name": "VideoServer",
+      "filePath": "nodes/FlaskServerVideoNode.py",
+      "lineRange": [
+        23,
+        67
+      ],
+      "summary": "Flask MJPEG 视频流服务器类，在初始化时配置路由和帧缓冲区，通过守护线程启动 HTTP 服务，生成器持续输出 JPEG 编码帧形成 MJPEG 流，支持独立运行和管道集成两种模式。",
+      "tags": [
+        "service",
+        "flask",
+        "mjpeg",
+        "streaming"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:nodes/VideoReader.py:VideoReader",
+      "type": "class",
+      "name": "VideoReader",
+      "filePath": "nodes/VideoReader.py",
+      "lineRange": [
+        14,
+        80
+      ],
+      "summary": "视频帧读取器类，支持 MP4/RTSP/本地摄像头输入。初始化时加载道路多边形 JSON 配置，process() 以生成器模式逐帧产出 FrameElement，自动计算时间戳并在流结束时发出结束哨兵。",
+      "tags": [
+        "generator",
+        "video-capture",
+        "input",
+        "component"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:nodes/VideoSaverNode.py:VideoSaverNode",
+      "type": "class",
+      "name": "VideoSaverNode",
+      "filePath": "nodes/VideoSaverNode.py",
+      "lineRange": [
+        12,
+        68
+      ],
+      "summary": "视频保存节点类，将渲染后的帧写入 MP4 文件。惰性初始化 cv2.VideoWriter 以匹配源分辨率和帧率，收到 VideoEndBreakElement 时释放写入器资源。",
+      "tags": [
+        "video-writer",
+        "output",
+        "component",
+        "lazy-init"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:main.py",
+      "type": "file",
+      "name": "main.py",
+      "filePath": "main.py",
+      "summary": "单进程顺序执行的入口点，使用 Hydra 加载配置后依次调用所有 Node 处理视频帧，适用于简单的本地测试场景。",
+      "tags": [
+        "entry-point",
+        "pipeline",
+        "sequential",
+        "hydra"
+      ],
+      "complexity": "simple",
+      "languageNotes": "使用 Hydra 装饰器 @hydra.main 进行配置管理，支持命令行覆盖。"
+    },
+    {
+      "id": "file:main_stream_optimized.py",
+      "type": "file",
+      "name": "main_stream_optimized.py",
+      "filePath": "main_stream_optimized.py",
+      "summary": "双进程多处理入口点，针对实时 RTSP 流优化：读取进程将帧放入容量为 2 的队列（满时丢弃旧帧），处理进程执行检测、跟踪、统计和可视化全链路。",
+      "tags": [
+        "entry-point",
+        "pipeline",
+        "multiprocessing",
+        "rtsp",
+        "real-time"
+      ],
+      "complexity": "moderate",
+      "languageNotes": "使用 multiprocessing.Process 和 multiprocessing.Queue，队满时 put_nowait 抛 Full 异常后丢弃帧，保证始终处理最新帧。"
+    },
+    {
+      "id": "file:nodes/CalcStatisticsNode.py",
+      "type": "file",
+      "name": "CalcStatisticsNode.py",
+      "filePath": "nodes/CalcStatisticsNode.py",
+      "summary": "统计计算节点，基于滑动窗口计算当前帧的车辆总数（平滑值）以及每条道路的车辆活跃度（辆/分钟），结果写入 FrameElement.info 字典。",
+      "tags": [
+        "pipeline-node",
+        "statistics",
+        "data-processing"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:nodes/KafkaProducerNode.py",
+      "type": "file",
+      "name": "KafkaProducerNode.py",
+      "filePath": "nodes/KafkaProducerNode.py",
+      "summary": "Kafka 生产者节点，按固定时间间隔将摄像头 ID、车辆总数和五条道路的活动度序列化为 JSON 发送至 Kafka 主题，供下游 Telegraf/InfluxDB 消费。",
+      "tags": [
+        "pipeline-node",
+        "kafka",
+        "messaging",
+        "serialization"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:nodes/ShowNode.py",
+      "type": "file",
+      "name": "ShowNode.py",
+      "filePath": "nodes/ShowNode.py",
+      "summary": "可视化节点，使用 OpenCV 在帧上绘制检测框、跟踪 ID、道路多边形、FPS 信息和统计面板，支持透明遮罩叠加和独立统计窗口，可选 cv2.imshow 实时预览。",
+      "tags": [
+        "pipeline-node",
+        "visualization",
+        "opencv",
+        "rendering"
+      ],
+      "complexity": "complex",
+      "languageNotes": "大量使用 OpenCV 绘图 API（rectangle, putText, polylines, fillPoly, addWeighted），并通过 numpy.hstack 将主帧与统计面板拼接。"
+    },
+    {
+      "id": "file:utils_local/utils.py",
+      "type": "file",
+      "name": "utils.py",
+      "filePath": "utils_local/utils.py",
+      "summary": "通用工具模块，提供环境变量检查与设置、函数耗时分析装饰器、基于滑动窗口的 FPS 计数器、以及基于 Shapely 的 bbox 中心点与道路多边形相交判定。",
+      "tags": [
+        "utility",
+        "helper",
+        "geometry",
+        "profiling"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:main.py:main",
+      "type": "function",
+      "name": "main",
+      "filePath": "main.py",
+      "lineRange": [
+        15,
+        46
+      ],
+      "summary": "Hydra 入口函数，实例化所有 Node 并按顺序对每帧执行检测→跟踪→统计→Kafka→可视化→保存→流媒体的完整处理链。",
+      "tags": [
+        "entry-point",
+        "pipeline",
+        "orchestration"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:main_stream_optimized.py:proc_frame_reader",
+      "type": "function",
+      "name": "proc_frame_reader",
+      "filePath": "main_stream_optimized.py",
+      "lineRange": [
+        22,
+        41
+      ],
+      "summary": "读取进程目标函数：预热等待后循环读取视频帧，通过 put_nowait 非阻塞入队，队满时丢弃帧以保证实时性，遇到 VideoEndBreakElement 则退出。",
+      "tags": [
+        "multiprocessing",
+        "video-reader",
+        "real-time"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:main_stream_optimized.py:proc_proceessor",
+      "type": "function",
+      "name": "proc_proceessor",
+      "filePath": "main_stream_optimized.py",
+      "lineRange": [
+        43,
+        78
+      ],
+      "summary": "处理进程目标函数：从队列取帧后依次执行检测、跟踪更新、统计计算、Kafka 发送、可视化渲染、视频保存和流媒体推送，遇到 VideoEndBreakElement 则退出。",
+      "tags": [
+        "multiprocessing",
+        "pipeline",
+        "data-processing"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:main_stream_optimized.py:main",
+      "type": "function",
+      "name": "main",
+      "filePath": "main_stream_optimized.py",
+      "lineRange": [
+        83,
+        107
+      ],
+      "summary": "多处理入口函数：创建容量为 2 的共享队列，启动读取和处理两个守护进程，并 join 等待读取进程结束。",
+      "tags": [
+        "entry-point",
+        "multiprocessing",
+        "orchestration"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:nodes/CalcStatisticsNode.py:CalcStatisticsNode",
+      "type": "class",
+      "name": "CalcStatisticsNode",
+      "filePath": "nodes/CalcStatisticsNode.py",
+      "lineRange": [
+        9,
+        65
+      ],
+      "summary": "道路拥堵统计计算类，使用 deque 滑动窗口平滑车辆数量，遍历 buffer_tracks 计算各道路车辆活跃度（辆/分钟），结果存入 frame_element.info。",
+      "tags": [
+        "statistics",
+        "data-model",
+        "pipeline-node"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:nodes/KafkaProducerNode.py:KafkaProducerNode",
+      "type": "class",
+      "name": "KafkaProducerNode",
+      "filePath": "nodes/KafkaProducerNode.py",
+      "lineRange": [
+        11,
+        75
+      ],
+      "summary": "Kafka 生产者类，初始化 KafkaProducer 连接，按配置的发送间隔将摄像头统计数据（车辆数、各道路活动度）以 JSON 格式发送至指定主题。",
+      "tags": [
+        "kafka",
+        "messaging",
+        "pipeline-node"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:nodes/ShowNode.py:ShowNode",
+      "type": "class",
+      "name": "ShowNode",
+      "filePath": "nodes/ShowNode.py",
+      "lineRange": [
+        10,
+        280
+      ],
+      "summary": "可视化渲染类，支持多种显示模式（仅检测框/跟踪框/道路多边形/透明遮罩/FPS 信息/统计面板），使用 OpenCV 在帧上绘制所有视觉元素并可选 imshow 预览。",
+      "tags": [
+        "visualization",
+        "opencv",
+        "rendering",
+        "pipeline-node"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:utils_local/utils.py:check_and_set_env_var",
+      "type": "function",
+      "name": "check_and_set_env_var",
+      "filePath": "utils_local/utils.py",
+      "lineRange": [
+        10,
+        20
+      ],
+      "summary": "检查指定环境变量是否已设置，若未设置则赋予默认值并打印提示信息，用于启动前的环境配置。",
+      "tags": [
+        "utility",
+        "environment",
+        "configuration"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:utils_local/utils.py:profile_time",
+      "type": "function",
+      "name": "profile_time",
+      "filePath": "utils_local/utils.py",
+      "lineRange": [
+        23,
+        36
+      ],
+      "summary": "函数耗时分析装饰器，记录被装饰函数的执行时间（毫秒）并通过 profile logger 输出调试信息。",
+      "tags": [
+        "utility",
+        "profiling",
+        "decorator"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:utils_local/utils.py:FPS_Counter",
+      "type": "class",
+      "name": "FPS_Counter",
+      "filePath": "utils_local/utils.py",
+      "lineRange": [
+        39,
+        64
+      ],
+      "summary": "基于滑动窗口的 FPS 计数器，维护固定帧数的时间戳列表，窗口满后计算帧率并返回。",
+      "tags": [
+        "utility",
+        "performance",
+        "video"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:utils_local/utils.py:intersects_central_point",
+      "type": "function",
+      "name": "intersects_central_point",
+      "filePath": "utils_local/utils.py",
+      "lineRange": [
+        67,
+        87
+      ],
+      "summary": "计算 bbox 中心点并使用 Shapely 判定该点是否落在某条道路多边形内，返回道路编号（int）或 None。",
+      "tags": [
+        "geometry",
+        "shapely",
+        "spatial"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:byte_tracker/byte_tracker_model.py",
+      "type": "file",
+      "name": "byte_tracker_model.py",
+      "filePath": "byte_tracker/byte_tracker_model.py",
+      "summary": "ByteTrack 多目标跟踪算法的核心实现，包含 STrack 单目标跟踪类和 BYTETracker 主跟踪器，通过两级 IOU 关联和卡尔曼滤波完成跨帧目标关联。",
+      "tags": [
+        "tracking",
+        "multi-object-tracking",
+        "byte-track",
+        "data-model"
+      ],
+      "complexity": "complex",
+      "languageNotes": "STrack 通过类变量 shared_kalman 实现所有轨迹共享同一个卡尔曼滤波器实例，避免重复构造。"
+    },
+    {
+      "id": "class:byte_tracker/byte_tracker_model.py:STrack",
+      "type": "class",
+      "name": "STrack",
+      "filePath": "byte_tracker/byte_tracker_model.py",
+      "lineRange": [
+        13,
+        146
+      ],
+      "summary": "表示单个被跟踪目标的轨迹类，封装卡尔曼滤波状态、bbox 格式转换以及激活/重激活/更新等生命周期方法。",
+      "tags": [
+        "tracking",
+        "data-model",
+        "kalman-filter"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "class:byte_tracker/byte_tracker_model.py:BYTETracker",
+      "type": "class",
+      "name": "BYTETracker",
+      "filePath": "byte_tracker/byte_tracker_model.py",
+      "lineRange": [
+        148,
+        308
+      ],
+      "summary": "ByteTrack 主跟踪器，维护 tracked/lost/removed 三类轨迹列表，通过高/低两级检测分数阈值和 IOU 匹配完成数据关联与轨迹生命周期管理。",
+      "tags": [
+        "tracking",
+        "byte-track",
+        "service"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:byte_tracker/byte_tracker_model.py:STrack.predict",
+      "type": "function",
+      "name": "STrack.predict",
+      "filePath": "byte_tracker/byte_tracker_model.py",
+      "lineRange": [
+        27,
+        31
+      ],
+      "summary": "调用卡尔曼滤波器对当前轨迹的状态进行一步预测，非跟踪状态的轨迹速度分量被置零。",
+      "tags": [
+        "tracking",
+        "kalman-filter"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:byte_tracker/byte_tracker_model.py:STrack.multi_predict",
+      "type": "function",
+      "name": "STrack.multi_predict",
+      "filePath": "byte_tracker/byte_tracker_model.py",
+      "lineRange": [
+        33,
+        44
+      ],
+      "summary": "对一组轨迹进行向量化卡尔曼滤波预测，通过共享的 shared_kalman 实例批量处理以提高性能。",
+      "tags": [
+        "tracking",
+        "kalman-filter",
+        "utility"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:byte_tracker/byte_tracker_model.py:STrack.activate",
+      "type": "function",
+      "name": "STrack.activate",
+      "filePath": "byte_tracker/byte_tracker_model.py",
+      "lineRange": [
+        46,
+        58
+      ],
+      "summary": "激活一条新轨迹：分配全局唯一 ID，用初始 bbox 初始化卡尔曼状态，并将状态置为 Tracked。",
+      "tags": [
+        "tracking",
+        "lifecycle"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:byte_tracker/byte_tracker_model.py:STrack.re_activate",
+      "type": "function",
+      "name": "STrack.re_activate",
+      "filePath": "byte_tracker/byte_tracker_model.py",
+      "lineRange": [
+        60,
+        71
+      ],
+      "summary": "将已丢失的轨迹与新的检测结果重新关联，使用卡尔曼更新修正状态，可选分配新 ID。",
+      "tags": [
+        "tracking",
+        "lifecycle"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:byte_tracker/byte_tracker_model.py:STrack.update",
+      "type": "function",
+      "name": "STrack.update",
+      "filePath": "byte_tracker/byte_tracker_model.py",
+      "lineRange": [
+        73,
+        91
+      ],
+      "summary": "用新匹配到的检测结果更新轨迹的卡尔曼状态、分数和类别，同时推进帧号。",
+      "tags": [
+        "tracking",
+        "lifecycle"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:byte_tracker/byte_tracker_model.py:STrack.tlwh",
+      "type": "function",
+      "name": "STrack.tlwh",
+      "filePath": "byte_tracker/byte_tracker_model.py",
+      "lineRange": [
+        93,
+        104
+      ],
+      "summary": "属性方法，从卡尔曼状态向量 (center_x, center_y, aspect_ratio, height) 反算出 (top_left_x, top_left_y, w, h) 格式的 bbox。",
+      "tags": [
+        "tracking",
+        "utility"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:byte_tracker/byte_tracker_model.py:STrack.tlwh_to_xyah",
+      "type": "function",
+      "name": "STrack.tlwh_to_xyah",
+      "filePath": "byte_tracker/byte_tracker_model.py",
+      "lineRange": [
+        116,
+        125
+      ],
+      "summary": "静态方法，将 (top_left_x, top_left_y, w, h) 格式转换为卡尔曼滤波所用的 (center_x, center_y, aspect_ratio, height) 格式。",
+      "tags": [
+        "tracking",
+        "utility"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:byte_tracker/byte_tracker_model.py:BYTETracker.__init__",
+      "type": "function",
+      "name": "BYTETracker.__init__",
+      "filePath": "byte_tracker/byte_tracker_model.py",
+      "lineRange": [
+        149,
+        168
+      ],
+      "summary": "初始化 ByteTrack 跟踪器：设置双阈值、匹配阈值、lost 缓冲大小，并构造卡尔曼滤波器实例。",
+      "tags": [
+        "tracking",
+        "lifecycle"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:byte_tracker/byte_tracker_model.py:BYTETracker.update",
+      "type": "function",
+      "name": "BYTETracker.update",
+      "filePath": "byte_tracker/byte_tracker_model.py",
+      "lineRange": [
+        170,
+        308
+      ],
+      "summary": "ByteTrack 核心帧更新流程：按分数高低划分检测、两轮 IOU 匹配（高分+低分）、处理未确认轨迹、初始化新轨迹、清理超时丢失轨迹。",
+      "tags": [
+        "tracking",
+        "byte-track",
+        "service"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:byte_tracker/byte_tracker_model.py:joint_stracks",
+      "type": "function",
+      "name": "joint_stracks",
+      "filePath": "byte_tracker/byte_tracker_model.py",
+      "lineRange": [
+        311,
+        322
+      ],
+      "summary": "按 track_id 去重合并两条轨迹列表。",
+      "tags": [
+        "tracking",
+        "utility"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:byte_tracker/byte_tracker_model.py:sub_stracks",
+      "type": "function",
+      "name": "sub_stracks",
+      "filePath": "byte_tracker/byte_tracker_model.py",
+      "lineRange": [
+        325,
+        333
+      ],
+      "summary": "从轨迹列表 tlista 中删除出现在 tlistb 中的轨迹（按 track_id 差集）。",
+      "tags": [
+        "tracking",
+        "utility"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:byte_tracker/byte_tracker_model.py:remove_duplicate_stracks",
+      "type": "function",
+      "name": "remove_duplicate_stracks",
+      "filePath": "byte_tracker/byte_tracker_model.py",
+      "lineRange": [
+        336,
+        349
+      ],
+      "summary": "基于 IOU 距离小于 0.15 识别跨列表的重复轨迹，保留存活时间更长的那一条。",
+      "tags": [
+        "tracking",
+        "utility"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:byte_tracker/utils/basetrack.py",
+      "type": "file",
+      "name": "basetrack.py",
+      "filePath": "byte_tracker/utils/basetrack.py",
+      "summary": "定义轨迹基类 BaseTrack 和状态枚举 TrackState，为具体轨迹类（如 STrack）提供全局 ID 分配、状态标记等公共接口。",
+      "tags": [
+        "tracking",
+        "data-model",
+        "utility"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:byte_tracker/utils/basetrack.py:TrackState",
+      "type": "class",
+      "name": "TrackState",
+      "filePath": "byte_tracker/utils/basetrack.py",
+      "lineRange": [
+        5,
+        9
+      ],
+      "summary": "轨迹状态枚举：New、Tracked、Lost、Removed 四种状态。",
+      "tags": [
+        "tracking",
+        "data-model"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:byte_tracker/utils/basetrack.py:BaseTrack",
+      "type": "class",
+      "name": "BaseTrack",
+      "filePath": "byte_tracker/utils/basetrack.py",
+      "lineRange": [
+        12,
+        52
+      ],
+      "summary": "轨迹抽象基类：维护全局 ID 计数器，提供 track_id、state、mark_lost/mark_removed 等通用属性和抽象方法。",
+      "tags": [
+        "tracking",
+        "data-model",
+        "utility"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:byte_tracker/utils/basetrack.py:BaseTrack.next_id",
+      "type": "function",
+      "name": "BaseTrack.next_id",
+      "filePath": "byte_tracker/utils/basetrack.py",
+      "lineRange": [
+        34,
+        37
+      ],
+      "summary": "静态方法，返回递增的全局轨迹 ID，用于为每条新轨迹分配唯一标识。",
+      "tags": [
+        "tracking",
+        "utility"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:byte_tracker/utils/kalman_filter.py",
+      "type": "file",
+      "name": "kalman_filter.py",
+      "filePath": "byte_tracker/utils/kalman_filter.py",
+      "summary": "用于 bbox 跟踪的卡尔曼滤波器实现，采用 8 维状态空间（位置/宽高 + 速度）和恒速运动模型，提供预测、投影、更新和马氏距离计算。",
+      "tags": [
+        "tracking",
+        "kalman-filter",
+        "utility"
+      ],
+      "complexity": "complex",
+      "languageNotes": "不确定性权重相对于当前 bbox 高度动态缩放（_std_weight_position / _std_weight_velocity），这是 DeepSORT 风格的启发式处理。"
+    },
+    {
+      "id": "class:byte_tracker/utils/kalman_filter.py:KalmanFilter",
+      "type": "class",
+      "name": "KalmanFilter",
+      "filePath": "byte_tracker/utils/kalman_filter.py",
+      "lineRange": [
+        23,
+        269
+      ],
+      "summary": "8 维恒速卡尔曼滤波器，状态为 (x, y, aspect_ratio, h, vx, vy, va, vh)，提供单步/批量预测、测量空间投影、卡尔曼更新和马氏门控距离。",
+      "tags": [
+        "tracking",
+        "kalman-filter",
+        "data-model"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:byte_tracker/utils/kalman_filter.py:KalmanFilter.initiate",
+      "type": "function",
+      "name": "KalmanFilter.initiate",
+      "filePath": "byte_tracker/utils/kalman_filter.py",
+      "lineRange": [
+        55,
+        86
+      ],
+      "summary": "由首次检测 bbox 构造新轨迹的初始 8 维均值和 8x8 协方差矩阵，速度分量初始化为零。",
+      "tags": [
+        "tracking",
+        "kalman-filter"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:byte_tracker/utils/kalman_filter.py:KalmanFilter.predict",
+      "type": "function",
+      "name": "KalmanFilter.predict",
+      "filePath": "byte_tracker/utils/kalman_filter.py",
+      "lineRange": [
+        88,
+        124
+      ],
+      "summary": "卡尔曼滤波预测步：依据运动模型传播均值和协方差，并叠加与 bbox 高度相关的过程噪声。",
+      "tags": [
+        "tracking",
+        "kalman-filter"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:byte_tracker/utils/kalman_filter.py:KalmanFilter.project",
+      "type": "function",
+      "name": "KalmanFilter.project",
+      "filePath": "byte_tracker/utils/kalman_filter.py",
+      "lineRange": [
+        126,
+        153
+      ],
+      "summary": "将 8 维状态分布投影到 4 维测量空间（x, y, aspect_ratio, h），加上测量噪声得到 innovation 协方差。",
+      "tags": [
+        "tracking",
+        "kalman-filter"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:byte_tracker/utils/kalman_filter.py:KalmanFilter.multi_predict",
+      "type": "function",
+      "name": "KalmanFilter.multi_predict",
+      "filePath": "byte_tracker/utils/kalman_filter.py",
+      "lineRange": [
+        155,
+        192
+      ],
+      "summary": "predict 的向量化版本，对 N 条轨迹并行进行卡尔曼预测以提高批量处理效率。",
+      "tags": [
+        "tracking",
+        "kalman-filter",
+        "utility"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:byte_tracker/utils/kalman_filter.py:KalmanFilter.update",
+      "type": "function",
+      "name": "KalmanFilter.update",
+      "filePath": "byte_tracker/utils/kalman_filter.py",
+      "lineRange": [
+        194,
+        226
+      ],
+      "summary": "卡尔曼滤波校正步：利用 Cholesky 分解计算卡尔曼增益，将测量融合进预测状态以得到后验均值和协方差。",
+      "tags": [
+        "tracking",
+        "kalman-filter"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:byte_tracker/utils/kalman_filter.py:KalmanFilter.gating_distance",
+      "type": "function",
+      "name": "KalmanFilter.gating_distance",
+      "filePath": "byte_tracker/utils/kalman_filter.py",
+      "lineRange": [
+        228,
+        269
+      ],
+      "summary": "计算状态分布与一组测量之间的马氏（或高斯）平方距离，配合 chi2inv95 阈值用于数据关联门控。",
+      "tags": [
+        "tracking",
+        "kalman-filter",
+        "utility"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:nodes/DetectionTrackingNodes.py",
+      "type": "file",
+      "name": "DetectionTrackingNodes.py",
+      "filePath": "nodes/DetectionTrackingNodes.py",
+      "summary": "流水线中的检测+跟踪节点：使用 YOLOv8 进行目标检测并将结果喂给 ByteTracker，把检测和跟踪结果写回 FrameElement。",
+      "tags": [
+        "pipeline-node",
+        "detection",
+        "tracking",
+        "yolo"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:nodes/DetectionTrackingNodes.py:DetectionTrackingNodes",
+      "type": "class",
+      "name": "DetectionTrackingNodes",
+      "filePath": "nodes/DetectionTrackingNodes.py",
+      "lineRange": [
+        11,
+        106
+      ],
+      "summary": "封装 YOLOv8 模型加载与 ByteTrack 跟踪器初始化的流水线节点类，process() 方法完成单帧检测+跟踪并将结果写入 FrameElement。",
+      "tags": [
+        "pipeline-node",
+        "detection",
+        "tracking",
+        "yolo"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:nodes/DetectionTrackingNodes.py:DetectionTrackingNodes.__init__",
+      "type": "function",
+      "name": "DetectionTrackingNodes.__init__",
+      "filePath": "nodes/DetectionTrackingNodes.py",
+      "lineRange": [
+        14,
+        36
+      ],
+      "summary": "从 Hydra 配置加载 YOLOv8 权重与推理参数，并按 ByteTrack 参数实例化跟踪器；自动选择 CUDA/CPU 设备。",
+      "tags": [
+        "pipeline-node",
+        "lifecycle"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:nodes/DetectionTrackingNodes.py:DetectionTrackingNodes.process",
+      "type": "function",
+      "name": "DetectionTrackingNodes.process",
+      "filePath": "nodes/DetectionTrackingNodes.py",
+      "lineRange": [
+        38,
+        78
+      ],
+      "summary": "对一帧执行 YOLO 推理和 ByteTrack 跟踪，把 detected_* 和 tracked_* 字段（bbox、cls、conf、id_list）写入 FrameElement 并返回。",
+      "tags": [
+        "pipeline-node",
+        "detection",
+        "tracking"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:nodes/DetectionTrackingNodes.py:DetectionTrackingNodes._get_results_dor_tracker",
+      "type": "function",
+      "name": "DetectionTrackingNodes._get_results_dor_tracker",
+      "filePath": "nodes/DetectionTrackingNodes.py",
+      "lineRange": [
+        80,
+        106
+      ],
+      "summary": "将 YOLO 推理结果转换为 ByteTracker 所需的 [x1, y1, x2, y2, conf, class_id] 格式数组，统一按 car 类处理。",
+      "tags": [
+        "tracking",
+        "utility",
+        "serialization"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "config:.dockerignore",
+      "type": "config",
+      "name": ".dockerignore",
+      "filePath": ".dockerignore",
+      "summary": "Docker 构建上下文排除文件，过滤掉 git 元数据、输出视频、密钥文件和服务配置等不应打入镜像的目录与文件，保持镜像体积精简。",
+      "tags": [
+        "infrastructure",
+        "containerization",
+        "build-system",
+        "configuration"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "pipeline:docker-compose.yaml",
+      "type": "pipeline",
+      "name": "docker-compose.yaml",
+      "filePath": "docker-compose.yaml",
+      "summary": "完整多摄像头交通分析栈的编排清单，定义 Zookeeper、Kafka、Kafka-UI、Grafana、InfluxDB、Telegraf、Nginx 及两个 GPU 摄像头后端服务，通过自定义网桥网络互联，使用环境变量注入凭据，并挂载配置文件与视频资源。",
+      "tags": [
+        "infrastructure",
+        "orchestration",
+        "deployment",
+        "docker-compose",
+        "microservices"
+      ],
+      "complexity": "complex",
+      "languageNotes": "使用 Docker Compose v3.8 格式，通过 depends_on + healthcheck 实现服务启动顺序控制，deploy.resources 保留 NVIDIA GPU 给摄像头分析容器。"
+    },
+    {
+      "id": "service:docker-compose.yaml:zookeeper",
+      "type": "service",
+      "name": "zookeeper",
+      "filePath": "docker-compose.yaml",
+      "summary": "Kafka 依赖的 Zookeeper 协调服务，提供分布式配置与 broker 元数据管理，启用匿名登录与 2181 端口健康检查。",
+      "tags": [
+        "infrastructure",
+        "messaging",
+        "coordination"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "service:docker-compose.yaml:kafka",
+      "type": "service",
+      "name": "kafka",
+      "filePath": "docker-compose.yaml",
+      "summary": "Kafka 消息代理，配置双监听器（内部 29092 / 外部 9092）及 SASL_PLAINTEXT 认证，保留期 24 小时，挂载 JAAS 配置与初始化脚本，通过健康检查确认就绪。",
+      "tags": [
+        "infrastructure",
+        "messaging",
+        "streaming",
+        "broker"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "service:docker-compose.yaml:kafka-ui",
+      "type": "service",
+      "name": "kafka-ui",
+      "filePath": "docker-compose.yaml",
+      "summary": "Provectus Kafka UI Web 控制台，通过 8080 端口暴露于 9001，连接内部 Kafka 监听器以可视化 topic 与消费者状态。",
+      "tags": [
+        "infrastructure",
+        "monitoring",
+        "ui"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "service:docker-compose.yaml:grafana",
+      "type": "service",
+      "name": "grafana",
+      "filePath": "docker-compose.yaml",
+      "summary": "Grafana 数据可视化服务，挂载 provisioning 目录自动配置数据源与仪表盘，启用面板嵌入与 HTML 渲染，凭据通过环境变量注入。",
+      "tags": [
+        "infrastructure",
+        "monitoring",
+        "visualization"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "service:docker-compose.yaml:influxdb",
+      "type": "service",
+      "name": "influxdb",
+      "filePath": "docker-compose.yaml",
+      "summary": "InfluxDB 1.8 时序数据库，承载交通统计指标存储，自动创建 30 天保留策略，通过持久卷保存数据。",
+      "tags": [
+        "infrastructure",
+        "database",
+        "time-series"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "service:docker-compose.yaml:telegraf",
+      "type": "service",
+      "name": "telegraf",
+      "filePath": "docker-compose.yaml",
+      "summary": "Telegraf 数据采集代理，从 Kafka topic 消费各摄像头统计消息并写入 InfluxDB，只读挂载 telegraf.conf 配置。",
+      "tags": [
+        "infrastructure",
+        "data-pipeline",
+        "monitoring"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "service:docker-compose.yaml:nginx",
+      "type": "service",
+      "name": "nginx",
+      "filePath": "docker-compose.yaml",
+      "summary": "Nginx 反向代理，聚合所有摄像头 Flask MJPEG 视频流，统一通过 8009 端口对外提供访问。",
+      "tags": [
+        "infrastructure",
+        "networking",
+        "reverse-proxy"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "service:docker-compose.yaml:traffic_analyzer_camera_1",
+      "type": "service",
+      "name": "traffic_analyzer_camera_1",
+      "filePath": "docker-compose.yaml",
+      "summary": "1 号摄像头分析容器，使用本地构建的 traffic_analyzer 镜像运行 main_optimized.py，处理 inter1.mp4 视频，通过 NVIDIA GPU 加速 YOLO 推理，将统计结果发布到 statistics_1 Kafka topic。",
+      "tags": [
+        "infrastructure",
+        "deployment",
+        "computer-vision",
+        "gpu"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "service:docker-compose.yaml:traffic_analyzer_camera_2",
+      "type": "service",
+      "name": "traffic_analyzer_camera_2",
+      "filePath": "docker-compose.yaml",
+      "summary": "2 号摄像头分析容器，复用 traffic_analyzer 镜像处理 inter2.mp4，同样保留 GPU 资源并将结果发布到 statistics_2 topic。",
+      "tags": [
+        "infrastructure",
+        "deployment",
+        "computer-vision",
+        "gpu"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "service:Dockerfile",
+      "type": "service",
+      "name": "Dockerfile",
+      "filePath": "Dockerfile",
+      "summary": "基于 python:3.10.13 的镜像构建文件，先安装系统依赖与 CUDA 版 PyTorch，再利用 requirements.txt 分层缓存安装 Python 依赖，最后复制完整应用代码。",
+      "tags": [
+        "infrastructure",
+        "containerization",
+        "deployment",
+        "python"
+      ],
+      "complexity": "simple",
+      "languageNotes": "采用先 COPY requirements.txt 再安装依赖、后 COPY 其余代码的分层策略，最大化利用 Docker 构建缓存。"
+    },
+    {
+      "id": "document:CLAUDE.md",
+      "type": "document",
+      "name": "CLAUDE.md",
+      "filePath": "CLAUDE.md",
+      "summary": "为 Claude Code 提供的项目指南文件，详细描述了 TrafficAnalyzer 的构建与运行方式、Hydra 配置体系、节点管道架构、微服务数据路径以及关键依赖库的使用方法。",
+      "tags": [
+        "documentation",
+        "developer-guide",
+        "architecture",
+        "entry-point"
+      ],
+      "complexity": "moderate",
+      "languageNotes": "英文撰写的项目技术文档，涵盖 Docker Compose 部署、本地 Python 运行、多进程管道架构和微服务数据流等内容。"
+    },
+    {
+      "id": "document:README-zh.md",
+      "type": "document",
+      "name": "README-zh.md",
+      "filePath": "README-zh.md",
+      "summary": "项目的中文/俄语混合 README 文件，包含安装部署指南、系统架构说明（含 Mermaid 流程图）、四种启动模式介绍、工作示例展示以及 Git 分支演进历史。",
+      "tags": [
+        "documentation",
+        "entry-point",
+        "deployment-guide",
+        "architecture"
+      ],
+      "complexity": "moderate",
+      "languageNotes": "以俄语为主、夹杂中文的项目主 README，包含 Mermaid 管道流程图和多层级分支结构说明。"
+    },
+    {
+      "id": "document:README.md",
+      "type": "document",
+      "name": "README.md",
+      "filePath": "README.md",
+      "summary": "项目的完整中文版 README，涵盖安装启动流程、系统架构描述、节点管道设计、多种运行模式说明、工作效果展示以及 Git 分支版本演进历史。",
+      "tags": [
+        "documentation",
+        "entry-point",
+        "deployment-guide",
+        "architecture"
+      ],
+      "complexity": "moderate",
+      "languageNotes": "全中文撰写的项目主 README，与 README-zh.md 为同一文档的不同语言版本（后者含俄语段落）。"
+    },
+    {
+      "id": "document:TrafficAnalyzer_无人机扩展落地方案.md",
+      "type": "document",
+      "name": "TrafficAnalyzer_无人机扩展落地方案.md",
+      "filePath": "TrafficAnalyzer_无人机扩展落地方案.md",
+      "summary": "基于 TrafficAnalyzer 的无人机路口交通态势监测扩展方案文档，分四期规划：IPM 透视变换标定、EIS 画面稳定、Qwen-VL 语义旁路、多机多路口调度，包含完整的 Python 代码示例和参数速查表。",
+      "tags": [
+        "documentation",
+        "design-spec",
+        "roadmap",
+        "drone-extension"
+      ],
+      "complexity": "complex",
+      "languageNotes": "全中文技术设计文档，包含内联 Python 代码块（标定参数库、EIS 节点、IPM 节点、VLM 旁路）和 JSON/YAML 配置示例，总 725 行。"
+    },
+    {
+      "id": "config:dashboard_backup.json",
+      "type": "config",
+      "name": "dashboard_backup.json",
+      "filePath": "dashboard_backup.json",
+      "summary": "Grafana 仪表盘 JSON 备份文件，包含摄像头 1 的完整仪表盘定义：视频流 iframe 嵌入面板、InfluxDB 数据源查询面板（车辆数量与道路活跃度时序图表）、面板布局及阈值样式配置。",
+      "tags": [
+        "configuration",
+        "grafana-dashboard",
+        "monitoring",
+        "visualization"
+      ],
+      "complexity": "complex",
+      "languageNotes": "标准 Grafana dashboard JSON 导出格式（apiVersion: v0alpha1），包含 text 类型面板（嵌入 Nginx 反代的 Flask MJPEG 流）和 timeseries 类型面板（InfluxDB 查询）。"
+    },
+    {
+      "id": "document:requirements.txt",
+      "type": "document",
+      "name": "requirements.txt",
+      "filePath": "requirements.txt",
+      "summary": "Python 依赖清单，列出项目运行所需的 7 个核心库：ultralytics（YOLO 检测）、opencv-python、shapely（几何计算）、hydra-core（配置管理）、Flask（视频流服务）、kafka-python（消息推送）和 tqdm。",
+      "tags": [
+        "documentation",
+        "dependencies",
+        "build-system",
+        "configuration"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "config:configs/app_config copy.yaml",
+      "type": "config",
+      "name": "app_config copy.yaml",
+      "filePath": "configs/app_config copy.yaml",
+      "summary": "Hydra 主配置文件的俄语备份版本，定义了整个交通分析流水线的参数，包括视频读取、YOLOv8 检测、ByteTrack 跟踪、统计计算、Kafka 生产者和 Flask 视频服务器的配置。检测类别为 COCO 中的 [2,3,5,7] 四类交通工具。",
+      "tags": [
+        "configuration",
+        "hydra",
+        "pipeline",
+        "backup",
+        "russian"
+      ],
+      "complexity": "moderate",
+      "languageNotes": "使用 Hydra 的 ${oc.env:VAR} 和 ${oc.decode:} 语法从环境变量注入运行时参数，注释为俄语。"
+    },
+    {
+      "id": "config:configs/app_config.yaml",
+      "type": "config",
+      "name": "app_config.yaml",
+      "filePath": "configs/app_config.yaml",
+      "summary": "Hydra 主配置文件（中文版），定义了交通分析系统的完整流水线参数：视频源、YOLOv8 检测模型（uav_best.pt，检测 COCO 类别 2-9 共 8 类交通工具）、ByteTrack 跟踪阈值、滑动窗口统计、Kafka 消息发送和 Flask MJPEG 视频流服务。",
+      "tags": [
+        "configuration",
+        "hydra",
+        "pipeline",
+        "entry-point",
+        "chinese"
+      ],
+      "complexity": "moderate",
+      "languageNotes": "使用 Hydra 的 ${oc.env:VAR} 和 ${oc.decode:} 语法实现环境变量覆盖，注释为中文。与备份版本的主要区别是 classes_to_detect 扩展为 [2,3,4,5,6,7,8,9] 八类。"
+    },
+    {
+      "id": "config:configs/entry_exit_lanes.json",
+      "type": "config",
+      "name": "entry_exit_lanes.json",
+      "filePath": "configs/entry_exit_lanes.json",
+      "summary": "定义了 5 条道路（ID 1-5）的四边形多边形坐标，每条道路由 4 个顶点（8 个浮点数）组成，用于环形交叉路口的入口/出口车道区域检测。坐标通过 shapely 进行点-多边形包含测试以分配车辆到对应道路。",
+      "tags": [
+        "configuration",
+        "road-polygon",
+        "lane-definition",
+        "geometry",
+        "spatial-data"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "config:configs/inter1_lanes.json",
+      "type": "config",
+      "name": "inter1_lanes.json",
+      "filePath": "configs/inter1_lanes.json",
+      "summary": "定义了 2 条道路（ID 1-2）的四边形多边形坐标，用于第一个交叉路口的车道区域检测。每条道路由 4 个顶点的平面坐标表示，配合 VideoReader 节点通过环境变量加载。",
+      "tags": [
+        "configuration",
+        "road-polygon",
+        "lane-definition",
+        "geometry",
+        "intersection"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "config:configs/inter2_lanes.json",
+      "type": "config",
+      "name": "inter2_lanes.json",
+      "filePath": "configs/inter2_lanes.json",
+      "summary": "定义了 5 条道路（ID 1-5）的四边形多边形坐标，用于第二个交叉路口的车道区域检测。坐标范围较大（部分值超过 1000），适配高分辨率视频帧的道路区域标注。",
+      "tags": [
+        "configuration",
+        "road-polygon",
+        "lane-definition",
+        "geometry",
+        "intersection"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "config:services/grafana/provisioning/dashboards/camera-1.json",
+      "type": "config",
+      "name": "camera-1.json",
+      "filePath": "services/grafana/provisioning/dashboards/camera-1.json",
+      "summary": "摄像头 1 的 Grafana 仪表盘配置，包含路口视频流嵌入（通过 Nginx 反向代理显示 camera_2 画面）、路口车辆数时序图、各道路拥堵情况条形图与趋势折线图，以及导航至其他仪表盘的按钮。所有 InfluxQL 查询均针对 InfluxDB 中的 \"camera_1\" measurement。",
+      "tags": [
+        "configuration",
+        "monitoring",
+        "grafana-dashboard",
+        "visualization",
+        "traffic-analytics"
+      ],
+      "complexity": "complex",
+      "languageNotes": "Grafana JSON 仪表盘模型，包含 5 个面板（text/timeseries/bargauge），使用 InfluxDB 数据源（uid: cdycrblq6bf9ce）和 PostgreSQL 数据源（用于 HTML 文本面板）。面板通过嵌入 iframe 显示 Nginx 反向代理（localhost:8009）的视频流，并包含跨仪表盘导航按钮。"
+    },
+    {
+      "id": "config:services/grafana/provisioning/dashboards/camera-2.json",
+      "type": "config",
+      "name": "camera-2.json",
+      "filePath": "services/grafana/provisioning/dashboards/camera-2.json",
+      "summary": "摄像头 2 的 Grafana 仪表盘配置，结构与 camera-1.json 对称。包含路口视频流嵌入（通过 Nginx 反向代理显示 camera_1 画面）、路口车辆数时序图、各道路拥堵情况条形图与趋势折线图，以及导航至其他仪表盘的按钮。所有 InfluxQL 查询均针对 InfluxDB 中的 \"camera_2\" measurement。",
+      "tags": [
+        "configuration",
+        "monitoring",
+        "grafana-dashboard",
+        "visualization",
+        "traffic-analytics"
+      ],
+      "complexity": "complex",
+      "languageNotes": "与 camera-1.json 结构完全对称，仅 InfluxDB measurement 名称（camera_2）、iframe 嵌入地址（camera_1 视频流）和导航链接目标不同。体现了多摄像头场景下每摄像头一个仪表盘的配置模式。"
+    },
+    {
+      "id": "config:services/grafana/provisioning/dashboards/dashboard.yaml",
+      "type": "config",
+      "name": "dashboard.yaml",
+      "filePath": "services/grafana/provisioning/dashboards/dashboard.yaml",
+      "summary": "Grafana 仪表盘自动供给（provisioning）配置文件，声明一个名为 \"default\" 的文件型 provider，每 10 秒从 /etc/grafana/provisioning/dashboards 目录自动发现并加载 JSON 仪表盘文件（包括 camera-1.json 和 camera-2.json）。",
+      "tags": [
+        "configuration",
+        "monitoring",
+        "grafana-provisioning",
+        "deployment"
+      ],
+      "complexity": "simple",
+      "languageNotes": "Grafana provisioning API v1 格式。orgId=1 指向默认组织，disableDeletion=false 允许通过 UI 删除自动加载的仪表盘，updateIntervalSeconds=10 控制文件扫描频率。"
+    },
+    {
+      "id": "document:test_videos/rtsp_streaming/README.md",
+      "type": "document",
+      "name": "README.md",
+      "filePath": "test_videos/rtsp_streaming/README.md",
+      "summary": "简要说明如何通过 Docker Compose 启动 MediaMTX 服务器，将本地 MP4 视频转换为 RTSP 流用于 TrafficAnalyzer 测试。",
+      "tags": [
+        "documentation",
+        "rtsp-streaming",
+        "test-setup",
+        "entry-point"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "service:test_videos/rtsp_streaming/docker-compose.yaml",
+      "type": "service",
+      "name": "docker-compose.yaml",
+      "filePath": "test_videos/rtsp_streaming/docker-compose.yaml",
+      "summary": "Docker Compose 编排文件，启动 MediaMTX 容器并映射 RTSP (8554)、RTMP (1935)、HTTP (8888) 和 HTTPS (8889) 端口，同时挂载本地 mediamtx.yml 配置文件。",
+      "tags": [
+        "containerization",
+        "orchestration",
+        "infrastructure",
+        "rtsp-streaming",
+        "deployment"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "service:test_videos/rtsp_streaming/docker-compose.yaml:mediamtx",
+      "type": "service",
+      "name": "mediamtx",
+      "filePath": "test_videos/rtsp_streaming/docker-compose.yaml",
+      "summary": "MediaMTX 媒体服务器容器服务，使用 bluenviron/mediamtx:latest 镜像，提供 RTSP/RTMP/HLS/WebRTC 多协议流媒体转发能力。",
+      "tags": [
+        "media-server",
+        "rtsp-streaming",
+        "containerization"
+      ],
+      "complexity": "simple",
+      "lineRange": [
+        4,
+        14
+      ]
+    },
+    {
+      "id": "config:test_videos/rtsp_streaming/mediamtx.yml",
+      "type": "config",
+      "name": "mediamtx.yml",
+      "filePath": "test_videos/rtsp_streaming/mediamtx.yml",
+      "summary": "MediaMTX 服务器完整配置文件，涵盖 RTSP、RTMP、HLS、WebRTC、SRT 多协议设置，以及内部认证、API、Prometheus 指标、录制、路径钩子等全局和路径级参数。",
+      "tags": [
+        "configuration",
+        "media-server",
+        "rtsp-streaming",
+        "authentication",
+        "infrastructure"
+      ],
+      "complexity": "complex",
+      "languageNotes": "MediaMTX 的 YAML 配置文件采用扁平键值结构，pathDefaults 节为所有路径提供默认值，paths 节可逐路径覆盖，支持正则表达式匹配路径名。"
+    },
+    {
+      "id": "document:test_videos/交通路口数据采集2/堤口路胜利庄北路早高峰0520.txt",
+      "type": "document",
+      "name": "堤口路胜利庄北路早高峰0520.txt",
+      "filePath": "test_videos/交通路口数据采集2/堤口路胜利庄北路早高峰0520.txt",
+      "summary": "济南堤口路与胜利庄北路交叉口早高峰时段的无人机交通数据采集记录文件，包含航线坐标点信息，用于环形交叉路口交通分析系统的视频数据源准备。",
+      "tags": [
+        "documentation",
+        "data-collection",
+        "drone-flight-plan",
+        "traffic-data"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "document:test_videos/交通路口数据采集2/小清河北路与水屯路路口交通数据收集航线快速计划20260403142353.txt",
+      "type": "document",
+      "name": "小清河北路与水屯路路口交通数据收集航线快速计划20260403142353.txt",
+      "filePath": "test_videos/交通路口数据采集2/小清河北路与水屯路路口交通数据收集航线快速计划20260403142353.txt",
+      "summary": "小清河北路与水屯路交叉口的无人机快速航线计划文件（2026年4月3日生成），包含DJI无人机自动飞行任务的GPS航点坐标和飞行参数，用于交通数据采集。",
+      "tags": [
+        "documentation",
+        "drone-flight-plan",
+        "data-collection",
+        "traffic-data"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "document:test_videos/交通路口数据采集2/梓东大道308国道早高峰0520.txt",
+      "type": "document",
+      "name": "梓东大道308国道早高峰0520.txt",
+      "filePath": "test_videos/交通路口数据采集2/梓东大道308国道早高峰0520.txt",
+      "summary": "梓东大道与308国道交叉口早高峰时段的无人机交通数据采集记录文件，包含飞行航点坐标数据，为环形交叉路口交通分析提供视频素材准备。",
+      "tags": [
+        "documentation",
+        "data-collection",
+        "drone-flight-plan",
+        "traffic-data"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "document:test_videos/交通路口数据采集2/梓东大道与208国道路口快速计划20260403134109.txt",
+      "type": "document",
+      "name": "梓东大道与208国道路口快速计划20260403134109.txt",
+      "filePath": "test_videos/交通路口数据采集2/梓东大道与208国道路口快速计划20260403134109.txt",
+      "summary": "梓东大道与208国道交叉口的无人机快速航线计划文件（2026年4月3日生成），包含自动飞行任务的航点信息，用于路口交通数据采集。",
+      "tags": [
+        "documentation",
+        "drone-flight-plan",
+        "data-collection",
+        "traffic-data"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:.DS_Store",
+      "type": "file",
+      "name": ".DS_Store",
+      "filePath": ".DS_Store",
+      "summary": "macOS系统自动生成的目录元数据文件，用于存储Finder自定义显示设置，不包含项目逻辑代码。",
+      "tags": [
+        "system",
+        "metadata",
+        "macos"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "document:absolute/path/to/README.md",
+      "type": "document",
+      "name": "README.md",
+      "filePath": "absolute/path/to/README.md",
+      "summary": "项目主文档文件，标题为「环形交叉路口交通分析器」，描述多摄像头生产版本的基本功能介绍及安装运行指南，指向视频教程。",
+      "tags": [
+        "documentation",
+        "entry-point",
+        "overview",
+        "readme"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:byte_tracker/utils/matching.py",
+      "type": "file",
+      "name": "matching.py",
+      "filePath": "byte_tracker/utils/matching.py",
+      "summary": "ByteTrack多目标跟踪算法的核心匹配工具模块，提供线性分配（基于LAP求解器）、IoU距离计算、嵌入特征距离、卡尔曼滤波门控及代价矩阵融合等函数，用于将检测框与已有跟踪轨迹进行数据关联。",
+      "tags": [
+        "utility",
+        "tracking",
+        "matching",
+        "data-association",
+        "byte-track"
+      ],
+      "complexity": "moderate",
+      "languageNotes": "使用lap.lapjv（LAP Jonker-Volgenant算法）进行线性分配求解，比匈牙利算法更高效；使用cython_bbox的Cython加速IoU计算。"
+    },
+    {
+      "id": "function:byte_tracker/utils/matching.py:merge_matches",
+      "type": "function",
+      "name": "merge_matches",
+      "filePath": "byte_tracker/utils/matching.py",
+      "lineRange": [
+        11,
+        25
+      ],
+      "summary": "通过稀疏矩阵乘法组合两组匹配结果（m1和m2），生成跨三层的传递匹配关系及未匹配索引，用于ByteTrack的两阶段级联匹配。",
+      "tags": [
+        "matching",
+        "sparse-matrix",
+        "cascade"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:byte_tracker/utils/matching.py:_indices_to_matches",
+      "type": "function",
+      "name": "_indices_to_matches",
+      "filePath": "byte_tracker/utils/matching.py",
+      "lineRange": [
+        28,
+        36
+      ],
+      "summary": "将线性分配求解器输出的索引对转换为匹配对和未匹配集合，按阈值过滤高代价匹配。",
+      "tags": [
+        "matching",
+        "utility",
+        "internal"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:byte_tracker/utils/matching.py:linear_assignment",
+      "type": "function",
+      "name": "linear_assignment",
+      "filePath": "byte_tracker/utils/matching.py",
+      "lineRange": [
+        39,
+        50
+      ],
+      "summary": "基于LAP（线性分配问题）求解器进行最优匹配，使用lapjv算法求解代价矩阵并返回匹配对、未匹配行和未匹配列。",
+      "tags": [
+        "matching",
+        "optimization",
+        "lap-solver"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:byte_tracker/utils/matching.py:ious",
+      "type": "function",
+      "name": "ious",
+      "filePath": "byte_tracker/utils/matching.py",
+      "lineRange": [
+        53,
+        70
+      ],
+      "summary": "计算两组边界框（atlbrs和btlbrs）之间的IoU（交并比）矩阵，使用cython_bbox进行加速计算。",
+      "tags": [
+        "iou",
+        "bounding-box",
+        "metric"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:byte_tracker/utils/matching.py:iou_distance",
+      "type": "function",
+      "name": "iou_distance",
+      "filePath": "byte_tracker/utils/matching.py",
+      "lineRange": [
+        73,
+        91
+      ],
+      "summary": "计算跟踪轨迹与检测框之间的IoU代价矩阵（1 - IoU），用于数据关联中的空间距离度量。",
+      "tags": [
+        "iou",
+        "distance-metric",
+        "cost-matrix"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:byte_tracker/utils/matching.py:v_iou_distance",
+      "type": "function",
+      "name": "v_iou_distance",
+      "filePath": "byte_tracker/utils/matching.py",
+      "lineRange": [
+        93,
+        111
+      ],
+      "summary": "计算基于视觉的IoU距离矩阵，将跟踪轨迹的tlwh格式转换为tlbr格式后进行IoU计算，适用于视觉跟踪场景。",
+      "tags": [
+        "iou",
+        "distance-metric",
+        "visual-tracking"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "config:configs/hydra/job_logging/custom.yaml",
+      "type": "config",
+      "name": "custom.yaml",
+      "filePath": "configs/hydra/job_logging/custom.yaml",
+      "summary": "Hydra框架的自定义日志配置，定义控制台输出格式（时间戳-模块名-日志级别-消息），设置根日志级别为INFO，使用StreamHandler输出到标准输出。",
+      "tags": [
+        "configuration",
+        "logging",
+        "hydra",
+        "yaml"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:content_for_readme/architecture.drawio",
+      "type": "file",
+      "name": "architecture.drawio",
+      "filePath": "content_for_readme/architecture.drawio",
+      "summary": "项目系统架构图源文件（draw.io格式），描述TrafficAnalyzer的整体架构，包括节点流水线、微服务数据路径和组件关系图。",
+      "tags": [
+        "documentation",
+        "architecture",
+        "diagram",
+        "drawio"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:elements/TrackElement.py",
+      "type": "file",
+      "name": "TrackElement.py",
+      "filePath": "elements/TrackElement.py",
+      "summary": "单车跟踪状态数据载体类，存储每辆被跟踪车辆的ID、首次/最后检测时间戳、起始道路编号及道路初始化时间戳，被TrackerInfoUpdateNode管理和更新。",
+      "tags": [
+        "data-model",
+        "tracking",
+        "element"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:elements/TrackElement.py:TrackElement",
+      "type": "class",
+      "name": "TrackElement",
+      "filePath": "elements/TrackElement.py",
+      "lineRange": [
+        1,
+        18
+      ],
+      "summary": "包含特定车辆跟踪信息的数据类，属性包括id（跟踪编号）、timestamp_first（初始化时间戳）、timestamp_last（最后检测时间）、start_road（起始道路编号）和timestamp_init_road（道路编号初始化时间戳）。",
+      "tags": [
+        "data-model",
+        "tracking",
+        "state"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:export_dashboards.py",
+      "type": "file",
+      "name": "export_dashboards.py",
+      "filePath": "export_dashboards.py",
+      "summary": "Grafana仪表盘导出脚本，通过HTTP API从本地Grafana实例获取指定UID的仪表盘JSON数据并保存为本地备份文件。",
+      "tags": [
+        "utility",
+        "grafana",
+        "dashboard-management",
+        "script"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:export_dashboards.py:get_dashboard",
+      "type": "function",
+      "name": "get_dashboard",
+      "filePath": "export_dashboards.py",
+      "lineRange": [
+        15,
+        23
+      ],
+      "summary": "通过Grafana REST API获取指定UID的仪表盘完整JSON数据，使用Basic认证访问本地Grafana服务。",
+      "tags": [
+        "grafana-api",
+        "http-client",
+        "dashboard"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:fetch_dashboard.py",
+      "type": "file",
+      "name": "fetch_dashboard.py",
+      "filePath": "fetch_dashboard.py",
+      "summary": "Grafana仪表盘批量拉取脚本，从本地Grafana实例下载多个摄像头仪表盘JSON，去除id字段后保存到provisioning目录用于自动部署。",
+      "tags": [
+        "utility",
+        "grafana",
+        "dashboard-management",
+        "provisioning"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:generate_lanes.py",
+      "type": "file",
+      "name": "generate_lanes.py",
+      "filePath": "generate_lanes.py",
+      "summary": "交互式道路车道多边形标注工具，通过OpenCV窗口点击4个点定义四边形道路区域，支持取消、重置和保存操作，输出与configs/目录兼容的JSON格式。",
+      "tags": [
+        "utility",
+        "lane-annotation",
+        "interactive-tool",
+        "opencv"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:generate_lanes.py:mouse_callback",
+      "type": "function",
+      "name": "mouse_callback",
+      "filePath": "generate_lanes.py",
+      "lineRange": [
+        31,
+        57
+      ],
+      "summary": "OpenCV鼠标回调函数，处理左键点击事件收集多边形顶点，满4点后自动闭合并保存道路多边形，同时在画面上绘制半透明填充和编号标注。",
+      "tags": [
+        "event-handler",
+        "opencv",
+        "interactive",
+        "annotation"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:nodes/TrackerInfoUpdateNode.py",
+      "type": "file",
+      "name": "TrackerInfoUpdateNode.py",
+      "filePath": "nodes/TrackerInfoUpdateNode.py",
+      "summary": "跟踪信息更新节点，维护活动跟踪缓冲区buffer_tracks，为新检测到的车辆创建TrackElement，通过中心点-多边形相交检测分配起始道路编号，并按buffer_analytics时间窗口清理过期跟踪。",
+      "tags": [
+        "pipeline-node",
+        "tracking",
+        "road-assignment",
+        "buffer-management"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:nodes/TrackerInfoUpdateNode.py:TrackerInfoUpdateNode",
+      "type": "class",
+      "name": "TrackerInfoUpdateNode",
+      "filePath": "nodes/TrackerInfoUpdateNode.py",
+      "lineRange": [
+        11,
+        74
+      ],
+      "summary": "活动跟踪更新模块的核心处理类，process方法接收FrameElement，为每个检测ID创建或更新TrackElement，调用intersects_central_point确定起始道路，并定期清理超过buffer_analytics窗口的旧跟踪。",
+      "tags": [
+        "pipeline-node",
+        "tracking",
+        "state-management"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:services/grafana/grafana.db",
+      "type": "file",
+      "name": "grafana.db",
+      "filePath": "services/grafana/grafana.db",
+      "summary": "Grafana内部SQLite数据库文件，存储仪表盘配置、用户数据、数据源设置等Grafana运行时状态，由Grafana服务自动管理。",
+      "tags": [
+        "database",
+        "grafana",
+        "runtime-state",
+        "binary"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:services/kafka/init-kafka-broker.sh",
+      "type": "file",
+      "name": "init-kafka-broker.sh",
+      "filePath": "services/kafka/init-kafka-broker.sh",
+      "summary": "Kafka broker初始化脚本，创建配置目录、复制JAAS认证配置文件，并通过环境变量替换用户名和密码占位符后启动Kafka服务。",
+      "tags": [
+        "infrastructure",
+        "kafka",
+        "initialization",
+        "shell-script"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:services/kafka/kafka_server_jaas.conf",
+      "type": "file",
+      "name": "kafka_server_jaas.conf",
+      "filePath": "services/kafka/kafka_server_jaas.conf",
+      "summary": "Kafka JAAS（Java认证和授权服务）安全配置文件，定义PLAIN登录模块的用户名和密码认证，支持通过环境变量动态注入凭证。",
+      "tags": [
+        "security",
+        "kafka",
+        "authentication",
+        "configuration"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:services/nginx/nginx.conf",
+      "type": "file",
+      "name": "nginx.conf",
+      "filePath": "services/nginx/nginx.conf",
+      "summary": "Nginx反向代理配置，监听8009端口，使用正则匹配/camera_N路径并动态代理到对应camera容器（traffic_analyzer_camera_N:8100/video）的Flask MJPEG视频流。",
+      "tags": [
+        "infrastructure",
+        "reverse-proxy",
+        "video-streaming",
+        "nginx"
+      ],
+      "complexity": "simple",
+      "languageNotes": "使用Nginx正则捕获组(\\d+)动态提取摄像头ID，配合resolver解析Docker内部DNS实现动态路由。"
+    },
+    {
+      "id": "file:services/telegraf/telegraf.conf",
+      "type": "file",
+      "name": "telegraf.conf",
+      "filePath": "services/telegraf/telegraf.conf",
+      "summary": "Telegraf数据采集代理配置，定义两个kafka_consumer输入插件分别消费statistics_1和statistics_2主题，将JSON格式的交通统计数据写入InfluxDB数据库。",
+      "tags": [
+        "infrastructure",
+        "data-pipeline",
+        "telegraf",
+        "kafka-consumer"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:test_videos/.DS_Store",
+      "type": "file",
+      "name": ".DS_Store",
+      "filePath": "test_videos/.DS_Store",
+      "summary": "macOS系统在test_videos目录下自动生成的元数据文件，存储Finder显示偏好设置，无项目逻辑意义。",
+      "tags": [
+        "system",
+        "metadata",
+        "macos"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:test_videos/rtsp_streaming/ffmpeg_rtsp.ipynb",
+      "type": "file",
+      "name": "ffmpeg_rtsp.ipynb",
+      "filePath": "test_videos/rtsp_streaming/ffmpeg_rtsp.ipynb",
+      "summary": "RTSP流媒体测试笔记本，探索使用FFmpeg进行RTSP流推送和接收的实验代码，用于调试摄像头的实时视频流接入。",
+      "tags": [
+        "notebook",
+        "rtsp",
+        "streaming",
+        "ffmpeg",
+        "experiment"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:update_dashboards.py",
+      "type": "file",
+      "name": "update_dashboards.py",
+      "filePath": "update_dashboards.py",
+      "summary": "Grafana仪表盘翻译更新脚本，从Grafana API拉取仪表盘JSON，递归替换俄文标签为中文（如道路名称、图表标题），然后通过API回写更新。",
+      "tags": [
+        "utility",
+        "grafana",
+        "i18n",
+        "dashboard-management"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:update_dashboards.py:get_dashboard",
+      "type": "function",
+      "name": "get_dashboard",
+      "filePath": "update_dashboards.py",
+      "lineRange": [
+        15,
+        23
+      ],
+      "summary": "通过Grafana REST API和Basic认证获取指定UID仪表盘的完整JSON响应数据。",
+      "tags": [
+        "grafana-api",
+        "http-client",
+        "dashboard"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:update_dashboards.py:update_dashboard",
+      "type": "function",
+      "name": "update_dashboard",
+      "filePath": "update_dashboards.py",
+      "lineRange": [
+        25,
+        42
+      ],
+      "summary": "将修改后的仪表盘JSON数据通过POST请求回写到Grafana，设置overwrite为true覆盖现有版本，处理HTTP错误并输出响应。",
+      "tags": [
+        "grafana-api",
+        "http-client",
+        "dashboard-update"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:update_dashboards.py:translate_json",
+      "type": "function",
+      "name": "translate_json",
+      "filePath": "update_dashboards.py",
+      "lineRange": [
+        61,
+        73
+      ],
+      "summary": "递归遍历JSON数据结构（字典和列表），将字符串值中的俄文文本按映射表替换为中文对应翻译。",
+      "tags": [
+        "i18n",
+        "json-processing",
+        "recursive",
+        "translation"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:utils_local/templates/index.html",
+      "type": "file",
+      "name": "index.html",
+      "filePath": "utils_local/templates/index.html",
+      "summary": "Flask视频流前端页面模板，使用Jinja2模板引擎渲染MJPEG视频流img标签，提供「摄像头直播」标题和实时视频展示。",
+      "tags": [
+        "markup",
+        "flask-template",
+        "video-streaming",
+        "frontend"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:weights/uav_best.pt",
+      "type": "file",
+      "name": "uav_best.pt",
+      "filePath": "weights/uav_best.pt",
+      "summary": "自定义训练的YOLOv8目标检测模型权重文件（PyTorch格式），专为无人机视角训练，检测COCO类别2-9（车辆类），是系统默认使用的检测模型。",
+      "tags": [
+        "model-weights",
+        "yolov8",
+        "object-detection",
+        "uav",
+        "binary"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:weights/YOLOv8_TensorRT_converter.ipynb",
+      "type": "file",
+      "name": "YOLOv8_TensorRT_converter.ipynb",
+      "filePath": "weights/YOLOv8_TensorRT_converter.ipynb",
+      "summary": "YOLOv8模型TensorRT转换笔记本，包含将PyTorch模型转换为NVIDIA TensorRT优化格式的步骤，用于GPU推理加速部署。",
+      "tags": [
+        "notebook",
+        "tensorrt",
+        "model-optimization",
+        "gpu-inference"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:weights/yolov8m.pt",
+      "type": "file",
+      "name": "yolov8m.pt",
+      "filePath": "weights/yolov8m.pt",
+      "summary": "YOLOv8中型（Medium）预训练模型权重文件（PyTorch格式），官方COCO数据集训练，可作为自定义训练的基线模型或备用检测模型。",
+      "tags": [
+        "model-weights",
+        "yolov8",
+        "pretrained",
+        "object-detection",
+        "binary"
+      ],
+      "complexity": "simple"
+    }
+  ],
+  "edges": [
+    {
+      "source": "file:elements/VideoEndBreakElement.py",
+      "target": "file:elements/FrameElement.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:main_optimized.py",
+      "target": "file:elements/VideoEndBreakElement.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:main_optimized.py",
+      "target": "file:nodes/CalcStatisticsNode.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:main_optimized.py",
+      "target": "file:nodes/DetectionTrackingNodes.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:main_optimized.py",
+      "target": "file:nodes/FlaskServerVideoNode.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:main_optimized.py",
+      "target": "file:nodes/KafkaProducerNode.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:main_optimized.py",
+      "target": "file:nodes/ShowNode.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:main_optimized.py",
+      "target": "file:nodes/TrackerInfoUpdateNode.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:main_optimized.py",
+      "target": "file:nodes/VideoReader.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:main_optimized.py",
+      "target": "file:nodes/VideoSaverNode.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:main_optimized.py",
+      "target": "file:utils_local/utils.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:main_stream_optimized_v2.py",
+      "target": "file:elements/VideoEndBreakElement.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:main_stream_optimized_v2.py",
+      "target": "file:nodes/CalcStatisticsNode.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:main_stream_optimized_v2.py",
+      "target": "file:nodes/DetectionTrackingNodes.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:main_stream_optimized_v2.py",
+      "target": "file:nodes/FlaskServerVideoNode.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:main_stream_optimized_v2.py",
+      "target": "file:nodes/KafkaProducerNode.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:main_stream_optimized_v2.py",
+      "target": "file:nodes/ShowNode.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:main_stream_optimized_v2.py",
+      "target": "file:nodes/TrackerInfoUpdateNode.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:main_stream_optimized_v2.py",
+      "target": "file:nodes/VideoReader.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:main_stream_optimized_v2.py",
+      "target": "file:nodes/VideoSaverNode.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:main_stream_optimized_v2.py",
+      "target": "file:utils_local/utils.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:nodes/FlaskServerVideoNode.py",
+      "target": "file:elements/FrameElement.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:nodes/FlaskServerVideoNode.py",
+      "target": "file:elements/VideoEndBreakElement.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:nodes/VideoReader.py",
+      "target": "file:elements/FrameElement.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:nodes/VideoReader.py",
+      "target": "file:elements/VideoEndBreakElement.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:nodes/VideoSaverNode.py",
+      "target": "file:elements/FrameElement.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:nodes/VideoSaverNode.py",
+      "target": "file:elements/VideoEndBreakElement.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:elements/FrameElement.py",
+      "target": "class:elements/FrameElement.py:FrameElement",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:elements/FrameElement.py",
+      "target": "class:elements/FrameElement.py:FrameElement",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:elements/VideoEndBreakElement.py",
+      "target": "class:elements/VideoEndBreakElement.py:VideoEndBreakElement",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:elements/VideoEndBreakElement.py",
+      "target": "class:elements/VideoEndBreakElement.py:VideoEndBreakElement",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:main_optimized.py",
+      "target": "function:main_optimized.py:proc_frame_reader_and_detection",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:main_optimized.py",
+      "target": "function:main_optimized.py:proc_frame_reader_and_detection",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:main_optimized.py",
+      "target": "function:main_optimized.py:proc_tracker_update_and_calc",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:main_optimized.py",
+      "target": "function:main_optimized.py:proc_tracker_update_and_calc",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:main_optimized.py",
+      "target": "function:main_optimized.py:proc_show_node",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:main_optimized.py",
+      "target": "function:main_optimized.py:proc_show_node",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:main_optimized.py",
+      "target": "function:main_optimized.py:main",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:main_optimized.py",
+      "target": "function:main_optimized.py:main",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:main_stream_optimized_v2.py",
+      "target": "function:main_stream_optimized_v2.py:proc_frame_reader",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:main_stream_optimized_v2.py",
+      "target": "function:main_stream_optimized_v2.py:proc_frame_reader",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:main_stream_optimized_v2.py",
+      "target": "function:main_stream_optimized_v2.py:proc_proceessor",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:main_stream_optimized_v2.py",
+      "target": "function:main_stream_optimized_v2.py:proc_proceessor",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:main_stream_optimized_v2.py",
+      "target": "function:main_stream_optimized_v2.py:main",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:main_stream_optimized_v2.py",
+      "target": "function:main_stream_optimized_v2.py:main",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:nodes/FlaskServerVideoNode.py",
+      "target": "class:nodes/FlaskServerVideoNode.py:VideoServer",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:nodes/FlaskServerVideoNode.py",
+      "target": "class:nodes/FlaskServerVideoNode.py:VideoServer",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:nodes/VideoReader.py",
+      "target": "class:nodes/VideoReader.py:VideoReader",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:nodes/VideoReader.py",
+      "target": "class:nodes/VideoReader.py:VideoReader",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:nodes/VideoSaverNode.py",
+      "target": "class:nodes/VideoSaverNode.py:VideoSaverNode",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:nodes/VideoSaverNode.py",
+      "target": "class:nodes/VideoSaverNode.py:VideoSaverNode",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "class:elements/VideoEndBreakElement.py:VideoEndBreakElement",
+      "target": "class:elements/FrameElement.py:FrameElement",
+      "type": "inherits",
+      "direction": "forward",
+      "weight": 0.9
+    },
+    {
+      "source": "file:main.py",
+      "target": "function:main.py:main",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:main.py",
+      "target": "function:main.py:main",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:main_stream_optimized.py",
+      "target": "function:main_stream_optimized.py:proc_frame_reader",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:main_stream_optimized.py",
+      "target": "function:main_stream_optimized.py:proc_proceessor",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:main_stream_optimized.py",
+      "target": "function:main_stream_optimized.py:main",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:main_stream_optimized.py",
+      "target": "function:main_stream_optimized.py:proc_frame_reader",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:main_stream_optimized.py",
+      "target": "function:main_stream_optimized.py:proc_proceessor",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:main_stream_optimized.py",
+      "target": "function:main_stream_optimized.py:main",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:nodes/CalcStatisticsNode.py",
+      "target": "class:nodes/CalcStatisticsNode.py:CalcStatisticsNode",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:nodes/CalcStatisticsNode.py",
+      "target": "class:nodes/CalcStatisticsNode.py:CalcStatisticsNode",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:nodes/KafkaProducerNode.py",
+      "target": "class:nodes/KafkaProducerNode.py:KafkaProducerNode",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:nodes/KafkaProducerNode.py",
+      "target": "class:nodes/KafkaProducerNode.py:KafkaProducerNode",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:nodes/ShowNode.py",
+      "target": "class:nodes/ShowNode.py:ShowNode",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:nodes/ShowNode.py",
+      "target": "class:nodes/ShowNode.py:ShowNode",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:utils_local/utils.py",
+      "target": "function:utils_local/utils.py:check_and_set_env_var",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:utils_local/utils.py",
+      "target": "function:utils_local/utils.py:profile_time",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:utils_local/utils.py",
+      "target": "class:utils_local/utils.py:FPS_Counter",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:utils_local/utils.py",
+      "target": "function:utils_local/utils.py:intersects_central_point",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:utils_local/utils.py",
+      "target": "function:utils_local/utils.py:check_and_set_env_var",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:utils_local/utils.py",
+      "target": "function:utils_local/utils.py:profile_time",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:utils_local/utils.py",
+      "target": "class:utils_local/utils.py:FPS_Counter",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:utils_local/utils.py",
+      "target": "function:utils_local/utils.py:intersects_central_point",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:main.py",
+      "target": "file:elements/VideoEndBreakElement.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:main.py",
+      "target": "file:nodes/CalcStatisticsNode.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:main.py",
+      "target": "file:nodes/DetectionTrackingNodes.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:main.py",
+      "target": "file:nodes/FlaskServerVideoNode.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:main.py",
+      "target": "file:nodes/KafkaProducerNode.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:main.py",
+      "target": "file:nodes/ShowNode.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:main.py",
+      "target": "file:nodes/TrackerInfoUpdateNode.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:main.py",
+      "target": "file:nodes/VideoReader.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:main.py",
+      "target": "file:nodes/VideoSaverNode.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:main.py",
+      "target": "file:utils_local/utils.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:main_stream_optimized.py",
+      "target": "file:elements/VideoEndBreakElement.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:main_stream_optimized.py",
+      "target": "file:nodes/CalcStatisticsNode.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:main_stream_optimized.py",
+      "target": "file:nodes/DetectionTrackingNodes.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:main_stream_optimized.py",
+      "target": "file:nodes/FlaskServerVideoNode.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:main_stream_optimized.py",
+      "target": "file:nodes/KafkaProducerNode.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:main_stream_optimized.py",
+      "target": "file:nodes/ShowNode.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:main_stream_optimized.py",
+      "target": "file:nodes/TrackerInfoUpdateNode.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:main_stream_optimized.py",
+      "target": "file:nodes/VideoReader.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:main_stream_optimized.py",
+      "target": "file:nodes/VideoSaverNode.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:main_stream_optimized.py",
+      "target": "file:utils_local/utils.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:nodes/CalcStatisticsNode.py",
+      "target": "file:elements/FrameElement.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:nodes/CalcStatisticsNode.py",
+      "target": "file:elements/VideoEndBreakElement.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:nodes/CalcStatisticsNode.py",
+      "target": "file:utils_local/utils.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:nodes/KafkaProducerNode.py",
+      "target": "file:elements/FrameElement.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:nodes/KafkaProducerNode.py",
+      "target": "file:elements/VideoEndBreakElement.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:nodes/KafkaProducerNode.py",
+      "target": "file:utils_local/utils.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:nodes/ShowNode.py",
+      "target": "file:elements/FrameElement.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:nodes/ShowNode.py",
+      "target": "file:elements/VideoEndBreakElement.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:nodes/ShowNode.py",
+      "target": "file:utils_local/utils.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:byte_tracker/byte_tracker_model.py",
+      "target": "file:byte_tracker/utils/basetrack.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:byte_tracker/byte_tracker_model.py",
+      "target": "file:byte_tracker/utils/kalman_filter.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:nodes/DetectionTrackingNodes.py",
+      "target": "file:byte_tracker/byte_tracker_model.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:nodes/DetectionTrackingNodes.py",
+      "target": "file:elements/FrameElement.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:nodes/DetectionTrackingNodes.py",
+      "target": "file:elements/VideoEndBreakElement.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:nodes/DetectionTrackingNodes.py",
+      "target": "file:utils_local/utils.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:byte_tracker/byte_tracker_model.py",
+      "target": "class:byte_tracker/byte_tracker_model.py:STrack",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:byte_tracker/byte_tracker_model.py",
+      "target": "class:byte_tracker/byte_tracker_model.py:BYTETracker",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:byte_tracker/byte_tracker_model.py",
+      "target": "function:byte_tracker/byte_tracker_model.py:STrack.predict",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:byte_tracker/byte_tracker_model.py",
+      "target": "function:byte_tracker/byte_tracker_model.py:STrack.multi_predict",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:byte_tracker/byte_tracker_model.py",
+      "target": "function:byte_tracker/byte_tracker_model.py:STrack.activate",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:byte_tracker/byte_tracker_model.py",
+      "target": "function:byte_tracker/byte_tracker_model.py:STrack.re_activate",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:byte_tracker/byte_tracker_model.py",
+      "target": "function:byte_tracker/byte_tracker_model.py:STrack.update",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:byte_tracker/byte_tracker_model.py",
+      "target": "function:byte_tracker/byte_tracker_model.py:STrack.tlwh",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:byte_tracker/byte_tracker_model.py",
+      "target": "function:byte_tracker/byte_tracker_model.py:STrack.tlwh_to_xyah",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:byte_tracker/byte_tracker_model.py",
+      "target": "function:byte_tracker/byte_tracker_model.py:BYTETracker.__init__",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:byte_tracker/byte_tracker_model.py",
+      "target": "function:byte_tracker/byte_tracker_model.py:BYTETracker.update",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:byte_tracker/byte_tracker_model.py",
+      "target": "function:byte_tracker/byte_tracker_model.py:joint_stracks",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:byte_tracker/byte_tracker_model.py",
+      "target": "function:byte_tracker/byte_tracker_model.py:sub_stracks",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:byte_tracker/byte_tracker_model.py",
+      "target": "function:byte_tracker/byte_tracker_model.py:remove_duplicate_stracks",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:byte_tracker/byte_tracker_model.py",
+      "target": "class:byte_tracker/byte_tracker_model.py:STrack",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:byte_tracker/byte_tracker_model.py",
+      "target": "class:byte_tracker/byte_tracker_model.py:BYTETracker",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "class:byte_tracker/byte_tracker_model.py:STrack",
+      "target": "class:byte_tracker/utils/basetrack.py:BaseTrack",
+      "type": "inherits",
+      "direction": "forward",
+      "weight": 0.9
+    },
+    {
+      "source": "file:byte_tracker/utils/basetrack.py",
+      "target": "class:byte_tracker/utils/basetrack.py:TrackState",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:byte_tracker/utils/basetrack.py",
+      "target": "class:byte_tracker/utils/basetrack.py:BaseTrack",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:byte_tracker/utils/basetrack.py",
+      "target": "function:byte_tracker/utils/basetrack.py:BaseTrack.next_id",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:byte_tracker/utils/basetrack.py",
+      "target": "class:byte_tracker/utils/basetrack.py:TrackState",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:byte_tracker/utils/basetrack.py",
+      "target": "class:byte_tracker/utils/basetrack.py:BaseTrack",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:byte_tracker/utils/kalman_filter.py",
+      "target": "class:byte_tracker/utils/kalman_filter.py:KalmanFilter",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:byte_tracker/utils/kalman_filter.py",
+      "target": "function:byte_tracker/utils/kalman_filter.py:KalmanFilter.initiate",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:byte_tracker/utils/kalman_filter.py",
+      "target": "function:byte_tracker/utils/kalman_filter.py:KalmanFilter.predict",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:byte_tracker/utils/kalman_filter.py",
+      "target": "function:byte_tracker/utils/kalman_filter.py:KalmanFilter.project",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:byte_tracker/utils/kalman_filter.py",
+      "target": "function:byte_tracker/utils/kalman_filter.py:KalmanFilter.multi_predict",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:byte_tracker/utils/kalman_filter.py",
+      "target": "function:byte_tracker/utils/kalman_filter.py:KalmanFilter.update",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:byte_tracker/utils/kalman_filter.py",
+      "target": "function:byte_tracker/utils/kalman_filter.py:KalmanFilter.gating_distance",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:byte_tracker/utils/kalman_filter.py",
+      "target": "class:byte_tracker/utils/kalman_filter.py:KalmanFilter",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:nodes/DetectionTrackingNodes.py",
+      "target": "class:nodes/DetectionTrackingNodes.py:DetectionTrackingNodes",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:nodes/DetectionTrackingNodes.py",
+      "target": "function:nodes/DetectionTrackingNodes.py:DetectionTrackingNodes.__init__",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:nodes/DetectionTrackingNodes.py",
+      "target": "function:nodes/DetectionTrackingNodes.py:DetectionTrackingNodes.process",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:nodes/DetectionTrackingNodes.py",
+      "target": "function:nodes/DetectionTrackingNodes.py:DetectionTrackingNodes._get_results_dor_tracker",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:nodes/DetectionTrackingNodes.py",
+      "target": "class:nodes/DetectionTrackingNodes.py:DetectionTrackingNodes",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:nodes/DetectionTrackingNodes.py",
+      "target": "file:elements/FrameElement.py",
+      "type": "depends_on",
+      "direction": "forward",
+      "weight": 0.6
+    },
+    {
+      "source": "file:nodes/DetectionTrackingNodes.py",
+      "target": "file:elements/VideoEndBreakElement.py",
+      "type": "depends_on",
+      "direction": "forward",
+      "weight": 0.6
+    },
+    {
+      "source": "file:nodes/DetectionTrackingNodes.py",
+      "target": "file:utils_local/utils.py",
+      "type": "depends_on",
+      "direction": "forward",
+      "weight": 0.6
+    },
+    {
+      "source": "function:nodes/DetectionTrackingNodes.py:DetectionTrackingNodes.process",
+      "target": "function:utils_local/utils.py:profile_time",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:byte_tracker/byte_tracker_model.py:STrack.predict",
+      "target": "function:byte_tracker/utils/kalman_filter.py:KalmanFilter.predict",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:byte_tracker/byte_tracker_model.py:STrack.activate",
+      "target": "function:byte_tracker/utils/kalman_filter.py:KalmanFilter.initiate",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:byte_tracker/byte_tracker_model.py:STrack.re_activate",
+      "target": "function:byte_tracker/utils/kalman_filter.py:KalmanFilter.update",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:byte_tracker/byte_tracker_model.py:STrack.update",
+      "target": "function:byte_tracker/utils/kalman_filter.py:KalmanFilter.update",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:byte_tracker/byte_tracker_model.py:STrack.multi_predict",
+      "target": "function:byte_tracker/utils/kalman_filter.py:KalmanFilter.multi_predict",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:nodes/DetectionTrackingNodes.py:DetectionTrackingNodes.process",
+      "target": "function:byte_tracker/byte_tracker_model.py:BYTETracker.update",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "pipeline:docker-compose.yaml",
+      "target": "service:Dockerfile",
+      "type": "depends_on",
+      "direction": "forward",
+      "weight": 0.6
+    },
+    {
+      "source": "service:docker-compose.yaml:traffic_analyzer_camera_1",
+      "target": "service:docker-compose.yaml:kafka",
+      "type": "depends_on",
+      "direction": "forward",
+      "weight": 0.6
+    },
+    {
+      "source": "service:docker-compose.yaml:traffic_analyzer_camera_2",
+      "target": "service:docker-compose.yaml:kafka",
+      "type": "depends_on",
+      "direction": "forward",
+      "weight": 0.6
+    },
+    {
+      "source": "service:docker-compose.yaml:kafka",
+      "target": "service:docker-compose.yaml:zookeeper",
+      "type": "depends_on",
+      "direction": "forward",
+      "weight": 0.6
+    },
+    {
+      "source": "service:docker-compose.yaml:telegraf",
+      "target": "service:docker-compose.yaml:influxdb",
+      "type": "depends_on",
+      "direction": "forward",
+      "weight": 0.6
+    },
+    {
+      "source": "service:docker-compose.yaml:kafka-ui",
+      "target": "service:docker-compose.yaml:kafka",
+      "type": "depends_on",
+      "direction": "forward",
+      "weight": 0.6
+    },
+    {
+      "source": "service:Dockerfile",
+      "target": "file:main_optimized.py",
+      "type": "deploys",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "document:README.md",
+      "target": "document:README-zh.md",
+      "type": "related",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "document:CLAUDE.md",
+      "target": "document:requirements.txt",
+      "type": "related",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "document:TrafficAnalyzer_无人机扩展落地方案.md",
+      "target": "document:README.md",
+      "type": "related",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "config:dashboard_backup.json",
+      "target": "document:README.md",
+      "type": "related",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "config:configs/app_config copy.yaml",
+      "target": "config:configs/app_config.yaml",
+      "type": "related",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "config:configs/app_config.yaml",
+      "target": "config:configs/entry_exit_lanes.json",
+      "type": "related",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "config:configs/app_config.yaml",
+      "target": "config:configs/inter1_lanes.json",
+      "type": "related",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "config:configs/app_config.yaml",
+      "target": "config:configs/inter2_lanes.json",
+      "type": "related",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "config:configs/app_config copy.yaml",
+      "target": "config:configs/entry_exit_lanes.json",
+      "type": "related",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "config:configs/app_config copy.yaml",
+      "target": "config:configs/inter1_lanes.json",
+      "type": "related",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "config:configs/app_config copy.yaml",
+      "target": "config:configs/inter2_lanes.json",
+      "type": "related",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "config:services/grafana/provisioning/dashboards/dashboard.yaml",
+      "target": "config:services/grafana/provisioning/dashboards/camera-1.json",
+      "type": "configures",
+      "direction": "forward",
+      "weight": 0.6
+    },
+    {
+      "source": "config:services/grafana/provisioning/dashboards/dashboard.yaml",
+      "target": "config:services/grafana/provisioning/dashboards/camera-2.json",
+      "type": "configures",
+      "direction": "forward",
+      "weight": 0.6
+    },
+    {
+      "source": "config:services/grafana/provisioning/dashboards/camera-1.json",
+      "target": "config:services/grafana/provisioning/dashboards/camera-2.json",
+      "type": "related",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "config:services/grafana/provisioning/dashboards/camera-2.json",
+      "target": "config:services/grafana/provisioning/dashboards/camera-1.json",
+      "type": "related",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "document:test_videos/rtsp_streaming/README.md",
+      "target": "service:test_videos/rtsp_streaming/docker-compose.yaml",
+      "type": "documents",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "document:test_videos/rtsp_streaming/README.md",
+      "target": "config:test_videos/rtsp_streaming/mediamtx.yml",
+      "type": "documents",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "service:test_videos/rtsp_streaming/docker-compose.yaml",
+      "target": "config:test_videos/rtsp_streaming/mediamtx.yml",
+      "type": "depends_on",
+      "direction": "forward",
+      "weight": 0.6
+    },
+    {
+      "source": "service:test_videos/rtsp_streaming/docker-compose.yaml",
+      "target": "service:test_videos/rtsp_streaming/docker-compose.yaml:mediamtx",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:nodes/TrackerInfoUpdateNode.py",
+      "target": "file:elements/FrameElement.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:nodes/TrackerInfoUpdateNode.py",
+      "target": "file:elements/TrackElement.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:nodes/TrackerInfoUpdateNode.py",
+      "target": "file:elements/VideoEndBreakElement.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:nodes/TrackerInfoUpdateNode.py",
+      "target": "file:utils_local/utils.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:byte_tracker/utils/matching.py",
+      "target": "function:byte_tracker/utils/matching.py:merge_matches",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:byte_tracker/utils/matching.py",
+      "target": "function:byte_tracker/utils/matching.py:_indices_to_matches",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:byte_tracker/utils/matching.py",
+      "target": "function:byte_tracker/utils/matching.py:linear_assignment",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:byte_tracker/utils/matching.py",
+      "target": "function:byte_tracker/utils/matching.py:ious",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:byte_tracker/utils/matching.py",
+      "target": "function:byte_tracker/utils/matching.py:iou_distance",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:byte_tracker/utils/matching.py",
+      "target": "function:byte_tracker/utils/matching.py:v_iou_distance",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:elements/TrackElement.py",
+      "target": "class:elements/TrackElement.py:TrackElement",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:export_dashboards.py",
+      "target": "function:export_dashboards.py:get_dashboard",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:generate_lanes.py",
+      "target": "function:generate_lanes.py:mouse_callback",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:nodes/TrackerInfoUpdateNode.py",
+      "target": "class:nodes/TrackerInfoUpdateNode.py:TrackerInfoUpdateNode",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:update_dashboards.py",
+      "target": "function:update_dashboards.py:get_dashboard",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:update_dashboards.py",
+      "target": "function:update_dashboards.py:update_dashboard",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:update_dashboards.py",
+      "target": "function:update_dashboards.py:translate_json",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:byte_tracker/utils/matching.py",
+      "target": "function:byte_tracker/utils/matching.py:merge_matches",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:byte_tracker/utils/matching.py",
+      "target": "function:byte_tracker/utils/matching.py:_indices_to_matches",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:byte_tracker/utils/matching.py",
+      "target": "function:byte_tracker/utils/matching.py:linear_assignment",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:byte_tracker/utils/matching.py",
+      "target": "function:byte_tracker/utils/matching.py:ious",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:byte_tracker/utils/matching.py",
+      "target": "function:byte_tracker/utils/matching.py:iou_distance",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:byte_tracker/utils/matching.py",
+      "target": "function:byte_tracker/utils/matching.py:v_iou_distance",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:elements/TrackElement.py",
+      "target": "class:elements/TrackElement.py:TrackElement",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:export_dashboards.py",
+      "target": "function:export_dashboards.py:get_dashboard",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:generate_lanes.py",
+      "target": "function:generate_lanes.py:mouse_callback",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:nodes/TrackerInfoUpdateNode.py",
+      "target": "class:nodes/TrackerInfoUpdateNode.py:TrackerInfoUpdateNode",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:update_dashboards.py",
+      "target": "function:update_dashboards.py:get_dashboard",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:update_dashboards.py",
+      "target": "function:update_dashboards.py:update_dashboard",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:update_dashboards.py",
+      "target": "function:update_dashboards.py:translate_json",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "config:configs/hydra/job_logging/custom.yaml",
+      "target": "file:nodes/TrackerInfoUpdateNode.py",
+      "type": "configures",
+      "direction": "forward",
+      "weight": 0.6
+    },
+    {
+      "source": "document:absolute/path/to/README.md",
+      "target": "file:elements/TrackElement.py",
+      "type": "documents",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "document:absolute/path/to/README.md",
+      "target": "file:nodes/TrackerInfoUpdateNode.py",
+      "type": "documents",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "file:services/nginx/nginx.conf",
+      "target": "file:utils_local/templates/index.html",
+      "type": "routes",
+      "direction": "forward",
+      "weight": 0.6
+    },
+    {
+      "source": "file:services/kafka/init-kafka-broker.sh",
+      "target": "file:services/kafka/kafka_server_jaas.conf",
+      "type": "depends_on",
+      "direction": "forward",
+      "weight": 0.6
+    },
+    {
+      "source": "file:services/telegraf/telegraf.conf",
+      "target": "file:services/kafka/kafka_server_jaas.conf",
+      "type": "related",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "file:content_for_readme/architecture.drawio",
+      "target": "file:nodes/TrackerInfoUpdateNode.py",
+      "type": "documents",
+      "direction": "forward",
+      "weight": 0.5
+    }
+  ],
+  "layers": [
+    {
+      "id": "layer:entry",
+      "name": "入口层",
+      "description": "多进程管道启动入口，包括单进程顺序模式、三进程 MP4 模式和双进程 RTSP 实时流模式。",
+      "nodeIds": [
+        "file:main.py",
+        "file:main_optimized.py",
+        "file:main_stream_optimized.py",
+        "file:main_stream_optimized_v2.py"
+      ]
+    },
+    {
+      "id": "layer:pipeline-nodes",
+      "name": "管道节点层",
+      "description": "帧处理管道的各功能节点：视频读取、YOLO 检测与 ByteTrack 跟踪、轨迹管理、统计计算、Kafka 发送、可视化渲染、视频保存和 Flask 流服务。",
+      "nodeIds": [
+        "file:nodes/VideoReader.py",
+        "file:nodes/DetectionTrackingNodes.py",
+        "file:nodes/TrackerInfoUpdateNode.py",
+        "file:nodes/CalcStatisticsNode.py",
+        "file:nodes/KafkaProducerNode.py",
+        "file:nodes/ShowNode.py",
+        "file:nodes/VideoSaverNode.py",
+        "file:nodes/FlaskServerVideoNode.py"
+      ]
+    },
+    {
+      "id": "layer:data-models",
+      "name": "数据模型层",
+      "description": "管道中共享的数据载体类：帧元素（FrameElement）、轨迹元素（TrackElement）和视频结束哨兵元素。",
+      "nodeIds": [
+        "file:elements/FrameElement.py",
+        "file:elements/VideoEndBreakElement.py",
+        "file:elements/TrackElement.py"
+      ]
+    },
+    {
+      "id": "layer:tracking-algorithm",
+      "name": "跟踪算法层",
+      "description": "ByteTrack 多目标跟踪算法核心实现，包括轨迹基类、卡尔曼滤波器、IOU 匹配和线性分配。",
+      "nodeIds": [
+        "file:byte_tracker/byte_tracker_model.py",
+        "file:byte_tracker/utils/basetrack.py",
+        "file:byte_tracker/utils/kalman_filter.py",
+        "file:byte_tracker/utils/matching.py"
+      ]
+    },
+    {
+      "id": "layer:utility",
+      "name": "工具与脚本层",
+      "description": "通用工具函数（几何判定、FPS 计数、环境变量）、Flask HTML 模板以及道路标注和 Grafana 仪表盘管理等辅助脚本。",
+      "nodeIds": [
+        "file:utils_local/utils.py",
+        "file:utils_local/templates/index.html",
+        "file:generate_lanes.py",
+        "file:export_dashboards.py",
+        "file:fetch_dashboard.py",
+        "file:update_dashboards.py"
+      ]
+    },
+    {
+      "id": "layer:infrastructure",
+      "name": "基础设施层",
+      "description": "Docker 容器编排、微服务部署（Kafka、InfluxDB、Telegraf、Grafana、Nginx、Zookeeper）、服务配置文件及 RTSP 测试环境。",
+      "nodeIds": [
+        "config:.dockerignore",
+        "pipeline:docker-compose.yaml",
+        "service:Dockerfile",
+        "service:docker-compose.yaml:zookeeper",
+        "service:docker-compose.yaml:kafka",
+        "service:docker-compose.yaml:kafka-ui",
+        "service:docker-compose.yaml:grafana",
+        "service:docker-compose.yaml:influxdb",
+        "service:docker-compose.yaml:telegraf",
+        "service:docker-compose.yaml:nginx",
+        "service:docker-compose.yaml:traffic_analyzer_camera_1",
+        "service:docker-compose.yaml:traffic_analyzer_camera_2",
+        "config:services/grafana/provisioning/dashboards/camera-1.json",
+        "config:services/grafana/provisioning/dashboards/camera-2.json",
+        "config:services/grafana/provisioning/dashboards/dashboard.yaml",
+        "file:services/grafana/grafana.db",
+        "service:test_videos/rtsp_streaming/docker-compose.yaml",
+        "config:test_videos/rtsp_streaming/mediamtx.yml",
+        "service:test_videos/rtsp_streaming/docker-compose.yaml:mediamtx",
+        "file:services/kafka/init-kafka-broker.sh",
+        "file:services/kafka/kafka_server_jaas.conf",
+        "file:services/nginx/nginx.conf",
+        "file:services/telegraf/telegraf.conf"
+      ]
+    },
+    {
+      "id": "layer:configuration",
+      "name": "配置层",
+      "description": "Hydra 主配置文件、道路多边形坐标 JSON、日志配置和 Grafana 仪表盘备份。",
+      "nodeIds": [
+        "config:configs/app_config.yaml",
+        "config:configs/app_config copy.yaml",
+        "config:configs/entry_exit_lanes.json",
+        "config:configs/inter1_lanes.json",
+        "config:configs/inter2_lanes.json",
+        "config:configs/hydra/job_logging/custom.yaml",
+        "config:dashboard_backup.json"
+      ]
+    },
+    {
+      "id": "layer:model-weights",
+      "name": "模型权重层",
+      "description": "YOLOv8 检测模型权重文件（自定义无人机视角模型和预训练 Medium 模型）及 TensorRT 格式转换工具。",
+      "nodeIds": [
+        "file:weights/uav_best.pt",
+        "file:weights/yolov8m.pt",
+        "file:weights/YOLOv8_TensorRT_converter.ipynb"
+      ]
+    },
+    {
+      "id": "layer:documentation",
+      "name": "文档与测试数据层",
+      "description": "项目 README、开发指南、无人机扩展方案文档、交通数据采集记录、无人机航线规划、架构图源文件及测试视频相关资源。",
+      "nodeIds": [
+        "document:CLAUDE.md",
+        "document:README.md",
+        "document:README-zh.md",
+        "document:TrafficAnalyzer_无人机扩展落地方案.md",
+        "document:requirements.txt",
+        "document:test_videos/rtsp_streaming/README.md",
+        "document:test_videos/交通路口数据采集2/堤口路胜利庄北路早高峰0520.txt",
+        "document:test_videos/交通路口数据采集2/小清河北路与水屯路路口交通数据收集航线快速计划20260403142353.txt",
+        "document:test_videos/交通路口数据采集2/梓东大道308国道早高峰0520.txt",
+        "document:test_videos/交通路口数据采集2/梓东大道与208国道路口快速计划20260403134109.txt",
+        "file:content_for_readme/architecture.drawio",
+        "file:test_videos/rtsp_streaming/ffmpeg_rtsp.ipynb",
+        "file:.DS_Store",
+        "file:test_videos/.DS_Store",
+        "document:absolute/path/to/README.md"
+      ]
+    }
+  ],
+  "tour": [
+    {
+      "order": 1,
+      "title": "项目概览",
+      "description": "从 README 开始了解 TrafficAnalyzer 的全貌。这是一个环形交叉路口交通分析系统，能够处理视频流（MP4 或 RTSP），检测车辆、跟踪轨迹、计算每条道路的拥堵统计，并通过 Grafana 仪表盘可视化结果。README 介绍了系统的完整架构、Docker Compose 部署方式和各微服务组件的角色。",
+      "nodeIds": [
+        "document:README.md"
+      ]
+    },
+    {
+      "order": 2,
+      "title": "程序入口与管道编排",
+      "description": "main.py 是最基础的单进程入口点，它按顺序串联整个处理管道：VideoReader → DetectionTrackingNodes → TrackerInfoUpdateNode → CalcStatisticsNode → KafkaProducerNode → ShowNode → VideoSaverNode / FlaskServerVideoNode。通过阅读这个文件，你可以一目了然地看到帧数据如何在各节点之间流转，以及 Hydra 配置如何注入到每个环节。",
+      "nodeIds": [
+        "file:main.py"
+      ],
+      "languageLesson": "Hydra 使用 @hydra.main 装饰器加载 configs/app_config.yaml，所有配置项都可以在命令行通过点号路径覆盖（如 pipeline.send_info_kafka=False），无需修改代码即可切换运行模式。"
+    },
+    {
+      "order": 3,
+      "title": "核心数据模型",
+      "description": "FrameElement 是整个节点管道的共享数据载体——每一帧从读取到最终输出，都封装在一个 FrameElement 对象中，各节点逐步填充其 detected_*、tracked_*、info 等字段。TrackElement 则存储单条车辆轨迹的 ID、首末次出现时间和起始道路信息。VideoEndBreakElement 是视频流结束的哨兵信号，所有节点必须原样传递它。",
+      "nodeIds": [
+        "file:elements/FrameElement.py",
+        "file:elements/TrackElement.py",
+        "file:elements/VideoEndBreakElement.py"
+      ]
+    },
+    {
+      "order": 4,
+      "title": "Hydra 配置与道路定义",
+      "description": "app_config.yaml 是 Hydra 主配置文件，定义了从模型权重路径、检测阈值到 Kafka 发送频率等全部流水线参数。entry_exit_lanes.json 则存储每条道路的四边形多边形坐标（4 个顶点、8 个浮点数），用于判定车辆属于哪条道路。这两个文件共同决定了系统的运行行为和空间分析范围。",
+      "nodeIds": [
+        "config:configs/app_config.yaml",
+        "config:configs/entry_exit_lanes.json"
+      ],
+      "languageLesson": "Hydra 支持 ${oc.env:VAR_NAME} 语法从环境变量读取配置值，这使得同一份配置文件可以在不同摄像头容器中通过环境变量覆盖 VIDEO_SRC、TOPIC_NAME 等参数，实现多摄像头复用同一配置。"
+    },
+    {
+      "order": 5,
+      "title": "视频读取节点",
+      "description": "VideoReader 是管道的起点，负责从 MP4 文件、RTSP 流或本地摄像头逐帧读取图像，并加载道路多边形 JSON 配置。它为每一帧创建一个 FrameElement 对象，填入原始帧、时间戳和道路信息后向下游传递。该节点是一个 Python 生成器，支持在视频结束时发出 VideoEndBreakElement 信号。",
+      "nodeIds": [
+        "file:nodes/VideoReader.py"
+      ]
+    },
+    {
+      "order": 6,
+      "title": "YOLOv8 检测与 ByteTrack 跟踪",
+      "description": "DetectionTrackingNodes 执行两项核心 AI 任务：使用 YOLOv8（自定义无人机视角模型 uav_best.pt）检测帧中的车辆，然后通过 ByteTracker 进行多目标跟踪，为每辆车分配唯一 ID。检测结果和跟踪信息被写入 FrameElement 的 detected_* 和 tracked_* 字段，供后续节点使用。",
+      "nodeIds": [
+        "file:nodes/DetectionTrackingNodes.py",
+        "file:weights/uav_best.pt"
+      ],
+      "languageLesson": "ultralytics 库的 YOLO 类封装了模型加载和推理，通过 model.predict(frame, conf=threshold) 一行即可完成检测。自定义权重 uav_best.pt 针对无人机俯拍视角优化，检测 COCO 类别中 2–9 类（各类车辆）。"
+    },
+    {
+      "order": 7,
+      "title": "ByteTrack 算法核心",
+      "description": "ByteTrack 是业界先进的多目标跟踪算法，核心流程为：将检测框按置信度分为高低两组 → 用卡尔曼滤波器预测已有轨迹的新位置 → 通过 IOU 匹配和匈牙利算法（线性分配）将检测框关联到轨迹 → 未匹配的检测框初始化为新轨迹。basetrack.py 定义轨迹状态机（New → Tracked → Lost → Removed），kalman_filter.py 实现 8 维恒速卡尔曼滤波器，matching.py 提供 IOU 计算和线性分配工具。",
+      "nodeIds": [
+        "file:byte_tracker/byte_tracker_model.py",
+        "file:byte_tracker/utils/basetrack.py",
+        "file:byte_tracker/utils/kalman_filter.py",
+        "file:byte_tracker/utils/matching.py"
+      ],
+      "languageLesson": "卡尔曼滤波器使用 8 维状态向量 [cx, cy, w, h, vx, vy, vw, vh]，其中前 4 维是边界框中心坐标和宽高，后 4 维是对应速度分量。lap 库的线性分配算法（Jonker-Volgenant）比 scipy 的 Hungarian 算法更快，适合实时跟踪场景。"
+    },
+    {
+      "order": 8,
+      "title": "轨迹管理与统计计算",
+      "description": "TrackerInfoUpdateNode 维护一个活动轨迹缓冲区（buffer_tracks 字典），为每条轨迹记录其首次进入的道路多边形（start_road），并通过 shapely 库判断轨迹中心点是否落在某条道路的多边形内。CalcStatisticsNode 基于缓冲区中的轨迹数据，计算平滑后的车辆总数（滑动窗口）和每条道路的车辆活跃度（辆/分钟），将结果写入 FrameElement.info。",
+      "nodeIds": [
+        "file:nodes/TrackerInfoUpdateNode.py",
+        "file:nodes/CalcStatisticsNode.py"
+      ],
+      "languageLesson": "shapely.geometry.Polygon.contains(Point) 执行点在多边形内的判定，这是将车辆分配到具体道路的核心几何逻辑。道路多边形由 4 个顶点构成的四边形表示，覆盖了环形交叉路口各入口/出口车道。"
+    },
+    {
+      "order": 9,
+      "title": "Kafka 数据发布",
+      "description": "KafkaProducerNode 将统计结果定时发送到 Kafka 消息队列。它按照配置中的 how_often_sec 间隔，将 FrameElement.info 中的车辆数和道路活跃度序列化为 JSON 并发布到指定 topic（如 statistics_1）。这是连接后端分析管道与前端监控仪表盘的关键桥梁。",
+      "nodeIds": [
+        "file:nodes/KafkaProducerNode.py"
+      ]
+    },
+    {
+      "order": 10,
+      "title": "可视化与视频输出",
+      "description": "ShowNode 在原始帧上绘制检测框、跟踪 ID、道路多边形覆盖层和实时统计面板（FPS、车辆数等），生成最终的 frame_result。VideoSaverNode 将带注释的帧写入 MP4 文件，FlaskServerVideoNode 则通过 Flask 的 MJPEG 端点（/video）实时串流视频画面。三者共同构成了系统的输出层。",
+      "nodeIds": [
+        "file:nodes/ShowNode.py",
+        "file:nodes/VideoSaverNode.py",
+        "file:nodes/FlaskServerVideoNode.py"
+      ]
+    },
+    {
+      "order": 11,
+      "title": "微服务基础设施",
+      "description": "docker-compose.yaml 编排了完整的生产环境：Zookeeper + Kafka 作为消息队列、InfluxDB 作为时序数据库、Telegraf 从 Kafka 消费统计数据写入 InfluxDB、Grafana 读取 InfluxDB 展示仪表盘、Nginx 反向代理聚合多路 Flask 视频流。Dockerfile 构建带 GPU 支持的 Python 运行镜像。这套基础设施使得多摄像头并行分析和统一监控成为可能。",
+      "nodeIds": [
+        "pipeline:docker-compose.yaml",
+        "service:Dockerfile",
+        "config:services/grafana/provisioning/dashboards/camera-1.json"
+      ],
+      "languageLesson": "Docker Compose 的 depends_on 配合 healthcheck 确保服务启动顺序（Zookeeper → Kafka → 分析容器）。Telegraf 的 [[inputs.kafka_consumer]] 插件通过 name_override 将不同 topic 的数据写入 InfluxDB 的不同 measurement，实现多摄像头数据隔离。"
+    },
+    {
+      "order": 12,
+      "title": "多进程优化入口",
+      "description": "除了 main.py 的单进程模式，项目还提供了三个多进程入口：main_optimized.py 使用 3 个进程并行处理（读取+检测 | 跟踪+统计+Kafka | 显示+保存+串流），是处理 MP4 文件的推荐方式；main_stream_optimized.py 和 v2 版本针对实时 RTSP 流优化为 2 进程，v2 还增加了进程健康检查机制。这些入口共享相同的节点组件，只是进程划分和队列策略不同。",
+      "nodeIds": [
+        "file:main_optimized.py",
+        "file:main_stream_optimized.py",
+        "file:main_stream_optimized_v2.py"
+      ],
+      "languageLesson": "Python 的 multiprocessing.Process + multiprocessing.Queue 实现了进程间通信。队列的 maxsize 参数是关键调优点：MP4 模式设为 50 以最大化吞吐量，RTSP 模式设为 2 并丢弃旧帧以确保处理最新画面。"
+    },
+    {
+      "order": 13,
+      "title": "通用工具与标注辅助",
+      "description": "utils.py 是 fan-in 最高的文件（被 14 个其他文件依赖），提供环境变量读取、耗时分析、FPS 计数器和几何判定（intersects_central_point）等基础工具。generate_lanes.py 是一个交互式标注工具，允许用户在视频画面上点击定义道路多边形顶点，生成的 JSON 文件可直接供系统使用。",
+      "nodeIds": [
+        "file:utils_local/utils.py",
+        "file:generate_lanes.py"
+      ]
+    },
+    {
+      "order": 14,
+      "title": "无人机扩展方案",
+      "description": "这份扩展方案文档描述了如何将 TrafficAnalyzer 从固定摄像头场景拓展到无人机航拍场景。它讨论了无人机视角下的特殊挑战（相机运动补偿、俯视角度变化、小目标检测等）以及相应的解决方案，展示了系统架构的可扩展性和未来的发展方向。",
+      "nodeIds": [
+        "document:TrafficAnalyzer_无人机扩展落地方案.md"
+      ]
+    }
+  ]
+}

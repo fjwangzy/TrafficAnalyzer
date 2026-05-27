@@ -1,0 +1,2225 @@
+{
+  "version": "1.0.0",
+  "gitCommitHash": "e69acee53e8c8603d8376a26c4df5d5bd92d1aa3",
+  "generatedAt": "2026-05-26T10:53:08.327Z",
+  "files": {
+    ".dockerignore": {
+      "filePath": ".dockerignore",
+      "contentHash": "4d553f50ec1f630c6295bc3410f3e2ca60efde9028d82e9f97da5291a4e959fa",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 10,
+      "hasStructuralAnalysis": false
+    },
+    ".DS_Store": {
+      "filePath": ".DS_Store",
+      "contentHash": "28309f146d5eb0c591eb4daf9067ac6c90b952f755d8b38f8d556ec4e30dce4e",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 1,
+      "hasStructuralAnalysis": false
+    },
+    ".understand-anything/.understandignore": {
+      "filePath": ".understand-anything/.understandignore",
+      "contentHash": "d3971f93fa11216142080f8a524b6d846310ada373a0e2bf431b21289a393537",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 37,
+      "hasStructuralAnalysis": false
+    },
+    ".understand-anything/config.json": {
+      "filePath": ".understand-anything/config.json",
+      "contentHash": "c4a81b476be169d02009b0f55951562958b700b6d831e2b5754648ac73552ec9",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 2,
+      "hasStructuralAnalysis": true
+    },
+    "absolute/path/to/README.md": {
+      "filePath": "absolute/path/to/README.md",
+      "contentHash": "314ef50aa541948d8fb38b5acbcfc26a110212ff34a88dc76218b0ea39fdd86f",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 10,
+      "hasStructuralAnalysis": true
+    },
+    "byte_tracker/byte_tracker_model.py": {
+      "filePath": "byte_tracker/byte_tracker_model.py",
+      "contentHash": "797e4816a362aefc6a5feeb005cc8c26f77fc786adcf0e16a4694475650271e1",
+      "functions": [
+        {
+          "name": "joint_stracks",
+          "params": [
+            "tlista",
+            "tlistb"
+          ],
+          "exported": true,
+          "lineCount": 12
+        },
+        {
+          "name": "sub_stracks",
+          "params": [
+            "tlista",
+            "tlistb"
+          ],
+          "exported": true,
+          "lineCount": 9
+        },
+        {
+          "name": "remove_duplicate_stracks",
+          "params": [
+            "stracksa",
+            "stracksb"
+          ],
+          "exported": true,
+          "lineCount": 14
+        }
+      ],
+      "classes": [
+        {
+          "name": "STrack",
+          "methods": [
+            "__init__",
+            "predict",
+            "multi_predict",
+            "activate",
+            "re_activate",
+            "update",
+            "tlwh",
+            "tlbr",
+            "tlwh_to_xyah",
+            "to_xyah",
+            "tlbr_to_tlwh",
+            "tlwh_to_tlbr",
+            "__repr__"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 133
+        },
+        {
+          "name": "BYTETracker",
+          "methods": [
+            "__init__",
+            "update"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 161
+        }
+      ],
+      "imports": [
+        {
+          "source": "numpy",
+          "specifiers": [
+            "np"
+          ]
+        },
+        {
+          "source": "collections",
+          "specifiers": [
+            "deque"
+          ]
+        },
+        {
+          "source": "os",
+          "specifiers": [
+            "os"
+          ]
+        },
+        {
+          "source": "os.path",
+          "specifiers": [
+            "osp"
+          ]
+        },
+        {
+          "source": "copy",
+          "specifiers": [
+            "copy"
+          ]
+        },
+        {
+          "source": "torch",
+          "specifiers": [
+            "torch"
+          ]
+        },
+        {
+          "source": "torch.nn.functional",
+          "specifiers": [
+            "F"
+          ]
+        },
+        {
+          "source": "byte_tracker.utils.kalman_filter",
+          "specifiers": [
+            "KalmanFilter"
+          ]
+        },
+        {
+          "source": "byte_tracker.utils",
+          "specifiers": [
+            "matching"
+          ]
+        },
+        {
+          "source": "byte_tracker.utils.basetrack",
+          "specifiers": [
+            "BaseTrack",
+            "TrackState"
+          ]
+        }
+      ],
+      "exports": [
+        "STrack",
+        "BYTETracker",
+        "joint_stracks",
+        "sub_stracks",
+        "remove_duplicate_stracks"
+      ],
+      "totalLines": 350,
+      "hasStructuralAnalysis": true
+    },
+    "byte_tracker/utils/basetrack.py": {
+      "filePath": "byte_tracker/utils/basetrack.py",
+      "contentHash": "e83b0676c5e46757c0ab1e253f392c6c234690d4dadfcfccc986b07d7bc21aae",
+      "functions": [],
+      "classes": [
+        {
+          "name": "TrackState",
+          "methods": [],
+          "properties": [],
+          "exported": true,
+          "lineCount": 5
+        },
+        {
+          "name": "BaseTrack",
+          "methods": [
+            "end_frame",
+            "next_id",
+            "activate",
+            "predict",
+            "update",
+            "mark_lost",
+            "mark_removed"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 41
+        }
+      ],
+      "imports": [
+        {
+          "source": "numpy",
+          "specifiers": [
+            "np"
+          ]
+        },
+        {
+          "source": "collections",
+          "specifiers": [
+            "OrderedDict"
+          ]
+        }
+      ],
+      "exports": [
+        "TrackState",
+        "BaseTrack"
+      ],
+      "totalLines": 52,
+      "hasStructuralAnalysis": true
+    },
+    "byte_tracker/utils/kalman_filter.py": {
+      "filePath": "byte_tracker/utils/kalman_filter.py",
+      "contentHash": "9842d0dd9957c97e312d42e5789441add55082066d87cc051ac768143a46eb39",
+      "functions": [],
+      "classes": [
+        {
+          "name": "KalmanFilter",
+          "methods": [
+            "__init__",
+            "initiate",
+            "predict",
+            "project",
+            "multi_predict",
+            "update",
+            "gating_distance"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 248
+        }
+      ],
+      "imports": [
+        {
+          "source": "numpy",
+          "specifiers": [
+            "np"
+          ]
+        },
+        {
+          "source": "scipy.linalg",
+          "specifiers": [
+            "scipy.linalg"
+          ]
+        }
+      ],
+      "exports": [
+        "KalmanFilter"
+      ],
+      "totalLines": 270,
+      "hasStructuralAnalysis": true
+    },
+    "byte_tracker/utils/matching.py": {
+      "filePath": "byte_tracker/utils/matching.py",
+      "contentHash": "8f9b7e4b12a602b9e87d1325395c8c9f4d4c70e687f24b1bb82a514ed026923b",
+      "functions": [
+        {
+          "name": "merge_matches",
+          "params": [
+            "m1",
+            "m2",
+            "shape"
+          ],
+          "exported": true,
+          "lineCount": 15
+        },
+        {
+          "name": "_indices_to_matches",
+          "params": [
+            "cost_matrix",
+            "indices",
+            "thresh"
+          ],
+          "exported": true,
+          "lineCount": 9
+        },
+        {
+          "name": "linear_assignment",
+          "params": [
+            "cost_matrix",
+            "thresh"
+          ],
+          "exported": true,
+          "lineCount": 12
+        },
+        {
+          "name": "ious",
+          "params": [
+            "atlbrs",
+            "btlbrs"
+          ],
+          "exported": true,
+          "lineCount": 18
+        },
+        {
+          "name": "iou_distance",
+          "params": [
+            "atracks",
+            "btracks"
+          ],
+          "exported": true,
+          "lineCount": 19
+        },
+        {
+          "name": "v_iou_distance",
+          "params": [
+            "atracks",
+            "btracks"
+          ],
+          "exported": true,
+          "lineCount": 19
+        },
+        {
+          "name": "embedding_distance",
+          "params": [
+            "tracks",
+            "detections",
+            "metric"
+          ],
+          "exported": true,
+          "lineCount": 17
+        },
+        {
+          "name": "gate_cost_matrix",
+          "params": [
+            "kf",
+            "cost_matrix",
+            "tracks",
+            "detections",
+            "only_position"
+          ],
+          "exported": true,
+          "lineCount": 11
+        },
+        {
+          "name": "fuse_motion",
+          "params": [
+            "kf",
+            "cost_matrix",
+            "tracks",
+            "detections",
+            "only_position",
+            "lambda_"
+          ],
+          "exported": true,
+          "lineCount": 12
+        },
+        {
+          "name": "fuse_iou",
+          "params": [
+            "cost_matrix",
+            "tracks",
+            "detections"
+          ],
+          "exported": true,
+          "lineCount": 12
+        },
+        {
+          "name": "fuse_score",
+          "params": [
+            "cost_matrix",
+            "detections"
+          ],
+          "exported": true,
+          "lineCount": 9
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "cv2",
+          "specifiers": [
+            "cv2"
+          ]
+        },
+        {
+          "source": "numpy",
+          "specifiers": [
+            "np"
+          ]
+        },
+        {
+          "source": "scipy",
+          "specifiers": [
+            "scipy"
+          ]
+        },
+        {
+          "source": "lap",
+          "specifiers": [
+            "lap"
+          ]
+        },
+        {
+          "source": "scipy.spatial.distance",
+          "specifiers": [
+            "cdist"
+          ]
+        },
+        {
+          "source": "cython_bbox",
+          "specifiers": [
+            "bbox_ious"
+          ]
+        },
+        {
+          "source": "byte_tracker.utils",
+          "specifiers": [
+            "kalman_filter"
+          ]
+        },
+        {
+          "source": "time",
+          "specifiers": [
+            "time"
+          ]
+        }
+      ],
+      "exports": [
+        "merge_matches",
+        "_indices_to_matches",
+        "linear_assignment",
+        "ious",
+        "iou_distance",
+        "v_iou_distance",
+        "embedding_distance",
+        "gate_cost_matrix",
+        "fuse_motion",
+        "fuse_iou",
+        "fuse_score"
+      ],
+      "totalLines": 182,
+      "hasStructuralAnalysis": true
+    },
+    "CLAUDE.md": {
+      "filePath": "CLAUDE.md",
+      "contentHash": "0f0bab0cd3fd904525de7a33154caf620ac937bd8d2c49bac0e0c0f064d7fc15",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 124,
+      "hasStructuralAnalysis": true
+    },
+    "configs/app_config copy.yaml": {
+      "filePath": "configs/app_config copy.yaml",
+      "contentHash": "b063cd925eb667ee849f96663fd9a62545dfd70621909450cf33c5429d1be493",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 87,
+      "hasStructuralAnalysis": true
+    },
+    "configs/app_config.yaml": {
+      "filePath": "configs/app_config.yaml",
+      "contentHash": "5b4342ff7133fc81c25e169a6006dc8f70ce2f3132bfe6c88ca76fc6ea911771",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 80,
+      "hasStructuralAnalysis": true
+    },
+    "configs/entry_exit_lanes.json": {
+      "filePath": "configs/entry_exit_lanes.json",
+      "contentHash": "2f3e731b32b5b1b6155cd9b71c39ca3f29598a9ba6fca1c3806faf17f68eb81e",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 52,
+      "hasStructuralAnalysis": true
+    },
+    "configs/hydra/job_logging/custom.yaml": {
+      "filePath": "configs/hydra/job_logging/custom.yaml",
+      "contentHash": "6c7ea050c4d98ea577d16a660e36252e46b909ba2b56be96971d2b15b91618a7",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 15,
+      "hasStructuralAnalysis": true
+    },
+    "configs/inter1_lanes.json": {
+      "filePath": "configs/inter1_lanes.json",
+      "contentHash": "0b9ef5c47ac1965267f1c7663acd663b622a8989233440988b700e7933b02d9f",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 22,
+      "hasStructuralAnalysis": true
+    },
+    "configs/inter2_lanes.json": {
+      "filePath": "configs/inter2_lanes.json",
+      "contentHash": "2f9a54644c318ce3e883128b1a60bb7d6ed5855cabac721a440a0b4a64706961",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 52,
+      "hasStructuralAnalysis": true
+    },
+    "content_for_readme/architecture.drawio": {
+      "filePath": "content_for_readme/architecture.drawio",
+      "contentHash": "cd4f5c36ea5b872732b3d5846e1670618c84f94ef3ae5ff6da936a9db3879537",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 173,
+      "hasStructuralAnalysis": false
+    },
+    "dashboard_backup.json": {
+      "filePath": "dashboard_backup.json",
+      "contentHash": "211ccb5b8eaa122cc3fac41104c0a6164a0d49d79a42ef78ed2180894f86f80f",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 713,
+      "hasStructuralAnalysis": true
+    },
+    "docker-compose.yaml": {
+      "filePath": "docker-compose.yaml",
+      "contentHash": "6c438511fa749f9eeafbca216364a049a26cf080f1d8ae60f79b6f9b8e40cba7",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 189,
+      "hasStructuralAnalysis": true
+    },
+    "Dockerfile": {
+      "filePath": "Dockerfile",
+      "contentHash": "57500b1c059e93c8204f8428daca8166209d37e6e4dfd48e242f6ec768a6044a",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 23,
+      "hasStructuralAnalysis": true
+    },
+    "elements/FrameElement.py": {
+      "filePath": "elements/FrameElement.py",
+      "contentHash": "dff20d2b7cb4cc26ed739eb976c94155262593e6b95527bfa3eae87ef77a369c",
+      "functions": [],
+      "classes": [
+        {
+          "name": "FrameElement",
+          "methods": [
+            "__init__"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 39
+        }
+      ],
+      "imports": [
+        {
+          "source": "numpy",
+          "specifiers": [
+            "np"
+          ]
+        },
+        {
+          "source": "time",
+          "specifiers": [
+            "time"
+          ]
+        }
+      ],
+      "exports": [
+        "FrameElement"
+      ],
+      "totalLines": 42,
+      "hasStructuralAnalysis": true
+    },
+    "elements/TrackElement.py": {
+      "filePath": "elements/TrackElement.py",
+      "contentHash": "c5f86f4eb089bcaf5893d44502f9f34fb02a893ff9cae2e7edbe48d873b27892",
+      "functions": [],
+      "classes": [
+        {
+          "name": "TrackElement",
+          "methods": [
+            "__init__",
+            "update"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 18
+        }
+      ],
+      "imports": [],
+      "exports": [
+        "TrackElement"
+      ],
+      "totalLines": 18,
+      "hasStructuralAnalysis": true
+    },
+    "elements/VideoEndBreakElement.py": {
+      "filePath": "elements/VideoEndBreakElement.py",
+      "contentHash": "82835c2eb097d3ceeb47770ab9e905e6877448bca7bdc0fc37af681374c1a35f",
+      "functions": [],
+      "classes": [
+        {
+          "name": "VideoEndBreakElement",
+          "methods": [
+            "__init__"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 14
+        }
+      ],
+      "imports": [
+        {
+          "source": "elements.FrameElement",
+          "specifiers": [
+            "FrameElement"
+          ]
+        }
+      ],
+      "exports": [
+        "VideoEndBreakElement"
+      ],
+      "totalLines": 17,
+      "hasStructuralAnalysis": true
+    },
+    "export_dashboards.py": {
+      "filePath": "export_dashboards.py",
+      "contentHash": "461fbdc1e42006692ec55b2f91b805729e7badc70c44ce65ed22089191dc1427",
+      "functions": [
+        {
+          "name": "get_dashboard",
+          "params": [
+            "uid"
+          ],
+          "exported": true,
+          "lineCount": 9
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "urllib.request",
+          "specifiers": [
+            "urllib.request"
+          ]
+        },
+        {
+          "source": "json",
+          "specifiers": [
+            "json"
+          ]
+        },
+        {
+          "source": "base64",
+          "specifiers": [
+            "base64"
+          ]
+        },
+        {
+          "source": "os",
+          "specifiers": [
+            "os"
+          ]
+        }
+      ],
+      "exports": [
+        "get_dashboard"
+      ],
+      "totalLines": 36,
+      "hasStructuralAnalysis": true
+    },
+    "fetch_dashboard.py": {
+      "filePath": "fetch_dashboard.py",
+      "contentHash": "2c2fdd4eb21716e4207228788fa3b0fb4d282896f8bdcf9e11005ac8c09064f5",
+      "functions": [],
+      "classes": [],
+      "imports": [
+        {
+          "source": "urllib.request",
+          "specifiers": [
+            "urllib.request"
+          ]
+        },
+        {
+          "source": "json",
+          "specifiers": [
+            "json"
+          ]
+        },
+        {
+          "source": "base64",
+          "specifiers": [
+            "base64"
+          ]
+        }
+      ],
+      "exports": [],
+      "totalLines": 21,
+      "hasStructuralAnalysis": true
+    },
+    "generate_lanes.py": {
+      "filePath": "generate_lanes.py",
+      "contentHash": "7e88a77ba6b93ee5fa27438cb8d165121a98a97d5893cad8a2efe4e7070856ce",
+      "functions": [
+        {
+          "name": "mouse_callback",
+          "params": [
+            "event",
+            "x",
+            "y",
+            "flags",
+            "param"
+          ],
+          "exported": true,
+          "lineCount": 27
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "cv2",
+          "specifiers": [
+            "cv2"
+          ]
+        },
+        {
+          "source": "json",
+          "specifiers": [
+            "json"
+          ]
+        },
+        {
+          "source": "numpy",
+          "specifiers": [
+            "np"
+          ]
+        },
+        {
+          "source": "sys",
+          "specifiers": [
+            "sys"
+          ]
+        },
+        {
+          "source": "os",
+          "specifiers": [
+            "os"
+          ]
+        }
+      ],
+      "exports": [
+        "mouse_callback"
+      ],
+      "totalLines": 102,
+      "hasStructuralAnalysis": true
+    },
+    "main_optimized.py": {
+      "filePath": "main_optimized.py",
+      "contentHash": "0255df986ad72fd8aecf4777387b35c5a6f69b3efb4ba8cdd315ae829cd27307",
+      "functions": [
+        {
+          "name": "proc_frame_reader_and_detection",
+          "params": [
+            "queue_out",
+            "config",
+            "time_sleep_start"
+          ],
+          "exported": true,
+          "lineCount": 19
+        },
+        {
+          "name": "proc_tracker_update_and_calc",
+          "params": [
+            "queue_in",
+            "queue_out",
+            "config"
+          ],
+          "exported": true,
+          "lineCount": 25
+        },
+        {
+          "name": "proc_show_node",
+          "params": [
+            "queue_in",
+            "config"
+          ],
+          "exported": true,
+          "lineCount": 27
+        },
+        {
+          "name": "main",
+          "params": [
+            "config"
+          ],
+          "returnType": "None",
+          "exported": true,
+          "lineCount": 30
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "time",
+          "specifiers": [
+            "sleep",
+            "time"
+          ]
+        },
+        {
+          "source": "multiprocessing",
+          "specifiers": [
+            "Process",
+            "Queue"
+          ]
+        },
+        {
+          "source": "hydra",
+          "specifiers": [
+            "hydra"
+          ]
+        },
+        {
+          "source": "tqdm",
+          "specifiers": [
+            "tqdm"
+          ]
+        },
+        {
+          "source": "nodes.VideoReader",
+          "specifiers": [
+            "VideoReader"
+          ]
+        },
+        {
+          "source": "nodes.ShowNode",
+          "specifiers": [
+            "ShowNode"
+          ]
+        },
+        {
+          "source": "nodes.VideoSaverNode",
+          "specifiers": [
+            "VideoSaverNode"
+          ]
+        },
+        {
+          "source": "nodes.DetectionTrackingNodes",
+          "specifiers": [
+            "DetectionTrackingNodes"
+          ]
+        },
+        {
+          "source": "nodes.TrackerInfoUpdateNode",
+          "specifiers": [
+            "TrackerInfoUpdateNode"
+          ]
+        },
+        {
+          "source": "nodes.CalcStatisticsNode",
+          "specifiers": [
+            "CalcStatisticsNode"
+          ]
+        },
+        {
+          "source": "nodes.FlaskServerVideoNode",
+          "specifiers": [
+            "VideoServer"
+          ]
+        },
+        {
+          "source": "nodes.KafkaProducerNode",
+          "specifiers": [
+            "KafkaProducerNode"
+          ]
+        },
+        {
+          "source": "elements.VideoEndBreakElement",
+          "specifiers": [
+            "VideoEndBreakElement"
+          ]
+        },
+        {
+          "source": "utils_local.utils",
+          "specifiers": [
+            "check_and_set_env_var"
+          ]
+        }
+      ],
+      "exports": [
+        "proc_frame_reader_and_detection",
+        "proc_tracker_update_and_calc",
+        "proc_show_node",
+        "main"
+      ],
+      "totalLines": 141,
+      "hasStructuralAnalysis": true
+    },
+    "main_stream_optimized_v2.py": {
+      "filePath": "main_stream_optimized_v2.py",
+      "contentHash": "10e40dc0a98010d132db36e9299c2f12ed075ddc0901dbf9bf5e95b4a2e4dbe4",
+      "functions": [
+        {
+          "name": "proc_frame_reader",
+          "params": [
+            "queue_out",
+            "config",
+            "time_sleep_start"
+          ],
+          "exported": true,
+          "lineCount": 20
+        },
+        {
+          "name": "proc_proceessor",
+          "params": [
+            "frame_queue_in",
+            "config",
+            "frame_process"
+          ],
+          "exported": true,
+          "lineCount": 50
+        },
+        {
+          "name": "main",
+          "params": [
+            "config"
+          ],
+          "returnType": "None",
+          "exported": true,
+          "lineCount": 11
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "time",
+          "specifiers": [
+            "sleep",
+            "time"
+          ]
+        },
+        {
+          "source": "multiprocessing",
+          "specifiers": [
+            "Process",
+            "Queue"
+          ]
+        },
+        {
+          "source": "queue",
+          "specifiers": [
+            "queue_is_full"
+          ]
+        },
+        {
+          "source": "queue",
+          "specifiers": [
+            "Empty"
+          ]
+        },
+        {
+          "source": "hydra",
+          "specifiers": [
+            "hydra"
+          ]
+        },
+        {
+          "source": "tqdm",
+          "specifiers": [
+            "tqdm"
+          ]
+        },
+        {
+          "source": "nodes.VideoReader",
+          "specifiers": [
+            "VideoReader"
+          ]
+        },
+        {
+          "source": "nodes.ShowNode",
+          "specifiers": [
+            "ShowNode"
+          ]
+        },
+        {
+          "source": "nodes.VideoSaverNode",
+          "specifiers": [
+            "VideoSaverNode"
+          ]
+        },
+        {
+          "source": "nodes.DetectionTrackingNodes",
+          "specifiers": [
+            "DetectionTrackingNodes"
+          ]
+        },
+        {
+          "source": "nodes.TrackerInfoUpdateNode",
+          "specifiers": [
+            "TrackerInfoUpdateNode"
+          ]
+        },
+        {
+          "source": "nodes.CalcStatisticsNode",
+          "specifiers": [
+            "CalcStatisticsNode"
+          ]
+        },
+        {
+          "source": "nodes.FlaskServerVideoNode",
+          "specifiers": [
+            "VideoServer"
+          ]
+        },
+        {
+          "source": "nodes.KafkaProducerNode",
+          "specifiers": [
+            "KafkaProducerNode"
+          ]
+        },
+        {
+          "source": "elements.VideoEndBreakElement",
+          "specifiers": [
+            "VideoEndBreakElement"
+          ]
+        },
+        {
+          "source": "utils_local.utils",
+          "specifiers": [
+            "check_and_set_env_var"
+          ]
+        }
+      ],
+      "exports": [
+        "proc_frame_reader",
+        "proc_proceessor",
+        "main"
+      ],
+      "totalLines": 118,
+      "hasStructuralAnalysis": true
+    },
+    "main_stream_optimized.py": {
+      "filePath": "main_stream_optimized.py",
+      "contentHash": "5595d096b9cc38025e7735d11dce4da268632ccbb280d8ab7905320dcd7bbc1a",
+      "functions": [
+        {
+          "name": "proc_frame_reader",
+          "params": [
+            "queue_out",
+            "config",
+            "time_sleep_start"
+          ],
+          "exported": true,
+          "lineCount": 20
+        },
+        {
+          "name": "proc_proceessor",
+          "params": [
+            "queue_in",
+            "config"
+          ],
+          "exported": true,
+          "lineCount": 36
+        },
+        {
+          "name": "main",
+          "params": [
+            "config"
+          ],
+          "returnType": "None",
+          "exported": true,
+          "lineCount": 25
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "time",
+          "specifiers": [
+            "sleep",
+            "time"
+          ]
+        },
+        {
+          "source": "multiprocessing",
+          "specifiers": [
+            "Process",
+            "Queue"
+          ]
+        },
+        {
+          "source": "queue",
+          "specifiers": [
+            "queue_is_full"
+          ]
+        },
+        {
+          "source": "hydra",
+          "specifiers": [
+            "hydra"
+          ]
+        },
+        {
+          "source": "tqdm",
+          "specifiers": [
+            "tqdm"
+          ]
+        },
+        {
+          "source": "nodes.VideoReader",
+          "specifiers": [
+            "VideoReader"
+          ]
+        },
+        {
+          "source": "nodes.ShowNode",
+          "specifiers": [
+            "ShowNode"
+          ]
+        },
+        {
+          "source": "nodes.VideoSaverNode",
+          "specifiers": [
+            "VideoSaverNode"
+          ]
+        },
+        {
+          "source": "nodes.DetectionTrackingNodes",
+          "specifiers": [
+            "DetectionTrackingNodes"
+          ]
+        },
+        {
+          "source": "nodes.TrackerInfoUpdateNode",
+          "specifiers": [
+            "TrackerInfoUpdateNode"
+          ]
+        },
+        {
+          "source": "nodes.CalcStatisticsNode",
+          "specifiers": [
+            "CalcStatisticsNode"
+          ]
+        },
+        {
+          "source": "nodes.FlaskServerVideoNode",
+          "specifiers": [
+            "VideoServer"
+          ]
+        },
+        {
+          "source": "nodes.KafkaProducerNode",
+          "specifiers": [
+            "KafkaProducerNode"
+          ]
+        },
+        {
+          "source": "elements.VideoEndBreakElement",
+          "specifiers": [
+            "VideoEndBreakElement"
+          ]
+        },
+        {
+          "source": "utils_local.utils",
+          "specifiers": [
+            "check_and_set_env_var"
+          ]
+        }
+      ],
+      "exports": [
+        "proc_frame_reader",
+        "proc_proceessor",
+        "main"
+      ],
+      "totalLines": 118,
+      "hasStructuralAnalysis": true
+    },
+    "main.py": {
+      "filePath": "main.py",
+      "contentHash": "554fddafdf7c683a431ec890474163f40e79a946beb44717f0e76425eab43bed",
+      "functions": [
+        {
+          "name": "main",
+          "params": [
+            "config"
+          ],
+          "returnType": "None",
+          "exported": true,
+          "lineCount": 32
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "hydra",
+          "specifiers": [
+            "hydra"
+          ]
+        },
+        {
+          "source": "nodes.VideoReader",
+          "specifiers": [
+            "VideoReader"
+          ]
+        },
+        {
+          "source": "nodes.ShowNode",
+          "specifiers": [
+            "ShowNode"
+          ]
+        },
+        {
+          "source": "nodes.VideoSaverNode",
+          "specifiers": [
+            "VideoSaverNode"
+          ]
+        },
+        {
+          "source": "nodes.DetectionTrackingNodes",
+          "specifiers": [
+            "DetectionTrackingNodes"
+          ]
+        },
+        {
+          "source": "nodes.TrackerInfoUpdateNode",
+          "specifiers": [
+            "TrackerInfoUpdateNode"
+          ]
+        },
+        {
+          "source": "nodes.CalcStatisticsNode",
+          "specifiers": [
+            "CalcStatisticsNode"
+          ]
+        },
+        {
+          "source": "nodes.FlaskServerVideoNode",
+          "specifiers": [
+            "VideoServer"
+          ]
+        },
+        {
+          "source": "elements.VideoEndBreakElement",
+          "specifiers": [
+            "VideoEndBreakElement"
+          ]
+        },
+        {
+          "source": "nodes.KafkaProducerNode",
+          "specifiers": [
+            "KafkaProducerNode"
+          ]
+        },
+        {
+          "source": "utils_local.utils",
+          "specifiers": [
+            "check_and_set_env_var"
+          ]
+        }
+      ],
+      "exports": [
+        "main"
+      ],
+      "totalLines": 55,
+      "hasStructuralAnalysis": true
+    },
+    "nodes/CalcStatisticsNode.py": {
+      "filePath": "nodes/CalcStatisticsNode.py",
+      "contentHash": "941a1ff416d14716be698e8b7aff8acf27b17e53ec4ea377576103e8a050c80b",
+      "functions": [],
+      "classes": [
+        {
+          "name": "CalcStatisticsNode",
+          "methods": [
+            "__init__",
+            "process"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 57
+        }
+      ],
+      "imports": [
+        {
+          "source": "collections",
+          "specifiers": [
+            "deque"
+          ]
+        },
+        {
+          "source": "numpy",
+          "specifiers": [
+            "np"
+          ]
+        },
+        {
+          "source": "elements.FrameElement",
+          "specifiers": [
+            "FrameElement"
+          ]
+        },
+        {
+          "source": "elements.VideoEndBreakElement",
+          "specifiers": [
+            "VideoEndBreakElement"
+          ]
+        },
+        {
+          "source": "utils_local.utils",
+          "specifiers": [
+            "profile_time"
+          ]
+        }
+      ],
+      "exports": [
+        "CalcStatisticsNode"
+      ],
+      "totalLines": 65,
+      "hasStructuralAnalysis": true
+    },
+    "nodes/DetectionTrackingNodes.py": {
+      "filePath": "nodes/DetectionTrackingNodes.py",
+      "contentHash": "dc470345af6995c66af590f628c7a2c3cfbf107c0c288f8ed0475977ec58aff7",
+      "functions": [],
+      "classes": [
+        {
+          "name": "DetectionTrackingNodes",
+          "methods": [
+            "__init__",
+            "process",
+            "_get_results_dor_tracker"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 96
+        }
+      ],
+      "imports": [
+        {
+          "source": "ultralytics",
+          "specifiers": [
+            "YOLO"
+          ]
+        },
+        {
+          "source": "torch",
+          "specifiers": [
+            "torch"
+          ]
+        },
+        {
+          "source": "numpy",
+          "specifiers": [
+            "np"
+          ]
+        },
+        {
+          "source": "utils_local.utils",
+          "specifiers": [
+            "profile_time"
+          ]
+        },
+        {
+          "source": "elements.FrameElement",
+          "specifiers": [
+            "FrameElement"
+          ]
+        },
+        {
+          "source": "elements.VideoEndBreakElement",
+          "specifiers": [
+            "VideoEndBreakElement"
+          ]
+        },
+        {
+          "source": "byte_tracker.byte_tracker_model",
+          "specifiers": [
+            "ByteTracker"
+          ]
+        }
+      ],
+      "exports": [
+        "DetectionTrackingNodes"
+      ],
+      "totalLines": 106,
+      "hasStructuralAnalysis": true
+    },
+    "nodes/FlaskServerVideoNode.py": {
+      "filePath": "nodes/FlaskServerVideoNode.py",
+      "contentHash": "1d06ed3e00abc3b5d926330ee15afc8f3c27bc829c7aec79d41bede40e0abf20",
+      "functions": [],
+      "classes": [
+        {
+          "name": "EndpointAction",
+          "methods": [
+            "__init__",
+            "__call__"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 9
+        },
+        {
+          "name": "VideoServer",
+          "methods": [
+            "__init__",
+            "_index",
+            "_gen",
+            "_update_page",
+            "update_image",
+            "process",
+            "run",
+            "stop_server"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 45
+        }
+      ],
+      "imports": [
+        {
+          "source": "flask",
+          "specifiers": [
+            "Flask",
+            "render_template",
+            "Response"
+          ]
+        },
+        {
+          "source": "threading",
+          "specifiers": [
+            "Thread"
+          ]
+        },
+        {
+          "source": "numpy",
+          "specifiers": [
+            "np"
+          ]
+        },
+        {
+          "source": "cv2",
+          "specifiers": [
+            "cv2"
+          ]
+        },
+        {
+          "source": "signal",
+          "specifiers": [
+            "signal"
+          ]
+        },
+        {
+          "source": "os",
+          "specifiers": [
+            "os"
+          ]
+        },
+        {
+          "source": "elements.FrameElement",
+          "specifiers": [
+            "FrameElement"
+          ]
+        },
+        {
+          "source": "elements.VideoEndBreakElement",
+          "specifiers": [
+            "VideoEndBreakElement"
+          ]
+        }
+      ],
+      "exports": [
+        "EndpointAction",
+        "VideoServer"
+      ],
+      "totalLines": 84,
+      "hasStructuralAnalysis": true
+    },
+    "nodes/KafkaProducerNode.py": {
+      "filePath": "nodes/KafkaProducerNode.py",
+      "contentHash": "445d8ccfa36d50188c8917ce4de5300d7ac3b8bac139248de69d20ef515de273",
+      "functions": [],
+      "classes": [
+        {
+          "name": "KafkaProducerNode",
+          "methods": [
+            "__init__",
+            "process"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 65
+        }
+      ],
+      "imports": [
+        {
+          "source": "kafka",
+          "specifiers": [
+            "KafkaProducer"
+          ]
+        },
+        {
+          "source": "json",
+          "specifiers": [
+            "dumps"
+          ]
+        },
+        {
+          "source": "time",
+          "specifiers": [
+            "time"
+          ]
+        },
+        {
+          "source": "utils_local.utils",
+          "specifiers": [
+            "profile_time"
+          ]
+        },
+        {
+          "source": "elements.VideoEndBreakElement",
+          "specifiers": [
+            "VideoEndBreakElement"
+          ]
+        },
+        {
+          "source": "elements.FrameElement",
+          "specifiers": [
+            "FrameElement"
+          ]
+        },
+        {
+          "source": "logging",
+          "specifiers": [
+            "logging"
+          ]
+        }
+      ],
+      "exports": [
+        "KafkaProducerNode"
+      ],
+      "totalLines": 75,
+      "hasStructuralAnalysis": true
+    },
+    "nodes/ShowNode.py": {
+      "filePath": "nodes/ShowNode.py",
+      "contentHash": "f2cdfec465e4c24951d38d1c8c8371c66765901437d7ba36ebc5853e85151aea",
+      "functions": [],
+      "classes": [
+        {
+          "name": "ShowNode",
+          "methods": [
+            "__init__",
+            "process",
+            "_overlay_transparent_mask"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 271
+        }
+      ],
+      "imports": [
+        {
+          "source": "random",
+          "specifiers": [
+            "random"
+          ]
+        },
+        {
+          "source": "cv2",
+          "specifiers": [
+            "cv2"
+          ]
+        },
+        {
+          "source": "numpy",
+          "specifiers": [
+            "np"
+          ]
+        },
+        {
+          "source": "utils_local.utils",
+          "specifiers": [
+            "profile_time",
+            "FPS_Counter"
+          ]
+        },
+        {
+          "source": "elements.VideoEndBreakElement",
+          "specifiers": [
+            "VideoEndBreakElement"
+          ]
+        },
+        {
+          "source": "elements.FrameElement",
+          "specifiers": [
+            "FrameElement"
+          ]
+        }
+      ],
+      "exports": [
+        "ShowNode"
+      ],
+      "totalLines": 280,
+      "hasStructuralAnalysis": true
+    },
+    "nodes/TrackerInfoUpdateNode.py": {
+      "filePath": "nodes/TrackerInfoUpdateNode.py",
+      "contentHash": "63f864bdb2c917fa19bab6f5e06cfb880d16252e7aa5970de6315a6329f0a2e5",
+      "functions": [],
+      "classes": [
+        {
+          "name": "TrackerInfoUpdateNode",
+          "methods": [
+            "__init__",
+            "process"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 64
+        }
+      ],
+      "imports": [
+        {
+          "source": "logging",
+          "specifiers": [
+            "logging"
+          ]
+        },
+        {
+          "source": "elements.FrameElement",
+          "specifiers": [
+            "FrameElement"
+          ]
+        },
+        {
+          "source": "elements.TrackElement",
+          "specifiers": [
+            "TrackElement"
+          ]
+        },
+        {
+          "source": "elements.VideoEndBreakElement",
+          "specifiers": [
+            "VideoEndBreakElement"
+          ]
+        },
+        {
+          "source": "utils_local.utils",
+          "specifiers": [
+            "profile_time",
+            "intersects_central_point"
+          ]
+        }
+      ],
+      "exports": [
+        "TrackerInfoUpdateNode"
+      ],
+      "totalLines": 74,
+      "hasStructuralAnalysis": true
+    },
+    "nodes/VideoReader.py": {
+      "filePath": "nodes/VideoReader.py",
+      "contentHash": "8ab124272bf9b34cec1687bac6612d44af0d9c4d58ebcfda26b6c98f874345c9",
+      "functions": [],
+      "classes": [
+        {
+          "name": "VideoReader",
+          "methods": [
+            "__init__",
+            "process"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 67
+        }
+      ],
+      "imports": [
+        {
+          "source": "os",
+          "specifiers": [
+            "os"
+          ]
+        },
+        {
+          "source": "json",
+          "specifiers": [
+            "json"
+          ]
+        },
+        {
+          "source": "time",
+          "specifiers": [
+            "time"
+          ]
+        },
+        {
+          "source": "logging",
+          "specifiers": [
+            "logging"
+          ]
+        },
+        {
+          "source": "typing",
+          "specifiers": [
+            "Generator"
+          ]
+        },
+        {
+          "source": "cv2",
+          "specifiers": [
+            "cv2"
+          ]
+        },
+        {
+          "source": "elements.FrameElement",
+          "specifiers": [
+            "FrameElement"
+          ]
+        },
+        {
+          "source": "elements.VideoEndBreakElement",
+          "specifiers": [
+            "VideoEndBreakElement"
+          ]
+        }
+      ],
+      "exports": [
+        "VideoReader"
+      ],
+      "totalLines": 80,
+      "hasStructuralAnalysis": true
+    },
+    "nodes/VideoSaverNode.py": {
+      "filePath": "nodes/VideoSaverNode.py",
+      "contentHash": "ee3d1b5de8136cfd452f178785abfdc10e78690c9d0ee9e6e9e3dc53c663a729",
+      "functions": [],
+      "classes": [
+        {
+          "name": "VideoSaverNode",
+          "methods": [
+            "__init__",
+            "process",
+            "_init_cv2_writer"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 57
+        }
+      ],
+      "imports": [
+        {
+          "source": "pathlib",
+          "specifiers": [
+            "Path"
+          ]
+        },
+        {
+          "source": "os",
+          "specifiers": [
+            "os"
+          ]
+        },
+        {
+          "source": "logging",
+          "specifiers": [
+            "logging"
+          ]
+        },
+        {
+          "source": "cv2",
+          "specifiers": [
+            "cv2"
+          ]
+        },
+        {
+          "source": "elements.FrameElement",
+          "specifiers": [
+            "FrameElement"
+          ]
+        },
+        {
+          "source": "elements.VideoEndBreakElement",
+          "specifiers": [
+            "VideoEndBreakElement"
+          ]
+        }
+      ],
+      "exports": [
+        "VideoSaverNode"
+      ],
+      "totalLines": 68,
+      "hasStructuralAnalysis": true
+    },
+    "README-zh.md": {
+      "filePath": "README-zh.md",
+      "contentHash": "d9a38b993ed09e2c71e422d6367653d092002265b18cb2e82f549bf4ca16aa34",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 155,
+      "hasStructuralAnalysis": true
+    },
+    "README.md": {
+      "filePath": "README.md",
+      "contentHash": "b16ee37473ec178753996c6f8db229a7e0e3b14a305793295f4990357e28245d",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 145,
+      "hasStructuralAnalysis": true
+    },
+    "requirements.txt": {
+      "filePath": "requirements.txt",
+      "contentHash": "5eb92a78484b0afd615b5f2bfd2130db196099fa85b87389a3daff43790bb6fa",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 8,
+      "hasStructuralAnalysis": false
+    },
+    "services/grafana/grafana.db": {
+      "filePath": "services/grafana/grafana.db",
+      "contentHash": "3ef59a3bd8466c14ee927684b3baff2a62296c1d6cf14b99eeab9840db29c37c",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 3187,
+      "hasStructuralAnalysis": false
+    },
+    "services/grafana/provisioning/dashboards/camera-1.json": {
+      "filePath": "services/grafana/provisioning/dashboards/camera-1.json",
+      "contentHash": "05c033311205a2694aaea04f14732864333d3bca47642021f6821f1efdc2552d",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 678,
+      "hasStructuralAnalysis": true
+    },
+    "services/grafana/provisioning/dashboards/camera-2.json": {
+      "filePath": "services/grafana/provisioning/dashboards/camera-2.json",
+      "contentHash": "cc9d9898375633b812f92ba9f37a48cc2eb95122a10c10b2a5f5fd722003603d",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 653,
+      "hasStructuralAnalysis": true
+    },
+    "services/grafana/provisioning/dashboards/dashboard.yaml": {
+      "filePath": "services/grafana/provisioning/dashboards/dashboard.yaml",
+      "contentHash": "515e4b4d3f3673b2dca22cd1d9d9de407471ee0090fce6a4ed648e4cc8da07ff",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 11,
+      "hasStructuralAnalysis": true
+    },
+    "services/kafka/init-kafka-broker.sh": {
+      "filePath": "services/kafka/init-kafka-broker.sh",
+      "contentHash": "bd38b74c67d5a3f7b65ce68b227deb3608d4a89f3c9ca5b01c52c90ae5529b5c",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 3,
+      "hasStructuralAnalysis": true
+    },
+    "services/kafka/kafka_server_jaas.conf": {
+      "filePath": "services/kafka/kafka_server_jaas.conf",
+      "contentHash": "2c5fe7d50c887fbea0271d62ca61eece05b5c3ed8742bb908e4c3074e8cb9a26",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 7,
+      "hasStructuralAnalysis": false
+    },
+    "services/nginx/nginx.conf": {
+      "filePath": "services/nginx/nginx.conf",
+      "contentHash": "1f26c94a76342e4fc7e3b3b62b666333e86640daa03b28c99fb00c19c95a8a6e",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 15,
+      "hasStructuralAnalysis": false
+    },
+    "services/telegraf/telegraf.conf": {
+      "filePath": "services/telegraf/telegraf.conf",
+      "contentHash": "8a775afb2bf6dbd3cb5c0a8ddfe2b85eab15fcf91721870c9c712bfb25833e27",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 33,
+      "hasStructuralAnalysis": false
+    },
+    "test_videos/.DS_Store": {
+      "filePath": "test_videos/.DS_Store",
+      "contentHash": "28309f146d5eb0c591eb4daf9067ac6c90b952f755d8b38f8d556ec4e30dce4e",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 1,
+      "hasStructuralAnalysis": false
+    },
+    "test_videos/rtsp_streaming/docker-compose.yaml": {
+      "filePath": "test_videos/rtsp_streaming/docker-compose.yaml",
+      "contentHash": "0152b313c95d9fa40b668e1d3c2e4ef6925902d5eeb6c6af692db1c92b2b91a7",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 14,
+      "hasStructuralAnalysis": true
+    },
+    "test_videos/rtsp_streaming/ffmpeg_rtsp.ipynb": {
+      "filePath": "test_videos/rtsp_streaming/ffmpeg_rtsp.ipynb",
+      "contentHash": "a8bdb4091d8ef4fe1db03654f1fe4f66646ec50a6f3f1172a4e24b9f58c840f9",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 89,
+      "hasStructuralAnalysis": false
+    },
+    "test_videos/rtsp_streaming/mediamtx.yml": {
+      "filePath": "test_videos/rtsp_streaming/mediamtx.yml",
+      "contentHash": "c2d14fa13108cf395e3aa328bba32b65a7d9fd013d445cd432b1a4f24f212244",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 698,
+      "hasStructuralAnalysis": true
+    },
+    "test_videos/rtsp_streaming/README.md": {
+      "filePath": "test_videos/rtsp_streaming/README.md",
+      "contentHash": "30441a47f6085828932322b36d39aded156246327892ff1b0825de8090716223",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 9,
+      "hasStructuralAnalysis": true
+    },
+    "test_videos/交通路口数据采集2/堤口路胜利庄北路早高峰0520.txt": {
+      "filePath": "test_videos/交通路口数据采集2/堤口路胜利庄北路早高峰0520.txt",
+      "contentHash": "5bc97da0cc39cadb2ddbd2ef51e2672e087d681488008baac78e94c505c57b33",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 1,
+      "hasStructuralAnalysis": false
+    },
+    "test_videos/交通路口数据采集2/小清河北路与水屯路路口交通数据收集航线快速计划20260403142353.txt": {
+      "filePath": "test_videos/交通路口数据采集2/小清河北路与水屯路路口交通数据收集航线快速计划20260403142353.txt",
+      "contentHash": "ace6723a195de5c0458ab8568750b547c546dcf5b1378ca5555b6ae9f293978e",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 1,
+      "hasStructuralAnalysis": false
+    },
+    "test_videos/交通路口数据采集2/梓东大道308国道早高峰0520.txt": {
+      "filePath": "test_videos/交通路口数据采集2/梓东大道308国道早高峰0520.txt",
+      "contentHash": "3996f657c496683a7c92d2a160df20de4945c8c8cd36c605008154bf37a707be",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 1,
+      "hasStructuralAnalysis": false
+    },
+    "test_videos/交通路口数据采集2/梓东大道与208国道路口快速计划20260403134109.txt": {
+      "filePath": "test_videos/交通路口数据采集2/梓东大道与208国道路口快速计划20260403134109.txt",
+      "contentHash": "0a24dc999a990b8e34e431e3f15b5c751c123d038cb1b7567ca5f2abb7f7c9f2",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 1,
+      "hasStructuralAnalysis": false
+    },
+    "TrafficAnalyzer_无人机扩展落地方案.md": {
+      "filePath": "TrafficAnalyzer_无人机扩展落地方案.md",
+      "contentHash": "d67becef193fce37a6e514e1cf6ddb73c6a6d1e43920c9d698c1de82e6ceb64e",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 726,
+      "hasStructuralAnalysis": true
+    },
+    "update_dashboards.py": {
+      "filePath": "update_dashboards.py",
+      "contentHash": "7ba5003755c2335d2ca253e29382a7f2e2a9700f915c3eb00b8c96b302362e07",
+      "functions": [
+        {
+          "name": "get_dashboard",
+          "params": [
+            "uid"
+          ],
+          "exported": true,
+          "lineCount": 9
+        },
+        {
+          "name": "update_dashboard",
+          "params": [
+            "dashboard_data"
+          ],
+          "exported": true,
+          "lineCount": 18
+        },
+        {
+          "name": "translate_json",
+          "params": [
+            "data"
+          ],
+          "exported": true,
+          "lineCount": 13
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "urllib.request",
+          "specifiers": [
+            "urllib.request"
+          ]
+        },
+        {
+          "source": "json",
+          "specifiers": [
+            "json"
+          ]
+        },
+        {
+          "source": "base64",
+          "specifiers": [
+            "base64"
+          ]
+        }
+      ],
+      "exports": [
+        "get_dashboard",
+        "update_dashboard",
+        "translate_json"
+      ],
+      "totalLines": 91,
+      "hasStructuralAnalysis": true
+    },
+    "utils_local/templates/index.html": {
+      "filePath": "utils_local/templates/index.html",
+      "contentHash": "2b09d98286935a63b77acf871501d12e2251873903a496ab246d13a9b8aba591",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 10,
+      "hasStructuralAnalysis": false
+    },
+    "utils_local/utils.py": {
+      "filePath": "utils_local/utils.py",
+      "contentHash": "ed6b0820b67f62276e5d29d74624834ad1fac57574e8ea23cd09fb9a5a1bc683",
+      "functions": [
+        {
+          "name": "check_and_set_env_var",
+          "params": [
+            "var_name",
+            "value_new"
+          ],
+          "exported": true,
+          "lineCount": 11
+        },
+        {
+          "name": "profile_time",
+          "params": [
+            "func"
+          ],
+          "exported": true,
+          "lineCount": 14
+        },
+        {
+          "name": "intersects_central_point",
+          "params": [
+            "tracked_xyxy",
+            "polygons"
+          ],
+          "exported": true,
+          "lineCount": 21
+        }
+      ],
+      "classes": [
+        {
+          "name": "FPS_Counter",
+          "methods": [
+            "__init__",
+            "calc_FPS"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 26
+        }
+      ],
+      "imports": [
+        {
+          "source": "logging",
+          "specifiers": [
+            "logging"
+          ]
+        },
+        {
+          "source": "os",
+          "specifiers": [
+            "os"
+          ]
+        },
+        {
+          "source": "time",
+          "specifiers": [
+            "time"
+          ]
+        },
+        {
+          "source": "numpy",
+          "specifiers": [
+            "np"
+          ]
+        },
+        {
+          "source": "shapely.geometry",
+          "specifiers": [
+            "Point",
+            "Polygon"
+          ]
+        }
+      ],
+      "exports": [
+        "check_and_set_env_var",
+        "profile_time",
+        "FPS_Counter",
+        "intersects_central_point"
+      ],
+      "totalLines": 87,
+      "hasStructuralAnalysis": true
+    },
+    "weights/uav_best.pt": {
+      "filePath": "weights/uav_best.pt",
+      "contentHash": "f83f5a712c57a192cd70ea08ffcbd616d975e041947ecc510ccb0cb039f36ecf",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 101797,
+      "hasStructuralAnalysis": false
+    },
+    "weights/YOLOv8_TensorRT_converter.ipynb": {
+      "filePath": "weights/YOLOv8_TensorRT_converter.ipynb",
+      "contentHash": "16f48b7165a3967b807641f8b1c4946c285a4c0387cb7bd81287de400d618908",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 253,
+      "hasStructuralAnalysis": false
+    },
+    "weights/yolov8m.pt": {
+      "filePath": "weights/yolov8m.pt",
+      "contentHash": "1d69469dcfc145feb598feff0b9c62c35ab2474dd69e6acc4f627f5beaa06e07",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 213100,
+      "hasStructuralAnalysis": false
+    }
+  }
+}

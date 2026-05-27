@@ -19,3 +19,4 @@ services/grafana/plugins
 services/triton
 services/influxdb_data
 services/grafana/grafana.db
+.superpowers

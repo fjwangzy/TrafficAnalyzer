@@ -64,6 +64,30 @@ class Lane(BaseModel):
     polygon_bev: list[list[float]]  # [[x,y],...]
     speed_limit: int | None    # km/h
 
+class LaneStats(BaseModel):
+    """车道级实时统计（每秒刷新）"""
+    lane_id: int
+    flow_veh_per_min: float    # 交通流量（辆/分钟）
+    headway_sec: float | None  # 车头时距（秒），车道内 <2 辆车时为 None
+    queue_length_m: float      # 排队长度（米），<2 辆车时为 0
+    vehicle_count: int         # 当前车道内车辆数
+    avg_speed_kmh: float       # 车道内平均速度
+
+class TurnBehavior(str, Enum):
+    """转向行为分类（基于 BEV 轨迹的进出车道组合）"""
+    STRAIGHT = "straight"      # 直行：进车道与出车道方向相同
+    LEFT_TURN = "left_turn"    # 左转
+    RIGHT_TURN = "right_turn"  # 右转
+    U_TURN = "u_turn"          # 掉头：进车道与出车道方向相反
+
+class LaneChangeEvent(BaseModel):
+    """单次换道事件"""
+    from_lane: int             # 换道前车道 ID
+    to_lane: int               # 换道后车道 ID
+    bev_x: float               # 换道发生位置 X（米）
+    bev_y: float               # 换道发生位置 Y（米）
+    timestamp: float           # 换道发生时刻
+
 # ═══════════════════════════════════════════
 # 车辆检测与轨迹
 # ═══════════════════════════════════════════
@@ -94,6 +118,8 @@ class Track(BaseModel):
     total_distance_m: float
     avg_speed_kmh: float
     is_anomaly: bool           # 逆行/异常停车
+    turn_behavior: TurnBehavior | None   # 转向行为（轨迹完成时计算）
+    lane_changes: list[LaneChangeEvent]  # 换道事件列表
 
 # ═══════════════════════════════════════════
 # 告警
@@ -270,6 +296,13 @@ class Report(BaseModel):
     congestion_periods: list[dict]
     anomaly_events: list[str]  # alert_ids
     lane_utilization: dict[str, float]
+    lane_headway_stats: dict[str, dict]    # {lane_id: {avg, min, below_2s_pct}}
+    lane_queue_stats: dict[str, dict]      # {lane_id: {avg, max}}
+    turn_distribution: dict[str, int]      # {straight: 120, left_turn: 45, ...}
+    turn_flow_matrix: list[dict]           # [{start_lane, turn_behavior, count}, ...]
+    lane_change_rate: float                # 换道次数/总车辆数
+    lane_change_matrix: list[dict]         # [{from_lane, to_lane, count}, ...]
+    lane_change_heatmap: list[dict]        # [{bev_x, bev_y, density}, ...]
     ai_summary: str | None     # VLM 生成
     pdf_url: str | None
     generated_at: datetime
@@ -297,7 +330,33 @@ Topic: `drone_{drone_id}_intersection_{intersection_id}`
   "congestion_index": 2.3,
   "queue_length_m": 45.2,
   "calib_quality": "ok",
-  "lane_match_rate": 0.94
+  "lane_match_rate": 0.94,
+  "lanes": [
+    {
+      "lane_id": 1,
+      "flow_veh_per_min": 4.2,
+      "headway_sec": 14.3,
+      "queue_length_m": 45.2,
+      "vehicle_count": 3,
+      "avg_speed_kmh": 22.1
+    },
+    {
+      "lane_id": 2,
+      "flow_veh_per_min": 3.8,
+      "headway_sec": 15.8,
+      "queue_length_m": 32.0,
+      "vehicle_count": 2,
+      "avg_speed_kmh": 28.5
+    },
+    {
+      "lane_id": 3,
+      "flow_veh_per_min": 2.1,
+      "headway_sec": 28.6,
+      "queue_length_m": 12.5,
+      "vehicle_count": 1,
+      "avg_speed_kmh": 35.0
+    }
+  ]
 }
 ```
 
@@ -338,7 +397,17 @@ Topic: `drone_{drone_id}_intersection_{intersection_id}`
   "total_distance_m": 85.3,
   "avg_speed_kmh": 30.7,
   "is_anomaly": false,
-  "positions_bev": [[5.2,23.1],[5.3,24.5],[5.1,26.0]]
+  "positions_bev": [[5.2,23.1],[5.3,24.5],[5.1,26.0]],
+  "turn_behavior": "left_turn",
+  "lane_changes": [
+    {
+      "from_lane": 2,
+      "to_lane": 3,
+      "bev_x": 5.3,
+      "bev_y": 24.5,
+      "timestamp": 1716799995.0
+    }
+  ]
 }
 ```
 
@@ -388,14 +457,30 @@ tags:
   calib_quality = "ok"
 fields:
   cars = 12i
-  road_1 = 4.2
+  road_1 = 4.2                  # 各车道流量（evts/min），保留向后兼容
   road_2 = 3.8
   road_3 = 2.1
   road_4 = 1.5
   road_5 = 0.4
   congestion_index = 2.3
-  queue_length_m = 45.2
+  queue_length_m = 45.2          # 最长排队长度（所有车道最大值）
   lane_match_rate = 0.94
+  # 车道级指标（动态字段，按实际车道数写入）
+  lane_1_flow = 4.2              # 车道 1 流量（辆/分钟）
+  lane_1_headway = 14.3          # 车道 1 车头时距（秒）
+  lane_1_queue = 45.2            # 车道 1 排队长度（米）
+  lane_1_count = 3i              # 车道 1 当前车辆数
+  lane_1_speed = 22.1            # 车道 1 平均速度（km/h）
+  lane_2_flow = 3.8
+  lane_2_headway = 15.8
+  lane_2_queue = 32.0
+  lane_2_count = 2i
+  lane_2_speed = 28.5
+  lane_3_flow = 2.1
+  lane_3_headway = 28.6
+  lane_3_queue = 12.5
+  lane_3_count = 1i
+  lane_3_speed = 35.0
 ```
 
 **measurement: `track_events`**
@@ -407,11 +492,30 @@ tags:
   start_lane = "2"
   end_lane = "3"
   is_anomaly = "false"
+  turn_behavior = "left_turn"    # straight/left_turn/right_turn/u_turn
+  has_lane_change = "true"       # 是否发生换道
 fields:
   duration_sec = 10.0
   total_distance_m = 85.3
   avg_speed_kmh = 30.7
   track_id = 42i
+  lane_change_count = 1i         # 换道次数
+  lane_change_1_x = 5.3          # 第 1 次换道 BEV X
+  lane_change_1_y = 24.5         # 第 1 次换道 BEV Y
+  lane_change_1_from = "2"       # 换道前车道
+  lane_change_1_to = "3"         # 换道后车道
+```
+
+**measurement: `turn_stats`**（按路口+时间段聚合的转向统计）
+
+```
+tags:
+  intersection_id = "INT_小清河水屯"
+  start_lane = "2"
+  turn_behavior = "left_turn"
+fields:
+  count = 15i                    # 该时间段内该转向行为的车辆数
+  avg_speed_kmh = 25.3
 ```
 
 **measurement: `vlm_analysis`**
@@ -462,7 +566,16 @@ fields:
 {
   "channel": "intersection:INT_小清河水屯",
   "type": "stats",
-  "data": {"cars": 12, "roads": [4.2, 3.8, 2.1, 1.5, 0.4], ...},
+  "data": {
+    "cars": 12,
+    "roads": [4.2, 3.8, 2.1, 1.5, 0.4],
+    "lanes": [
+      {"lane_id": 1, "flow": 4.2, "headway": 14.3, "queue": 45.2, "count": 3, "speed": 22.1},
+      {"lane_id": 2, "flow": 3.8, "headway": 15.8, "queue": 32.0, "count": 2, "speed": 28.5},
+      {"lane_id": 3, "flow": 2.1, "headway": 28.6, "queue": 12.5, "count": 1, "speed": 35.0}
+    ],
+    ...
+  },
   "ts": 1716800000.123
 }
 
@@ -549,7 +662,11 @@ InfluxDB 1.8 查询客户端（InfluxQL），提供历史数据查询。
 **核心方法**：
 
 - `query_stats(intersection_id, period, granularity)` — 路口历史统计
+- `query_lane_stats(intersection_id, period, granularity)` — 车道级指标时序（flow/headway/queue/speed per lane）
 - `query_track_events(intersection_id, period)` — 轨迹事件
+- `query_turn_summary(intersection_id, period)` — 转向行为聚合统计
+- `query_lane_changes(intersection_id, period, lane_id)` — 换道事件列表
+- `query_lane_change_heatmap(intersection_id, period)` — 换道位置热力图
 - `query_system_metrics(period, granularity)` — 系统指标
 - `query_peak_analysis(intersection_id, start, end)` — 高峰分析（报告用）
 
@@ -777,15 +894,23 @@ DELETE /api/v1/calibration/records/{key}
 **BEV 鸟瞰图**：
 
 - Konva.js 渲染车道多边形 + 实时车辆点 + 轨迹线
-- 点击车道 → 显示该车道实时统计（evts/min / 平均速度）
-- 车道颜色编码：绿(畅通) / 黄(轻度) / 红(拥堵)
+- 点击车道 → 显示该车道实时统计面板：
+  - 交通流量（flow_veh_per_min）
+  - 车头时距（headway_sec）+ 安全阈值线（2s 警戒）
+  - 排队长度（queue_length_m）+ 排队车辆高亮
+  - 车道内车辆数 + 平均速度
+- 车道颜色编码：绿(畅通 headway>5s) / 黄(轻度 2-5s) / 红(拥堵 <2s)
+- 换道位置标记：在 BEV 上以虚线箭头标注最近 N 次换道事件发生位置
 
 **实时指标图表**：
 
-- 流量趋势（折线图，最近 10 分钟，1s 粒度）
-- 各车道流量（柱状图）
+- 流量趋势（折线图，最近 10 分钟，1s 粒度，多车道叠加）
+- 各车道流量（柱状图，颜色编码）
+- 各车道车头时距（分组柱状图，附 2s 安全阈值线）
+- 各车道排队长度（堆叠面积图）
 - 拥堵指数（仪表盘 0-5）
-- 排队长度（面积图）
+- 转向行为分布（饼图：直行/左转/右转/掉头占比，来自 track_complete 聚合）
+- 换道热力图（BEV 上叠加换道位置密度热力，来自 track_complete 聚合）
 - 告警时间轴（最近 1 小时告警标记）
 
 **bbox overlay 时间戳对齐**：
@@ -819,6 +944,9 @@ HLSVideoPlayer:
 ```
 GET  /api/v1/intersections/{id}
 GET  /api/v1/intersections/{id}/stats?period=10m&granularity=1s
+GET  /api/v1/intersections/{id}/lane-stats?period=10m&granularity=1s
+GET  /api/v1/intersections/{id}/turn-stats?period=1h
+GET  /api/v1/intersections/{id}/lane-changes?period=1h
 GET  /api/v1/video/streams
 POST /api/v1/video/streams/{id}/start
 WS   subscribe: intersection:{id}
@@ -928,6 +1056,15 @@ POST /api/v1/alerts/webhooks/{id}/test
 - 路径热力图（统计高频行驶路径）
 - 逆行轨迹高亮（红色 + 闪烁）
 - 单车轨迹回放（点击 track_id → 动画回放）
+- 转向行为可视化：
+  - 按 turn_behavior 过滤轨迹（直行/左转/右转/掉头）
+  - 每种转向用不同颜色渲染（直行=白、左转=绿、右转=蓝、掉头=红）
+  - 转向统计饼图（各转向类型占比）
+- 换道位置分析：
+  - BEV 上渲染所有换道事件位置（圆点 + 箭头 from→to）
+  - 换道热力图（高频换道区域高亮）
+  - 按车道筛选换道事件（从哪条车道换到哪条）
+  - 换道频率统计（换道次数/总车辆数）
 
 **VLM 语义分析**：
 
@@ -942,8 +1079,10 @@ POST /api/v1/alerts/webhooks/{id}/test
 GET  /api/v1/video/streams
 POST /api/v1/video/streams/{id}/start
 GET  /api/v1/video/replay/{int_id}?start=...&end=...
-GET  /api/v1/trajectories/{int_id}?period=1h&limit=500
+GET  /api/v1/trajectories/{int_id}?period=1h&limit=500&turn_behavior=left_turn
 GET  /api/v1/trajectories/{int_id}/heatmap
+GET  /api/v1/trajectories/{int_id}/turn-summary?period=1h
+GET  /api/v1/trajectories/{int_id}/lane-change-heatmap?period=1h
 GET  /api/v1/vlm/history/{int_id}
 POST /api/v1/vlm/test  body: {frame_url, prompt}
 ```
@@ -964,7 +1103,17 @@ POST /api/v1/vlm/test  body: {frame_url, prompt}
 - 概览：总车流量 / 平均拥堵指数 / 异常事件数
 - 时序图：流量趋势 + 拥堵指数趋势
 - 拥堵时段表：开始/结束时间 + 峰值 + 持续时长
-- 车道利用率：各车道流量占比饼图
+- 车道级分析：
+  - 各车道流量占比饼图
+  - 各车道车头时距时序图（标注低于 2s 安全阈值的时段）
+  - 各车道排队长度最大值时序图
+- 转向行为分析：
+  - 转向类型分布饼图（直行/左转/右转/掉头占比）
+  - 各进车道的转向流量矩阵（start_lane × turn_behavior）
+- 换道行为分析：
+  - 换道频率（换道次数/总车辆数）
+  - 高频换道区域 BEV 热力图
+  - 换道矩阵（from_lane × to_lane 次数统计）
 - 异常事件清单：时间 + 类型 + 严重等级 + VLM 描述
 - AI 总结：Qwen-VL 生成的自然语言路况报告
 
@@ -1101,6 +1250,9 @@ GET    /api/v1/intersections
 GET    /api/v1/intersections/summary
 GET    /api/v1/intersections/{id}
 GET    /api/v1/intersections/{id}/stats?period=1h&granularity=1m
+GET    /api/v1/intersections/{id}/lane-stats?period=10m&granularity=1s
+GET    /api/v1/intersections/{id}/turn-stats?period=1h
+GET    /api/v1/intersections/{id}/lane-changes?period=1h&lane_id=2
 
 # 告警
 GET    /api/v1/alerts?severity=P1&status=open&limit=50&offset=0
@@ -1122,8 +1274,10 @@ POST   /api/v1/video/streams/{id}/stop
 GET    /api/v1/video/replay/{int_id}?start=...&end=...
 
 # 轨迹
-GET    /api/v1/trajectories/{int_id}?period=1h&limit=500&class_name=car
+GET    /api/v1/trajectories/{int_id}?period=1h&limit=500&class_name=car&turn_behavior=left_turn
 GET    /api/v1/trajectories/{int_id}/heatmap
+GET    /api/v1/trajectories/{int_id}/turn-summary?period=1h
+GET    /api/v1/trajectories/{int_id}/lane-change-heatmap?period=1h
 GET    /api/v1/trajectories/{int_id}/{track_id}
 
 # VLM
@@ -1169,7 +1323,7 @@ PUT    /api/v1/system/models/prompts/{id}
 POST   /api/v1/system/models/config
 ```
 
-**统计**：REST 端点 52 个，WebSocket Channels 6 类。
+**统计**：REST 端点 57 个，WebSocket Channels 6 类。
 
 ### 6.2 WebSocket Channels
 
@@ -1205,7 +1359,7 @@ Channels:
   - topic 命名改为 `drone_{drone_id}_intersection_{int_id}`
   - 新增字段：congestion_index / queue_length_m / calib_quality / lane_match_rate
 
-**CalcStatisticsNode**：新增拥堵指数 + 排队长度计算
+**CalcStatisticsNode**：新增拥堵指数 + 排队长度 + 车道级五项指标计算
 
 - `congestion_index`：加权平均拥堵度
   ```
@@ -1216,19 +1370,112 @@ Channels:
   ```
 - `queue_length_m`：最长排队长度（米）
   ```
-  # 对每个车道：取该车道内所有车辆 BEV Y 坐标的 max - min
-  # 排队长度 = 所有车道中的最大值
   queue_length_m = max(
     max(vehicles_bev_y[lane]) - min(vehicles_bev_y[lane])
     for lane in active_lanes if len(vehicles_bev_y[lane]) >= 2
   )
-  # 如果车道内车辆数 < 2，排队长度为 0
+  ```
+- `lane_flow`（车道级交通流量）：
+  ```
+  # 使用滑动窗口（60s）统计每个车道的通过车辆数
+  # flow_veh_per_min = window_count / window_duration_sec * 60
+  for lane in active_lanes:
+      recent_passes = [t for t in lane_pass_timestamps[lane] if t > now - 60]
+      lane.flow_veh_per_min = len(recent_passes) / 60.0 * 60
+  ```
+- `headway_sec`（车头时距）：
+  ```
+  # 车头时距 = 同一车道内前后两辆车通过同一参考线的时间差
+  # 参考线取车道中间 Y 坐标
+  for lane in active_lanes:
+      vehicles_in_lane = sorted(
+          [v for v in tracked_vehicles if v.lane_id == lane],
+          key=lambda v: v.last_cross_time
+      )
+      if len(vehicles_in_lane) >= 2:
+          # 取最近两次通过参考线的时间差
+          headways = [
+              vehicles_in_lane[i+1].last_cross_time - vehicles_in_lane[i].last_cross_time
+              for i in range(len(vehicles_in_lane) - 1)
+          ]
+          lane.headway_sec = mean(headways)  # 平均车头时距
+      else:
+          lane.headway_sec = None  # 车道内车辆不足，无法计算
+  ```
+- `lane_queue_m`（车道级排队长度）：
+  ```
+  # 每个车道：该车道内所有车辆 BEV Y 坐标的 max - min
+  for lane in active_lanes:
+      y_coords = [v.bev_y for v in tracked_vehicles if v.lane_id == lane and v.speed_kmh < 5.0]
+      # 只统计低速车辆（<5km/h 视为排队中）
+      if len(y_coords) >= 2:
+          lane.queue_length_m = max(y_coords) - min(y_coords)
+      else:
+          lane.queue_length_m = 0.0
   ```
 
-**TrackerInfoUpdateNode**：轨迹完成时发送 track_complete 消息
+**TrackerInfoUpdateNode**：轨迹完成时计算转向行为 + 检测换道 + 发送 track_complete
 
-- 当 track 离开视野（连续 N 帧未检测到）时，发送完整轨迹到 Kafka
-- 包含 positions_bev / start_lane / end_lane / is_anomaly
+- `turn_behavior`（转向行为分类）：
+  ```
+  # 基于车辆的 start_lane 和 end_lane 方向属性判断
+  # 需要从车道配置中读取每个车道的方向（direction 字段）
+  start_dir = lane_config[track.start_lane].direction   # "north"/"south"/"east"/"west"
+  end_dir = lane_config[track.end_lane].direction
+
+  # 直行：进出方向相同
+  if start_dir == opposite(end_dir):
+      turn = "straight"
+  # 左转：end_dir 是 start_dir 逆时针 90°
+  elif end_dir == ccw90(start_dir):
+      turn = "left_turn"
+  # 右转：end_dir 是 start_dir 顺时针 90°
+  elif end_dir == cw90(start_dir):
+      turn = "right_turn"
+  # 掉头：进出方向相同（同向车道）
+  elif start_dir == end_dir:
+      turn = "u_turn"
+  ```
+- `lane_changes`（换道检测）：
+  ```
+  # 检测逻辑：当连续 track 的 lane_id 发生变化时，记录一次换道事件
+  # 过滤条件：排除短暂误判（lane_id 抖动），要求新 lane_id 持续 >= 5 帧
+
+  lane_history = []  # [(lane_id, start_frame, end_frame), ...]
+  current_lane = track.positions[0].lane_id
+  current_start = 0
+
+  for i, pos in enumerate(track.positions):
+      if pos.lane_id != current_lane:
+          # 记录上一段
+          lane_history.append((current_lane, current_start, i - 1))
+          current_lane = pos.lane_id
+          current_start = i
+  lane_history.append((current_lane, current_start, len(track.positions) - 1))
+
+  # 过滤：只保留持续 >= 5 帧的车道段
+  stable_segments = [seg for seg in lane_history if seg[2] - seg[1] >= 5]
+
+  # 相邻稳定段之间就是换道事件
+  lane_changes = []
+  for i in range(len(stable_segments) - 1):
+      from_lane = stable_segments[i][0]
+      to_lane = stable_segments[i + 1][0]
+      change_frame = stable_segments[i][2]  # 换道发生帧
+      bev_pos = track.positions[change_frame]
+      lane_changes.append(LaneChangeEvent(
+          from_lane=from_lane, to_lane=to_lane,
+          bev_x=bev_pos.bev_x, bev_y=bev_pos.bev_y,
+          timestamp=bev_pos.ts
+      ))
+  ```
+- 轨迹完成时发送 track_complete 消息（含 turn_behavior + lane_changes）：
+  ```
+  # 当 track 离开视野（连续 N 帧未检测到）时：
+  track.turn_behavior = classify_turn(track.start_lane, track.end_lane)
+  track.lane_changes = detect_lane_changes(track)
+  kafka_produce("track_complete", track.to_dict())
+  ```
 
 ### 7.3 需要新增的模块（POC 规划中已定义）
 

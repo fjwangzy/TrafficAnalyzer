@@ -1,0 +1,168 @@
+version: '3.9'
+
+services:
+  # ============================================
+  # Infrastructure Services
+  # ============================================
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: traffic-postgres
+    environment:
+      POSTGRES_USER: traffic
+      POSTGRES_PASSWORD: traffic
+      POSTGRES_DB: traffic_platform
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - traffic-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U traffic"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  influxdb:
+    image: influxdb:1.8
+    container_name: traffic-influxdb
+    environment:
+      INFLUXDB_DB: traffic
+      INFLUXDB_HTTP_AUTH_ENABLED: "false"
+    ports:
+      - "8086:8086"
+    volumes:
+      - influxdb_data:/var/lib/influxdb
+    networks:
+      - traffic-net
+    healthcheck:
+      test: ["CMD", "influx", "-execute", "SHOW DATABASES"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: traffic-kafka
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_LOG_RETENTION_HOURS: 168
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    ports:
+      - "9092:9092"
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    networks:
+      - traffic-net
+    healthcheck:
+      test: ["CMD", "kafka-topics", "--bootstrap-server", "localhost:9092", "--list"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ============================================
+  # Platform Services
+  # ============================================
+
+  gateway:
+    build:
+      context: ../
+      dockerfile: gateway/Dockerfile
+    container_name: traffic-gateway
+    environment:
+      OPERATIONS_URL: http://operations:8001
+      VISION_URL: http://vision:8002
+      FLIGHT_URL: http://flight:8003
+      ANNOTATION_URL: http://annotation:8004
+    ports:
+      - "8000:8000"
+    depends_on:
+      operations:
+        condition: service_healthy
+    networks:
+      - traffic-net
+    restart: unless-stopped
+
+  operations:
+    build:
+      context: ../
+      dockerfile: services/operations/Dockerfile
+    container_name: traffic-operations
+    environment:
+      OPS_DATABASE_URL: postgresql+asyncpg://traffic:traffic@postgres:5432/traffic_platform
+      OPS_SERVICE_NAME: operations
+      OPS_SERVICE_PORT: 8001
+      OPS_DEBUG: "false"
+    ports:
+      - "8001:8001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - traffic-net
+    restart: unless-stopped
+
+  # ============================================
+  # Placeholder Services (to be implemented)
+  # ============================================
+
+  vision:
+    image: python:3.12-slim
+    container_name: traffic-vision
+    command: python -m http.server 8002
+    ports:
+      - "8002:8002"
+    networks:
+      - traffic-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8002"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  flight:
+    image: python:3.12-slim
+    container_name: traffic-flight
+    command: python -m http.server 8003
+    ports:
+      - "8003:8003"
+    networks:
+      - traffic-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8003"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  annotation:
+    image: python:3.12-slim
+    container_name: traffic-annotation
+    command: python -m http.server 8004
+    ports:
+      - "8004:8004"
+    networks:
+      - traffic-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8004"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  postgres_data:
+  influxdb_data:
+  kafka_data:
+
+networks:
+  traffic-net:
+    driver: bridge

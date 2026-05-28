@@ -1,0 +1,3 @@
+[submodule "traffic-fly-console"]
+	path = traffic-fly-console
+	url = git@github.com:fjwangzy/traffic-fly-console.git

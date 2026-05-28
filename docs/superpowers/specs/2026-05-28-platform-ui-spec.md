@@ -59,7 +59,8 @@ class Intersection(BaseModel):
 class Lane(BaseModel):
     id: int                    # 1, 2, 3...
     name: str                  # "南向北直行"
-    direction: str             # inbound/outbound
+    direction: str             # inbound/outbound（道路级别：进入/离开路口）
+    compass: str               # "north"/"south"/"east"/"west"（行驶朝向，用于转向分类）
     width_m: float             # 3.5
     polygon_bev: list[list[float]]  # [[x,y],...]
     speed_limit: int | None    # km/h
@@ -771,12 +772,16 @@ async def generate_clip(stream_id: str, output_path: str,
 **生成流程**：
 
 1. 查询 InfluxDB 历史统计
-2. 查询告警事件列表
-3. 计算拥堵时段（congestion_index > 3.0 的连续区间）
-4. 计算车道利用率（各车道流量占比）
-5. 生成 Report 对象
-6. 后台任务生成 PDF（WeasyPrint/ReportLab）
-7. VLM 异步填充 AI 摘要
+2. 查询车道级指标时序（各车道 flow/headway/queue 的均值和极值）
+3. 查询告警事件列表
+4. 计算拥堵时段（congestion_index > 3.0 的连续区间）
+5. 计算车道利用率（各车道流量占比）
+6. 计算车道级分析：各车道车头时距统计（avg/min/below_2s_pct）、排队长度（avg/max）
+7. 计算转向行为分布：从 track_events 聚合 turn_behavior 计数 + start_lane × turn_behavior 矩阵
+8. 计算换道行为分析：从 track_events 聚合 lane_change_count + from_lane × to_lane 矩阵 + 换道位置热力图
+9. 生成 Report 对象
+10. 后台任务生成 PDF（WeasyPrint/ReportLab）
+11. VLM 异步填充 AI 摘要
 
 ---
 
@@ -1323,7 +1328,7 @@ PUT    /api/v1/system/models/prompts/{id}
 POST   /api/v1/system/models/config
 ```
 
-**统计**：REST 端点 57 个，WebSocket Channels 6 类。
+**统计**：REST 端点 61 个，WebSocket Channels 6 类。
 
 ### 6.2 WebSocket Channels
 
@@ -1358,6 +1363,7 @@ Channels:
   - msg_type: "stats" | "detections" | "track_complete" | "vlm_analysis" | "system_metrics"
   - topic 命名改为 `drone_{drone_id}_intersection_{int_id}`
   - 新增字段：congestion_index / queue_length_m / calib_quality / lane_match_rate
+  - stats 消息新增 `lanes[]` 数组：每车道 flow_veh_per_min / headway_sec / queue_length_m / vehicle_count / avg_speed_kmh
 
 **CalcStatisticsNode**：新增拥堵指数 + 排队长度 + 车道级五项指标计算
 
@@ -1420,8 +1426,8 @@ Channels:
   ```
   # 基于车辆的 start_lane 和 end_lane 方向属性判断
   # 需要从车道配置中读取每个车道的方向（direction 字段）
-  start_dir = lane_config[track.start_lane].direction   # "north"/"south"/"east"/"west"
-  end_dir = lane_config[track.end_lane].direction
+  start_dir = lane_config[track.start_lane].compass     # "north"/"south"/"east"/"west"
+  end_dir = lane_config[track.end_lane].compass
 
   # 直行：进出方向相同
   if start_dir == opposite(end_dir):
@@ -1615,20 +1621,24 @@ networks:
 | 模块 | 测试内容 |
 |---|---|
 | KafkaConsumerService | 消息解析、WebSocket 广播、内存缓存更新 |
-| InfluxClient | InfluxQL 查询构建、结果解析 |
+| InfluxClient | InfluxQL 查询构建（含车道级/转向/换道查询）、结果解析 |
 | WSManager | 连接管理、订阅/取消、广播、断线重连 |
 | AlertEngine | 规则触发（排队/拥堵/标定漂移）、VLM 告警、Webhook 推送 |
-| VideoService | FFmpeg 进程启动/停止、HLS 输出目录管理 |
-| ReportService | 拥堵时段识别、车道利用率计算、PDF 生成 |
+| VideoService | FFmpeg 进程启动/停止、HLS 输出目录管理、截图/视频片段 |
+| ReportService | 拥堵时段识别、车道利用率计算、转向/换道聚合、PDF 生成 |
+| CalcStatisticsNode（管道） | 车道级五项指标计算（flow/headway/queue/count/speed） |
+| TrackerInfoUpdateNode（管道） | 转向分类（straight/left/right/u_turn）、换道检测（5帧稳定过滤） |
 
 ### 9.2 集成测试
 
 1. 启动 TrafficAnalyzer 管道（模拟数据）
 2. 启动 Platform API + Frontend
 3. 验证 Kafka 消息消费 → WebSocket 推送 → 前端实时更新
-4. 验证 HLS 视频流播放 + bbox overlay 时间戳对齐
-5. 触发告警规则 → 验证 WebSocket 推送 + Webhook 推送
-6. 生成报告 → 验证 PDF 内容完整性
+4. 验证车道级五项指标（flow/headway/queue/count/speed）在 Kafka → InfluxDB → WebSocket → 前端全链路正确传递
+5. 验证 HLS 视频流播放 + bbox overlay 时间戳对齐
+6. 验证轨迹完成后 turn_behavior 和 lane_changes 正确计算并写入 track_events
+7. 触发告警规则 → 验证 WebSocket 推送 + Webhook 推送
+8. 生成报告 → 验证 PDF 含车道级分析 + 转向分布 + 换道热力图
 
 ### 9.3 CTO 演示验证
 
@@ -1642,5 +1652,6 @@ networks:
 
 ---
 
-*文档版本：v1.0 | 2026-05-28*
+*文档版本：v1.1 | 2026-05-28*
+*更新：新增 5 个车道级指标（交通流量/车头时距/排队长度/转向行为/换道位置），贯穿数据模型→Kafka→InfluxDB→WebSocket→管道→功能规格→API 全链路*
 *下一步：UI 层由 open design 工具细化，本 spec 聚焦功能/服务/模型实现*

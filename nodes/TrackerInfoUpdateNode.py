@@ -82,6 +82,18 @@ class TrackerInfoUpdateNode:
             if len(self.buffer_tracks[id].position_history) > 30:
                 self.buffer_tracks[id].position_history = self.buffer_tracks[id].position_history[-30:]
 
+            # 出口道路检测：车辆从一条道路移动到另一条道路时记录exit_road
+            current_road = intersects_central_point(
+                tracked_xyxy=frame_element.tracked_xyxy[i],
+                polygons=frame_element.roads_info,
+            )
+            track = self.buffer_tracks[id]
+            if (current_road is not None
+                    and track.start_road is not None
+                    and current_road != track.start_road
+                    and track.exit_road is None):
+                track.exit_road = current_road
+
             # 寻找与道路多边形的第一次交集
             if self.buffer_tracks[id].start_road is None:
                 self.buffer_tracks[id].start_road = intersects_central_point(

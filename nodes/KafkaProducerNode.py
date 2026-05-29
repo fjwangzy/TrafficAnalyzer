@@ -48,6 +48,8 @@ class KafkaProducerNode:
             data = {
                 f"camera_id": f"id_{self.camera_id}",
                 f"cars": frame_element.info["cars_amount"],
+                f"msg_type": "stats",
+                f"intersection_id": self.intersection_id,
                 f"road_1": (
                     frame_element.info["roads_activity"][1]
                     if timestamp >= self.buffer_analytics_sec
@@ -109,7 +111,7 @@ class KafkaProducerNode:
                     "intersection_id": self.intersection_id,
                     **ct,
                 }
-                self.kafka_producer.send(self.track_complete_topic, value=ct_msg)
+                self.kafka_producer.send(self.track_complete_topic, value=ct_msg).get(timeout=1)
                 logging.info(f"KAFKA sent track_complete: id={ct.get('track_id')} topic {self.track_complete_topic}")
 
         # 发布冲突事件到独立topic
@@ -121,7 +123,7 @@ class KafkaProducerNode:
                     "intersection_id": self.intersection_id,
                     **event,
                 }
-                self.kafka_producer.send(self.conflicts_topic, value=event_msg)
+                self.kafka_producer.send(self.conflicts_topic, value=event_msg).get(timeout=1)
                 logging.info(f"KAFKA sent conflict: {event.get('severity')} topic {self.conflicts_topic}")
 
         return frame_element

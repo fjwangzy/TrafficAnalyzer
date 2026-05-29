@@ -1,3 +1,4 @@
+import math
 import numpy as np
 import logging
 
@@ -72,5 +73,11 @@ class SpeedEstimationNode:
             # EMA平滑
             track.avg_speed_kmh = alpha * track.speed_kmh + (1 - alpha) * track.avg_speed_kmh
             track.max_speed_kmh = max(track.max_speed_kmh, track.speed_kmh)
+
+            # 更新当前运动方向角度
+            dx = p_new[0] - p_old[0]
+            dy = p_new[1] - p_old[1]
+            if abs(dx) > 0.5 or abs(dy) > 0.5:
+                track.heading_angle = math.degrees(math.atan2(dy, dx))
 
         return frame_element

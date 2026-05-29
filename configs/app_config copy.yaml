@@ -75,7 +75,62 @@ kafka_producer_node: #// камера id
   bootstrap_servers: kafka:29092 #127.0.0.1:9092 #kafka:29092
   topic_name: ${oc.env:TOPIC_NAME}
   how_often_sec: 1 # раз в сколько секунд отправлять результат
-  camera_id: ${oc.decode:${oc.env:CAMERA_ID}} 
+  camera_id: ${oc.decode:${oc.env:CAMERA_ID}}
+
+# ------------------------------------------------- АНАЛИЗ ТРАНСПОРТНОЙ СИТУАЦИИ --------------------------------------------------
+
+calibration:
+  mode: "auto"             # "auto" | "telemetry" | "reference_points"
+  camera_intrinsics:
+    focal_length_mm: 4.5
+    sensor_width_mm: 6.4
+    sensor_height_mm: 3.6
+  reference_points: []
+
+telemetry:
+  enabled: false
+  mqtt_broker: "mqtt://mqtt:1883"
+  mqtt_topic: "drone/+/osd"
+  buffer_size: 100
+  sync_tolerance_sec: 0.05
+
+speed_estimation:
+  enabled: true
+  history_frames: 15
+  smoothing_window: 5
+  min_displacement_px: 2.0
+
+direction_flow:
+  enabled: true
+  min_track_duration_sec: 2.0
+  min_position_points: 8
+  heading_window: 5
+  queue_speed_threshold_kmh: 5.0
+  turn_thresholds:
+    straight: 25
+    turn: 120
+
+lane_analysis:
+  queue_speed_threshold_kmh: 5.0
+  queue_gap_threshold_m: 8.0
+
+trajectory:
+  enabled: true
+  min_track_duration_sec: 2.0
+  turn_angle_thresholds:
+    straight: 30
+    left_turn: [30, 150]
+    right_turn: [-150, -30]
+    u_turn: [150, 180]
+
+conflict_detection:
+  enabled: false
+  proximity_threshold_m: 3.0
+  ttc_threshold_sec: 2.0
+  severity_levels:
+    critical: {ttc: 1.0, distance_m: 1.5}
+    warning: {ttc: 2.0, distance_m: 3.0}
+    info: {ttc: 3.0, distance_m: 5.0}
 
 
 video_server_node: 

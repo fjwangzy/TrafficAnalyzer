@@ -14,6 +14,7 @@ from nodes.TrackerInfoUpdateNode import TrackerInfoUpdateNode
 from nodes.CalcStatisticsNode import CalcStatisticsNode
 from nodes.FlaskServerVideoNode import VideoServer
 from nodes.KafkaProducerNode import KafkaProducerNode
+from nodes.HomographyCalibrationNode import HomographyCalibrationNode
 from elements.VideoEndBreakElement import VideoEndBreakElement
 from utils_local.utils import check_and_set_env_var
 
@@ -43,6 +44,7 @@ def proc_frame_reader(queue_out: Queue, config: dict, time_sleep_start: int):
 
 def proc_proceessor(frame_queue_in: Queue, config: dict, frame_process: Process):
     detection_node = DetectionTrackingNodes(config)
+    homography_node = HomographyCalibrationNode(config)
     tracker_info_update_node = TrackerInfoUpdateNode(config)
     calc_statistics_node = CalcStatisticsNode(config)
     send_info_kafka = config["pipeline"]["send_info_kafka"]
@@ -71,6 +73,7 @@ def proc_proceessor(frame_queue_in: Queue, config: dict, frame_process: Process)
 
         ts1 = time()
         frame_element = detection_node.process(frame_element)
+        frame_element = homography_node.process(frame_element)
         frame_element = tracker_info_update_node.process(frame_element)
         frame_element = calc_statistics_node.process(frame_element)
         if send_info_kafka:

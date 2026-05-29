@@ -34,9 +34,22 @@ class FrameElement:
         # 跟踪算法修正结果：
         self.tracked_conf = tracked_conf  # 检测到的对象的置信度列表
         self.tracked_cls = tracked_cls  # 检测到的对象的类列表
-        self.tracked_xyxy = tracked_xyxy  # 带xyxy框坐标的列表    
+        self.tracked_xyxy = tracked_xyxy  # 带xyxy框坐标的列表
         self.id_list = id_list  # 检测到的可跟踪对象ID列表
         # 帧的后处理：
         self.buffer_tracks = buffer_tracks  # 选定分析时间段内的活动跟踪缓冲区
         self.info = {}  # 结果统计字典（道路拥堵程度+车辆数量）
         self.send_info_of_frame_to_db = False  # 标志是否从该帧向数据库发送信息
+
+        # ── 新增：遥测与标定 ──
+        self.telemetry: dict | None = None  # MQTT遥测数据（与帧同步后的）
+        self.calibration_mode: str | None = None  # "telemetry" | "reference_points" | None
+        self.homography_matrix: np.ndarray | None = None  # 3×3 单应性矩阵（像素→世界米坐标）
+
+        # ── 新增：交通态势统计 ──
+        self.direction_stats: dict | None = None  # 方向流量统计（DirectionFlowNode始终输出）
+        self.lane_stats: dict | None = None  # 车道级统计（LaneAnalysisNode，仅点位命中时输出）
+        self.lane_polygons: dict | None = None  # 车道多边形数据（VideoReader加载）
+        self.queue_count: int = 0  # 当前排队车辆数
+        self.conflict_events: list[dict] | None = None  # 冲突事件列表
+        self.completed_tracks: list[dict] | None = None  # 本帧完成的轨迹数据

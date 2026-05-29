@@ -72,6 +72,9 @@ class DetectionTrackingNodes:
         # 获取物体类名称
         frame_element.tracked_cls = [self.classes[int(t.class_name)] for t in track_list]
 
+        # 获取YOLO原始检测类别ID（保留原始class_id，用于motor/non_motor分类）
+        frame_element.tracked_cls_ids = [int(t.class_name) for t in track_list]
+
         # 获取置信度分数
         frame_element.tracked_conf = [t.score for t in track_list]
 
@@ -88,9 +91,9 @@ class DetectionTrackingNodes:
                 bbox = result.boxes.xyxy.cpu().numpy()
                 confidence = result.boxes.conf.cpu().numpy()
 
-                class_id_value = (
-                    2  # 我们将所有可跟踪对象视为car类以避免错误
-                )
+                # 保留YOLO原始class_id，用于下游motor/non_motor分类
+                # ByteTrack内部仍将所有目标视为同一类进行IoU匹配
+                class_id_value = class_id[0]
 
                 merged_detection = [
                     bbox[0][0],

@@ -40,10 +40,37 @@ class VideoReader:
         with open(config["roads_info"], "r") as file:
             data_json = json.load(file)
 
-        # 将道路坐标数据转换为int格式
-        self.roads_info = {
-            key: [int(value) for value in values] for key, values in data_json.items()
-        }
+        # 向后兼容：支持新格式（含roads/lanes/calibration键）和旧格式（扁平道路多边形）
+        self.roads_info = {}
+        self.lane_polygons: dict | None = None
+        self.extended_config: dict | None = None
+
+        if "roads" in data_json or "lanes" in data_json or "calibration" in data_json:
+            # 新格式：扩展JSON
+            self.extended_config = data_json
+            # 提取道路多边形
+            roads = data_json.get("roads", {})
+            for key, road_data in roads.items():
+                if isinstance(road_data, dict) and "polygon" in road_data:
+                    self.roads_info[key] = [int(v) for v in road_data["polygon"]]
+                elif isinstance(road_data, list):
+                    self.roads_info[key] = [int(v) for v in road_data]
+            # 提取车道多边形（可选）
+            lanes = data_json.get("lanes", {})
+            if lanes:
+                from shapely.geometry import Polygon
+                self.lane_polygons = {}
+                for lane_id, lane_data in lanes.items():
+                    if isinstance(lane_data, dict) and "polygon" in lane_data:
+                        coords = lane_data["polygon"]
+                        self.lane_polygons[lane_id] = Polygon(
+                            [(coords[i], coords[i + 1]) for i in range(0, len(coords), 2)]
+                        )
+        else:
+            # 旧格式：扁平道路多边形 {"1": [x1,y1,...], ...}
+            self.roads_info = {
+                key: [int(value) for value in values] for key, values in data_json.items()
+            }
 
     def process(self) -> Generator[FrameElement, None, None]:
         # 当前视频的帧号
@@ -77,4 +104,9 @@ class VideoReader:
 
             frame_number += 1
 
-            yield FrameElement(self.video_source, frame, timestamp, frame_number, self.roads_info)
+            frame_element = FrameElement(
+                self.video_source, frame, timestamp, frame_number, self.roads_info
+            )
+            # 注入车道多边形数据（供LaneAnalysisNode数据驱动使用）
+            frame_element.lane_polygons = self.lane_polygons
+            yield frame_element

@@ -10,7 +10,7 @@ services:
     container_name: traffic-postgres
     environment:
       POSTGRES_USER: traffic
-      POSTGRES_PASSWORD: traffic
+      POSTGRES_PASSWORD: traffic123
       POSTGRES_DB: traffic_platform
     ports:
       - "5432:5432"
@@ -46,6 +46,7 @@ services:
     image: confluentinc/cp-kafka:7.5.0
     container_name: traffic-kafka
     environment:
+      CLUSTER_ID: "MkU3OEVBNTcwNTJENDM2Qk"
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller
       KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
@@ -71,97 +72,95 @@ services:
       retries: 5
 
   # ============================================
-  # Platform Services
+  # Platform Backend (Monolith)
   # ============================================
 
-  gateway:
+  platform:
     build:
       context: ../
-      dockerfile: gateway/Dockerfile
-    container_name: traffic-gateway
+      dockerfile: Dockerfile
+    container_name: traffic-platform
     environment:
-      OPERATIONS_URL: http://operations:8001
-      VISION_URL: http://vision:8002
-      FLIGHT_URL: http://flight:8003
-      ANNOTATION_URL: http://annotation:8004
+      # Application
+      DEBUG: "false"
+      SERVICE_PORT: 8000
+
+      # Database
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: traffic
+      DB_PASSWORD: traffic123
+      DB_NAME: traffic_platform
+
+      # Kafka
+      KAFKA_BOOTSTRAP: kafka:9092
+      KAFKA_CONSUMER_GROUP: vision-service
+      KAFKA_TOPICS_PATTERN: "statistics_.*"
+
+      # InfluxDB
+      INFLUX_HOST: influxdb
+      INFLUX_PORT: 8086
+      INFLUX_DB: traffic
+      INFLUX_USER: ""
+      INFLUX_PASS: ""
+
+      # JWT
+      JWT_SECRET_KEY: "your-secret-key-change-in-production"
+      JWT_ALGORITHM: "HS256"
+      JWT_ACCESS_TOKEN_EXPIRE_MINUTES: 30
+
+      # Alert Rules
+      QUEUE_OVERFLOW_THRESHOLD_M: 80.0
+      CONGESTION_SEVERE_THRESHOLD: 4.0
+      CALIBRATION_DRIFT_MATCH_RATE: 0.80
+      CONSECUTIVE_CONGESTION_FRAMES: 30
+
+      # Video
+      HLS_OUTPUT_DIR: /hls
+      PIPELINE_VIDEO_BASE: "http://traffic_analyzer_camera_1:8100/video"
+
+      # Calibration
+      CALIBRATION_DB_PATH: /calibration/calibration_db.json
     ports:
       - "8000:8000"
-    depends_on:
-      operations:
-        condition: service_healthy
-    networks:
-      - traffic-net
-    restart: unless-stopped
-
-  operations:
-    build:
-      context: ../
-      dockerfile: services/operations/Dockerfile
-    container_name: traffic-operations
-    environment:
-      OPS_DATABASE_URL: postgresql+asyncpg://traffic:traffic@postgres:5432/traffic_platform
-      OPS_SERVICE_NAME: operations
-      OPS_SERVICE_PORT: 8001
-      OPS_DEBUG: "false"
-    ports:
-      - "8001:8001"
+    volumes:
+      - hls_data:/hls
+      - ../../configs:/calibration:ro
     depends_on:
       postgres:
         condition: service_healthy
+      kafka:
+        condition: service_healthy
+      influxdb:
+        condition: service_healthy
     networks:
       - traffic-net
     restart: unless-stopped
 
   # ============================================
-  # Placeholder Services (to be implemented)
+  # Frontend
   # ============================================
 
-  vision:
-    image: python:3.12-slim
-    container_name: traffic-vision
-    command: python -m http.server 8002
+  frontend:
+    build:
+      context: ../../traffic-fly-console
+      dockerfile: Dockerfile
+    container_name: traffic-frontend
+    environment:
+      VITE_API_BASE: "http://localhost:8000/api/v1"
     ports:
-      - "8002:8002"
+      - "8080:8080"
+    depends_on:
+      - platform
     networks:
       - traffic-net
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8002"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-
-  flight:
-    image: python:3.12-slim
-    container_name: traffic-flight
-    command: python -m http.server 8003
-    ports:
-      - "8003:8003"
-    networks:
-      - traffic-net
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8003"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-
-  annotation:
-    image: python:3.12-slim
-    container_name: traffic-annotation
-    command: python -m http.server 8004
-    ports:
-      - "8004:8004"
-    networks:
-      - traffic-net
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8004"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
+    restart: unless-stopped
 
 volumes:
   postgres_data:
   influxdb_data:
   kafka_data:
+  hls_data:
 
 networks:
   traffic-net:

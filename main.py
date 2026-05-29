@@ -19,7 +19,7 @@ from utils_local.utils import check_and_set_env_var
 
 @hydra.main(version_base=None, config_path="configs", config_name="app_config")
 def main(config) -> None:
-    video_reader = VideoReader(config["video_reader"])
+    video_reader = VideoReader(config["video_reader"], config.get("telemetry"))
     detection_node = DetectionTrackingNodes(config)
     homography_node = HomographyCalibrationNode(config)
     tracker_info_update_node = TrackerInfoUpdateNode(config)

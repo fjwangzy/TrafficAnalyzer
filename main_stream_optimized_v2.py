@@ -30,7 +30,7 @@ def proc_frame_reader(queue_out: Queue, config: dict, time_sleep_start: int):
     sleep_message = f"系统正在预热.. sleep({time_sleep_start})"
     for _ in tqdm(range(time_sleep_start), desc=sleep_message):
         sleep(1)
-    video_reader = VideoReader(config["video_reader"])
+    video_reader = VideoReader(config["video_reader"], config.get("telemetry"))
     for frame_element in video_reader.process():
         ts0 = time()
         try:

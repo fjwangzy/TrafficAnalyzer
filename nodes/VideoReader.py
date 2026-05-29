@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 class VideoReader:
     """视频流帧读取模块"""
 
-    def __init__(self, config: dict) -> None:
+    def __init__(self, config: dict, telemetry_config: dict | None = None) -> None:
         self.video_pth = config["src"]
         self.video_source = f"Processing of {self.video_pth}"
         assert (
@@ -30,6 +30,17 @@ class VideoReader:
         self.first_timestamp = 0  # 流第一帧时刻的时间值
 
         self.break_element_sent = False  # 是否已发送视频流中断元素
+
+        # MQTT遥测订阅（可选）
+        self.telemetry_subscriber = None
+        if telemetry_config and telemetry_config.get("enabled", False):
+            try:
+                from services.TelemetrySubscriber import TelemetrySubscriber
+                self.telemetry_subscriber = TelemetrySubscriber(telemetry_config)
+                self.telemetry_subscriber.start()
+                logger.info("VideoReader: MQTT遥测订阅已启动")
+            except Exception as e:
+                logger.warning(f"VideoReader: MQTT遥测启动失败: {e}")
 
         # 设置处理摄像机视频时的宽度和高度（输入为int类型的摄像机编号）
         if type(self.video_pth) == int:
@@ -109,4 +120,7 @@ class VideoReader:
             )
             # 注入车道多边形数据（供LaneAnalysisNode数据驱动使用）
             frame_element.lane_polygons = self.lane_polygons
+            # 注入遥测数据（与帧时间戳同步）
+            if self.telemetry_subscriber:
+                frame_element.telemetry = self.telemetry_subscriber.get_nearest(timestamp)
             yield frame_element

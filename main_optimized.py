@@ -28,7 +28,7 @@ def proc_frame_reader_and_detection(queue_out: Queue, config: dict, time_sleep_s
     sleep_message = f"系统预热中.. sleep({time_sleep_start})"
     for _ in tqdm(range(time_sleep_start), desc=sleep_message):
         sleep(1)
-    video_reader = VideoReader(config["video_reader"])
+    video_reader = VideoReader(config["video_reader"], config.get("telemetry"))
     detection_node = DetectionTrackingNodes(config)
     for frame_element in video_reader.process():
         ts0 = time()

@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>车道 Polygon 标注 — 无人机路口交通态势监测平台</title>
+  <link rel="stylesheet" href="styles.css" />
+  <style>
+    .lane-layout { display:grid; grid-template-columns:1fr 320px; gap:var(--sp-4); height:calc(100vh - var(--topbar-h) - var(--statusbar-h) - var(--sp-12)); }
+    .bev-editor { position:relative; background:var(--bg-deep); border:1px solid var(--border); border-radius:var(--r-lg); overflow:hidden; }
+    .prop-panel { display:flex; flex-direction:column; gap:var(--sp-4); overflow-y:auto; }
+    .prop-row { display:flex; align-items:center; gap:var(--sp-3); padding:var(--sp-2) 0; border-bottom:1px solid var(--border); }
+    .prop-label { font-size:12px; color:var(--fg-muted); min-width:80px; }
+    .toolbar-float { position:absolute; top:var(--sp-4); left:var(--sp-4); display:flex; gap:var(--sp-2); z-index:3; }
+    .lane-sidebar-list { display:flex; flex-direction:column; gap:var(--sp-2); }
+    .lane-item { display:flex; align-items:center; gap:var(--sp-3); padding:var(--sp-2) var(--sp-3); border-radius:var(--r-sm); cursor:pointer; transition:background var(--ease); font-size:12px; }
+    .lane-item:hover { background:oklch(50% 0.02 250 / 0.08); }
+    .lane-item.selected-lane { background:var(--accent-dim); border:1px solid oklch(78% 0.14 210 / 0.25); }
+    .lane-color { width:12px; height:12px; border-radius:2px; flex-shrink:0; }
+    @media (max-width:1024px) { .lane-layout { grid-template-columns:1fr; } .prop-panel { display:none; } }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="sidebar-brand"><div class="logo">DT</div><span>DroneTraffic</span></div>
+      <nav class="nav">
+        <div class="nav-section">指挥大屏</div>
+        <a class="nav-item" href="dashboard.html"><span class="nav-icon">◉</span> Dashboard</a>
+        <a class="nav-item" href="monitoring-intersection.html"><span class="nav-icon">◎</span> 实时监测</a>
+        <a class="nav-item" href="gis-overview.html"><span class="nav-icon">⊞</span> GIS 总览</a>
+        <div class="nav-section">业务操作</div>
+        <a class="nav-item" href="video-realtime.html"><span class="nav-icon">▷</span> 视频分析</a>
+        <a class="nav-item active" href="calibration-homography.html"><span class="nav-icon">⊡</span> 标定中心</a>
+        <a class="nav-item" href="alerts-center.html"><span class="nav-icon">⚡</span> 告警中心 <span class="nav-badge">3</span></a>
+        <a class="nav-item" href="reports-daily.html"><span class="nav-icon">☰</span> 报告中心</a>
+        <div class="nav-section">管理</div>
+        <a class="nav-item" href="drone-monitor.html"><span class="nav-icon">✦</span> 无人机管理</a>
+        <a class="nav-item" href="admin-gpu.html"><span class="nav-icon">⚙</span> 系统管理</a>
+      </nav>
+    </aside>
+    <header class="topbar">
+      <span class="topbar-title">标定中心</span>
+      <span class="topbar-sep"></span>
+      <div class="tabs" style="border:0;margin:0;">
+        <a class="tab" href="calibration-homography.html">Homography</a>
+        <button class="tab active">车道标注</button>
+        <a class="tab" href="calibration-db.html">参数库</a>
+      </div>
+      <div class="topbar-actions">
+        <button class="theme-toggle"><span class="theme-icon">⚡</span><span class="theme-label">CTO 模式</span></button>
+        <button class="btn btn-ghost btn-sm">CAD 导入</button>
+        <button class="btn btn-primary btn-sm">保存标注</button>
+      </div>
+    </header>
+    <main class="main">
+      <div class="lane-layout">
+        <div class="bev-editor">
+          <div style="position:absolute;inset:0;background-image:linear-gradient(oklch(40% 0.01 250 / 0.08) 1px,transparent 1px),linear-gradient(90deg,oklch(40% 0.01 250 / 0.08) 1px,transparent 1px);background-size:25px 25px;"></div>
+          <!-- Roads -->
+          <div style="position:absolute;top:0;bottom:0;left:38%;width:24%;background:oklch(28% 0.01 250 / 0.5);"></div>
+          <div style="position:absolute;left:0;right:0;top:38%;height:24%;background:oklch(28% 0.01 250 / 0.5);"></div>
+          <!-- Lane Polygons -->
+          <div class="lane-poly" style="top:5%;left:39%;width:10%;height:32%;border-color:var(--success);background:oklch(72% 0.16 155 / 0.12);"></div>
+          <div class="lane-poly" style="top:5%;left:50%;width:10%;height:32%;border-color:var(--accent);background:oklch(78% 0.14 210 / 0.10);"></div>
+          <div class="lane-poly congested" style="top:62%;left:39%;width:10%;height:32%;"></div>
+          <div class="lane-poly" style="top:62%;left:50%;width:10%;height:32%;border-color:var(--success);background:oklch(72% 0.16 155 / 0.12);"></div>
+          <div class="lane-poly" style="top:39%;left:5%;width:32%;height:10%;border-color:var(--secondary);background:oklch(68% 0.18 290 / 0.10);"></div>
+          <div class="lane-poly slow" style="top:50%;left:5%;width:32%;height:10%;"></div>
+          <div class="lane-poly" style="top:39%;left:62%;width:32%;height:10%;border-color:var(--success);background:oklch(72% 0.16 155 / 0.12);"></div>
+          <div class="lane-poly" style="top:50%;left:62%;width:32%;height:10%;border-color:var(--accent);background:oklch(78% 0.14 210 / 0.10);"></div>
+          <!-- Vertex handles -->
+          <div style="position:absolute;top:5%;left:39%;width:8px;height:8px;background:var(--accent);border-radius:50%;transform:translate(-50%,-50%);z-index:3;"></div>
+          <div style="position:absolute;top:5%;left:49%;width:8px;height:8px;background:var(--accent);border-radius:50%;transform:translate(-50%,-50%);z-index:3;"></div>
+          <div style="position:absolute;top:37%;left:39%;width:8px;height:8px;background:var(--accent);border-radius:50%;transform:translate(-50%,-50%);z-index:3;"></div>
+          <div style="position:absolute;top:37%;left:49%;width:8px;height:8px;background:var(--warn);border-radius:50%;transform:translate(-50%,-50%);z-index:3;box-shadow:0 0 8px var(--warn);"></div>
+          <div class="toolbar-float">
+            <span class="vc-btn active-ctrl">新建 Polygon</span>
+            <span class="vc-btn">选择</span>
+            <span class="vc-btn">顶点编辑</span>
+            <span class="vc-btn">吸附网格</span>
+            <span class="vc-btn">自动闭合</span>
+          </div>
+          <div style="position:absolute;bottom:var(--sp-4);right:var(--sp-4);background:oklch(15% 0.02 250 / 0.85);backdrop-filter:blur(8px);padding:var(--sp-2) var(--sp-3);border-radius:var(--r-sm);border:1px solid var(--glass-border);font-family:var(--font-mono);font-size:11px;color:var(--fg-muted);">
+            8 车道 · 32 顶点 · 已自动闭合
+          </div>
+        </div>
+        <div class="prop-panel">
+          <div class="card">
+            <div class="card-header"><span class="card-title">车道列表</span><button class="btn btn-ghost btn-sm">+ 新增</button></div>
+            <div class="lane-sidebar-list">
+              <div class="lane-item"><span class="lane-color" style="background:var(--success)"></span>L1 · 直行↑<span class="mono dim" style="margin-left:auto;font-size:10px;">3.5m</span></div>
+              <div class="lane-item selected-lane"><span class="lane-color" style="background:var(--accent)"></span>L2 · 左转↑<span class="mono dim" style="margin-left:auto;font-size:10px;">3.5m</span></div>
+              <div class="lane-item"><span class="lane-color" style="background:var(--danger)"></span>L3 · 直行↓<span class="mono dim" style="margin-left:auto;font-size:10px;">3.5m</span></div>
+              <div class="lane-item"><span class="lane-color" style="background:var(--success)"></span>L4 · 右转↓<span class="mono dim" style="margin-left:auto;font-size:10px;">3.5m</span></div>
+              <div class="lane-item"><span class="lane-color" style="background:var(--secondary)"></span>L5 · 直行→<span class="mono dim" style="margin-left:auto;font-size:10px;">3.5m</span></div>
+              <div class="lane-item"><span class="lane-color" style="background:var(--warn)"></span>L6 · 左转→<span class="mono dim" style="margin-left:auto;font-size:10px;">3.5m</span></div>
+              <div class="lane-item"><span class="lane-color" style="background:var(--success)"></span>L7 · 直行←<span class="mono dim" style="margin-left:auto;font-size:10px;">3.5m</span></div>
+              <div class="lane-item"><span class="lane-color" style="background:var(--accent)"></span>L8 · 右转←<span class="mono dim" style="margin-left:auto;font-size:10px;">3.5m</span></div>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-header"><span class="card-title">车道属性 · L2</span></div>
+            <div class="prop-row"><span class="prop-label">Lane ID</span><span class="mono" style="font-size:13px;">2</span></div>
+            <div class="prop-row"><span class="prop-label">方向</span><select class="select" style="width:auto;padding:var(--sp-1) var(--sp-2);font-size:12px;"><option>left_turn</option><option>straight</option><option>right_turn</option></select></div>
+            <div class="prop-row"><span class="prop-label">宽度</span><input class="input" value="3.5" style="width:80px;text-align:right;" /></div>
+            <div class="prop-row"><span class="prop-label">限速</span><input class="input" value="40" style="width:80px;text-align:right;" /><span class="dim" style="font-size:11px;">km/h</span></div>
+            <div class="prop-row"><span class="prop-label">优先级</span><select class="select" style="width:auto;padding:var(--sp-1) var(--sp-2);font-size:12px;"><option>normal</option><option>high</option><option>low</option></select></div>
+          </div>
+          <div class="card">
+            <div class="card-header"><span class="card-title">JSON 输出</span></div>
+            <div class="code-block" style="font-size:10px;">
+{<br>
+&nbsp;&nbsp;<span class="key">"lane_id"</span>: <span class="val">2</span>,<br>
+&nbsp;&nbsp;<span class="key">"direction"</span>: <span class="str">"left_turn"</span>,<br>
+&nbsp;&nbsp;<span class="key">"width"</span>: <span class="val">3.5</span>,<br>
+&nbsp;&nbsp;<span class="key">"speed_limit"</span>: <span class="val">40</span>,<br>
+&nbsp;&nbsp;<span class="key">"polygon"</span>: [<span class="val">...</span>]<br>
+}
+            </div>
+          </div>
+        </div>
+      </div>
+    </main>
+    <footer class="statusbar">
+      <div class="statusbar-item"><span class="statusbar-dot"></span> 标注模式</div>
+      <div class="statusbar-item">路口: <span class="text-accent">INT-CS-0042</span></div>
+      <div class="statusbar-item">8 车道</div>
+      <div class="statusbar-item ml-auto">车道 Polygon 标注</div>
+    </footer>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>

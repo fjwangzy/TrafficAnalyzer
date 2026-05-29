@@ -1,0 +1,5 @@
+[    1316ms] [ERROR] Failed to load resource: the server responded with a status of 401 (Unauthorized) @ http://localhost:8080/api/v1/alerts?status=open:0
+[    1323ms] [ERROR] Failed to load resource: the server responded with a status of 401 (Unauthorized) @ http://localhost:8080/api/v1/alerts?limit=20:0
+[    1325ms] [ERROR] Failed to load resource: the server responded with a status of 401 (Unauthorized) @ http://localhost:8080/api/v1/intersections/summary:0
+[    1348ms] [WARNING] WebSocket connection to 'ws://localhost:8080/ws/realtime' failed: WebSocket is closed before the connection is established. @ http://localhost:8080/assets/use-websocket-CJ25WNx8.js:0
+[    1454ms] [VERBOSE] [DOM] Input elements should have autocomplete attributes (suggested: "current-password"): (More info: https://goo.gl/9p2vKq) %o @ http://localhost:8080/sign-in?redirect=%2Fsign-in%3Fredirect%3D%252Fsign-in%253Fredirect%253D%25252F:0

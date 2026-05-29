@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" /><title>告警推送 — 移动端</title><link rel="stylesheet" href="styles.css" />
+<style>
+  body { max-width:430px; margin:0 auto; min-height:100vh; }
+  .mobile-app { display:flex; flex-direction:column; min-height:100vh; }
+  .mobile-header { padding:var(--sp-4) var(--sp-5); background:var(--bg-deep); border-bottom:1px solid var(--border); display:flex; align-items:center; gap:var(--sp-3); }
+  .mobile-header h1 { font-size:18px; }
+  .mobile-content { flex:1; padding:var(--sp-4); display:flex; flex-direction:column; gap:var(--sp-4); }
+  .alert-card-mobile { border-radius:var(--r-lg); padding:var(--sp-5); }
+  .alert-card-mobile.p1 { background:oklch(68% 0.20 25 / 0.12); border:1px solid oklch(68% 0.20 25 / 0.3); }
+  .alert-card-mobile .alert-type { font-size:20px; font-weight:700; color:var(--danger); margin-bottom:var(--sp-2); }
+  .alert-screenshot { aspect-ratio:16/9; background:var(--bg-deep); border:1px solid var(--border); border-radius:var(--r-md); position:relative; overflow:hidden; }
+  .action-btn { display:flex; align-items:center; justify-content:center; gap:var(--sp-2); width:100%; padding:var(--sp-4); border-radius:var(--r-md); font-size:15px; font-weight:600; border:0; cursor:pointer; font-family:var(--font-body); }
+  .action-btn.primary { background:var(--accent); color:var(--bg-deep); }
+  .action-btn.ghost { background:oklch(50% 0.02 250 / 0.1); color:var(--fg); border:1px solid var(--border); }
+  .mobile-nav { display:flex; justify-content:space-around; padding:var(--sp-3); background:var(--bg-deep); border-top:1px solid var(--border); }
+  .nav-tab { display:flex; flex-direction:column; align-items:center; gap:2px; font-size:10px; color:var(--fg-dim); cursor:pointer; }
+  .nav-tab.active-tab { color:var(--accent); }
+  .nav-tab-icon { font-size:18px; }
+</style>
+</head>
+<body>
+<div class="mobile-app">
+  <div class="mobile-header">
+    <span style="font-size:20px;">⚡</span>
+    <h1>告警推送</h1>
+    <span class="badge badge-danger animate-blink" style="margin-left:auto;">1 新告警</span>
+  </div>
+  <div class="mobile-content">
+    <!-- Latest P1 Alert -->
+    <div class="alert-card-mobile p1">
+      <div class="alert-type">逆行事件</div>
+      <div class="mono" style="font-size:12px;color:var(--fg-muted);margin-bottom:var(--sp-3);">P1 · 14:31:42 · 中山路/解放路</div>
+      <div class="alert-screenshot">
+        <div style="position:absolute;inset:0;background:linear-gradient(180deg,oklch(22% 0.02 250),oklch(18% 0.015 250));"></div>
+        <div style="position:absolute;bottom:0;left:0;right:0;height:60%;background:oklch(25% 0.01 250);"></div>
+        <div class="detect-box" style="top:35%;left:30%;width:70px;height:50px;border-color:var(--danger);"><span class="detect-label" style="background:var(--danger);">逆行 #T041</span></div>
+      </div>
+      <div style="margin-top:var(--sp-3);font-size:12px;color:var(--fg-muted);line-height:1.6;">
+        车辆#T041在L2车道逆向行驶，速度23km/h，已持续12秒。与对向车道存在碰撞风险。
+      </div>
+    </div>
+    <!-- Action buttons -->
+    <button class="action-btn primary">▶ 立即查看视频</button>
+    <button class="action-btn ghost">查看事件详情</button>
+    <!-- Recent alerts -->
+    <div style="margin-top:var(--sp-2);">
+      <div class="kpi-label" style="margin-bottom:var(--sp-3);">今日告警 · 47 条</div>
+      <div style="display:flex;flex-direction:column;gap:var(--sp-2);">
+        <div class="alert-item"><span class="alert-dot p1"></span><div><div class="alert-title" style="font-size:13px;">疑似交通事故</div><div class="alert-meta">14:28 · 人民大道/建设路</div></div></div>
+        <div class="alert-item"><span class="alert-dot p2"></span><div><div class="alert-title" style="font-size:13px;">排队超限预警</div><div class="alert-meta">14:25 · 和平路/光华街</div></div></div>
+        <div class="alert-item"><span class="alert-dot p2"></span><div><div class="alert-title" style="font-size:13px;">非机动车闯入</div><div class="alert-meta">14:22 · 中山路/解放路</div></div></div>
+        <div class="alert-item"><span class="alert-dot p3"></span><div><div class="alert-title" style="font-size:13px;">拥堵指数超限</div><div class="alert-meta">14:18 · 人民大道/建设路</div></div></div>
+      </div>
+    </div>
+  </div>
+  <div class="mobile-nav">
+    <div class="nav-tab active-tab"><span class="nav-tab-icon">⚡</span>告警</div>
+    <div class="nav-tab"><span class="nav-tab-icon">⊞</span>GIS</div>
+    <div class="nav-tab"><span class="nav-tab-icon">◎</span>监测</div>
+    <div class="nav-tab"><span class="nav-tab-icon">☰</span>报告</div>
+  </div>
+</div>
+  <script src="app.js"></script>
+  <button class="theme-toggle" style="position:fixed;top:12px;right:12px;z-index:100;"><span class="theme-icon">⚡</span><span class="theme-label">CTO 模式</span></button>
+</body>
+</html>

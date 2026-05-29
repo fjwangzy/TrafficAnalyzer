@@ -1,0 +1,248 @@
+- generic [ref=e2]:
+  - generic [ref=e42]:
+    - link "Skip to Main" [ref=e43] [cursor=pointer]:
+      - /url: "#content"
+    - generic [ref=e46]:
+      - list [ref=e48]:
+        - listitem [ref=e49]:
+          - button "DroneTraffic 路口态势监测平台" [ref=e50] [cursor=pointer]:
+            - img [ref=e52]
+            - generic [ref=e54]:
+              - generic [ref=e55]: DroneTraffic
+              - generic [ref=e56]: 路口态势监测平台
+            - img [ref=e57]
+      - generic [ref=e60]:
+        - generic [ref=e61]:
+          - generic [ref=e62]: 指挥大屏
+          - list [ref=e63]:
+            - listitem [ref=e64]:
+              - link "Dashboard" [ref=e65] [cursor=pointer]:
+                - /url: /
+                - img [ref=e66]
+                - generic [ref=e71]: Dashboard
+            - listitem [ref=e72]:
+              - link "实时监测" [ref=e73] [cursor=pointer]:
+                - /url: /monitoring
+                - img [ref=e74]
+                - generic [ref=e80]: 实时监测
+            - listitem [ref=e81]:
+              - link "GIS 总览" [ref=e82] [cursor=pointer]:
+                - /url: /gis
+                - img [ref=e83]
+                - generic [ref=e85]: GIS 总览
+        - generic [ref=e86]:
+          - generic [ref=e87]: 业务操作
+          - list [ref=e88]:
+            - listitem [ref=e89]:
+              - link "视频分析" [ref=e90] [cursor=pointer]:
+                - /url: /video
+                - img [ref=e91]
+                - generic [ref=e94]: 视频分析
+            - listitem [ref=e95]:
+              - link "标定中心" [ref=e96] [cursor=pointer]:
+                - /url: /calibration
+                - img [ref=e97]
+                - generic [ref=e99]: 标定中心
+            - listitem [ref=e100]:
+              - link "告警中心" [ref=e101] [cursor=pointer]:
+                - /url: /alerts
+                - img [ref=e102]
+                - generic [ref=e104]: 告警中心
+            - listitem [ref=e105]:
+              - link "报告中心" [ref=e106] [cursor=pointer]:
+                - /url: /reports
+                - img [ref=e107]
+                - generic [ref=e110]: 报告中心
+        - generic [ref=e111]:
+          - generic [ref=e112]: 管理
+          - list [ref=e113]:
+            - listitem [ref=e114]:
+              - link "无人机管理" [ref=e115] [cursor=pointer]:
+                - /url: /drones
+                - img [ref=e116]
+                - generic [ref=e118]: 无人机管理
+            - listitem [ref=e119]:
+              - link "系统管理" [active] [ref=e120] [cursor=pointer]:
+                - /url: /admin
+                - img [ref=e121]
+                - generic [ref=e124]: 系统管理
+            - listitem [ref=e125]:
+              - link "用户管理" [ref=e126] [cursor=pointer]:
+                - /url: /users
+                - img [ref=e127]
+                - generic [ref=e132]: 用户管理
+      - list [ref=e134]:
+        - listitem [ref=e135]:
+          - button "SN admin admin@traffic.local" [ref=e136] [cursor=pointer]:
+            - generic [ref=e138]: SN
+            - generic [ref=e139]:
+              - generic [ref=e140]: admin
+              - generic [ref=e141]: admin@traffic.local
+            - img [ref=e142]
+      - button "Toggle Sidebar" [ref=e145]
+    - generic [ref=e146]:
+      - generic [ref=e147]:
+        - banner [ref=e1058]:
+          - generic [ref=e1059]:
+            - button "Toggle Sidebar" [ref=e1060] [cursor=pointer]:
+              - img
+              - generic [ref=e1061]: Toggle Sidebar
+            - generic [ref=e1062]:
+              - generic [ref=e1063]: 系统管理
+              - generic [ref=e1065]: "版本: v2.4.0 · Production"
+            - button "Search ⌘ K" [ref=e1066] [cursor=pointer]:
+              - img
+              - generic [ref=e1067]: Search
+              - generic:
+                - generic: ⌘
+                - text: K
+            - button "Toggle theme" [ref=e1068] [cursor=pointer]:
+              - img
+              - generic [ref=e1069]: Toggle theme
+            - button "SN" [ref=e1070] [cursor=pointer]:
+              - generic [ref=e1072]: SN
+        - main [ref=e1073]:
+          - generic [ref=e1074]:
+            - tablist [ref=e1075]:
+              - tab "用户权限" [selected] [ref=e1076] [cursor=pointer]
+              - tab "GPU 监控" [ref=e1077] [cursor=pointer]
+              - tab "Kafka" [ref=e1078] [cursor=pointer]
+              - tab "模型管理" [ref=e1079] [cursor=pointer]
+              - tab "系统配置" [ref=e1080] [cursor=pointer]
+            - tabpanel "用户权限" [ref=e1081]:
+              - generic [ref=e1082]:
+                - generic [ref=e1083]:
+                  - generic [ref=e1084]: 总用户
+                  - generic [ref=e1085]: "24"
+                - generic [ref=e1086]:
+                  - generic [ref=e1087]: 在线
+                  - generic [ref=e1088]: "8"
+                - generic [ref=e1089]:
+                  - generic [ref=e1090]: 角色
+                  - generic [ref=e1091]: "4"
+              - generic [ref=e1092]:
+                - generic [ref=e1093]:
+                  - generic [ref=e1094]: 用户列表
+                  - button "+ 新增用户" [ref=e1095] [cursor=pointer]
+                - table [ref=e1096]:
+                  - rowgroup [ref=e1097]:
+                    - row "用户 角色 部门 权限范围 状态 最近登录" [ref=e1098]:
+                      - columnheader "用户" [ref=e1099]
+                      - columnheader "角色" [ref=e1100]
+                      - columnheader "部门" [ref=e1101]
+                      - columnheader "权限范围" [ref=e1102]
+                      - columnheader "状态" [ref=e1103]
+                      - columnheader "最近登录" [ref=e1104]
+                      - columnheader [ref=e1105]
+                  - rowgroup [ref=e1106]:
+                    - row "张工 admin 超级管理员 技术中心 全部 在线 14:30 编辑" [ref=e1107]:
+                      - cell "张工 admin" [ref=e1108]:
+                        - generic [ref=e1109]: 张工
+                        - generic [ref=e1110]: admin
+                      - cell "超级管理员" [ref=e1111]
+                      - cell "技术中心" [ref=e1112]
+                      - cell "全部" [ref=e1113]
+                      - cell "在线" [ref=e1114]:
+                        - generic [ref=e1117]: 在线
+                      - cell "14:30" [ref=e1118]
+                      - cell "编辑" [ref=e1119]:
+                        - button "编辑" [ref=e1120] [cursor=pointer]
+                    - row "李警官 li_officer 指挥员 交管局 监测/告警/报告 在线 09:15 编辑" [ref=e1121]:
+                      - cell "李警官 li_officer" [ref=e1122]:
+                        - generic [ref=e1123]: 李警官
+                        - generic [ref=e1124]: li_officer
+                      - cell "指挥员" [ref=e1125]
+                      - cell "交管局" [ref=e1126]
+                      - cell "监测/告警/报告" [ref=e1127]
+                      - cell "在线" [ref=e1128]:
+                        - generic [ref=e1131]: 在线
+                      - cell "09:15" [ref=e1132]
+                      - cell "编辑" [ref=e1133]:
+                        - button "编辑" [ref=e1134] [cursor=pointer]
+                    - row "王工 wang_eng 工程师 技术中心 全部(含标定/系统) 在线 08:42 编辑" [ref=e1135]:
+                      - cell "王工 wang_eng" [ref=e1136]:
+                        - generic [ref=e1137]: 王工
+                        - generic [ref=e1138]: wang_eng
+                      - cell "工程师" [ref=e1139]
+                      - cell "技术中心" [ref=e1140]
+                      - cell "全部(含标定/系统)" [ref=e1141]
+                      - cell "在线" [ref=e1142]:
+                        - generic [ref=e1145]: 在线
+                      - cell "08:42" [ref=e1146]
+                      - cell "编辑" [ref=e1147]:
+                        - button "编辑" [ref=e1148] [cursor=pointer]
+                    - row "赵警官 zhao_officer 指挥员 交管局 监测/告警 离线 昨日 18:30 编辑" [ref=e1149]:
+                      - cell "赵警官 zhao_officer" [ref=e1150]:
+                        - generic [ref=e1151]: 赵警官
+                        - generic [ref=e1152]: zhao_officer
+                      - cell "指挥员" [ref=e1153]
+                      - cell "交管局" [ref=e1154]
+                      - cell "监测/告警" [ref=e1155]
+                      - cell "离线" [ref=e1156]:
+                        - generic [ref=e1159]: 离线
+                      - cell "昨日 18:30" [ref=e1160]
+                      - cell "编辑" [ref=e1161]:
+                        - button "编辑" [ref=e1162] [cursor=pointer]
+                    - row "刘工 liu_eng 工程师 技术中心 标定/模型 离线 昨日 17:45 编辑" [ref=e1163]:
+                      - cell "刘工 liu_eng" [ref=e1164]:
+                        - generic [ref=e1165]: 刘工
+                        - generic [ref=e1166]: liu_eng
+                      - cell "工程师" [ref=e1167]
+                      - cell "技术中心" [ref=e1168]
+                      - cell "标定/模型" [ref=e1169]
+                      - cell "离线" [ref=e1170]:
+                        - generic [ref=e1173]: 离线
+                      - cell "昨日 17:45" [ref=e1174]
+                      - cell "编辑" [ref=e1175]:
+                        - button "编辑" [ref=e1176] [cursor=pointer]
+                    - row "陈警官 chen_observer 观察员 交管局 Dashboard/GIS 在线 10:20 编辑" [ref=e1177]:
+                      - cell "陈警官 chen_observer" [ref=e1178]:
+                        - generic [ref=e1179]: 陈警官
+                        - generic [ref=e1180]: chen_observer
+                      - cell "观察员" [ref=e1181]
+                      - cell "交管局" [ref=e1182]
+                      - cell "Dashboard/GIS" [ref=e1183]
+                      - cell "在线" [ref=e1184]:
+                        - generic [ref=e1187]: 在线
+                      - cell "10:20" [ref=e1188]
+                      - cell "编辑" [ref=e1189]:
+                        - button "编辑" [ref=e1190] [cursor=pointer]
+                    - row "周工 zhou_eng 工程师 技术中心 全部 离线 昨日 16:00 编辑" [ref=e1191]:
+                      - cell "周工 zhou_eng" [ref=e1192]:
+                        - generic [ref=e1193]: 周工
+                        - generic [ref=e1194]: zhou_eng
+                      - cell "工程师" [ref=e1195]
+                      - cell "技术中心" [ref=e1196]
+                      - cell "全部" [ref=e1197]
+                      - cell "离线" [ref=e1198]:
+                        - generic [ref=e1201]: 离线
+                      - cell "昨日 16:00" [ref=e1202]
+                      - cell "编辑" [ref=e1203]:
+                        - button "编辑" [ref=e1204] [cursor=pointer]
+      - contentinfo [ref=e301]:
+        - generic [ref=e302]: 系统正常
+        - generic [ref=e304]:
+          - text: Kafka TPS
+          - generic [ref=e305]: 2,847
+        - generic [ref=e306]:
+          - text: FPS
+          - generic [ref=e307]: "28.3"
+        - generic [ref=e308]:
+          - text: 延迟
+          - generic [ref=e309]: 42ms
+        - generic [ref=e310]:
+          - text: GPU VRAM
+          - generic [ref=e311]: 14.2/24 GB
+        - generic [ref=e312]:
+          - text: WS
+          - generic [ref=e313]: 18/18
+        - generic [ref=e314]:
+          - text: 路口
+          - generic [ref=e315]: 12 active
+        - generic [ref=e316]:
+          - generic [ref=e317]: 08:52:51
+          - generic [ref=e318]: CTO Demo · Dark Industrial
+  - generic [ref=e319]:
+    - heading "Command Palette" [level=2] [ref=e320]
+    - paragraph [ref=e321]: Search for a command to run...
+  - region "Notifications alt+T"

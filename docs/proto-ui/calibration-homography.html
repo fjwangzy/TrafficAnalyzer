@@ -1,0 +1,476 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Homography 标定 — 无人机路口交通态势监测平台</title>
+  <link rel="stylesheet" href="styles.css" />
+  <style>
+    .calib-layout {
+      display: grid;
+      grid-template-columns: 260px 1fr;
+      gap: var(--sp-4);
+      height: calc(100vh - var(--topbar-h) - var(--statusbar-h) - var(--sp-12));
+    }
+    .calib-sidebar {
+      display: flex; flex-direction: column; gap: var(--sp-4);
+      overflow-y: auto;
+    }
+    .calib-main {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      grid-template-rows: 1fr auto;
+      gap: var(--sp-4);
+    }
+    .frame-panel {
+      position: relative;
+      background: var(--bg-deep);
+      border: 1px solid var(--border);
+      border-radius: var(--r-lg);
+      overflow: hidden;
+    }
+    .frame-header {
+      position: absolute; top: 0; left: 0; right: 0;
+      padding: var(--sp-2) var(--sp-3);
+      background: oklch(15% 0.02 250 / 0.85);
+      backdrop-filter: blur(8px);
+      border-bottom: 1px solid var(--border);
+      display: flex; align-items: center; justify-content: space-between;
+      z-index: 2;
+      font-size: 12px;
+    }
+    .ref-point {
+      position: absolute;
+      width: 16px; height: 16px;
+      border: 2px solid var(--accent);
+      border-radius: 50%;
+      transform: translate(-50%, -50%);
+      cursor: move;
+      z-index: 3;
+    }
+    .ref-point::after {
+      content: attr(data-idx);
+      position: absolute;
+      top: -18px; left: 50%;
+      transform: translateX(-50%);
+      background: var(--accent);
+      color: var(--bg-deep);
+      font-family: var(--font-mono);
+      font-size: 9px; font-weight: 700;
+      padding: 0 4px;
+      border-radius: 2px;
+    }
+    .ref-point.selected {
+      border-color: var(--warn);
+      box-shadow: 0 0 12px var(--warn);
+    }
+    .ref-line {
+      position: absolute;
+      height: 1px;
+      background: oklch(78% 0.14 210 / 0.3);
+      transform-origin: left center;
+      z-index: 1;
+    }
+    .bev-preview {
+      position: absolute; inset: 0;
+    }
+    .bev-grid-preview {
+      position: absolute; inset: 0;
+      background-image:
+        linear-gradient(oklch(40% 0.01 250 / 0.1) 1px, transparent 1px),
+        linear-gradient(90deg, oklch(40% 0.01 250 / 0.1) 1px, transparent 1px);
+      background-size: 25px 25px;
+    }
+    .srt-bar {
+      grid-column: 1 / -1;
+      display: flex; align-items: center; gap: var(--sp-6);
+      padding: var(--sp-3) var(--sp-5);
+    }
+    .srt-item {
+      display: flex; flex-direction: column; gap: 2px;
+    }
+    .srt-label {
+      font-size: 10px; color: var(--fg-dim);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+    .srt-value {
+      font-family: var(--font-mono);
+      font-size: 14px; font-weight: 600;
+      color: var(--fg);
+    }
+    .point-list {
+      display: flex; flex-direction: column; gap: var(--sp-2);
+    }
+    .point-row {
+      display: flex; align-items: center; gap: var(--sp-2);
+      padding: var(--sp-2);
+      border-radius: var(--r-sm);
+      background: oklch(50% 0.02 250 / 0.06);
+      font-family: var(--font-mono);
+      font-size: 11px;
+    }
+    .point-idx {
+      width: 20px; height: 20px;
+      border-radius: 50%;
+      background: var(--accent);
+      color: var(--bg-deep);
+      display: grid; place-items: center;
+      font-size: 10px; font-weight: 700;
+    }
+    .h-matrix {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      line-height: 1.6;
+      color: var(--fg-muted);
+    }
+    .h-matrix .val { color: var(--accent); }
+    .magnifier {
+      position: absolute;
+      width: 100px; height: 100px;
+      border: 2px solid var(--accent);
+      border-radius: 50%;
+      background: oklch(20% 0.015 250 / 0.9);
+      z-index: 5;
+      display: none;
+    }
+    .quality-bar {
+      display: flex; align-items: center; gap: var(--sp-2);
+      margin-top: var(--sp-2);
+    }
+    @media (max-width: 1200px) {
+      .calib-layout { grid-template-columns: 1fr; }
+      .calib-sidebar { display: none; }
+    }
+    @media (max-width: 768px) {
+      .calib-main { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="sidebar-brand"><div class="logo">DT</div><span>DroneTraffic</span></div>
+      <nav class="nav">
+        <div class="nav-section">指挥大屏</div>
+        <a class="nav-item" href="dashboard.html"><span class="nav-icon">◉</span> Dashboard</a>
+        <a class="nav-item" href="monitoring-intersection.html"><span class="nav-icon">◎</span> 实时监测</a>
+        <a class="nav-item" href="gis-overview.html"><span class="nav-icon">⊞</span> GIS 总览</a>
+        <div class="nav-section">业务操作</div>
+        <a class="nav-item" href="video-realtime.html"><span class="nav-icon">▷</span> 视频分析</a>
+        <a class="nav-item active" href="calibration-homography.html"><span class="nav-icon">⊡</span> 标定中心</a>
+        <a class="nav-item" href="alerts-center.html"><span class="nav-icon">⚡</span> 告警中心 <span class="nav-badge">3</span></a>
+        <a class="nav-item" href="reports-daily.html"><span class="nav-icon">☰</span> 报告中心</a>
+        <div class="nav-section">管理</div>
+        <a class="nav-item" href="drone-monitor.html"><span class="nav-icon">✦</span> 无人机管理</a>
+        <a class="nav-item" href="admin-gpu.html"><span class="nav-icon">⚙</span> 系统管理</a>
+      </nav>
+    </aside>
+
+    <header class="topbar">
+      <span class="topbar-title">标定中心</span>
+      <span class="topbar-sep"></span>
+      <div class="tabs" style="border:0;margin:0;">
+        <button class="tab active">Homography 标定</button>
+        <a class="tab" href="calibration-lanes.html">车道标注</a>
+        <a class="tab" href="calibration-db.html">参数库</a>
+      </div>
+      <div class="topbar-actions">
+        <button class="btn btn-ghost btn-sm">上传帧</button>
+        <button class="btn btn-ghost btn-sm">从回放截帧</button>
+        <button class="theme-toggle"><span class="theme-icon">⚡</span><span class="theme-label">CTO 模式</span></button>
+        <button class="btn btn-ghost btn-sm" onclick="window.__toggleDebug()">Debug</button>
+        <button class="btn btn-primary btn-sm">保存标定</button>
+      </div>
+    </header>
+
+    <main class="main">
+      <div class="calib-layout">
+
+        <!-- Left Panel: Controls -->
+        <div class="calib-sidebar">
+
+          <div class="card">
+            <div class="card-header">
+              <span class="card-title">基准点 · 4 Points</span>
+              <div style="display:flex;gap:var(--sp-1);">
+                <button class="btn btn-ghost btn-sm btn-icon" title="Undo">↩</button>
+                <button class="btn btn-ghost btn-sm btn-icon" title="Redo">↪</button>
+              </div>
+            </div>
+            <div class="point-list">
+              <div class="point-row">
+                <span class="point-idx">1</span>
+                <span class="muted">x: 342</span> <span class="muted">y: 518</span>
+                <span class="badge badge-success" style="margin-left:auto;">✓</span>
+              </div>
+              <div class="point-row" style="background:var(--accent-dim);">
+                <span class="point-idx" style="background:var(--warn);">2</span>
+                <span>x: 876</span> <span>y: 492</span>
+                <span class="badge badge-accent" style="margin-left:auto;">选中</span>
+              </div>
+              <div class="point-row">
+                <span class="point-idx">3</span>
+                <span class="muted">x: 912</span> <span class="muted">y: 834</span>
+                <span class="badge badge-success" style="margin-left:auto;">✓</span>
+              </div>
+              <div class="point-row">
+                <span class="point-idx">4</span>
+                <span class="muted">x: 298</span> <span class="muted">y: 856</span>
+                <span class="badge badge-success" style="margin-left:auto;">✓</span>
+              </div>
+            </div>
+            <div style="margin-top:var(--sp-3); display:flex; gap:var(--sp-2);">
+              <button class="btn btn-ghost btn-sm" style="flex:1;">放大镜</button>
+              <button class="btn btn-ghost btn-sm" style="flex:1;">清除全部</button>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-header">
+              <span class="card-title">H 矩阵 · 3×3</span>
+            </div>
+            <div class="h-matrix">
+              ┌                              ┐<br>
+              │ <span class="val"> 2.341e-03</span>  <span class="val">-1.087e-04</span>  <span class="val"> 1.234e+02</span> │<br>
+              │ <span class="val"> 5.672e-05</span>  <span class="val"> 2.198e-03</span>  <span class="val">-3.456e+01</span> │<br>
+              │ <span class="val"> 8.901e-07</span>  <span class="val">-2.345e-06</span>  <span class="val"> 1.000e+00</span> │<br>
+              └                              ┘
+            </div>
+            <div class="quality-bar">
+              <span class="kpi-label" style="margin:0;">标定质量</span>
+              <div class="progress" style="flex:1;"><div class="progress-fill success-fill" style="width:94%"></div></div>
+              <span class="mono" style="font-size:11px;color:var(--success);">94%</span>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-header">
+              <span class="card-title">路口信息</span>
+            </div>
+            <div style="font-size:12px; line-height:2;">
+              <div class="flex justify-between">
+                <span class="muted">路口 ID</span>
+                <span class="mono">INT-CS-0042</span>
+              </div>
+              <div class="flex justify-between">
+                <span class="muted">路口名</span>
+                <span>中山路 / 解放路</span>
+              </div>
+              <div class="flex justify-between">
+                <span class="muted">标定时间</span>
+                <span class="mono">2026-05-27 13:45</span>
+              </div>
+              <div class="flex justify-between">
+                <span class="muted">覆盖率</span>
+                <span class="mono text-success">94.2%</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Main: Two panels + SRT bar -->
+        <div class="calib-main">
+
+          <!-- Original Drone Frame -->
+          <div class="frame-panel">
+            <div class="frame-header">
+              <span style="color:var(--fg);">原始无人机画面</span>
+              <span class="mono" style="font-size:11px; color:var(--fg-dim);">1920×1080 · 点选基准点</span>
+            </div>
+            <!-- Simulated drone frame -->
+            <div style="position:absolute;inset:0;background:
+              linear-gradient(180deg, oklch(30% 0.02 220) 0%, oklch(25% 0.015 250) 50%, oklch(22% 0.01 250) 100%);
+            "></div>
+            <!-- Road surface -->
+            <div style="position:absolute;bottom:0;left:0;right:0;height:60%;
+              background:linear-gradient(180deg, oklch(28% 0.01 250) 0%, oklch(24% 0.01 250) 100%);"></div>
+            <!-- Road markings -->
+            <div style="position:absolute;bottom:35%;left:10%;right:10%;height:2px;background:oklch(60% 0.01 250 / 0.15);"></div>
+            <div style="position:absolute;bottom:20%;left:15%;right:15%;height:1px;background:oklch(50% 0.01 250 / 0.1);"></div>
+            <div style="position:absolute;left:45%;top:30%;bottom:10%;width:2px;background:oklch(50% 0.01 250 / 0.12);"></div>
+
+            <!-- Reference points -->
+            <div class="ref-point" data-idx="1" style="top:48%;left:25%;"></div>
+            <div class="ref-point selected" data-idx="2" style="top:46%;left:65%;"></div>
+            <div class="ref-point" data-idx="3" style="top:78%;left:68%;"></div>
+            <div class="ref-point" data-idx="4" style="top:80%;left:22%;"></div>
+
+            <!-- Lines between points -->
+            <div style="position:absolute;top:48%;left:25%;width:40%;height:1px;background:var(--accent);opacity:0.3;z-index:1;transform:rotate(-3deg);"></div>
+            <div style="position:absolute;top:46%;left:65%;width:3%;height:32%;background:var(--accent);opacity:0.3;z-index:1;"></div>
+            <div style="position:absolute;top:78%;left:22%;width:46%;height:1px;background:var(--accent);opacity:0.3;z-index:1;transform:rotate(2deg);"></div>
+            <div style="position:absolute;top:48%;left:25%;width:3%;height:32%;background:var(--accent);opacity:0.3;z-index:1;"></div>
+
+            <div style="position:absolute;bottom:var(--sp-3);left:var(--sp-3);display:flex;gap:var(--sp-2);">
+              <span class="vc-btn active-ctrl">选点模式</span>
+              <span class="vc-btn">拖拽模式</span>
+              <span class="vc-btn">放大镜</span>
+            </div>
+          </div>
+
+          <!-- BEV Preview -->
+          <div class="frame-panel">
+            <div class="frame-header">
+              <span style="color:var(--fg);">BEV 鸟瞰预览</span>
+              <span class="mono" style="font-size:11px; color:var(--fg-dim);">warpPerspective · 实时</span>
+            </div>
+            <div class="bev-preview">
+              <div class="bev-grid-preview"></div>
+              <!-- Warped road surface -->
+              <div style="position:absolute;top:20%;left:20%;right:20%;bottom:20%;
+                background:oklch(26% 0.01 250 / 0.6);
+                border:1px solid oklch(40% 0.01 250 / 0.2);
+              "></div>
+              <!-- Lane markings in BEV -->
+              <div style="position:absolute;top:20%;left:45%;bottom:20%;width:2px;background:oklch(55% 0.01 250 / 0.3);"></div>
+              <div style="position:absolute;top:20%;left:55%;bottom:20%;width:2px;background:oklch(55% 0.01 250 / 0.3);"></div>
+              <div style="position:absolute;left:20%;right:20%;top:50%;height:2px;background:oklch(55% 0.01 250 / 0.2);border-style:dashed;"></div>
+              <!-- Reference grid crosshairs -->
+              <div style="position:absolute;top:20%;left:20%;width:8px;height:8px;border:1px solid var(--accent);border-radius:50%;transform:translate(-50%,-50%);"></div>
+              <div style="position:absolute;top:20%;right:20%;width:8px;height:8px;border:1px solid var(--accent);border-radius:50%;transform:translate(50%,-50%);"></div>
+              <div style="position:absolute;bottom:20%;left:20%;width:8px;height:8px;border:1px solid var(--accent);border-radius:50%;transform:translate(-50%,50%);"></div>
+              <div style="position:absolute;bottom:20%;right:20%;width:8px;height:8px;border:1px solid var(--accent);border-radius:50%;transform:translate(50%,50%);"></div>
+
+              <!-- Quality indicator -->
+              <div style="position:absolute;bottom:var(--sp-3);right:var(--sp-3);
+                background:oklch(15% 0.02 250 / 0.85); backdrop-filter:blur(8px);
+                padding:var(--sp-2) var(--sp-3); border-radius:var(--r-sm);
+                border:1px solid var(--glass-border); font-family:var(--font-mono); font-size:11px;">
+                <span class="text-success">透视矫正 OK</span> · 道路拉正 · 网格对齐
+              </div>
+            </div>
+          </div>
+
+          <!-- SRT Telemetry Bar -->
+          <div class="card srt-bar">
+            <div class="srt-item">
+              <span class="srt-label">Intersection ID</span>
+              <span class="srt-value">INT-CS-0042</span>
+            </div>
+            <div class="srt-item">
+              <span class="srt-label">Alt AGL</span>
+              <span class="srt-value">82.4 <span style="font-size:0.7em;color:var(--fg-muted);">m</span></span>
+            </div>
+            <div class="srt-item">
+              <span class="srt-label">Gimbal Pitch</span>
+              <span class="srt-value">-87.2<span style="font-size:0.7em;color:var(--fg-muted);">°</span></span>
+            </div>
+            <div class="srt-item">
+              <span class="srt-label">Yaw</span>
+              <span class="srt-value">124.8<span style="font-size:0.7em;color:var(--fg-muted);">°</span></span>
+            </div>
+            <div class="srt-item">
+              <span class="srt-label">GPS</span>
+              <span class="srt-value" style="font-size:12px;">30.5728°N 104.0668°E</span>
+            </div>
+            <div class="srt-item">
+              <span class="srt-label">RTK</span>
+              <span class="srt-value text-success">FIXED</span>
+            </div>
+            <div style="margin-left:auto; display:flex; gap:var(--sp-2);">
+              <button class="btn btn-ghost btn-sm">自动读取 SRT</button>
+              <button class="btn btn-primary btn-sm">计算 H 矩阵</button>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </main>
+
+    <footer class="statusbar">
+      <div class="statusbar-item"><span class="statusbar-dot"></span> 标定就绪</div>
+      <div class="statusbar-item">质量: <span class="text-success">94.2%</span></div>
+      <div class="statusbar-item">覆盖率: <span class="text-success">94.2%</span></div>
+      <div class="statusbar-item">4/4 基准点</div>
+      <div class="statusbar-item ml-auto">Homography 标定 · INT-CS-0042</div>
+    </footer>
+  </div>
+
+  <script src="app.js"></script>
+  <script>
+  (function() {
+    /* ── Reference point drag simulation ── */
+    var points = document.querySelectorAll('.ref-point');
+    var selectedPoint = null;
+
+    for (var i = 0; i < points.length; i++) {
+      (function(pt) {
+        pt.addEventListener('mousedown', function(e) {
+          selectedPoint = pt;
+          // Remove selected state from all
+          for (var j = 0; j < points.length; j++) {
+            points[j].classList.remove('selected');
+          }
+          pt.classList.add('selected');
+          e.preventDefault();
+        });
+      })(points[i]);
+    }
+
+    document.addEventListener('mousemove', function(e) {
+      if (!selectedPoint) return;
+      var parent = selectedPoint.parentElement.getBoundingClientRect();
+      var x = ((e.clientX - parent.left) / parent.width * 100);
+      var y = ((e.clientY - parent.top) / parent.height * 100);
+      x = Math.max(5, Math.min(95, x));
+      y = Math.max(5, Math.min(95, y));
+      selectedPoint.style.left = x + '%';
+      selectedPoint.style.top = y + '%';
+    });
+
+    document.addEventListener('mouseup', function() {
+      if (selectedPoint) {
+        // Recalculate H matrix (simulated)
+        animateHMatrix();
+        selectedPoint = null;
+      }
+    });
+
+    /* ── H matrix animation on recalculate ── */
+    function animateHMatrix() {
+      var vals = document.querySelectorAll('.h-matrix .val');
+      for (var i = 0; i < vals.length; i++) {
+        var orig = vals[i].textContent;
+        vals[i].style.color = 'var(--warn)';
+        vals[i].style.transition = 'color 0.6s';
+        setTimeout(function(v) {
+          v.style.color = 'var(--accent)';
+        }.bind(null, vals[i]), 600);
+      }
+    }
+
+    /* ── Magnifier on hover ── */
+    var framePanel = document.querySelector('.frame-panel');
+    if (framePanel) {
+      framePanel.addEventListener('mousemove', function(e) {
+        var rect = framePanel.getBoundingClientRect();
+        var x = e.clientX - rect.left;
+        var y = e.clientY - rect.top;
+        // Show a subtle cursor indicator
+        var mag = framePanel.querySelector('.mag-indicator');
+        if (!mag) {
+          mag = document.createElement('div');
+          mag.className = 'mag-indicator';
+          mag.style.cssText = 'position:absolute;width:40px;height:40px;border:1px solid var(--accent);border-radius:50%;pointer-events:none;z-index:4;opacity:0;transition:opacity 0.2s;';
+          framePanel.appendChild(mag);
+        }
+        mag.style.left = (x - 20) + 'px';
+        mag.style.top = (y - 20) + 'px';
+        mag.style.opacity = '0.4';
+      });
+      framePanel.addEventListener('mouseleave', function() {
+        var mag = framePanel.querySelector('.mag-indicator');
+        if (mag) mag.style.opacity = '0';
+      });
+    }
+
+    /* ── Undo/Redo buttons ── */
+    var undoBtn = document.querySelector('[title="Undo"]');
+    var redoBtn = document.querySelector('[title="Redo"]');
+    if (undoBtn) undoBtn.addEventListener('click', function() { undoBtn.style.color = 'var(--accent)'; setTimeout(function() { undoBtn.style.color = ''; }, 300); });
+    if (redoBtn) redoBtn.addEventListener('click', function() { redoBtn.style.color = 'var(--accent)'; setTimeout(function() { redoBtn.style.color = ''; }, 300); });
+  })();
+  </script>
+</body>
+</html>

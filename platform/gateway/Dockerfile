@@ -1,4 +1,4 @@
-FROM python:3.9-slim
+FROM --platform=linux/amd64 python:3.11
 
 WORKDIR /app
 
@@ -8,14 +8,14 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy shared library first (for dependency caching)
-COPY ../shared /shared
-RUN pip install --no-cache-dir -e /shared
+COPY shared /shared
+RUN pip install --no-cache-dir /shared
 
 # Copy gateway code
-COPY . .
+COPY gateway .
 
 # Install gateway dependencies
-RUN pip install --no-cache-dir -e .
+RUN pip install --no-cache-dir .
 
 # Expose port
 EXPOSE 8000

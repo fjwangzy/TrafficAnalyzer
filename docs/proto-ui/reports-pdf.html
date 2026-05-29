@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" /><title>PDF 导出 — 无人机路口交通态势监测平台</title><link rel="stylesheet" href="styles.css" /><style>.pdf-layout{display:grid;grid-template-columns:400px 1fr;gap:var(--sp-4);height:calc(100vh - var(--topbar-h) - var(--statusbar-h) - var(--sp-12));}.pdf-config{display:flex;flex-direction:column;gap:var(--sp-4);overflow-y:auto;}.pdf-preview{background:oklch(92% 0.005 250);border-radius:var(--r-lg);padding:var(--sp-6);display:flex;flex-direction:column;align-items:center;overflow-y:auto;}.pdf-page{width:280px;min-height:380px;background:white;border-radius:4px;box-shadow:0 4px 20px rgba(0,0,0,0.3);margin-bottom:var(--sp-4);padding:var(--sp-5);color:#333;font-size:10px;line-height:1.5;}.step-list{display:flex;flex-direction:column;gap:var(--sp-3);}.step{display:flex;align-items:flex-start;gap:var(--sp-3);padding:var(--sp-3);border-radius:var(--r-md);background:oklch(50% 0.02 250 / 0.06);}.step-num{width:28px;height:28px;border-radius:50%;background:var(--accent);color:var(--bg-deep);display:grid;place-items:center;font-weight:700;font-size:12px;flex-shrink:0;}.step.done .step-num{background:var(--success);}.step.active-step{border:1px solid var(--accent);background:var(--accent-dim);}@media(max-width:1024px){.pdf-layout{grid-template-columns:1fr;}.pdf-preview{display:none;}}</style>
+</head>
+<body>
+<div class="app">
+<aside class="sidebar"><div class="sidebar-brand"><div class="logo">DT</div><span>DroneTraffic</span></div><nav class="nav"><div class="nav-section">指挥大屏</div><a class="nav-item" href="dashboard.html"><span class="nav-icon">◉</span> Dashboard</a><a class="nav-item" href="monitoring-intersection.html"><span class="nav-icon">◎</span> 实时监测</a><a class="nav-item" href="gis-overview.html"><span class="nav-icon">⊞</span> GIS 总览</a><div class="nav-section">业务操作</div><a class="nav-item" href="video-realtime.html"><span class="nav-icon">▷</span> 视频分析</a><a class="nav-item" href="calibration-homography.html"><span class="nav-icon">⊡</span> 标定中心</a><a class="nav-item" href="alerts-center.html"><span class="nav-icon">⚡</span> 告警中心 <span class="nav-badge">3</span></a><a class="nav-item active" href="reports-daily.html"><span class="nav-icon">☰</span> 报告中心</a><div class="nav-section">管理</div><a class="nav-item" href="drone-monitor.html"><span class="nav-icon">✦</span> 无人机管理</a><a class="nav-item" href="admin-gpu.html"><span class="nav-icon">⚙</span> 系统管理</a></nav></aside>
+<header class="topbar"><span class="topbar-title">报告中心</span><span class="topbar-sep"></span><div class="tabs" style="border:0;margin:0;"><a class="tab" href="reports-daily.html">日报</a><a class="tab" href="reports-peak.html">高峰分析</a><button class="tab active">PDF 导出</button></div><div class="topbar-actions">
+        <button class="theme-toggle"><span class="theme-icon">⚡</span><span class="theme-label">CTO 模式</span></button><button class="btn btn-primary btn-sm">生成 PDF</button></div></header>
+<main class="main"><div class="pdf-layout">
+  <div class="pdf-config">
+    <div class="card"><div class="card-header"><span class="card-title">报告配置</span></div>
+      <div style="display:flex;flex-direction:column;gap:var(--sp-4);">
+        <div><label class="label">时间范围</label><div class="grid-2" style="gap:var(--sp-2);"><input class="input" value="2026-05-27" /><input class="input" value="2026-05-27" /></div></div>
+        <div><label class="label">路口选择</label><div style="display:flex;flex-wrap:wrap;gap:var(--sp-2);margin-top:var(--sp-1);"><span class="filter-chip active-chip">全部 24 个</span><span class="filter-chip">中山路/解放路</span><span class="filter-chip">人民大道/建设路</span></div></div>
+        <div><label class="label">报告模块</label><div style="display:flex;flex-direction:column;gap:var(--sp-2);margin-top:var(--sp-1);"><label style="display:flex;align-items:center;gap:var(--sp-2);font-size:13px;cursor:pointer;"><input type="checkbox" checked /> 早高峰分析</label><label style="display:flex;align-items:center;gap:var(--sp-2);font-size:13px;cursor:pointer;"><input type="checkbox" checked /> 拥堵时段</label><label style="display:flex;align-items:center;gap:var(--sp-2);font-size:13px;cursor:pointer;"><input type="checkbox" checked /> 异常事件</label><label style="display:flex;align-items:center;gap:var(--sp-2);font-size:13px;cursor:pointer;"><input type="checkbox" checked /> 车道利用率</label><label style="display:flex;align-items:center;gap:var(--sp-2);font-size:13px;cursor:pointer;"><input type="checkbox" checked /> AI 总结</label></div></div>
+      </div>
+    </div>
+    <div class="card"><div class="card-header"><span class="card-title">生成流程</span></div>
+      <div class="step-list">
+        <div class="step done"><span class="step-num">✓</span><div><div style="font-size:13px;font-weight:500;">选择时间范围</div><div class="dim" style="font-size:11px;">2026-05-27 全天</div></div></div>
+        <div class="step done"><span class="step-num">✓</span><div><div style="font-size:13px;font-weight:500;">选择路口</div><div class="dim" style="font-size:11px;">全部 24 个路口</div></div></div>
+        <div class="step active-step"><span class="step-num">3</span><div><div style="font-size:13px;font-weight:500;">生成分析</div><div class="dim" style="font-size:11px;">聚合数据 + 图表渲染</div></div></div>
+        <div class="step"><span class="step-num">4</span><div><div style="font-size:13px;font-weight:500;">AI 总结</div><div class="dim" style="font-size:11px;">Qwen 生成报告摘要</div></div></div>
+        <div class="step"><span class="step-num">5</span><div><div style="font-size:13px;font-weight:500;">导出 PDF</div><div class="dim" style="font-size:11px;">A4 横版 · 8 页</div></div></div>
+      </div>
+    </div>
+  </div>
+  <div class="pdf-preview">
+    <div class="pdf-page">
+      <div style="font-size:14px;font-weight:700;margin-bottom:4px;">交通态势日报</div>
+      <div style="font-size:8px;color:#999;margin-bottom:12px;">2026年5月27日 · 无人机路口交通态势监测平台</div>
+      <div style="height:1px;background:#ddd;margin-bottom:8px;"></div>
+      <div style="font-size:9px;font-weight:600;margin-bottom:4px;">AI 摘要</div>
+      <div style="font-size:8px;color:#666;line-height:1.6;">5月27日全天监测24个路口，总车流量184,293辆次，较昨日上升12.3%。早高峰拥堵指数峰值达2.31…</div>
+      <div style="height:40px;background:#f5f5f5;border-radius:2px;margin-top:8px;display:grid;place-items:center;font-size:8px;color:#999;">[ 流量趋势图 ]</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:4px;margin-top:8px;">
+        <div style="background:#f5f5f5;padding:4px;border-radius:2px;text-align:center;"><div style="font-size:7px;color:#999;">总车流</div><div style="font-size:10px;font-weight:700;">184,293</div></div>
+        <div style="background:#f5f5f5;padding:4px;border-radius:2px;text-align:center;"><div style="font-size:7px;color:#999;">拥堵峰值</div><div style="font-size:10px;font-weight:700;color:#d97706;">2.31</div></div>
+        <div style="background:#f5f5f5;padding:4px;border-radius:2px;text-align:center;"><div style="font-size:7px;color:#999;">告警</div><div style="font-size:10px;font-weight:700;color:#dc2626;">47</div></div>
+      </div>
+    </div>
+    <div style="font-family:var(--font-mono);font-size:11px;color:var(--fg-dim);">预览 · 第 1/8 页</div>
+  </div>
+</div></main>
+<footer class="statusbar"><div class="statusbar-item"><span class="statusbar-dot"></span> PDF 导出</div><div class="statusbar-item">预计: <span class="text-accent">8 页 A4</span></div><div class="statusbar-item ml-auto">报告生成</div></footer>
+</div>
+  <script src="app.js"></script>
+</body></html>

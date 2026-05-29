@@ -1,4 +1,4 @@
-FROM python:3.12-slim
+FROM --platform=linux/amd64 python:3.11
 
 WORKDIR /app
 
@@ -9,11 +9,11 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy and install shared library
-COPY platform/shared /app/shared
+COPY shared /app/shared
 RUN pip install --no-cache-dir /app/shared
 
 # Copy and install operations service
-COPY platform/services/operations /app
+COPY services/operations /app
 RUN pip install --no-cache-dir .
 
 # Expose port

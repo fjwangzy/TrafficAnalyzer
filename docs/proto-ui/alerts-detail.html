@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" /><title>告警详情 — 无人机路口交通态势监测平台</title><link rel="stylesheet" href="styles.css" />
+<style>.detail-layout{display:grid;grid-template-columns:1fr 1fr;gap:var(--sp-4);height:calc(100vh - var(--topbar-h) - var(--statusbar-h) - var(--sp-12));}.detail-left,.detail-right{display:flex;flex-direction:column;gap:var(--sp-4);overflow-y:auto;}.video-strip{display:flex;gap:var(--sp-3);}.mini-video{flex:1;aspect-ratio:16/9;background:var(--bg-deep);border:1px solid var(--border);border-radius:var(--r-md);position:relative;overflow:hidden;}.timeline-track{display:flex;align-items:center;gap:var(--sp-2);padding:var(--sp-3);background:oklch(50% 0.02 250 / 0.06);border-radius:var(--r-md);}.tl-segment{height:24px;border-radius:var(--r-sm);position:relative;}.tl-event{position:absolute;top:-4px;width:3px;height:32px;background:var(--danger);border-radius:1px;}@media(max-width:1024px){.detail-layout{grid-template-columns:1fr;}}</style>
+</head>
+<body>
+<div class="app">
+<aside class="sidebar"><div class="sidebar-brand"><div class="logo">DT</div><span>DroneTraffic</span></div><nav class="nav"><div class="nav-section">指挥大屏</div><a class="nav-item" href="dashboard.html"><span class="nav-icon">◉</span> Dashboard</a><a class="nav-item" href="monitoring-intersection.html"><span class="nav-icon">◎</span> 实时监测</a><a class="nav-item" href="gis-overview.html"><span class="nav-icon">⊞</span> GIS 总览</a><div class="nav-section">业务操作</div><a class="nav-item" href="video-realtime.html"><span class="nav-icon">▷</span> 视频分析</a><a class="nav-item" href="calibration-homography.html"><span class="nav-icon">⊡</span> 标定中心</a><a class="nav-item active" href="alerts-center.html"><span class="nav-icon">⚡</span> 告警中心 <span class="nav-badge">3</span></a><a class="nav-item" href="reports-daily.html"><span class="nav-icon">☰</span> 报告中心</a><div class="nav-section">管理</div><a class="nav-item" href="drone-monitor.html"><span class="nav-icon">✦</span> 无人机管理</a><a class="nav-item" href="admin-gpu.html"><span class="nav-icon">⚙</span> 系统管理</a></nav></aside>
+<header class="topbar"><span class="topbar-title">告警详情</span><span class="topbar-sep"></span><span class="mono" style="font-size:12px;color:var(--fg-muted);">EVT-20260527-0047</span><div class="topbar-actions">
+        <button class="theme-toggle"><span class="theme-icon">⚡</span><span class="theme-label">CTO 模式</span></button><button class="btn btn-ghost btn-sm">← 返回列表</button><button class="btn btn-primary btn-sm">标记已处理</button></div></header>
+<main class="main">
+<div class="detail-layout">
+  <div class="detail-left">
+    <div class="card"><div class="card-header"><span class="card-title">告警截图</span><span class="badge badge-danger animate-blink">P1 逆行事件</span></div>
+      <div style="aspect-ratio:16/9;background:var(--bg-deep);border:1px solid var(--border);border-radius:var(--r-md);position:relative;overflow:hidden;">
+        <div style="position:absolute;inset:0;background:linear-gradient(180deg,oklch(22% 0.02 250),oklch(18% 0.015 250));"></div>
+        <div style="position:absolute;bottom:0;left:0;right:0;height:60%;background:oklch(25% 0.01 250);"></div>
+        <div class="detect-box" style="top:35%;left:30%;width:80px;height:55px;border-color:var(--danger);"><span class="detect-label" style="background:var(--danger);">逆行 #T041 92%</span></div>
+        <div style="position:absolute;top:var(--sp-3);left:var(--sp-3);font-family:var(--font-mono);font-size:11px;color:var(--danger);">● 14:31:42.128</div>
+      </div>
+      <!-- Snapshot generation status (from AlertEngine._create_alert) -->
+      <div class="gen-status ready" style="margin-top:var(--sp-3);">
+        <div class="gen-icon">📸</div>
+        <div class="gen-info">
+          <span class="gen-title">截图已生成</span>
+          <span class="gen-meta">/snapshots/EVT-20260527-0047.jpg · FFmpeg 单帧截取 · 12ms</span>
+        </div>
+        <div class="gen-action"><button class="btn btn-ghost btn-sm">下载</button></div>
+      </div>
+    </div>
+    <div class="card"><div class="card-header"><span class="card-title">前后 30 秒视频</span></div>
+      <div class="video-strip">
+        <div class="mini-video"><div style="position:absolute;inset:0;display:grid;place-items:center;font-family:var(--font-mono);font-size:11px;color:var(--fg-dim);">-30s ~ 事件前</div></div>
+        <div class="mini-video" style="border-color:var(--danger);"><div style="position:absolute;inset:0;display:grid;place-items:center;font-family:var(--font-mono);font-size:11px;color:var(--danger);">● 事件帧</div></div>
+        <div class="mini-video"><div style="position:absolute;inset:0;display:grid;place-items:center;font-family:var(--font-mono);font-size:11px;color:var(--fg-dim);">事件后 ~ +30s</div></div>
+      </div>
+      <!-- Video clip generation status (async from AlertEngine) -->
+      <div class="gen-status ready" style="margin-top:var(--sp-3);">
+        <div class="gen-icon">🎬</div>
+        <div class="gen-info">
+          <span class="gen-title">视频片段已生成</span>
+          <span class="gen-meta">/clips/EVT-20260527-0047.mp4 · FFmpeg HLS截取 60s · 2.3s</span>
+        </div>
+        <div class="gen-action"><button class="btn btn-ghost btn-sm">播放</button><button class="btn btn-ghost btn-sm" style="margin-left:var(--sp-2);">下载</button></div>
+      </div>
+    </div>
+    <div class="card"><div class="card-header"><span class="card-title">轨迹分析</span></div>
+      <div style="height:120px;background:var(--bg-deep);border-radius:var(--r-md);position:relative;overflow:hidden;">
+        <div style="position:absolute;inset:0;background-image:linear-gradient(oklch(40% 0.01 250 / 0.06) 1px,transparent 1px),linear-gradient(90deg,oklch(40% 0.01 250 / 0.06) 1px,transparent 1px);background-size:20px 20px;"></div>
+        <div style="position:absolute;top:20%;left:45%;width:2px;height:60%;background:var(--danger);opacity:0.6;"></div>
+        <div style="position:absolute;top:20%;left:45%;width:6px;height:6px;background:var(--danger);border-radius:50%;transform:translate(-50%,-50%);"></div>
+        <div style="position:absolute;top:80%;left:45%;width:6px;height:6px;background:var(--danger);border-radius:50%;transform:translate(-50%,-50%);box-shadow:0 0 8px var(--danger);"></div>
+        <div style="position:absolute;top:var(--sp-2);right:var(--sp-3);font-family:var(--font-mono);font-size:10px;color:var(--fg-dim);">#T041 逆行轨迹 · 12.4s</div>
+      </div>
+    </div>
+  </div>
+  <div class="detail-right">
+    <div class="card"><div class="card-header"><span class="card-title">事件信息</span></div>
+      <div style="font-size:12px;line-height:2.2;">
+        <div class="flex justify-between"><span class="muted">事件 ID</span><span class="mono">EVT-20260527-0047</span></div>
+        <div class="flex justify-between"><span class="muted">等级</span><span class="badge badge-danger">P1</span></div>
+        <div class="flex justify-between"><span class="muted">类型</span><span class="badge badge-danger">retrograde</span></div>
+        <div class="flex justify-between"><span class="muted">路口</span><span>中山路 / 解放路 <span class="mono dim">INT_中山解放</span></span></div>
+        <div class="flex justify-between"><span class="muted">时间</span><span class="mono">2026-05-27 14:31:42</span></div>
+        <div class="flex justify-between"><span class="muted">Track IDs</span><span class="mono">#T041, #T042</span></div>
+        <div class="flex justify-between"><span class="muted">持续时长</span><span class="mono">12.4s</span></div>
+        <div class="flex justify-between"><span class="muted">状态</span><span class="badge badge-danger">open</span></div>
+        <div class="flex justify-between"><span class="muted">确认人</span><span style="color:var(--fg-dim);">—</span></div>
+        <div class="flex justify-between"><span class="muted">确认时间</span><span style="color:var(--fg-dim);">—</span></div>
+      </div>
+      <div style="margin-top:var(--sp-3);display:flex;gap:var(--sp-2);">
+        <button class="btn btn-primary btn-sm" style="flex:1;">确认处理 (acknowledge)</button>
+        <button class="btn btn-ghost btn-sm" style="flex:1;">标记误报</button>
+      </div>
+    </div>
+    <div class="card"><div class="card-header"><span class="card-title">VLM 语义摘要</span></div>
+      <div class="code-block" style="font-size:11px;">
+{<br>
+&nbsp;&nbsp;<span class="key">"congestion"</span>: <span class="str">"moderate"</span>,<br>
+&nbsp;&nbsp;<span class="key">"anomaly"</span>: <span class="str">"车辆#T041在L2车道逆向行驶"</span>,<br>
+&nbsp;&nbsp;<span class="key">"risk"</span>: <span class="str">"与对向#T042存在碰撞风险"</span>,<br>
+&nbsp;&nbsp;<span class="key">"recommend"</span>: <span class="str">"立即预警，通知交管"</span><br>
+}
+      </div>
+    </div>
+    <div class="card"><div class="card-header"><span class="card-title">推送记录 · AlertPushLog</span><span class="mono" style="font-size:10px;color:var(--fg-dim);">4 channels</span></div>
+      <div class="push-log">
+        <div class="push-log-entry">
+          <span class="pl-status success"></span>
+          <span class="pl-channel">企业微信 · 交管值班群</span>
+          <span class="pl-code ok">200</span>
+          <span class="pl-time">14:31:43 · 1.2s</span>
+        </div>
+        <div class="push-log-entry">
+          <span class="pl-status success"></span>
+          <span class="pl-channel">钉钉 · 交通指挥频道</span>
+          <span class="pl-code ok">200</span>
+          <span class="pl-time">14:31:44 · 0.8s</span>
+        </div>
+        <div class="push-log-entry">
+          <span class="pl-status pending"></span>
+          <span class="pl-channel">短信 · 张警官 138****5521</span>
+          <span class="pl-code" style="background:var(--warn-dim);color:var(--warn);">pending</span>
+          <span class="pl-time">14:31:44 · retry 2/3</span>
+        </div>
+        <div class="push-log-entry">
+          <span class="pl-status success"></span>
+          <span class="pl-channel">HTTP POST · 指挥平台</span>
+          <span class="pl-code ok">200</span>
+          <span class="pl-time">14:31:43 · 0.3s</span>
+        </div>
+      </div>
+      <div style="margin-top:var(--sp-3);padding-top:var(--sp-3);border-top:1px solid var(--border);display:flex;gap:var(--sp-4);font-size:11px;">
+        <span class="muted">Webhook ID: <span class="mono">WH-001, WH-003, WH-007, WH-012</span></span>
+        <span class="muted">Rate limit: <span class="mono">30s</span></span>
+      </div>
+    </div>
+  </div>
+</div>
+</main>
+<footer class="statusbar"><div class="statusbar-item"><span class="statusbar-dot"></span> 告警详情</div><div class="statusbar-item">EVT-20260527-0047</div><div class="statusbar-item ml-auto">P1 逆行事件</div></footer>
+</div>
+  <script src="app.js"></script>
+</body></html>

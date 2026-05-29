@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" /><title>Webhook 配置 — 无人机路口交通态势监测平台</title><link rel="stylesheet" href="styles.css" />
+<style>.wh-layout{display:grid;grid-template-columns:380px 1fr;gap:var(--sp-4);height:calc(100vh - var(--topbar-h) - var(--statusbar-h) - var(--sp-12));}.wh-list{display:flex;flex-direction:column;gap:var(--sp-3);}.wh-item{padding:var(--sp-4);border-radius:var(--r-md);background:oklch(50% 0.02 250 / 0.06);cursor:pointer;transition:all var(--ease);border:1px solid transparent;}.wh-item:hover{background:oklch(50% 0.02 250 / 0.1);}.wh-item.selected-wh{border-color:var(--accent);background:var(--accent-dim);}.wh-form{display:flex;flex-direction:column;gap:var(--sp-4);}@media(max-width:1024px){.wh-layout{grid-template-columns:1fr;}}</style>
+</head>
+<body>
+<div class="app">
+<aside class="sidebar"><div class="sidebar-brand"><div class="logo">DT</div><span>DroneTraffic</span></div><nav class="nav"><div class="nav-section">指挥大屏</div><a class="nav-item" href="dashboard.html"><span class="nav-icon">◉</span> Dashboard</a><a class="nav-item" href="monitoring-intersection.html"><span class="nav-icon">◎</span> 实时监测</a><a class="nav-item" href="gis-overview.html"><span class="nav-icon">⊞</span> GIS 总览</a><div class="nav-section">业务操作</div><a class="nav-item" href="video-realtime.html"><span class="nav-icon">▷</span> 视频分析</a><a class="nav-item" href="calibration-homography.html"><span class="nav-icon">⊡</span> 标定中心</a><a class="nav-item active" href="alerts-center.html"><span class="nav-icon">⚡</span> 告警中心 <span class="nav-badge">3</span></a><a class="nav-item" href="reports-daily.html"><span class="nav-icon">☰</span> 报告中心</a><div class="nav-section">管理</div><a class="nav-item" href="drone-monitor.html"><span class="nav-icon">✦</span> 无人机管理</a><a class="nav-item" href="admin-gpu.html"><span class="nav-icon">⚙</span> 系统管理</a></nav></aside>
+<header class="topbar"><span class="topbar-title">告警中心</span><span class="topbar-sep"></span><div class="tabs" style="border:0;margin:0;"><a class="tab" href="alerts-center.html">实时告警</a><a class="tab" href="alerts-detail.html">事件详情</a><button class="tab active">Webhook</button></div><div class="topbar-actions">
+        <button class="theme-toggle"><span class="theme-icon">⚡</span><span class="theme-label">CTO 模式</span></button><button class="btn btn-primary btn-sm">+ 新增 Webhook</button></div></header>
+<main class="main"><div class="wh-layout">
+  <div class="card" style="overflow-y:auto;"><div class="card-header"><span class="card-title">Webhook 列表</span><span class="mono" style="font-size:11px;color:var(--fg-dim);">3 个</span></div>
+    <div class="wh-list">
+      <div class="wh-item selected-wh"><div class="flex items-center gap-3"><span class="statusbar-dot"></span><div><div style="font-weight:500;font-size:13px;">企业微信 · 交管群</div><div class="mono dim" style="font-size:11px;">https://qyapi.weixin…</div></div></div><div style="margin-top:var(--sp-2);display:flex;gap:var(--sp-2);"><span class="badge badge-success">在线</span><span class="badge badge-neutral">P1, P2</span></div></div>
+      <div class="wh-item"><div class="flex items-center gap-3"><span class="statusbar-dot"></span><div><div style="font-weight:500;font-size:13px;">钉钉 · 值班频道</div><div class="mono dim" style="font-size:11px;">https://oapi.dingtalk…</div></div></div><div style="margin-top:var(--sp-2);display:flex;gap:var(--sp-2);"><span class="badge badge-success">在线</span><span class="badge badge-neutral">P1, P2, P3</span></div></div>
+      <div class="wh-item"><div class="flex items-center gap-3"><span class="statusbar-dot warn"></span><div><div style="font-weight:500;font-size:13px;">HTTP POST · 指挥平台</div><div class="mono dim" style="font-size:11px;">https://cmd.traffic.gov…</div></div></div><div style="margin-top:var(--sp-2);display:flex;gap:var(--sp-2);"><span class="badge badge-warn">超时</span><span class="badge badge-neutral">P1</span></div></div>
+    </div>
+  </div>
+  <div class="card" style="overflow-y:auto;"><div class="card-header"><span class="card-title">编辑 · 企业微信</span><div style="display:flex;gap:var(--sp-2);"><button class="btn btn-ghost btn-sm">测试推送</button><button class="btn btn-primary btn-sm">保存</button></div></div>
+    <div class="wh-form">
+      <div><label class="label">Webhook URL</label><input class="input" value="https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxx-yyy-zzz" /></div>
+      <div><label class="label">Token / Secret</label><input class="input" type="password" value="••••••••••••" /></div>
+      <div><label class="label">触发事件等级</label><div class="flex gap-3" style="margin-top:var(--sp-1);"><label style="display:flex;align-items:center;gap:var(--sp-2);font-size:13px;cursor:pointer;"><input type="checkbox" checked /> P1 严重</label><label style="display:flex;align-items:center;gap:var(--sp-2);font-size:13px;cursor:pointer;"><input type="checkbox" checked /> P2 警告</label><label style="display:flex;align-items:center;gap:var(--sp-2);font-size:13px;cursor:pointer;"><input type="checkbox" /> P3 提示</label></div></div>
+      <div class="grid-2"><div><label class="label">频率限制</label><select class="select"><option>无限制</option><option>每分钟 1 次</option><option>每 5 分钟 1 次</option></select></div><div><label class="label">静默时段</label><input class="input" placeholder="例：22:00-06:00" /></div></div>
+      <div><label class="label">自定义 Payload 模板</label><textarea class="textarea" style="font-family:var(--font-mono);font-size:12px;min-height:100px;">{
+  "msgtype": "markdown",
+  "markdown": {
+    "content": "## ⚡ {{alert_type}}\n**路口:** {{intersection}}\n**等级:** {{severity}}\n**时间:** {{timestamp}}"
+  }
+}</textarea></div>
+    </div>
+  </div>
+</div></main>
+<footer class="statusbar"><div class="statusbar-item"><span class="statusbar-dot"></span> Webhook 管理</div><div class="statusbar-item">在线: <span class="text-success">2/3</span></div><div class="statusbar-item">今日推送: <span class="text-accent">142</span></div><div class="statusbar-item ml-auto">Webhook 配置</div></footer>
+</div>
+  <script src="app.js"></script>
+</body></html>

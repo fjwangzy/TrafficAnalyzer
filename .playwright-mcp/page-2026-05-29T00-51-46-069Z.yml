@@ -1,0 +1,48 @@
+- generic [ref=e2]:
+  - generic [ref=e7]:
+    - generic [ref=e8]:
+      - img "Shadcn-Admin" [ref=e9]
+      - heading "Shadcn Admin" [level=1] [ref=e11]
+    - generic [ref=e12]:
+      - generic [ref=e13]:
+        - generic [ref=e14]: Sign in
+        - generic [ref=e15]:
+          - text: Enter your email and password below to log into
+          - text: your account. Don't have an account?
+          - link "Sign Up" [ref=e16] [cursor=pointer]:
+            - /url: /sign-up
+      - generic [ref=e18]:
+        - generic [ref=e19]:
+          - generic [ref=e20]: Username
+          - textbox "Username" [ref=e21]:
+            - /placeholder: admin
+        - generic [ref=e22]:
+          - generic [ref=e23]: Password
+          - generic [ref=e24]:
+            - textbox "Password" [ref=e25]:
+              - /placeholder: "********"
+            - button "Show password" [ref=e26] [cursor=pointer]:
+              - img
+              - generic [ref=e27]: Show password
+          - link "Forgot password?" [ref=e28] [cursor=pointer]:
+            - /url: /forgot-password
+        - button "Sign in" [ref=e29] [cursor=pointer]:
+          - img
+          - text: Sign in
+        - generic [ref=e34]: Or continue with
+        - generic [ref=e35]:
+          - button "GitHub GitHub" [ref=e36] [cursor=pointer]:
+            - img "GitHub"
+            - text: GitHub
+          - button "Facebook Facebook" [ref=e37] [cursor=pointer]:
+            - img "Facebook"
+            - text: Facebook
+      - paragraph [ref=e39]:
+        - text: By clicking sign in, you agree to our
+        - link "Terms of Service" [ref=e40] [cursor=pointer]:
+          - /url: /terms
+        - text: and
+        - link "Privacy Policy" [ref=e41] [cursor=pointer]:
+          - /url: /privacy
+        - text: .
+  - region "Notifications alt+T"

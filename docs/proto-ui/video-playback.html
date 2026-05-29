@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>回放分析 — 无人机路口交通态势监测平台</title>
+  <link rel="stylesheet" href="styles.css" />
+  <style>
+    .playback-layout { display:flex; flex-direction:column; gap:var(--sp-4); height:calc(100vh - var(--topbar-h) - var(--statusbar-h) - var(--sp-12)); }
+    .playback-main { flex:1; display:grid; grid-template-columns:1fr 1fr; gap:var(--sp-4); min-height:0; }
+    .playback-controls { display:flex; align-items:center; gap:var(--sp-4); padding:var(--sp-3) var(--sp-5); flex-shrink:0; }
+    .timeline-bar { flex:1; height:6px; background:var(--border); border-radius:3px; position:relative; cursor:pointer; }
+    .timeline-progress { position:absolute; left:0; top:0; bottom:0; width:35%; background:var(--accent); border-radius:3px; }
+    .timeline-marker { position:absolute; top:-3px; width:2px; height:12px; background:var(--danger); border-radius:1px; }
+    .play-btn { width:40px; height:40px; border-radius:50%; background:var(--accent); color:var(--bg-deep); border:0; cursor:pointer; display:grid; place-items:center; font-size:16px; }
+    .play-btn:hover { background:oklch(82% 0.12 210); }
+    .speed-select { background:var(--surface); border:1px solid var(--border); border-radius:var(--r-sm); padding:var(--sp-1) var(--sp-2); color:var(--fg); font-family:var(--font-mono); font-size:11px; }
+    @media (max-width:768px) { .playback-main { grid-template-columns:1fr; } }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="sidebar-brand"><div class="logo">DT</div><span>DroneTraffic</span></div>
+      <nav class="nav">
+        <div class="nav-section">指挥大屏</div>
+        <a class="nav-item" href="dashboard.html"><span class="nav-icon">◉</span> Dashboard</a>
+        <a class="nav-item" href="monitoring-intersection.html"><span class="nav-icon">◎</span> 实时监测</a>
+        <a class="nav-item" href="gis-overview.html"><span class="nav-icon">⊞</span> GIS 总览</a>
+        <div class="nav-section">业务操作</div>
+        <a class="nav-item active" href="video-realtime.html"><span class="nav-icon">▷</span> 视频分析</a>
+        <a class="nav-item" href="calibration-homography.html"><span class="nav-icon">⊡</span> 标定中心</a>
+        <a class="nav-item" href="alerts-center.html"><span class="nav-icon">⚡</span> 告警中心 <span class="nav-badge">3</span></a>
+        <a class="nav-item" href="reports-daily.html"><span class="nav-icon">☰</span> 报告中心</a>
+        <div class="nav-section">管理</div>
+        <a class="nav-item" href="drone-monitor.html"><span class="nav-icon">✦</span> 无人机管理</a>
+        <a class="nav-item" href="admin-gpu.html"><span class="nav-icon">⚙</span> 系统管理</a>
+      </nav>
+    </aside>
+    <header class="topbar">
+      <span class="topbar-title">视频分析中心</span>
+      <span class="topbar-sep"></span>
+      <div class="tabs" style="border:0;margin:0;">
+        <a class="tab" href="video-realtime.html">实时分析</a>
+        <button class="tab active">回放分析</button>
+        <a class="tab" href="video-trajectory.html">轨迹分析</a>
+        <a class="tab" href="video-vlm.html">VLM 语义</a>
+      </div>
+      <div class="topbar-actions">
+        <button class="theme-toggle"><span class="theme-icon">⚡</span><span class="theme-label">CTO 模式</span></button>
+        <select class="select" style="width:auto;font-size:12px;"><option>中山路/解放路</option><option>人民大道/建设路</option></select>
+        <button class="btn btn-ghost btn-sm">导出片段</button>
+      </div>
+    </header>
+    <main class="main">
+      <div class="playback-layout">
+        <div class="playback-main">
+          <div class="card" style="padding:0;overflow:hidden;">
+            <div class="video-frame" style="height:100%;border:0;border-radius:var(--r-lg);">
+              <div style="position:absolute;inset:0;background:linear-gradient(180deg,oklch(22% 0.02 250),oklch(18% 0.015 250));"></div>
+              <div style="position:absolute;bottom:0;left:0;right:0;height:65%;background:oklch(25% 0.01 250);"></div>
+              <div class="detect-box" style="top:35%;left:25%;width:60px;height:45px;"><span class="detect-label">car #T031 91%</span></div>
+              <div class="detect-box" style="top:40%;left:55%;width:55px;height:40px;"><span class="detect-label">car #T032 88%</span></div>
+              <div class="video-overlay">
+                <div class="top-info"><span>回放 · 2026-05-27 08:15:32</span><span>HLS · 1080p</span></div>
+                <div class="bottom-info"><span>YOLO 后处理叠加</span></div>
+              </div>
+            </div>
+          </div>
+          <div class="card" style="padding:0;overflow:hidden;">
+            <div class="bev-canvas" style="height:100%;border:0;border-radius:var(--r-lg);">
+              <div class="bev-grid"></div>
+              <div style="position:absolute;top:0;bottom:0;left:40%;width:20%;background:oklch(28% 0.01 250 / 0.5);"></div>
+              <div style="position:absolute;left:0;right:0;top:40%;height:20%;background:oklch(28% 0.01 250 / 0.5);"></div>
+              <div class="vehicle-dot" style="top:20%;left:44%;background:var(--accent);"></div>
+              <div class="vehicle-dot" style="top:28%;left:52%;background:var(--accent);"></div>
+              <div class="vehicle-dot" style="top:65%;left:44%;background:var(--success);"></div>
+              <div class="vehicle-dot" style="top:44%;left:20%;background:var(--accent);"></div>
+              <div style="position:absolute;top:var(--sp-3);right:var(--sp-3);font-family:var(--font-mono);font-size:11px;color:var(--fg-muted);background:oklch(15% 0.02 250 / 0.85);padding:var(--sp-2) var(--sp-3);border-radius:var(--r-sm);border:1px solid var(--glass-border);">BEV 回放 · H_mat applied</div>
+            </div>
+          </div>
+        </div>
+        <div class="card playback-controls">
+          <button class="play-btn">▶</button>
+          <span class="mono" style="font-size:12px;">08:15:32</span>
+          <div class="timeline-bar">
+            <div class="timeline-progress"></div>
+            <div class="timeline-marker" style="left:35%;" title="逆行事件"></div>
+            <div class="timeline-marker" style="left:62%;" title="排队超限"></div>
+            <div class="timeline-marker" style="left:78%;" title="疑似事故"></div>
+          </div>
+          <span class="mono" style="font-size:12px;">08:45:00</span>
+          <select class="speed-select"><option>1×</option><option>2×</option><option>4×</option><option>8×</option></select>
+          <button class="btn btn-ghost btn-sm">逐帧</button>
+          <button class="btn btn-ghost btn-sm">截帧</button>
+        </div>
+      </div>
+    </main>
+    <footer class="statusbar">
+      <div class="statusbar-item"><span class="statusbar-dot"></span> 回放就绪</div>
+      <div class="statusbar-item">时长: <span class="text-accent">29m28s</span></div>
+      <div class="statusbar-item">告警标记: <span class="text-danger">3</span></div>
+      <div class="statusbar-item ml-auto">回放分析 · 中山路/解放路</div>
+    </footer>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>

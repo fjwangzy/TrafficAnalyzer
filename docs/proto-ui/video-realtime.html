@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>实时视频分析 — 无人机路口交通态势监测平台</title>
+  <link rel="stylesheet" href="styles.css" />
+  <style>
+    .video-layout { display:grid; grid-template-columns:1fr 360px; grid-template-rows:1fr auto; gap:var(--sp-4); height:calc(100vh - var(--topbar-h) - var(--statusbar-h) - var(--sp-12)); }
+    .video-main { position:relative; }
+    .side-panels { display:flex; flex-direction:column; gap:var(--sp-4); overflow-y:auto; }
+    .stats-row { grid-column:1/-1; display:grid; grid-template-columns:repeat(5,1fr); gap:var(--sp-3); }
+    .detect-list { display:flex; flex-direction:column; gap:var(--sp-2); }
+    .detect-item { display:flex; align-items:center; gap:var(--sp-3); padding:var(--sp-2) var(--sp-3); border-radius:var(--r-sm); background:oklch(50% 0.02 250 / 0.06); font-size:12px; }
+    .detect-thumb { width:40px; height:30px; background:var(--bg-deep); border:1px solid var(--border); border-radius:var(--r-sm); }
+    .vlm-output { font-family:var(--font-mono); font-size:11px; line-height:1.7; }
+    @media (max-width:1024px) { .video-layout { grid-template-columns:1fr; } .side-panels { display:none; } .stats-row { grid-template-columns:repeat(3,1fr); } }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="sidebar-brand"><div class="logo">DT</div><span>DroneTraffic</span></div>
+      <nav class="nav">
+        <div class="nav-section">指挥大屏</div>
+        <a class="nav-item" href="dashboard.html"><span class="nav-icon">◉</span> Dashboard</a>
+        <a class="nav-item" href="monitoring-intersection.html"><span class="nav-icon">◎</span> 实时监测</a>
+        <a class="nav-item" href="gis-overview.html"><span class="nav-icon">⊞</span> GIS 总览</a>
+        <div class="nav-section">业务操作</div>
+        <a class="nav-item active" href="video-realtime.html"><span class="nav-icon">▷</span> 视频分析</a>
+        <a class="nav-item" href="calibration-homography.html"><span class="nav-icon">⊡</span> 标定中心</a>
+        <a class="nav-item" href="alerts-center.html"><span class="nav-icon">⚡</span> 告警中心 <span class="nav-badge">3</span></a>
+        <a class="nav-item" href="reports-daily.html"><span class="nav-icon">☰</span> 报告中心</a>
+        <div class="nav-section">管理</div>
+        <a class="nav-item" href="drone-monitor.html"><span class="nav-icon">✦</span> 无人机管理</a>
+        <a class="nav-item" href="admin-gpu.html"><span class="nav-icon">⚙</span> 系统管理</a>
+      </nav>
+    </aside>
+    <header class="topbar">
+      <span class="topbar-title">视频分析中心</span>
+      <span class="topbar-sep"></span>
+      <div class="tabs" style="border:0;margin:0;">
+        <button class="tab active">实时分析</button>
+        <a class="tab" href="video-playback.html">回放分析</a>
+        <a class="tab" href="video-trajectory.html">轨迹分析</a>
+        <a class="tab" href="video-vlm.html">VLM 语义</a>
+      </div>
+      <div class="topbar-actions">
+        <button class="theme-toggle"><span class="theme-icon">⚡</span><span class="theme-label">CTO 模式</span></button>
+        <span class="badge badge-accent animate-pulse">● LIVE</span>
+      </div>
+    </header>
+    <main class="main">
+      <div class="video-layout">
+        <div class="card video-main" style="padding:0;overflow:hidden;">
+          <div class="video-frame" style="height:100%;border:0;border-radius:var(--r-lg);">
+            <div style="position:absolute;inset:0;background:linear-gradient(180deg,oklch(22% 0.02 250) 0%,oklch(18% 0.015 250) 100%);"></div>
+            <div style="position:absolute;bottom:0;left:0;right:0;height:65%;background:oklch(25% 0.01 250);"></div>
+            <div class="detect-box" style="top:30%;left:18%;width:65px;height:48px;"><span class="detect-label">car #T041 92% · 38km/h</span></div>
+            <div class="detect-box" style="top:35%;left:42%;width:58px;height:42px;"><span class="detect-label">car #T042 89% · 35km/h</span></div>
+            <div class="detect-box" style="top:32%;left:62%;width:75px;height:52px;"><span class="detect-label">bus #T038 95% · 28km/h</span></div>
+            <div class="detect-box warn-box" style="top:48%;left:28%;width:38px;height:30px;"><span class="detect-label">moto #T043 78%</span></div>
+            <div class="detect-box" style="top:52%;left:52%;width:52px;height:40px;"><span class="detect-label">car #T044 91% · 42km/h</span></div>
+            <div class="detect-box" style="top:58%;left:72%;width:48px;height:36px;"><span class="detect-label">truck #T039 93%</span></div>
+            <div class="detect-box" style="top:44%;left:82%;width:42px;height:34px;"><span class="detect-label">car #T046 86%</span></div>
+            <div class="video-overlay">
+              <div class="top-info"><span style="color:var(--accent);">● REC 14:32:08</span><span>FPS: 28.3 | 推理: 18ms | YOLO11m</span></div>
+              <div class="bottom-info"><span>跟踪目标: 12 | 车道: 4 | 中山路/解放路</span><span>conf≥0.5 | NMS 0.45</span></div>
+            </div>
+            <div class="animate-scan"></div>
+          </div>
+        </div>
+        <div class="side-panels">
+          <div class="card">
+            <div class="card-header"><span class="card-title">检测列表</span><span class="mono" style="font-size:11px;color:var(--fg-dim);">12 targets</span></div>
+            <div class="detect-list">
+              <div class="detect-item"><span class="detect-thumb"></span><div><div style="font-weight:500;">#T041 · car</div><div class="dim" style="font-size:10px;">L1 · 38km/h · conf 0.92</div></div><span class="badge badge-success" style="margin-left:auto;">tracked</span></div>
+              <div class="detect-item"><span class="detect-thumb"></span><div><div style="font-weight:500;">#T042 · car</div><div class="dim" style="font-size:10px;">L2 · 35km/h · conf 0.89</div></div><span class="badge badge-success" style="margin-left:auto;">tracked</span></div>
+              <div class="detect-item"><span class="detect-thumb"></span><div><div style="font-weight:500;">#T038 · bus</div><div class="dim" style="font-size:10px;">L2 · 28km/h · conf 0.95</div></div><span class="badge badge-success" style="margin-left:auto;">tracked</span></div>
+              <div class="detect-item" style="background:var(--warn-dim);"><span class="detect-thumb"></span><div><div style="font-weight:500;color:var(--warn);">#T043 · moto</div><div class="dim" style="font-size:10px;">非机动车道 · conf 0.78</div></div><span class="badge badge-warn" style="margin-left:auto;">alert</span></div>
+              <div class="detect-item"><span class="detect-thumb"></span><div><div style="font-weight:500;">#T044 · car</div><div class="dim" style="font-size:10px;">L3 · 42km/h · conf 0.91</div></div><span class="badge badge-success" style="margin-left:auto;">tracked</span></div>
+              <div class="detect-item"><span class="detect-thumb"></span><div><div style="font-weight:500;">#T039 · truck</div><div class="dim" style="font-size:10px;">L4 · 31km/h · conf 0.93</div></div><span class="badge badge-success" style="margin-left:auto;">tracked</span></div>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-header"><span class="card-title">VLM 实时输出</span></div>
+            <div class="vlm-output code-block">
+{<br>
+&nbsp;&nbsp;<span class="key">"congestion"</span>: <span class="val">"moderate"</span>,<br>
+&nbsp;&nbsp;<span class="key">"anomaly"</span>: <span class="str">"非机动车闯入"</span>,<br>
+&nbsp;&nbsp;<span class="key">"flow_dir"</span>: [<span class="str">"N→S"</span>, <span class="str">"E→W"</span>],<br>
+&nbsp;&nbsp;<span class="key">"density"</span>: <span class="val">0.67</span>,<br>
+&nbsp;&nbsp;<span class="key">"inference"</span>: <span class="val">142</span><span class="comment">ms</span><br>
+}
+            </div>
+          </div>
+        </div>
+        <div class="stats-row">
+          <div class="card kpi-card"><div class="kpi-label">检测 FPS</div><div class="kpi-value">28.3</div></div>
+          <div class="card kpi-card"><div class="kpi-label">推理耗时</div><div class="kpi-value">18<span style="font-size:0.5em;color:var(--fg-muted)">ms</span></div></div>
+          <div class="card kpi-card"><div class="kpi-label">跟踪目标</div><div class="kpi-value">12</div></div>
+          <div class="card kpi-card"><div class="kpi-label">VLM 耗时</div><div class="kpi-value">142<span style="font-size:0.5em;color:var(--fg-muted)">ms</span></div></div>
+          <div class="card kpi-card"><div class="kpi-label">告警</div><div class="kpi-value" style="color:var(--warn);">1</div></div>
+        </div>
+      </div>
+    </main>
+    <footer class="statusbar">
+      <div class="statusbar-item"><span class="statusbar-dot"></span> 推理正常</div>
+      <div class="statusbar-item">FPS: <span class="text-accent">28.3</span></div>
+      <div class="statusbar-item">GPU0: <span class="text-accent">YOLO11m</span></div>
+      <div class="statusbar-item">GPU1: <span class="text-accent">Qwen-VL</span></div>
+      <div class="statusbar-item ml-auto">实时视频分析</div>
+    </footer>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>

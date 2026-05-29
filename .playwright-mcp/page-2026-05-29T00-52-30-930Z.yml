@@ -1,0 +1,223 @@
+- generic [ref=e2]:
+  - generic [ref=e42]:
+    - link "Skip to Main" [ref=e43] [cursor=pointer]:
+      - /url: "#content"
+    - generic [ref=e46]:
+      - list [ref=e48]:
+        - listitem [ref=e49]:
+          - button "DroneTraffic 路口态势监测平台" [ref=e50] [cursor=pointer]:
+            - img [ref=e52]
+            - generic [ref=e54]:
+              - generic [ref=e55]: DroneTraffic
+              - generic [ref=e56]: 路口态势监测平台
+            - img [ref=e57]
+      - generic [ref=e60]:
+        - generic [ref=e61]:
+          - generic [ref=e62]: 指挥大屏
+          - list [ref=e63]:
+            - listitem [ref=e64]:
+              - link "Dashboard" [ref=e65] [cursor=pointer]:
+                - /url: /
+                - img [ref=e66]
+                - generic [ref=e71]: Dashboard
+            - listitem [ref=e72]:
+              - link "实时监测" [ref=e73] [cursor=pointer]:
+                - /url: /monitoring
+                - img [ref=e74]
+                - generic [ref=e80]: 实时监测
+            - listitem [ref=e81]:
+              - link "GIS 总览" [ref=e82] [cursor=pointer]:
+                - /url: /gis
+                - img [ref=e83]
+                - generic [ref=e85]: GIS 总览
+        - generic [ref=e86]:
+          - generic [ref=e87]: 业务操作
+          - list [ref=e88]:
+            - listitem [ref=e89]:
+              - link "视频分析" [active] [ref=e90] [cursor=pointer]:
+                - /url: /video
+                - img [ref=e91]
+                - generic [ref=e94]: 视频分析
+            - listitem [ref=e95]:
+              - link "标定中心" [ref=e96] [cursor=pointer]:
+                - /url: /calibration
+                - img [ref=e97]
+                - generic [ref=e99]: 标定中心
+            - listitem [ref=e100]:
+              - link "告警中心" [ref=e101] [cursor=pointer]:
+                - /url: /alerts
+                - img [ref=e102]
+                - generic [ref=e104]: 告警中心
+            - listitem [ref=e105]:
+              - link "报告中心" [ref=e106] [cursor=pointer]:
+                - /url: /reports
+                - img [ref=e107]
+                - generic [ref=e110]: 报告中心
+        - generic [ref=e111]:
+          - generic [ref=e112]: 管理
+          - list [ref=e113]:
+            - listitem [ref=e114]:
+              - link "无人机管理" [ref=e115] [cursor=pointer]:
+                - /url: /drones
+                - img [ref=e116]
+                - generic [ref=e118]: 无人机管理
+            - listitem [ref=e119]:
+              - link "系统管理" [ref=e120] [cursor=pointer]:
+                - /url: /admin
+                - img [ref=e121]
+                - generic [ref=e124]: 系统管理
+            - listitem [ref=e125]:
+              - link "用户管理" [ref=e126] [cursor=pointer]:
+                - /url: /users
+                - img [ref=e127]
+                - generic [ref=e132]: 用户管理
+      - list [ref=e134]:
+        - listitem [ref=e135]:
+          - button "SN admin admin@traffic.local" [ref=e136] [cursor=pointer]:
+            - generic [ref=e138]: SN
+            - generic [ref=e139]:
+              - generic [ref=e140]: admin
+              - generic [ref=e141]: admin@traffic.local
+            - img [ref=e142]
+      - button "Toggle Sidebar" [ref=e145]
+    - generic [ref=e146]:
+      - generic [ref=e147]:
+        - banner [ref=e791]:
+          - generic [ref=e792]:
+            - button "Toggle Sidebar" [ref=e793] [cursor=pointer]:
+              - img
+              - generic [ref=e794]: Toggle Sidebar
+            - generic [ref=e795]:
+              - generic [ref=e796]: 视频分析中心
+              - generic [ref=e800]: connected
+            - button "Search ⌘ K" [ref=e801] [cursor=pointer]:
+              - img
+              - generic [ref=e802]: Search
+              - generic:
+                - generic: ⌘
+                - text: K
+            - button "Toggle theme" [ref=e803] [cursor=pointer]:
+              - img
+              - generic [ref=e804]: Toggle theme
+            - button "SN" [ref=e805] [cursor=pointer]:
+              - generic [ref=e807]: SN
+        - main [ref=e808]:
+          - generic [ref=e809]:
+            - tablist [ref=e810]:
+              - tab "实时分析" [selected] [ref=e811] [cursor=pointer]
+              - tab "回放分析" [ref=e812] [cursor=pointer]
+              - tab "轨迹分析" [ref=e813] [cursor=pointer]
+              - tab "VLM 语义" [ref=e814] [cursor=pointer]
+            - tabpanel "实时分析" [ref=e815]:
+              - generic [ref=e816]:
+                - generic [ref=e817]:
+                  - generic [ref=e819]:
+                    - generic [ref=e822]: "car #T041 92%"
+                    - generic [ref=e824]: "car #T042 89%"
+                    - generic [ref=e826]: "bus #T038 95%"
+                    - generic [ref=e828]: "moto #T043 78%"
+                    - generic [ref=e830]: "car #T044 91%"
+                    - generic [ref=e832]: "car #T045 87%"
+                    - generic [ref=e834]: "truck #T039 93%"
+                    - generic [ref=e835]:
+                      - generic [ref=e836]: ● REC 14:32:08.342
+                      - generic [ref=e837]: "FPS: 28.3 | 推理: 18ms | YOLO11m"
+                    - generic [ref=e838]:
+                      - generic [ref=e839]: "跟踪目标: 12 | 车道: 4 | 中山路/解放路"
+                      - generic [ref=e840]: conf≥0.5 | NMS 0.45
+                    - generic [ref=e843]: LIVE · 1080p
+                  - generic [ref=e844]:
+                    - generic [ref=e845]:
+                      - generic [ref=e846]: 检测 FPS
+                      - generic [ref=e847]: "28.3"
+                    - generic [ref=e848]:
+                      - generic [ref=e849]: 推理耗时
+                      - generic [ref=e850]: 18ms
+                    - generic [ref=e851]:
+                      - generic [ref=e852]: 跟踪目标
+                      - generic [ref=e853]: "12"
+                    - generic [ref=e854]:
+                      - generic [ref=e855]: VLM 耗时
+                      - generic [ref=e856]: 142ms
+                    - generic [ref=e857]:
+                      - generic [ref=e858]: 告警
+                      - generic [ref=e859]: "1"
+                - generic [ref=e860]:
+                  - combobox [ref=e861] [cursor=pointer]:
+                    - generic: 路口 1 (Camera 1)
+                    - img
+                  - generic [ref=e862]:
+                    - generic [ref=e864]: 检测列表 12 targets
+                    - generic [ref=e865]:
+                      - generic [ref=e866]:
+                        - generic [ref=e867]: "#T041"
+                        - generic [ref=e868]: car
+                        - generic [ref=e869]: L1
+                        - generic [ref=e870]: 38km/h
+                        - generic [ref=e871]: 92%
+                        - generic [ref=e872]: tracked
+                      - generic [ref=e873]:
+                        - generic [ref=e874]: "#T042"
+                        - generic [ref=e875]: car
+                        - generic [ref=e876]: L1
+                        - generic [ref=e877]: 35km/h
+                        - generic [ref=e878]: 89%
+                        - generic [ref=e879]: tracked
+                      - generic [ref=e880]:
+                        - generic [ref=e881]: "#T038"
+                        - generic [ref=e882]: bus
+                        - generic [ref=e883]: L2
+                        - generic [ref=e884]: 28km/h
+                        - generic [ref=e885]: 95%
+                        - generic [ref=e886]: tracked
+                      - generic [ref=e887]:
+                        - generic [ref=e888]: "#T043"
+                        - generic [ref=e889]: moto
+                        - generic [ref=e890]: L3
+                        - generic [ref=e891]: 42km/h
+                        - generic [ref=e892]: 78%
+                        - generic [ref=e893]: alert
+                      - generic [ref=e894]:
+                        - generic [ref=e895]: "#T044"
+                        - generic [ref=e896]: car
+                        - generic [ref=e897]: L4
+                        - generic [ref=e898]: 31km/h
+                        - generic [ref=e899]: 91%
+                        - generic [ref=e900]: tracked
+                      - generic [ref=e901]:
+                        - generic [ref=e902]: "#T045"
+                        - generic [ref=e903]: car
+                        - generic [ref=e904]: L2
+                        - generic [ref=e905]: 36km/h
+                        - generic [ref=e906]: 87%
+                        - generic [ref=e907]: tracked
+                  - generic [ref=e908]:
+                    - generic [ref=e910]: VLM 实时输出
+                    - generic [ref=e912]: "{ \"congestion_level\": \"moderate\", \"anomaly\": \"motorcycle in bus lane\", \"flow_dir\": \"N→S dominant\", \"density\": \"medium-high\", \"inference_ms\": 142 }"
+      - contentinfo [ref=e301]:
+        - generic [ref=e302]: 系统正常
+        - generic [ref=e304]:
+          - text: Kafka TPS
+          - generic [ref=e305]: 2,847
+        - generic [ref=e306]:
+          - text: FPS
+          - generic [ref=e307]: "28.3"
+        - generic [ref=e308]:
+          - text: 延迟
+          - generic [ref=e309]: 42ms
+        - generic [ref=e310]:
+          - text: GPU VRAM
+          - generic [ref=e311]: 14.2/24 GB
+        - generic [ref=e312]:
+          - text: WS
+          - generic [ref=e313]: 18/18
+        - generic [ref=e314]:
+          - text: 路口
+          - generic [ref=e315]: 12 active
+        - generic [ref=e316]:
+          - generic [ref=e317]: 08:52:30
+          - generic [ref=e318]: CTO Demo · Dark Industrial
+  - generic [ref=e319]:
+    - heading "Command Palette" [level=2] [ref=e320]
+    - paragraph [ref=e321]: Search for a command to run...
+  - region "Notifications alt+T"

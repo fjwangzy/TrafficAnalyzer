@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>VLM 语义分析 — 无人机路口交通态势监测平台</title>
+  <link rel="stylesheet" href="styles.css" />
+  <style>
+    .vlm-layout { display:grid; grid-template-columns:1fr 1fr; gap:var(--sp-4); height:calc(100vh - var(--topbar-h) - var(--statusbar-h) - var(--sp-12)); }
+    .vlm-video { display:flex; flex-direction:column; gap:var(--sp-4); }
+    .vlm-output { display:flex; flex-direction:column; gap:var(--sp-4); overflow-y:auto; }
+    .chat-msg { padding:var(--sp-3) var(--sp-4); border-radius:var(--r-md); font-size:13px; line-height:1.6; }
+    .chat-user { background:var(--accent-dim); border:1px solid oklch(78% 0.14 210 / 0.2); margin-left:var(--sp-8); }
+    .chat-ai { background:oklch(50% 0.02 250 / 0.08); border:1px solid var(--border); margin-right:var(--sp-8); }
+    .prompt-editor { background:var(--bg-deep); border:1px solid var(--border); border-radius:var(--r-md); padding:var(--sp-4); font-family:var(--font-mono); font-size:12px; line-height:1.6; color:var(--fg-muted); min-height:120px; resize:vertical; width:100%; }
+    .token-bar { display:flex; align-items:center; gap:var(--sp-4); font-family:var(--font-mono); font-size:11px; color:var(--fg-dim); padding:var(--sp-2) 0; }
+    @media (max-width:1024px) { .vlm-layout { grid-template-columns:1fr; } }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="sidebar-brand"><div class="logo">DT</div><span>DroneTraffic</span></div>
+      <nav class="nav">
+        <div class="nav-section">指挥大屏</div>
+        <a class="nav-item" href="dashboard.html"><span class="nav-icon">◉</span> Dashboard</a>
+        <a class="nav-item" href="monitoring-intersection.html"><span class="nav-icon">◎</span> 实时监测</a>
+        <a class="nav-item" href="gis-overview.html"><span class="nav-icon">⊞</span> GIS 总览</a>
+        <div class="nav-section">业务操作</div>
+        <a class="nav-item active" href="video-realtime.html"><span class="nav-icon">▷</span> 视频分析</a>
+        <a class="nav-item" href="calibration-homography.html"><span class="nav-icon">⊡</span> 标定中心</a>
+        <a class="nav-item" href="alerts-center.html"><span class="nav-icon">⚡</span> 告警中心 <span class="nav-badge">3</span></a>
+        <a class="nav-item" href="reports-daily.html"><span class="nav-icon">☰</span> 报告中心</a>
+        <div class="nav-section">管理</div>
+        <a class="nav-item" href="drone-monitor.html"><span class="nav-icon">✦</span> 无人机管理</a>
+        <a class="nav-item" href="admin-gpu.html"><span class="nav-icon">⚙</span> 系统管理</a>
+      </nav>
+    </aside>
+    <header class="topbar">
+      <span class="topbar-title">视频分析中心</span>
+      <span class="topbar-sep"></span>
+      <div class="tabs" style="border:0;margin:0;">
+        <a class="tab" href="video-realtime.html">实时分析</a>
+        <a class="tab" href="video-playback.html">回放分析</a>
+        <a class="tab" href="video-trajectory.html">轨迹分析</a>
+        <button class="tab active">VLM 语义</button>
+      </div>
+      <div class="topbar-actions">
+        <button class="theme-toggle"><span class="theme-icon">⚡</span><span class="theme-label">CTO 模式</span></button>
+        <span class="badge badge-info">Qwen-VL-Max</span>
+        <button class="btn btn-ghost btn-sm">Prompt 模板</button>
+      </div>
+    </header>
+    <main class="main">
+      <div class="vlm-layout">
+        <div class="vlm-video">
+          <div class="card" style="flex:1;padding:0;overflow:hidden;">
+            <div class="video-frame" style="height:100%;border:0;border-radius:var(--r-lg);">
+              <div style="position:absolute;inset:0;background:linear-gradient(180deg,oklch(22% 0.02 250),oklch(18% 0.015 250));"></div>
+              <div style="position:absolute;bottom:0;left:0;right:0;height:65%;background:oklch(25% 0.01 250);"></div>
+              <div class="detect-box" style="top:35%;left:25%;width:60px;height:45px;"><span class="detect-label">car #T041</span></div>
+              <div class="detect-box" style="top:40%;left:55%;width:55px;height:40px;"><span class="detect-label">car #T042</span></div>
+              <div class="detect-box" style="top:32%;left:65%;width:70px;height:50px;"><span class="detect-label">bus #T038</span></div>
+              <div class="video-overlay">
+                <div class="top-info"><span>VLM 分析帧 · #142857</span><span>Qwen-VL-Max</span></div>
+                <div class="bottom-info"><span>中山路/解放路 · 14:32:08</span></div>
+              </div>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-header">
+              <span class="card-title">Prompt Playground</span>
+              <div style="display:flex;gap:var(--sp-2);">
+                <button class="btn btn-primary btn-sm">运行</button>
+                <button class="btn btn-ghost btn-sm">保存模板</button>
+              </div>
+            </div>
+            <textarea class="prompt-editor">你是一个交通态势分析专家。请分析当前无人机航拍画面，输出以下信息：
+1. congestion_level: 拥堵等级 (low/moderate/high/severe)
+2. anomaly: 异常事件描述
+3. vehicle_count: 各类车辆数量
+4. flow_direction: 主要车流方向
+5. risk_assessment: 风险评估
+
+请以 JSON 格式输出。</textarea>
+            <div class="token-bar">
+              <span>Tokens: <span class="text-accent">186</span> / 2048</span>
+              <span>推理: <span class="text-accent">142ms</span></span>
+              <span>GPU1 VRAM: <span class="text-accent">8.4 GB</span></span>
+              <span style="margin-left:auto;">最后运行: 14:32:08</span>
+            </div>
+          </div>
+        </div>
+        <div class="vlm-output">
+          <div class="card" style="flex:1;">
+            <div class="card-header"><span class="card-title">VLM 对话</span></div>
+            <div style="display:flex;flex-direction:column;gap:var(--sp-3);">
+              <div class="chat-msg chat-user">分析当前帧的交通态势，特别关注L2车道的异常情况</div>
+              <div class="chat-msg chat-ai">
+                <div class="code-block" style="margin:0;background:transparent;border:0;padding:0;">
+{<br>
+&nbsp;&nbsp;<span class="key">"congestion_level"</span>: <span class="str">"moderate"</span>,<br>
+&nbsp;&nbsp;<span class="key">"anomaly"</span>: <span class="str">"L2车道检测到车辆#T041逆向行驶，速度约23km/h，已持续12秒。与对向L3车道车辆#T042存在碰撞风险。"</span>,<br>
+&nbsp;&nbsp;<span class="key">"vehicle_count"</span>: {<br>
+&nbsp;&nbsp;&nbsp;&nbsp;<span class="key">"car"</span>: <span class="val">8</span>,<br>
+&nbsp;&nbsp;&nbsp;&nbsp;<span class="key">"bus"</span>: <span class="val">1</span>,<br>
+&nbsp;&nbsp;&nbsp;&nbsp;<span class="key">"truck"</span>: <span class="val">2</span>,<br>
+&nbsp;&nbsp;&nbsp;&nbsp;<span class="key">"motorcycle"</span>: <span class="val">1</span><br>
+&nbsp;&nbsp;},<br>
+&nbsp;&nbsp;<span class="key">"flow_direction"</span>: [<span class="str">"N→S (主)"</span>, <span class="str">"E→W"</span>],<br>
+&nbsp;&nbsp;<span class="key">"risk_assessment"</span>: <span class="str">"P1 - 逆行事件，建议立即预警并通知交管部门。对向车道需减速避让。"</span><br>
+}
+                </div>
+              </div>
+              <div class="chat-msg chat-user">这个逆行车辆是从什么时候开始的？之前有类似事件吗？</div>
+              <div class="chat-msg chat-ai">
+                根据历史轨迹分析：<br><br>
+                <strong>车辆 #T041 逆行起始时间：</strong>14:31:30（持续约12秒）<br><br>
+                <strong>今日该路口类似事件：</strong><br>
+                · 09:15:22 — 非机动车逆行（P3，已处理）<br>
+                · 本次为该路口今日第2次逆行事件<br><br>
+                <strong>建议：</strong>该路口L2左转车道标识可能存在磨损，建议交管部门排查。
+              </div>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-header"><span class="card-title">推理性能</span></div>
+            <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:var(--sp-3);">
+              <div><div class="kpi-label">首Token</div><div class="mono" style="font-size:16px;font-weight:700;">86<span style="font-size:0.6em;color:var(--fg-muted)">ms</span></div></div>
+              <div><div class="kpi-label">总耗时</div><div class="mono" style="font-size:16px;font-weight:700;">142<span style="font-size:0.6em;color:var(--fg-muted)">ms</span></div></div>
+              <div><div class="kpi-label">Output</div><div class="mono" style="font-size:16px;font-weight:700;">324<span style="font-size:0.6em;color:var(--fg-muted)">tok</span></div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </main>
+    <footer class="statusbar">
+      <div class="statusbar-item"><span class="statusbar-dot"></span> Qwen-VL 就绪</div>
+      <div class="statusbar-item">模型: <span class="text-accent">Qwen-VL-Max</span></div>
+      <div class="statusbar-item">推理: <span class="text-accent">142ms</span></div>
+      <div class="statusbar-item">GPU1: <span class="text-accent">8.4/24 GB</span></div>
+      <div class="statusbar-item ml-auto">VLM 语义分析</div>
+    </footer>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>

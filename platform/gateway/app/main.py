@@ -1,8 +1,9 @@
 """API Gateway - Main Application"""
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
 import os
+import httpx
 
 from .middleware.auth import AuthMiddleware
 from .proxy.router import ProxyRouter
@@ -63,11 +64,15 @@ async def readiness_check(request: Request):
     for name, url in services.items():
         try:
             response = await proxy_client.client.get(f"{url}/health", timeout=2.0)
+            # Fall back to root if /health is not available (e.g. annotation service)
+            if response.status_code == 404:
+                response = await proxy_client.client.get(f"{url}/", timeout=2.0)
+            is_healthy = 200 <= response.status_code < 300
             results[name] = {
-                "status": "healthy" if response.status_code == 200 else "unhealthy",
+                "status": "healthy" if is_healthy else "unhealthy",
                 "url": url,
             }
-            if response.status_code != 200:
+            if not is_healthy:
                 all_ready = False
         except Exception as e:
             results[name] = {
@@ -86,8 +91,60 @@ async def readiness_check(request: Request):
     )
 
 
-# Catch-all route for proxying requests
-@app.api_route("/{path:path}")
+# WebSocket proxy to Vision service
+@app.websocket("/ws/realtime")
+async def ws_proxy(websocket: WebSocket):
+    """Proxy WebSocket connections to Vision service"""
+    await websocket.accept()
+
+    vision_ws_url = os.getenv("VISION_WS_URL", "ws://localhost:8002/ws/realtime")
+
+    try:
+        async with httpx.AsyncClient() as client:
+            async with client.stream("GET", vision_ws_url.replace("ws://", "http://").replace("wss://", "https://")) as _:
+                pass
+    except Exception:
+        pass
+
+    # Use websockets library for actual WebSocket proxy
+    try:
+        import websockets
+        async with websockets.connect(vision_ws_url) as upstream:
+            import asyncio
+
+            async def forward_client_to_upstream():
+                while True:
+                    msg = await websocket.receive_text()
+                    await upstream.send(msg)
+
+            async def forward_upstream_to_client():
+                while True:
+                    msg = await upstream.recv()
+                    await websocket.send_text(msg)
+
+            done, pending = await asyncio.wait(
+                [
+                    asyncio.ensure_future(forward_client_to_upstream()),
+                    asyncio.ensure_future(forward_upstream_to_client()),
+                ],
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            for task in pending:
+                task.cancel()
+    except WebSocketDisconnect:
+        pass
+    except Exception:
+        try:
+            await websocket.close()
+        except Exception:
+            pass
+
+
+# Catch-all route for proxying requests — register all methods explicitly
+@app.api_route(
+    "/{path:path}",
+    methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+)
 async def proxy_request(request: Request, path: str):
     """Proxy all requests to appropriate microservice"""
     proxy_router: ProxyRouter = request.app.state.proxy_router

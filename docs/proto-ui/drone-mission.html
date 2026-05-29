@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" /><title>航线任务 — 无人机路口交通态势监测平台</title><link rel="stylesheet" href="styles.css" /><style>.mission-layout{display:grid;grid-template-columns:1fr 380px;gap:var(--sp-4);height:calc(100vh - var(--topbar-h) - var(--statusbar-h) - var(--sp-12));}@media(max-width:1024px){.mission-layout{grid-template-columns:1fr;}}</style>
+</head>
+<body>
+<div class="app">
+<aside class="sidebar"><div class="sidebar-brand"><div class="logo">DT</div><span>DroneTraffic</span></div><nav class="nav"><div class="nav-section">指挥大屏</div><a class="nav-item" href="dashboard.html"><span class="nav-icon">◉</span> Dashboard</a><a class="nav-item" href="monitoring-intersection.html"><span class="nav-icon">◎</span> 实时监测</a><a class="nav-item" href="gis-overview.html"><span class="nav-icon">⊞</span> GIS 总览</a><div class="nav-section">业务操作</div><a class="nav-item" href="video-realtime.html"><span class="nav-icon">▷</span> 视频分析</a><a class="nav-item" href="calibration-homography.html"><span class="nav-icon">⊡</span> 标定中心</a><a class="nav-item" href="alerts-center.html"><span class="nav-icon">⚡</span> 告警中心 <span class="nav-badge">3</span></a><a class="nav-item" href="reports-daily.html"><span class="nav-icon">☰</span> 报告中心</a><div class="nav-section">管理</div><a class="nav-item active" href="drone-monitor.html"><span class="nav-icon">✦</span> 无人机管理</a><a class="nav-item" href="admin-gpu.html"><span class="nav-icon">⚙</span> 系统管理</a></nav></aside>
+<header class="topbar"><span class="topbar-title">无人机管理</span><span class="topbar-sep"></span><div class="tabs" style="border:0;margin:0;"><a class="tab" href="drone-monitor.html">飞行监控</a><a class="tab" href="drone-trajectory.html">飞行轨迹</a><button class="tab active">航线任务</button></div><div class="topbar-actions">
+        <button class="theme-toggle"><span class="theme-icon">⚡</span><span class="theme-label">CTO 模式</span></button><button class="btn btn-primary btn-sm">+ 新建任务</button></div></header>
+<main class="main"><div class="mission-layout">
+  <div class="card" style="overflow:hidden;padding:0;">
+    <div style="overflow-y:auto;height:100%;">
+      <table class="data-table">
+        <thead><tr><th>任务名</th><th>航线</th><th>状态</th><th>分配</th><th>周期</th><th>下次执行</th></tr></thead>
+        <tbody>
+          <tr><td style="color:var(--fg);">早高峰巡检-A线</td><td>中山路→人民大道→和平路</td><td><span class="badge badge-success">执行中</span></td><td>UAV-07, 12</td><td>工作日 07:00</td><td>明日 07:00</td></tr>
+          <tr><td style="color:var(--fg);">早高峰巡检-B线</td><td>文化路→滨江路→学府路</td><td><span class="badge badge-success">执行中</span></td><td>UAV-03, 05</td><td>工作日 07:00</td><td>明日 07:00</td></tr>
+          <tr><td style="color:var(--fg);">晚高峰巡检</td><td>全部重点路口</td><td><span class="badge badge-neutral">待执行</span></td><td>UAV-07, 12, 03</td><td>工作日 17:00</td><td>今日 17:00</td></tr>
+          <tr><td style="color:var(--fg);">夜间标定采集</td><td>中山路/解放路</td><td><span class="badge badge-neutral">待执行</span></td><td>UAV-15</td><td>每日 22:00</td><td>今日 22:00</td></tr>
+          <tr><td style="color:var(--fg);">应急出动-事故</td><td>按需指派</td><td><span class="badge badge-accent">触发式</span></td><td>就近空闲</td><td>事件触发</td><td>—</td></tr>
+          <tr><td style="color:var(--fg);">周末巡逻</td><td>全域覆盖</td><td><span class="badge badge-neutral">暂停</span></td><td>UAV-08, 19</td><td>周末 09:00</td><td>—</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+  <div style="display:flex;flex-direction:column;gap:var(--sp-4);overflow-y:auto;">
+    <div class="card"><div class="card-header"><span class="card-title">当前任务 · 早高峰-A</span><span class="badge badge-success">执行中</span></div>
+      <div style="font-size:12px;line-height:2.2;">
+        <div class="flex justify-between"><span class="muted">任务 ID</span><span class="mono">MSN-20260527-001</span></div>
+        <div class="flex justify-between"><span class="muted">开始时间</span><span class="mono">07:00:12</span></div>
+        <div class="flex justify-between"><span class="muted">已飞行</span><span class="mono">7h 32m</span></div>
+        <div class="flex justify-between"><span class="muted">进度</span><span class="mono text-accent">航点 8/10</span></div>
+        <div class="flex justify-between"><span class="muted">预计结束</span><span class="mono">15:30</span></div>
+      </div>
+      <div class="progress mt-2"><div class="progress-fill accent-fill" style="width:80%"></div></div>
+    </div>
+    <div class="card"><div class="card-header"><span class="card-title">航线航点</span></div>
+      <div style="display:flex;flex-direction:column;gap:var(--sp-2);">
+        <div style="display:flex;align-items:center;gap:var(--sp-3);padding:var(--sp-2);"><span class="badge badge-success" style="min-width:24px;">✓</span><span style="font-size:12px;">中山路/解放路 · 悬停 5min</span></div>
+        <div style="display:flex;align-items:center;gap:var(--sp-3);padding:var(--sp-2);"><span class="badge badge-success" style="min-width:24px;">✓</span><span style="font-size:12px;">人民大道/建设路 · 悬停 5min</span></div>
+        <div style="display:flex;align-items:center;gap:var(--sp-3);padding:var(--sp-2);"><span class="badge badge-success" style="min-width:24px;">✓</span><span style="font-size:12px;">和平路/光华街 · 悬停 3min</span></div>
+        <div style="display:flex;align-items:center;gap:var(--sp-3);padding:var(--sp-2);background:var(--accent-dim);border-radius:var(--r-sm);"><span class="badge badge-accent animate-pulse" style="min-width:24px;">●</span><span style="font-size:12px;color:var(--accent);">文化路/科技大道 · 执行中</span></div>
+        <div style="display:flex;align-items:center;gap:var(--sp-3);padding:var(--sp-2);opacity:0.5;"><span class="badge badge-neutral" style="min-width:24px;">—</span><span style="font-size:12px;">滨江路/望江街</span></div>
+        <div style="display:flex;align-items:center;gap:var(--sp-3);padding:var(--sp-2);opacity:0.5;"><span class="badge badge-neutral" style="min-width:24px;">—</span><span style="font-size:12px;">返回起飞点</span></div>
+      </div>
+    </div>
+  </div>
+</div></main>
+<footer class="statusbar"><div class="statusbar-item"><span class="statusbar-dot"></span> 任务系统</div><div class="statusbar-item">活跃: <span class="text-accent">2</span></div><div class="statusbar-item">待执行: <span class="text-accent">2</span></div><div class="statusbar-item ml-auto">航线任务</div></footer>
+</div>
+  <script src="app.js"></script>
+</body></html>

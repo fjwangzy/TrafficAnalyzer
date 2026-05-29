@@ -1,0 +1,646 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>单路口实时监测 — 无人机路口交通态势监测平台</title>
+  <link rel="stylesheet" href="styles.css" />
+  <style>
+    .monitor-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      grid-template-rows: auto auto auto;
+      gap: var(--sp-4);
+      height: calc(100vh - var(--topbar-h) - var(--statusbar-h) - var(--sp-12));
+      overflow-y: auto;
+    }
+    .intersection-bar {
+      grid-column: 1 / -1;
+      display: flex; align-items: center; gap: var(--sp-6);
+      padding: var(--sp-3) var(--sp-5);
+    }
+    .intersection-bar h2 {
+      font-size: 16px; font-weight: 600;
+    }
+    .drone-status {
+      display: flex; align-items: center; gap: var(--sp-4);
+      font-family: var(--font-mono); font-size: 12px;
+      color: var(--fg-muted);
+    }
+    .drone-status .ds-item {
+      display: flex; align-items: center; gap: var(--sp-2);
+    }
+    .video-panel { position: relative; }
+    .video-panel .video-frame { height: 100%; aspect-ratio: auto; }
+    .bev-panel { position: relative; }
+    .bev-canvas {
+      background: var(--bg-deep);
+      border: 1px solid var(--border);
+      border-radius: var(--r-lg);
+      height: 100%;
+      position: relative;
+      overflow: hidden;
+    }
+    .bev-grid {
+      position: absolute; inset: 0;
+      background-image:
+        linear-gradient(oklch(40% 0.01 250 / 0.08) 1px, transparent 1px),
+        linear-gradient(90deg, oklch(40% 0.01 250 / 0.08) 1px, transparent 1px);
+      background-size: 30px 30px;
+    }
+    .bev-road {
+      position: absolute;
+      background: oklch(30% 0.01 250 / 0.4);
+    }
+    .vehicle-dot {
+      position: absolute;
+      width: 8px; height: 8px;
+      border-radius: 2px;
+      transform: translate(-50%, -50%);
+    }
+    .trail-line {
+      position: absolute;
+      height: 2px;
+      transform-origin: left center;
+      opacity: 0.4;
+    }
+    .charts-row {
+      grid-column: 1 / -1;
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: var(--sp-3);
+      min-height: 180px;
+    }
+    .mini-chart {
+      padding: var(--sp-3) var(--sp-4);
+      display: flex; flex-direction: column;
+    }
+    .mini-chart .chart-title {
+      font-size: 11px; color: var(--fg-dim);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin-bottom: var(--sp-2);
+    }
+    .sparkline {
+      flex: 1;
+      position: relative;
+      display: flex; align-items: flex-end; gap: 2px;
+    }
+    .spark-bar {
+      flex: 1;
+      background: var(--accent);
+      border-radius: 1px 1px 0 0;
+      opacity: 0.6;
+      min-height: 2px;
+      transition: opacity 0.2s;
+    }
+    .spark-bar:last-child { opacity: 1; }
+    .spark-bar:hover { opacity: 1; }
+    .gauge {
+      flex: 1;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .gauge-ring {
+      width: 80px; height: 80px;
+      border-radius: 50%;
+      border: 6px solid var(--border);
+      border-top-color: var(--warn);
+      border-right-color: var(--warn);
+      position: relative;
+      display: grid; place-items: center;
+    }
+    .gauge-val {
+      font-family: var(--font-mono);
+      font-size: 20px; font-weight: 700;
+      color: var(--warn);
+    }
+    .timeline-alerts {
+      flex: 1;
+      display: flex; flex-direction: column; gap: var(--sp-1);
+      overflow-y: auto;
+    }
+    .tl-item {
+      display: flex; align-items: center; gap: var(--sp-2);
+      font-size: 11px; font-family: var(--font-mono);
+      padding: var(--sp-1) var(--sp-2);
+      border-radius: var(--r-sm);
+      background: oklch(50% 0.02 250 / 0.06);
+    }
+    .video-controls {
+      position: absolute; bottom: var(--sp-3); left: var(--sp-3); right: var(--sp-3);
+      display: flex; gap: var(--sp-2);
+      pointer-events: auto;
+    }
+    .vc-btn {
+      background: oklch(15% 0.02 250 / 0.8);
+      backdrop-filter: blur(8px);
+      border: 1px solid var(--glass-border);
+      border-radius: var(--r-sm);
+      padding: var(--sp-1) var(--sp-3);
+      font-family: var(--font-mono);
+      font-size: 10px;
+      color: var(--fg-muted);
+      cursor: pointer;
+      transition: all var(--ease);
+    }
+    .vc-btn:hover { color: var(--accent); border-color: var(--accent); }
+    .vc-btn.active-ctrl { color: var(--accent); border-color: var(--accent); background: var(--accent-dim); }
+    .bev-stats {
+      position: absolute; top: var(--sp-3); right: var(--sp-3);
+      font-family: var(--font-mono); font-size: 10px;
+      color: var(--fg-muted);
+      background: oklch(15% 0.02 250 / 0.8);
+      backdrop-filter: blur(8px);
+      padding: var(--sp-2) var(--sp-3);
+      border-radius: var(--r-sm);
+      border: 1px solid var(--glass-border);
+      line-height: 1.8;
+    }
+    .lane-label {
+      position: absolute;
+      font-family: var(--font-mono);
+      font-size: 9px;
+      color: var(--fg-muted);
+      background: oklch(15% 0.02 250 / 0.7);
+      padding: 0 3px;
+      border-radius: 2px;
+    }
+    @media (max-width: 1024px) {
+      .monitor-grid { grid-template-columns: 1fr; }
+      .charts-row { grid-template-columns: repeat(2, 1fr); }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <!-- ═══ Sidebar ═══ -->
+    <aside class="sidebar">
+      <div class="sidebar-brand"><div class="logo">DT</div><span>DroneTraffic</span></div>
+      <nav class="nav">
+        <div class="nav-section">指挥大屏</div>
+        <a class="nav-item" href="dashboard.html"><span class="nav-icon">◉</span> Dashboard</a>
+        <a class="nav-item active" href="monitoring-intersection.html"><span class="nav-icon">◎</span> 实时监测</a>
+        <a class="nav-item" href="gis-overview.html"><span class="nav-icon">⊞</span> GIS 总览</a>
+        <div class="nav-section">业务操作</div>
+        <a class="nav-item" href="video-realtime.html"><span class="nav-icon">▷</span> 视频分析</a>
+        <a class="nav-item" href="calibration-homography.html"><span class="nav-icon">⊡</span> 标定中心</a>
+        <a class="nav-item" href="alerts-center.html"><span class="nav-icon">⚡</span> 告警中心 <span class="nav-badge">3</span></a>
+        <a class="nav-item" href="reports-daily.html"><span class="nav-icon">☰</span> 报告中心</a>
+        <div class="nav-section">管理</div>
+        <a class="nav-item" href="drone-monitor.html"><span class="nav-icon">✦</span> 无人机管理</a>
+        <a class="nav-item" href="admin-gpu.html"><span class="nav-icon">⚙</span> 系统管理</a>
+      </nav>
+    </aside>
+
+    <!-- ═══ Topbar ═══ -->
+    <header class="topbar">
+      <span class="topbar-title">单路口实时监测</span>
+      <span class="topbar-sep"></span>
+      <span class="mono" style="font-size:12px; color:var(--fg-muted);" data-clock>2026-05-28 14:32:08</span>
+      <div class="topbar-actions">
+        <button class="btn btn-ghost btn-sm" data-bev-toggle="multi">多路口</button>
+        <button class="btn btn-ghost btn-sm" data-thermal-toggle>热成像</button>
+        <div class="ws-indicator"><span class="ws-dot"></span><span class="ws-label">WS</span><span class="ws-value" id="mi-ws">12ms</span></div>
+        <button class="theme-toggle"><span class="theme-icon">⚡</span><span class="theme-label">CTO 模式</span></button>
+        <button class="btn btn-primary btn-sm" onclick="window.__toggleDebug()">Debug (D)</button>
+      </div>
+    </header>
+
+    <!-- ═══ Main ═══ -->
+    <main class="main">
+      <div class="monitor-grid">
+
+        <!-- Intersection Status Bar -->
+        <div class="card intersection-bar">
+          <h2>中山路 / 解放路</h2>
+          <span class="badge badge-success">ONLINE</span>
+          <div class="drone-status">
+            <div class="ds-item"><span class="statusbar-dot"></span> UAV-07</div>
+            <div class="ds-item">📍 30.5728°N 104.0668°E</div>
+            <div class="ds-item">ALT 82m</div>
+            <div class="ds-item">🔋 67%</div>
+            <div class="ds-item">RTK <span class="text-success">FIXED</span></div>
+          </div>
+          <div style="margin-left:auto" class="pipeline">
+            <span class="pipeline-node active-node">RTSP</span>
+            <span class="pipeline-arrow flow">→</span>
+            <span class="pipeline-node active-node">YOLO11</span>
+            <span class="pipeline-arrow flow">→</span>
+            <span class="pipeline-node active-node">BEV</span>
+            <span class="pipeline-arrow flow">→</span>
+            <span class="pipeline-node">VLM</span>
+          </div>
+        </div>
+
+        <!-- LEFT: Real-time Video with YOLO -->
+        <div class="card video-panel" style="padding:0; overflow:hidden; position:relative;">
+          <div class="video-frame" style="height:100%; border:0; border-radius:var(--r-lg);">
+            <!-- Simulated video feed background -->
+            <div style="position:absolute;inset:0;background:
+              linear-gradient(180deg, oklch(22% 0.02 250) 0%, oklch(18% 0.015 250) 100%);
+            "></div>
+            <!-- Road surface -->
+            <div style="position:absolute;bottom:0;left:0;right:0;height:65%;background:oklch(25% 0.01 250);"></div>
+            <div style="position:absolute;bottom:30%;left:0;right:0;height:2px;background:oklch(50% 0.01 250 / 0.3);"></div>
+            <div style="position:absolute;bottom:45%;left:30%;width:40%;height:1px;background:oklch(60% 0.01 250 / 0.2);"></div>
+
+            <!-- YOLO Detection Boxes -->
+            <div class="detect-box" style="top:35%;left:20%;width:60px;height:45px;">
+              <span class="detect-label">car #T041 92%</span>
+            </div>
+            <div class="detect-box" style="top:40%;left:45%;width:55px;height:40px;">
+              <span class="detect-label">car #T042 89%</span>
+            </div>
+            <div class="detect-box" style="top:38%;left:65%;width:70px;height:50px;">
+              <span class="detect-label">bus #T038 95%</span>
+            </div>
+            <div class="detect-box warn-box" style="top:50%;left:30%;width:35px;height:28px;">
+              <span class="detect-label">moto #T043 78%</span>
+            </div>
+            <div class="detect-box" style="top:55%;left:55%;width:50px;height:38px;">
+              <span class="detect-label">car #T044 91%</span>
+            </div>
+            <div class="detect-box" style="top:60%;left:15%;width:45px;height:35px;">
+              <span class="detect-label">car #T045 87%</span>
+            </div>
+            <div class="detect-box" style="top:48%;left:75%;width:40px;height:32px;">
+              <span class="detect-label">truck #T039 93%</span>
+            </div>
+
+            <!-- Video Overlay -->
+            <div class="video-overlay">
+              <div class="top-info">
+                <span style="color:var(--accent);">● REC 14:32:08.342</span>
+                <span>FPS: 28.3 | 推理: 18ms</span>
+              </div>
+              <div class="bottom-info">
+                <span>目标: 12 辆 | 车道: 4</span>
+                <span>YOLO11m · conf≥0.5</span>
+              </div>
+            </div>
+
+            <div class="animate-scan"></div>
+
+            <!-- Video Controls -->
+            <div class="video-controls">
+              <span class="vc-btn active-ctrl">YOLO</span>
+              <span class="vc-btn">VLM</span>
+              <span class="vc-btn">EIS</span>
+              <span class="vc-btn">暂停</span>
+              <span class="vc-btn">ROI</span>
+              <span class="vc-btn" style="margin-left:auto;">RGB / IR</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- RIGHT: BEV Bird's Eye View -->
+        <div class="card bev-panel" style="padding:0; overflow:hidden;">
+          <div class="bev-canvas" style="height:100%; border:0; border-radius:var(--r-lg);">
+            <div class="bev-grid"></div>
+
+            <!-- Road surfaces in BEV -->
+            <div class="bev-road" style="top:0;bottom:0;left:42%;width:16%;"></div>
+            <div class="bev-road" style="left:0;right:0;top:42%;height:16%;"></div>
+
+            <!-- Lane Polygons -->
+            <div class="lane-poly" style="top:5%;left:43%;width:6%;height:36%;"></div>
+            <div class="lane-poly slow" style="top:5%;left:50%;width:6%;height:36%;"></div>
+            <div class="lane-poly congested" style="top:58%;left:43%;width:6%;height:36%;"></div>
+            <div class="lane-poly" style="top:58%;left:50%;width:6%;height:36%;"></div>
+            <div class="lane-poly" style="top:43%;left:5%;width:36%;height:6%;"></div>
+            <div class="lane-poly slow" style="top:50%;left:5%;width:36%;height:6%;"></div>
+            <div class="lane-poly" style="top:43%;left:58%;width:36%;height:6%;"></div>
+            <div class="lane-poly" style="top:50%;left:58%;width:36%;height:6%;"></div>
+
+            <!-- Lane labels -->
+            <span class="lane-label" style="top:20%;left:44%;">L1 ↑</span>
+            <span class="lane-label" style="top:20%;left:51%;">L2 ↑</span>
+            <span class="lane-label" style="top:72%;left:44%;">L3 ↓</span>
+            <span class="lane-label" style="top:72%;left:51%;">L4 ↓</span>
+
+            <!-- Vehicle dots with trails -->
+            <div class="vehicle-dot" style="top:15%;left:45%;background:var(--accent);"></div>
+            <div class="trail-line" style="top:15%;left:45%;width:20px;background:var(--accent);transform:rotate(90deg);"></div>
+            <div class="vehicle-dot" style="top:22%;left:52%;background:var(--accent);"></div>
+            <div class="trail-line" style="top:22%;left:52%;width:30px;background:var(--accent);transform:rotate(90deg);"></div>
+            <div class="vehicle-dot" style="top:30%;left:45%;background:var(--warn);"></div>
+            <div class="vehicle-dot" style="top:35%;left:52%;background:var(--warn);"></div>
+            <div class="vehicle-dot" style="top:65%;left:45%;background:var(--danger);"></div>
+            <div class="vehicle-dot" style="top:70%;left:45%;background:var(--danger);"></div>
+            <div class="vehicle-dot" style="top:75%;left:52%;background:var(--danger);"></div>
+            <div class="vehicle-dot" style="top:80%;left:45%;background:var(--success);"></div>
+            <div class="vehicle-dot" style="top:45%;left:15%;background:var(--accent);"></div>
+            <div class="vehicle-dot" style="top:52%;left:25%;background:var(--accent);"></div>
+            <div class="vehicle-dot" style="top:45%;left:72%;background:var(--success);"></div>
+            <div class="vehicle-dot" style="top:52%;left:80%;background:var(--success);"></div>
+
+            <!-- Lane Change Event Markers (LaneChangeEvent model) -->
+            <div class="lc-marker" style="top:28%;left:48%;" title="L1→L2 换道 · T041 · 14:31:02">
+              <div class="lc-dot"></div>
+              <div class="lc-arrow" style="transform:translate(0,-50%) rotate(35deg);"></div>
+            </div>
+            <div class="lc-marker" style="top:62%;left:47%;" title="L3→L4 换道 · T038 · 14:30:45">
+              <div class="lc-dot"></div>
+              <div class="lc-arrow" style="transform:translate(0,-50%) rotate(25deg);"></div>
+            </div>
+            <div class="lc-marker" style="top:46%;left:32%;" title="L5→L4 换道 · T044 · 14:30:12">
+              <div class="lc-dot"></div>
+              <div class="lc-arrow" style="transform:translate(0,-50%) rotate(-15deg);"></div>
+            </div>
+
+            <div class="bev-stats">
+              BEV · H_mat 3×3<br>
+              覆盖率: 94.2%<br>
+              排队: L3 142m<br>
+              车辆: 12 tracked
+            </div>
+
+            <div style="position:absolute;bottom:var(--sp-3);left:var(--sp-3);display:flex;gap:var(--sp-2);">
+              <span class="vc-btn active-ctrl">车道</span>
+              <span class="vc-btn">轨迹</span>
+              <span class="vc-btn">热力</span>
+              <span class="vc-btn">流向</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- BOTTOM: Charts Row -->
+        <div class="charts-row">
+          <div class="card mini-chart">
+            <span class="chart-title">流量趋势 · 30min</span>
+            <div class="sparkline">
+              <div class="spark-bar" style="height:30%"></div>
+              <div class="spark-bar" style="height:45%"></div>
+              <div class="spark-bar" style="height:55%"></div>
+              <div class="spark-bar" style="height:40%"></div>
+              <div class="spark-bar" style="height:65%"></div>
+              <div class="spark-bar" style="height:72%"></div>
+              <div class="spark-bar" style="height:80%"></div>
+              <div class="spark-bar" style="height:68%"></div>
+              <div class="spark-bar" style="height:85%"></div>
+              <div class="spark-bar" style="height:92%"></div>
+              <div class="spark-bar" style="height:78%"></div>
+              <div class="spark-bar" style="height:95%"></div>
+            </div>
+            <div class="mono" style="font-size:11px;color:var(--fg-muted);margin-top:var(--sp-2);">
+              当前: <span class="text-accent">847 veh/h</span>
+            </div>
+          </div>
+
+          <div class="card mini-chart">
+            <span class="chart-title">各车道流量</span>
+            <div style="flex:1;display:flex;flex-direction:column;gap:var(--sp-2);justify-content:center;">
+              <div style="display:flex;align-items:center;gap:var(--sp-2);">
+                <span class="mono" style="font-size:10px;width:24px;color:var(--fg-dim);">L1</span>
+                <div class="progress" style="flex:1;"><div class="progress-fill success-fill" style="width:62%"></div></div>
+                <span class="mono" style="font-size:10px;color:var(--fg-muted);">214</span>
+              </div>
+              <div style="display:flex;align-items:center;gap:var(--sp-2);">
+                <span class="mono" style="font-size:10px;width:24px;color:var(--fg-dim);">L2</span>
+                <div class="progress" style="flex:1;"><div class="progress-fill warn-fill" style="width:78%"></div></div>
+                <span class="mono" style="font-size:10px;color:var(--fg-muted);">268</span>
+              </div>
+              <div style="display:flex;align-items:center;gap:var(--sp-2);">
+                <span class="mono" style="font-size:10px;width:24px;color:var(--fg-dim);">L3</span>
+                <div class="progress" style="flex:1;"><div class="progress-fill danger-fill" style="width:92%"></div></div>
+                <span class="mono" style="font-size:10px;color:var(--danger);">316</span>
+              </div>
+              <div style="display:flex;align-items:center;gap:var(--sp-2);">
+                <span class="mono" style="font-size:10px;width:24px;color:var(--fg-dim);">L4</span>
+                <div class="progress" style="flex:1;"><div class="progress-fill accent-fill" style="width:45%"></div></div>
+                <span class="mono" style="font-size:10px;color:var(--fg-muted);">154</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="card mini-chart">
+            <span class="chart-title">拥堵指数</span>
+            <div class="gauge">
+              <div class="gauge-ring">
+                <span class="gauge-val">1.47</span>
+              </div>
+            </div>
+            <div class="mono" style="font-size:11px;color:var(--warn);text-align:center;">
+              轻度拥堵 · 阈值 2.0
+            </div>
+          </div>
+
+          <div class="card mini-chart">
+            <span class="chart-title">告警时间轴</span>
+            <div class="timeline-alerts">
+              <div class="tl-item"><span class="alert-dot p1" style="width:6px;height:6px;margin:0"></span> 14:31 逆行</div>
+              <div class="tl-item"><span class="alert-dot p2" style="width:6px;height:6px;margin:0"></span> 14:25 排队超限</div>
+              <div class="tl-item"><span class="alert-dot p3" style="width:6px;height:6px;margin:0"></span> 14:18 拥堵</div>
+              <div class="tl-item"><span class="alert-dot p2" style="width:6px;height:6px;margin:0"></span> 14:12 违规变道</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- LANE ANALYTICS ROW (new from spec) -->
+        <div style="grid-column:1/-1;display:grid;grid-template-columns:1fr 300px;gap:var(--sp-4);">
+
+          <!-- Lane-Level Stats (LaneStats model) -->
+          <div class="card" style="padding:var(--sp-4);">
+            <div class="card-header" style="margin-bottom:var(--sp-3);">
+              <span class="card-title">车道级实时指标 · LaneStats</span>
+              <span class="ws-indicator" style="font-size:10px;padding:2px 6px;"><span class="ws-dot"></span><span class="ws-value">1s 刷新</span></span>
+            </div>
+            <div class="lane-stats-grid" style="grid-template-columns:repeat(5,1fr);">
+              <!-- L1 南向北直行 -->
+              <div class="lane-stat">
+                <div class="lane-id"><span class="lane-status-dot ok"></span>L1 直行↑</div>
+                <div class="lane-metrics">
+                  <div class="lm-item"><span class="lm-label">流量</span><span class="lm-value">4.2<span style="font-size:9px;color:var(--fg-dim)"> v/m</span></span></div>
+                  <div class="lm-item"><span class="lm-label">车头时距</span><span class="lm-value">14.3<span style="font-size:9px;color:var(--fg-dim)">s</span></span></div>
+                  <div class="lm-item"><span class="lm-label">排队</span><span class="lm-value success">45.2<span style="font-size:9px;color:var(--fg-dim)">m</span></span></div>
+                  <div class="lm-item"><span class="lm-label">车速</span><span class="lm-value">22.1<span style="font-size:9px;color:var(--fg-dim)">km/h</span></span></div>
+                </div>
+                <div class="lane-bar"><div class="lane-bar-fill" style="width:62%;background:var(--success);"></div></div>
+              </div>
+              <!-- L2 南向北左转 -->
+              <div class="lane-stat">
+                <div class="lane-id"><span class="lane-status-dot slow"></span>L2 左转↑</div>
+                <div class="lane-metrics">
+                  <div class="lm-item"><span class="lm-label">流量</span><span class="lm-value">3.8<span style="font-size:9px;color:var(--fg-dim)"> v/m</span></span></div>
+                  <div class="lm-item"><span class="lm-label">车头时距</span><span class="lm-value">15.8<span style="font-size:9px;color:var(--fg-dim)">s</span></span></div>
+                  <div class="lm-item"><span class="lm-label">排队</span><span class="lm-value warn">32.0<span style="font-size:9px;color:var(--fg-dim)">m</span></span></div>
+                  <div class="lm-item"><span class="lm-label">车速</span><span class="lm-value">28.5<span style="font-size:9px;color:var(--fg-dim)">km/h</span></span></div>
+                </div>
+                <div class="lane-bar"><div class="lane-bar-fill" style="width:78%;background:var(--warn);"></div></div>
+              </div>
+              <!-- L3 北向南直行 -->
+              <div class="lane-stat">
+                <div class="lane-id"><span class="lane-status-dot congested"></span>L3 直行↓</div>
+                <div class="lane-metrics">
+                  <div class="lm-item"><span class="lm-label">流量</span><span class="lm-value">2.1<span style="font-size:9px;color:var(--fg-dim)"> v/m</span></span></div>
+                  <div class="lm-item"><span class="lm-label">车头时距</span><span class="lm-value danger">28.6<span style="font-size:9px;color:var(--fg-dim)">s</span></span></div>
+                  <div class="lm-item"><span class="lm-label">排队</span><span class="lm-value danger">142<span style="font-size:9px;color:var(--fg-dim)">m</span></span></div>
+                  <div class="lm-item"><span class="lm-label">车速</span><span class="lm-value danger">8.2<span style="font-size:9px;color:var(--fg-dim)">km/h</span></span></div>
+                </div>
+                <div class="lane-bar"><div class="lane-bar-fill" style="width:97%;background:var(--danger);"></div></div>
+              </div>
+              <!-- L4 北向南右转 -->
+              <div class="lane-stat">
+                <div class="lane-id"><span class="lane-status-dot ok"></span>L4 右转↓</div>
+                <div class="lane-metrics">
+                  <div class="lm-item"><span class="lm-label">流量</span><span class="lm-value">1.5<span style="font-size:9px;color:var(--fg-dim)"> v/m</span></span></div>
+                  <div class="lm-item"><span class="lm-label">车头时距</span><span class="lm-value">—</span></div>
+                  <div class="lm-item"><span class="lm-label">排队</span><span class="lm-value success">12.5<span style="font-size:9px;color:var(--fg-dim)">m</span></span></div>
+                  <div class="lm-item"><span class="lm-label">车速</span><span class="lm-value">35.0<span style="font-size:9px;color:var(--fg-dim)">km/h</span></span></div>
+                </div>
+                <div class="lane-bar"><div class="lane-bar-fill" style="width:35%;background:var(--success);"></div></div>
+              </div>
+              <!-- L5 东向西直行 -->
+              <div class="lane-stat">
+                <div class="lane-id"><span class="lane-status-dot ok"></span>L5 直行→</div>
+                <div class="lane-metrics">
+                  <div class="lm-item"><span class="lm-label">流量</span><span class="lm-value">0.4<span style="font-size:9px;color:var(--fg-dim)"> v/m</span></span></div>
+                  <div class="lm-item"><span class="lm-label">车头时距</span><span class="lm-value">—</span></div>
+                  <div class="lm-item"><span class="lm-label">排队</span><span class="lm-value success">0<span style="font-size:9px;color:var(--fg-dim)">m</span></span></div>
+                  <div class="lm-item"><span class="lm-label">车速</span><span class="lm-value">42.3<span style="font-size:9px;color:var(--fg-dim)">km/h</span></span></div>
+                </div>
+                <div class="lane-bar"><div class="lane-bar-fill" style="width:12%;background:var(--success);"></div></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Turn Behavior Distribution -->
+          <div class="card" style="padding:var(--sp-4);">
+            <div class="card-header" style="margin-bottom:var(--sp-3);">
+              <span class="card-title">转向行为分布 · TurnBehavior</span>
+              <span class="mono" style="font-size:10px;color:var(--fg-dim);">n=347</span>
+            </div>
+            <div class="turn-dist">
+              <div class="turn-row">
+                <span class="turn-icon" style="color:var(--accent);">↑</span>
+                <span class="turn-label">直行</span>
+                <div class="turn-bar-track"><div class="turn-bar-fill" style="width:62%;background:var(--accent);"></div></div>
+                <span class="turn-count">215</span>
+                <span class="turn-pct">62%</span>
+              </div>
+              <div class="turn-row">
+                <span class="turn-icon" style="color:var(--secondary);">↰</span>
+                <span class="turn-label">左转</span>
+                <div class="turn-bar-track"><div class="turn-bar-fill" style="width:22%;background:var(--secondary);"></div></div>
+                <span class="turn-count">76</span>
+                <span class="turn-pct">22%</span>
+              </div>
+              <div class="turn-row">
+                <span class="turn-icon" style="color:var(--success);">↱</span>
+                <span class="turn-label">右转</span>
+                <div class="turn-bar-track"><div class="turn-bar-fill" style="width:13%;background:var(--success);"></div></div>
+                <span class="turn-count">45</span>
+                <span class="turn-pct">13%</span>
+              </div>
+              <div class="turn-row">
+                <span class="turn-icon" style="color:var(--danger);">↩</span>
+                <span class="turn-label">掉头</span>
+                <div class="turn-bar-track"><div class="turn-bar-fill" style="width:3%;background:var(--danger);"></div></div>
+                <span class="turn-count">11</span>
+                <span class="turn-pct">3%</span>
+              </div>
+            </div>
+            <div style="margin-top:var(--sp-3);padding-top:var(--sp-3);border-top:1px solid var(--border);display:flex;justify-content:space-between;font-size:11px;">
+              <span class="muted">换道率</span>
+              <span class="mono text-secondary">8.4%<span style="color:var(--fg-dim);"> (29/347)</span></span>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </main>
+
+    <!-- ═══ Status Bar ═══ -->
+    <footer class="statusbar">
+      <div class="statusbar-item"><span class="statusbar-dot"></span> 推理正常</div>
+      <div class="statusbar-item">FPS: <span class="text-accent">28.3</span></div>
+      <div class="statusbar-item">推理: <span class="text-accent">18ms</span></div>
+      <div class="statusbar-item">Track: <span class="text-accent">12 目标</span></div>
+      <div class="statusbar-item">匹配率: <span class="text-success">96.8%</span></div>
+      <div class="statusbar-item">Kafka Lag: <span class="text-success">12ms</span></div>
+      <div class="statusbar-item">WS: <span class="text-success">connected</span></div>
+      <div class="statusbar-item">换道: <span class="text-secondary">3 次</span></div>
+      <div class="statusbar-item ml-auto">单路口 · 中山路/解放路</div>
+    </footer>
+  </div>
+
+  <script src="app.js"></script>
+  <script>
+  (function() {
+    /* ── Video control toggle ── */
+    var vcBtns = document.querySelectorAll('.vc-btn');
+    for (var i = 0; i < vcBtns.length; i++) {
+      (function(btn) {
+        btn.addEventListener('click', function() {
+          // If this is a mode toggle (YOLO/VLM/EIS), toggle active state
+          var text = btn.textContent.trim();
+          var modes = ['YOLO', 'VLM', 'EIS'];
+          if (modes.indexOf(text) !== -1) {
+            // Deactivate sibling mode buttons
+            var parent = btn.parentElement;
+            var siblings = parent.querySelectorAll('.vc-btn');
+            for (var j = 0; j < siblings.length; j++) {
+              if (modes.indexOf(siblings[j].textContent.trim()) !== -1) {
+                siblings[j].classList.remove('active-ctrl');
+              }
+            }
+            btn.classList.toggle('active-ctrl');
+          } else {
+            // Regular toggle
+            btn.classList.toggle('active-ctrl');
+          }
+        });
+      })(vcBtns[i]);
+    }
+
+    /* ── BEV mode tabs (车道/轨迹/热力/流向) ── */
+    // These are already vc-btn elements inside the BEV panel
+    // The click handler above already handles them
+
+    /* ── Thermal toggle ── */
+    var thermalBtn = document.querySelector('[data-thermal-toggle]');
+    if (thermalBtn) {
+      thermalBtn.addEventListener('click', function() {
+        thermalBtn.classList.toggle('active-ctrl');
+        var videoFrame = document.querySelector('.video-panel .video-frame');
+        if (videoFrame) {
+          if (thermalBtn.classList.contains('active-ctrl')) {
+            videoFrame.style.filter = 'hue-rotate(180deg) saturate(1.5)';
+            thermalBtn.textContent = 'IR 热成像';
+          } else {
+            videoFrame.style.filter = '';
+            thermalBtn.textContent = '热成像';
+          }
+        }
+      });
+    }
+
+    /* ── Simulated YOLO box jitter ── */
+    var boxes = document.querySelectorAll('.detect-box');
+    setInterval(function() {
+      for (var i = 0; i < boxes.length; i++) {
+        var dx = (Math.random() - 0.5) * 4;
+        var dy = (Math.random() - 0.5) * 3;
+        boxes[i].style.transform = 'translate(' + dx + 'px, ' + dy + 'px)';
+      }
+    }, 500);
+
+    /* ── Vehicle dot movement ── */
+    var dots = document.querySelectorAll('.vehicle-dot');
+    setInterval(function() {
+      for (var i = 0; i < dots.length; i++) {
+        var dx = (Math.random() - 0.5) * 3;
+        var dy = (Math.random() - 0.5) * 3;
+        dots[i].style.transform = 'translate(calc(-50% + ' + dx + 'px), calc(-50% + ' + dy + 'px))';
+      }
+    }, 800);
+
+    /* ── WS latency simulation ── */
+    var wsEl = document.getElementById('mi-ws');
+    setInterval(function() {
+      if (wsEl) wsEl.textContent = Math.floor(8 + Math.random() * 10) + 'ms';
+    }, 3000);
+  })();
+  </script>
+</body>
+</html>

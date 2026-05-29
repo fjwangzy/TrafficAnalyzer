@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" /><title>飞行监控 — 无人机路口交通态势监测平台</title><link rel="stylesheet" href="styles.css" /><style>.drone-grid{display:grid;grid-template-columns:1fr 360px;gap:var(--sp-4);height:calc(100vh - var(--topbar-h) - var(--statusbar-h) - var(--sp-12));}.drone-main{display:flex;flex-direction:column;gap:var(--sp-4);overflow:hidden;}.drone-side{display:flex;flex-direction:column;gap:var(--sp-4);overflow-y:auto;}.telemetry-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:var(--sp-3);}.telem-card{padding:var(--sp-3) var(--sp-4);text-align:center;}.telem-val{font-family:var(--font-mono);font-size:20px;font-weight:700;margin-top:var(--sp-1);}.drone-fleet{display:flex;flex-direction:column;gap:var(--sp-2);}.fleet-item{display:flex;align-items:center;gap:var(--sp-3);padding:var(--sp-3);border-radius:var(--r-md);background:oklch(50% 0.02 250 / 0.06);cursor:pointer;transition:all var(--ease);}.fleet-item:hover{background:oklch(50% 0.02 250 / 0.1);}.fleet-item.selected-drone{background:var(--accent-dim);border:1px solid oklch(78% 0.14 210 / 0.25);}@media(max-width:1024px){.drone-grid{grid-template-columns:1fr;}.drone-side{display:none;}}</style>
+</head>
+<body>
+<div class="app">
+<aside class="sidebar"><div class="sidebar-brand"><div class="logo">DT</div><span>DroneTraffic</span></div><nav class="nav"><div class="nav-section">指挥大屏</div><a class="nav-item" href="dashboard.html"><span class="nav-icon">◉</span> Dashboard</a><a class="nav-item" href="monitoring-intersection.html"><span class="nav-icon">◎</span> 实时监测</a><a class="nav-item" href="gis-overview.html"><span class="nav-icon">⊞</span> GIS 总览</a><div class="nav-section">业务操作</div><a class="nav-item" href="video-realtime.html"><span class="nav-icon">▷</span> 视频分析</a><a class="nav-item" href="calibration-homography.html"><span class="nav-icon">⊡</span> 标定中心</a><a class="nav-item" href="alerts-center.html"><span class="nav-icon">⚡</span> 告警中心 <span class="nav-badge">3</span></a><a class="nav-item" href="reports-daily.html"><span class="nav-icon">☰</span> 报告中心</a><div class="nav-section">管理</div><a class="nav-item active" href="drone-monitor.html"><span class="nav-icon">✦</span> 无人机管理</a><a class="nav-item" href="admin-gpu.html"><span class="nav-icon">⚙</span> 系统管理</a></nav></aside>
+<header class="topbar"><span class="topbar-title">无人机管理</span><span class="topbar-sep"></span><div class="tabs" style="border:0;margin:0;"><button class="tab active">飞行监控</button><a class="tab" href="drone-trajectory.html">飞行轨迹</a><a class="tab" href="drone-mission.html">航线任务</a></div><div class="topbar-actions">
+        <button class="theme-toggle"><span class="theme-icon">⚡</span><span class="theme-label">CTO 模式</span></button><span class="badge badge-success">18/20 在线</span></div></header>
+<main class="main"><div class="drone-grid">
+  <div class="drone-main">
+    <div class="card" style="padding:var(--sp-3) var(--sp-5);display:flex;align-items:center;gap:var(--sp-6);flex-shrink:0;">
+      <h3 style="font-size:15px;">UAV-07</h3>
+      <span class="badge badge-success">飞行中</span>
+      <span class="mono dim" style="font-size:12px;">中山路/解放路</span>
+      <div style="margin-left:auto;display:flex;gap:var(--sp-4);font-family:var(--font-mono);font-size:12px;">
+        <span>📍 30.5728°N 104.0668°E</span>
+        <span>ALT <span class="text-accent">82m</span></span>
+      </div>
+    </div>
+    <div class="telemetry-grid">
+      <div class="card telem-card"><div class="kpi-label">电量</div><div class="telem-val" style="color:var(--warn);">67%</div><div class="progress mt-2"><div class="progress-fill warn-fill" style="width:67%"></div></div></div>
+      <div class="card telem-card"><div class="kpi-label">GPS 卫星</div><div class="telem-val">18</div><div class="dim" style="font-size:11px;">RTK FIXED</div></div>
+      <div class="card telem-card"><div class="kpi-label">风速</div><div class="telem-val">3.2<span style="font-size:0.5em;color:var(--fg-muted)"> m/s</span></div></div>
+      <div class="card telem-card"><div class="kpi-label">图传码率</div><div class="telem-val">8.4<span style="font-size:0.5em;color:var(--fg-muted)"> Mbps</span></div></div>
+      <div class="card telem-card"><div class="kpi-label">云台 Pitch</div><div class="telem-val">-87.2<span style="font-size:0.5em;color:var(--fg-muted)">°</span></div></div>
+      <div class="card telem-card"><div class="kpi-label">云台 Yaw</div><div class="telem-val">124.8<span style="font-size:0.5em;color:var(--fg-muted)">°</span></div></div>
+    </div>
+    <div class="card" style="flex:1;min-height:200px;padding:0;overflow:hidden;">
+      <div style="position:relative;height:100%;">
+        <div style="position:absolute;inset:0;background:radial-gradient(ellipse at center,oklch(22% 0.025 210 / 0.4),var(--bg-deep));"></div>
+        <div style="position:absolute;inset:0;background-image:linear-gradient(oklch(40% 0.01 250 / 0.06) 1px,transparent 1px),linear-gradient(90deg,oklch(40% 0.01 250 / 0.06) 1px,transparent 1px);background-size:40px 40px;"></div>
+        <div class="map-marker drone" style="top:45%;left:50%;"></div>
+        <div style="position:absolute;top:45%;left:50%;width:120px;height:120px;border:1px dashed oklch(78% 0.14 210 / 0.3);border-radius:50%;transform:translate(-50%,-50%);"></div>
+        <div style="position:absolute;top:45%;left:50%;width:200px;height:200px;border:1px dashed oklch(78% 0.14 210 / 0.15);border-radius:50%;transform:translate(-50%,-50%);"></div>
+        <div style="position:absolute;bottom:var(--sp-3);left:var(--sp-3);font-family:var(--font-mono);font-size:11px;color:var(--fg-muted);background:oklch(15% 0.02 250 / 0.85);padding:var(--sp-2) var(--sp-3);border-radius:var(--r-sm);border:1px solid var(--glass-border);">UAV-07 实时位置 · 监控范围 200m</div>
+      </div>
+    </div>
+  </div>
+  <div class="drone-side">
+    <div class="card" style="overflow-y:auto;flex:1;"><div class="card-header"><span class="card-title">无人机编队</span><span class="mono" style="font-size:11px;color:var(--fg-dim);">20 架</span></div>
+      <div class="drone-fleet">
+        <div class="fleet-item selected-drone"><span class="statusbar-dot"></span><div><div style="font-size:13px;font-weight:500;">UAV-07</div><div class="mono dim" style="font-size:10px;">中山路/解放路 · 67%</div></div><span class="badge badge-success" style="margin-left:auto;">飞行</span></div>
+        <div class="fleet-item"><span class="statusbar-dot"></span><div><div style="font-size:13px;font-weight:500;">UAV-12</div><div class="mono dim" style="font-size:10px;">人民大道/建设路 · 82%</div></div><span class="badge badge-success" style="margin-left:auto;">飞行</span></div>
+        <div class="fleet-item"><span class="statusbar-dot"></span><div><div style="font-size:13px;font-weight:500;">UAV-03</div><div class="mono dim" style="font-size:10px;">和平路/光华街 · 91%</div></div><span class="badge badge-success" style="margin-left:auto;">飞行</span></div>
+        <div class="fleet-item"><span class="statusbar-dot warn"></span><div><div style="font-size:13px;font-weight:500;">UAV-15</div><div class="mono dim" style="font-size:10px;">返航中 · 23%</div></div><span class="badge badge-warn" style="margin-left:auto;">低电量</span></div>
+        <div class="fleet-item"><span class="statusbar-dot" style="background:var(--fg-dim);"></span><div><div style="font-size:13px;font-weight:500;">UAV-08</div><div class="mono dim" style="font-size:10px;">机坪 · 100%</div></div><span class="badge badge-neutral" style="margin-left:auto;">待机</span></div>
+        <div class="fleet-item"><span class="statusbar-dot" style="background:var(--fg-dim);"></span><div><div style="font-size:13px;font-weight:500;">UAV-19</div><div class="mono dim" style="font-size:10px;">机坪 · 100%</div></div><span class="badge badge-neutral" style="margin-left:auto;">待机</span></div>
+      </div>
+    </div>
+    <div class="card"><div class="card-header"><span class="card-title">图传状态</span></div>
+      <div style="font-size:12px;line-height:2;">
+        <div class="flex justify-between"><span class="muted">分辨率</span><span class="mono">1920×1080</span></div>
+        <div class="flex justify-between"><span class="muted">帧率</span><span class="mono">30 fps</span></div>
+        <div class="flex justify-between"><span class="muted">编码</span><span class="mono">H.265</span></div>
+        <div class="flex justify-between"><span class="muted">延迟</span><span class="mono text-success">42ms</span></div>
+        <div class="flex justify-between"><span class="muted">丢包率</span><span class="mono text-success">0.02%</span></div>
+      </div>
+    </div>
+  </div>
+</div></main>
+<footer class="statusbar"><div class="statusbar-item"><span class="statusbar-dot"></span> 飞行正常</div><div class="statusbar-item">在线: <span class="text-accent">18/20</span></div><div class="statusbar-item">UAV-07: <span class="text-warn">67%</span></div><div class="statusbar-item">RTK: <span class="text-success">FIXED</span></div><div class="statusbar-item ml-auto">飞行监控</div></footer>
+</div>
+  <script src="app.js"></script>
+</body></html>

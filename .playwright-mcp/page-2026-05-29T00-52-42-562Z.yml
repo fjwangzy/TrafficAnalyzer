@@ -1,0 +1,182 @@
+- generic [ref=e2]:
+  - generic [ref=e42]:
+    - link "Skip to Main" [ref=e43] [cursor=pointer]:
+      - /url: "#content"
+    - generic [ref=e46]:
+      - list [ref=e48]:
+        - listitem [ref=e49]:
+          - button "DroneTraffic 路口态势监测平台" [ref=e50] [cursor=pointer]:
+            - img [ref=e52]
+            - generic [ref=e54]:
+              - generic [ref=e55]: DroneTraffic
+              - generic [ref=e56]: 路口态势监测平台
+            - img [ref=e57]
+      - generic [ref=e60]:
+        - generic [ref=e61]:
+          - generic [ref=e62]: 指挥大屏
+          - list [ref=e63]:
+            - listitem [ref=e64]:
+              - link "Dashboard" [ref=e65] [cursor=pointer]:
+                - /url: /
+                - img [ref=e66]
+                - generic [ref=e71]: Dashboard
+            - listitem [ref=e72]:
+              - link "实时监测" [ref=e73] [cursor=pointer]:
+                - /url: /monitoring
+                - img [ref=e74]
+                - generic [ref=e80]: 实时监测
+            - listitem [ref=e81]:
+              - link "GIS 总览" [active] [ref=e82] [cursor=pointer]:
+                - /url: /gis
+                - img [ref=e83]
+                - generic [ref=e85]: GIS 总览
+        - generic [ref=e86]:
+          - generic [ref=e87]: 业务操作
+          - list [ref=e88]:
+            - listitem [ref=e89]:
+              - link "视频分析" [ref=e90] [cursor=pointer]:
+                - /url: /video
+                - img [ref=e91]
+                - generic [ref=e94]: 视频分析
+            - listitem [ref=e95]:
+              - link "标定中心" [ref=e96] [cursor=pointer]:
+                - /url: /calibration
+                - img [ref=e97]
+                - generic [ref=e99]: 标定中心
+            - listitem [ref=e100]:
+              - link "告警中心" [ref=e101] [cursor=pointer]:
+                - /url: /alerts
+                - img [ref=e102]
+                - generic [ref=e104]: 告警中心
+            - listitem [ref=e105]:
+              - link "报告中心" [ref=e106] [cursor=pointer]:
+                - /url: /reports
+                - img [ref=e107]
+                - generic [ref=e110]: 报告中心
+        - generic [ref=e111]:
+          - generic [ref=e112]: 管理
+          - list [ref=e113]:
+            - listitem [ref=e114]:
+              - link "无人机管理" [ref=e115] [cursor=pointer]:
+                - /url: /drones
+                - img [ref=e116]
+                - generic [ref=e118]: 无人机管理
+            - listitem [ref=e119]:
+              - link "系统管理" [ref=e120] [cursor=pointer]:
+                - /url: /admin
+                - img [ref=e121]
+                - generic [ref=e124]: 系统管理
+            - listitem [ref=e125]:
+              - link "用户管理" [ref=e126] [cursor=pointer]:
+                - /url: /users
+                - img [ref=e127]
+                - generic [ref=e132]: 用户管理
+      - list [ref=e134]:
+        - listitem [ref=e135]:
+          - button "SN admin admin@traffic.local" [ref=e136] [cursor=pointer]:
+            - generic [ref=e138]: SN
+            - generic [ref=e139]:
+              - generic [ref=e140]: admin
+              - generic [ref=e141]: admin@traffic.local
+            - img [ref=e142]
+      - button "Toggle Sidebar" [ref=e145]
+    - generic [ref=e146]:
+      - generic [ref=e147]:
+        - banner [ref=e913]:
+          - generic [ref=e914]:
+            - button "Toggle Sidebar" [ref=e915] [cursor=pointer]:
+              - img
+              - generic [ref=e916]: Toggle Sidebar
+            - generic [ref=e917]:
+              - generic [ref=e918]: GIS 总览
+              - generic [ref=e920]: 2 路口 · 18 无人机在线
+            - button "Search ⌘ K" [ref=e921] [cursor=pointer]:
+              - img
+              - generic [ref=e922]: Search
+              - generic:
+                - generic: ⌘
+                - text: K
+            - button "Toggle theme" [ref=e923] [cursor=pointer]:
+              - img
+              - generic [ref=e924]: Toggle theme
+            - button "SN" [ref=e925] [cursor=pointer]:
+              - generic [ref=e927]: SN
+        - main [ref=e928]:
+          - generic [ref=e929]:
+            - generic [ref=e931]:
+              - generic [ref=e987]: UAV-07
+              - generic [ref=e990]: UAV-12
+              - generic [ref=e993]: UAV-15
+              - generic [ref=e996]: UAV-03
+              - generic [ref=e999]: UAV-08
+              - generic [ref=e1000]:
+                - generic [ref=e1001]: 畅通
+                - generic [ref=e1003]: 缓行
+                - generic [ref=e1005]: 拥堵
+                - generic [ref=e1007]: 无人机
+              - generic [ref=e1009]: LIVE · 08:52:40
+              - generic [ref=e1012]:
+                - generic [ref=e1013]: 06:00
+                - slider [ref=e1014] [cursor=pointer]: "65"
+                - generic [ref=e1015]: 24:00
+                - generic [ref=e1018]: 14:32 CST
+            - generic [ref=e1019]:
+              - generic [ref=e1020]:
+                - generic [ref=e1022]:
+                  - text: 路口状态
+                  - generic [ref=e1023]: 2 个
+                - generic [ref=e1028]:
+                  - button "路口 1 (Camera 1) 拥堵 1.76 · 1,102 veh/h" [ref=e1029] [cursor=pointer]:
+                    - generic [ref=e1031]:
+                      - generic [ref=e1032]: 路口 1 (Camera 1)
+                      - generic [ref=e1033]:
+                        - generic [ref=e1034]: 拥堵 1.76
+                        - text: · 1,102 veh/h
+                  - button "路口 2 (Camera 2) 拥堵 2.00 · 998 veh/h" [ref=e1035] [cursor=pointer]:
+                    - generic [ref=e1037]:
+                      - generic [ref=e1038]: 路口 2 (Camera 2)
+                      - generic [ref=e1039]:
+                        - generic [ref=e1040]: 拥堵 2.00
+                        - text: · 998 veh/h
+              - generic [ref=e1041]:
+                - generic [ref=e1043]: 全局统计
+                - generic [ref=e1045]:
+                  - generic [ref=e1046]:
+                    - generic [ref=e1047]: 拥堵路口
+                    - generic [ref=e1048]: "0"
+                  - generic [ref=e1049]:
+                    - generic [ref=e1050]: 缓行路口
+                    - generic [ref=e1051]: "0"
+                  - generic [ref=e1052]:
+                    - generic [ref=e1053]: 畅通路口
+                    - generic [ref=e1054]: "2"
+                  - generic [ref=e1055]:
+                    - generic [ref=e1056]: 平均拥堵
+                    - generic [ref=e1057]: "1.88"
+      - contentinfo [ref=e301]:
+        - generic [ref=e302]: 系统正常
+        - generic [ref=e304]:
+          - text: Kafka TPS
+          - generic [ref=e305]: 2,847
+        - generic [ref=e306]:
+          - text: FPS
+          - generic [ref=e307]: "28.3"
+        - generic [ref=e308]:
+          - text: 延迟
+          - generic [ref=e309]: 42ms
+        - generic [ref=e310]:
+          - text: GPU VRAM
+          - generic [ref=e311]: 14.2/24 GB
+        - generic [ref=e312]:
+          - text: WS
+          - generic [ref=e313]: 18/18
+        - generic [ref=e314]:
+          - text: 路口
+          - generic [ref=e315]: 12 active
+        - generic [ref=e316]:
+          - generic [ref=e317]: 08:52:42
+          - generic [ref=e318]: CTO Demo · Dark Industrial
+  - generic [ref=e319]:
+    - heading "Command Palette" [level=2] [ref=e320]
+    - paragraph [ref=e321]: Search for a command to run...
+  - region "Notifications alt+T"

@@ -1,0 +1,408 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>告警中心 — 无人机路口交通态势监测平台</title>
+  <link rel="stylesheet" href="styles.css" />
+  <style>
+    .alerts-layout {
+      display: grid;
+      grid-template-columns: 1fr 380px;
+      gap: var(--sp-4);
+      height: calc(100vh - var(--topbar-h) - var(--statusbar-h) - var(--sp-12));
+    }
+    .alerts-main { display: flex; flex-direction: column; overflow: hidden; }
+    .alerts-filters {
+      display: flex; align-items: center; gap: var(--sp-3);
+      margin-bottom: var(--sp-4);
+      flex-shrink: 0;
+    }
+    .filter-chip {
+      padding: var(--sp-1) var(--sp-3);
+      border-radius: 999px;
+      font-size: 12px;
+      background: oklch(50% 0.02 250 / 0.08);
+      color: var(--fg-muted);
+      cursor: pointer;
+      transition: all var(--ease);
+      border: 1px solid transparent;
+    }
+    .filter-chip:hover { color: var(--fg); background: oklch(50% 0.02 250 / 0.14); }
+    .filter-chip.active-chip { color: var(--accent); background: var(--accent-dim); border-color: oklch(78% 0.14 210 / 0.25); }
+    .alerts-table-wrap { flex: 1; overflow-y: auto; }
+    .detail-panel {
+      display: flex; flex-direction: column;
+      overflow-y: auto;
+    }
+    .detail-screenshot {
+      aspect-ratio: 16/9;
+      background: var(--bg-deep);
+      border: 1px solid var(--border);
+      border-radius: var(--r-md);
+      position: relative;
+      overflow: hidden;
+      margin-bottom: var(--sp-4);
+    }
+    .detail-meta {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: var(--sp-3);
+    }
+    .meta-item {
+      padding: var(--sp-3);
+      background: oklch(50% 0.02 250 / 0.06);
+      border-radius: var(--r-md);
+    }
+    .meta-label {
+      font-size: 10px; color: var(--fg-dim);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin-bottom: var(--sp-1);
+    }
+    .meta-value {
+      font-family: var(--font-mono);
+      font-size: 13px; font-weight: 600;
+    }
+    .push-log {
+      display: flex; flex-direction: column; gap: var(--sp-2);
+    }
+    .push-item {
+      display: flex; align-items: center; gap: var(--sp-3);
+      padding: var(--sp-2) var(--sp-3);
+      background: oklch(50% 0.02 250 / 0.06);
+      border-radius: var(--r-sm);
+      font-size: 12px;
+    }
+    @media (max-width: 1024px) {
+      .alerts-layout { grid-template-columns: 1fr; }
+      .detail-panel { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="sidebar-brand"><div class="logo">DT</div><span>DroneTraffic</span></div>
+      <nav class="nav">
+        <div class="nav-section">指挥大屏</div>
+        <a class="nav-item" href="dashboard.html"><span class="nav-icon">◉</span> Dashboard</a>
+        <a class="nav-item" href="monitoring-intersection.html"><span class="nav-icon">◎</span> 实时监测</a>
+        <a class="nav-item" href="gis-overview.html"><span class="nav-icon">⊞</span> GIS 总览</a>
+        <div class="nav-section">业务操作</div>
+        <a class="nav-item" href="video-realtime.html"><span class="nav-icon">▷</span> 视频分析</a>
+        <a class="nav-item" href="calibration-homography.html"><span class="nav-icon">⊡</span> 标定中心</a>
+        <a class="nav-item active" href="alerts-center.html"><span class="nav-icon">⚡</span> 告警中心 <span class="nav-badge">3</span></a>
+        <a class="nav-item" href="reports-daily.html"><span class="nav-icon">☰</span> 报告中心</a>
+        <div class="nav-section">管理</div>
+        <a class="nav-item" href="drone-monitor.html"><span class="nav-icon">✦</span> 无人机管理</a>
+        <a class="nav-item" href="admin-gpu.html"><span class="nav-icon">⚙</span> 系统管理</a>
+      </nav>
+    </aside>
+
+    <header class="topbar">
+      <span class="topbar-title">告警中心</span>
+      <span class="topbar-sep"></span>
+      <div class="tabs" style="border:0;margin:0;">
+        <button class="tab active">实时告警</button>
+        <a class="tab" href="alerts-detail.html">事件详情</a>
+        <a class="tab" href="alerts-webhook.html">Webhook</a>
+      </div>
+      <div class="topbar-actions">
+        <button class="btn btn-ghost btn-sm">告警策略</button>
+        <button class="btn btn-ghost btn-sm">导出</button>
+        <button class="theme-toggle"><span class="theme-icon">⚡</span><span class="theme-label">CTO 模式</span></button>
+        <button class="btn btn-ghost btn-sm" onclick="window.__toggleDebug()">Debug</button>
+      </div>
+    </header>
+
+    <main class="main">
+      <div class="alerts-layout">
+
+        <!-- Alert List -->
+        <div class="alerts-main">
+          <div class="alerts-filters">
+            <span class="filter-chip active-chip">全部</span>
+            <span class="filter-chip">P1 严重</span>
+            <span class="filter-chip">P2 警告</span>
+            <span class="filter-chip">P3 提示</span>
+            <span class="filter-chip">未处理</span>
+            <span class="filter-chip">处理中</span>
+            <span style="margin-left:auto; font-family:var(--font-mono); font-size:11px; color:var(--fg-dim);">今日 47 条</span>
+          </div>
+
+          <div class="card" style="flex:1; overflow:hidden; padding:0;">
+            <div class="alerts-table-wrap">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>等级</th>
+                    <th>时间</th>
+                    <th>路口</th>
+                    <th>类型</th>
+                    <th>状态</th>
+                    <th style="text-align:right">操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr style="background:var(--accent-dim);">
+                    <td><span class="badge badge-danger">P1</span></td>
+                    <td>14:31:42</td>
+                    <td>中山路/解放路</td>
+                    <td style="color:var(--fg);">逆行事件</td>
+                    <td><span class="badge badge-danger">未处理</span></td>
+                    <td style="text-align:right"><a href="alerts-detail.html" class="btn btn-ghost btn-sm">详情</a></td>
+                  </tr>
+                  <tr>
+                    <td><span class="badge badge-danger">P1</span></td>
+                    <td>14:28:15</td>
+                    <td>人民大道/建设路</td>
+                    <td style="color:var(--fg);">疑似交通事故</td>
+                    <td><span class="badge badge-warn">处理中</span></td>
+                    <td style="text-align:right"><a href="alerts-detail.html" class="btn btn-ghost btn-sm">详情</a></td>
+                  </tr>
+                  <tr>
+                    <td><span class="badge badge-warn">P2</span></td>
+                    <td>14:25:03</td>
+                    <td>和平路/光华街</td>
+                    <td style="color:var(--fg);">排队超限预警</td>
+                    <td><span class="badge badge-danger">未处理</span></td>
+                    <td style="text-align:right"><a href="alerts-detail.html" class="btn btn-ghost btn-sm">详情</a></td>
+                  </tr>
+                  <tr>
+                    <td><span class="badge badge-warn">P2</span></td>
+                    <td>14:22:47</td>
+                    <td>中山路/解放路</td>
+                    <td style="color:var(--fg);">非机动车闯入</td>
+                    <td><span class="badge badge-success">已处理</span></td>
+                    <td style="text-align:right"><a href="alerts-detail.html" class="btn btn-ghost btn-sm">详情</a></td>
+                  </tr>
+                  <tr>
+                    <td><span class="badge badge-accent">P3</span></td>
+                    <td>14:18:31</td>
+                    <td>人民大道/建设路</td>
+                    <td style="color:var(--fg);">拥堵指数超限</td>
+                    <td><span class="badge badge-danger">未处理</span></td>
+                    <td style="text-align:right"><a href="alerts-detail.html" class="btn btn-ghost btn-sm">详情</a></td>
+                  </tr>
+                  <tr>
+                    <td><span class="badge badge-accent">P3</span></td>
+                    <td>14:15:09</td>
+                    <td>文化路/科技大道</td>
+                    <td style="color:var(--fg);">行人闯红灯</td>
+                    <td><span class="badge badge-success">已处理</span></td>
+                    <td style="text-align:right"><a href="alerts-detail.html" class="btn btn-ghost btn-sm">详情</a></td>
+                  </tr>
+                  <tr>
+                    <td><span class="badge badge-warn">P2</span></td>
+                    <td>14:12:55</td>
+                    <td>和平路/光华街</td>
+                    <td style="color:var(--fg);">违规变道</td>
+                    <td><span class="badge badge-success">已处理</span></td>
+                    <td style="text-align:right"><a href="alerts-detail.html" class="btn btn-ghost btn-sm">详情</a></td>
+                  </tr>
+                  <tr>
+                    <td><span class="badge badge-accent">P3</span></td>
+                    <td>14:08:22</td>
+                    <td>滨江路/望江街</td>
+                    <td style="color:var(--fg);">车流量预警</td>
+                    <td><span class="badge badge-success">已处理</span></td>
+                    <td style="text-align:right"><a href="alerts-detail.html" class="btn btn-ghost btn-sm">详情</a></td>
+                  </tr>
+                  <tr>
+                    <td><span class="badge badge-warn">P2</span></td>
+                    <td>13:55:41</td>
+                    <td>学府路/创新大道</td>
+                    <td style="color:var(--fg);">违停检测</td>
+                    <td><span class="badge badge-success">已处理</span></td>
+                    <td style="text-align:right"><a href="alerts-detail.html" class="btn btn-ghost btn-sm">详情</a></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- Detail Panel -->
+        <div class="card detail-panel">
+          <div class="card-header">
+            <span class="card-title">事件详情</span>
+            <span class="badge badge-danger animate-blink">P1</span>
+          </div>
+
+          <div class="detail-screenshot">
+            <div style="position:absolute;inset:0;background:linear-gradient(180deg, oklch(22% 0.02 250) 0%, oklch(18% 0.015 250) 100%);"></div>
+            <div style="position:absolute;bottom:0;left:0;right:0;height:60%;background:oklch(25% 0.01 250);"></div>
+            <!-- Detection highlight -->
+            <div class="detect-box" style="top:35%;left:35%;width:80px;height:55px;border-color:var(--danger);">
+              <span class="detect-label" style="background:var(--danger);">逆行 · 92%</span>
+            </div>
+            <div style="position:absolute;top:var(--sp-3);left:var(--sp-3);font-family:var(--font-mono);font-size:11px;color:var(--danger);">
+              ● 告警截图 · 14:31:42
+            </div>
+          </div>
+
+          <div class="detail-meta">
+            <div class="meta-item">
+              <div class="meta-label">路口</div>
+              <div class="meta-value" style="font-family:var(--font-body);font-size:13px;">中山路/解放路</div>
+            </div>
+            <div class="meta-item">
+              <div class="meta-label">时间</div>
+              <div class="meta-value">14:31:42</div>
+            </div>
+            <div class="meta-item">
+              <div class="meta-label">类型</div>
+              <div class="meta-value" style="color:var(--danger);">逆行事件</div>
+            </div>
+            <div class="meta-item">
+              <div class="meta-label">Track ID</div>
+              <div class="meta-value">#T041</div>
+            </div>
+          </div>
+
+          <div style="margin-top:var(--sp-4);">
+            <div class="card-title" style="margin-bottom:var(--sp-3);">VLM 语义摘要</div>
+            <div class="code-block" style="font-size:11px; line-height:1.7;">
+              <span class="key">congestion_level</span>: <span class="val">"moderate"</span><br>
+              <span class="key">anomaly</span>: <span class="str">"车辆#T041在L2车道逆向行驶，速度23km/h，持续12秒"</span><br>
+              <span class="key">risk</span>: <span class="str">"与对向车道#T042存在碰撞风险"</span><br>
+              <span class="key">summary</span>: <span class="str">"逆行事件，建议立即预警"</span>
+            </div>
+          </div>
+
+          <div style="margin-top:var(--sp-4);">
+            <div class="card-title" style="margin-bottom:var(--sp-3);">推送记录</div>
+            <div class="push-log">
+              <div class="push-item">
+                <span class="statusbar-dot"></span>
+                <span>企业微信</span>
+                <span class="mono" style="margin-left:auto;font-size:10px;color:var(--success);">已送达 14:31:43</span>
+              </div>
+              <div class="push-item">
+                <span class="statusbar-dot"></span>
+                <span>钉钉</span>
+                <span class="mono" style="margin-left:auto;font-size:10px;color:var(--success);">已送达 14:31:44</span>
+              </div>
+              <div class="push-item">
+                <span class="statusbar-dot warn"></span>
+                <span>短信 · 张警官</span>
+                <span class="mono" style="margin-left:auto;font-size:10px;color:var(--warn);">发送中</span>
+              </div>
+            </div>
+          </div>
+
+          <div style="margin-top:var(--sp-4); display:flex; gap:var(--sp-2);">
+            <button class="btn btn-primary btn-sm" style="flex:1;">查看视频</button>
+            <button class="btn btn-ghost btn-sm" style="flex:1;">标记处理</button>
+          </div>
+        </div>
+
+      </div>
+    </main>
+
+    <footer class="statusbar">
+      <div class="statusbar-item"><span class="statusbar-dot"></span> 告警引擎正常</div>
+      <div class="statusbar-item">今日: <span class="text-accent">47 条</span></div>
+      <div class="statusbar-item">未处理: <span class="text-danger">3 条</span></div>
+      <div class="statusbar-item">Webhook: <span class="text-success">3/3 在线</span></div>
+      <div class="statusbar-item ml-auto">告警中心</div>
+    </footer>
+  </div>
+
+  <script src="app.js"></script>
+  <script>
+  (function() {
+    /* ── Filter chips — filter table rows ── */
+    var chips = document.querySelectorAll('.filter-chip');
+    for (var i = 0; i < chips.length; i++) {
+      (function(chip) {
+        chip.addEventListener('click', function() {
+          // Toggle active state
+          for (var j = 0; j < chips.length; j++) chips[j].classList.remove('active-chip');
+          chip.classList.add('active-chip');
+
+          var filter = chip.getAttribute('data-filter') || chip.textContent.trim();
+          var rows = document.querySelectorAll('.data-table tbody tr');
+          for (var k = 0; k < rows.length; k++) {
+            var sev = rows[k].getAttribute('data-severity') || '';
+            var status = rows[k].getAttribute('data-status') || '';
+            if (filter === '全部' || filter === 'All') {
+              rows[k].style.display = '';
+            } else if (filter === 'P1' || filter === 'P2' || filter === 'P3') {
+              rows[k].style.display = sev === filter ? '' : 'none';
+            } else if (filter === '未处理' || filter === '处理中' || filter === '已解决') {
+              rows[k].style.display = status === filter ? '' : 'none';
+            } else {
+              rows[k].style.display = '';
+            }
+          }
+        });
+      })(chips[i]);
+    }
+
+    /* ── Table row click → select detail ── */
+    var tableRows = document.querySelectorAll('.data-table tbody tr');
+    for (var r = 0; r < tableRows.length; r++) {
+      (function(row) {
+        row.style.cursor = 'pointer';
+        row.addEventListener('click', function() {
+          for (var j = 0; j < tableRows.length; j++) {
+            tableRows[j].style.background = '';
+          }
+          row.style.background = 'var(--accent-dim)';
+        });
+      })(tableRows[r]);
+    }
+
+    /* ── Acknowledge button in detail panel ── */
+    var ackBtns = document.querySelectorAll('[data-ack]');
+    for (var a = 0; a < ackBtns.length; a++) {
+      (function(btn) {
+        btn.addEventListener('click', function(e) {
+          e.stopPropagation();
+          btn.textContent = '已确认';
+          btn.classList.remove('btn-primary');
+          btn.classList.add('btn-ghost');
+          btn.style.pointerEvents = 'none';
+          // Update status badge in the row
+          var row = btn.closest('tr');
+          if (row) {
+            var statusBadge = row.querySelector('.badge-danger, .badge-warn');
+            if (statusBadge) {
+              statusBadge.className = 'badge badge-success';
+              statusBadge.textContent = '已确认';
+            }
+          }
+        });
+      })(ackBtns[a]);
+    }
+
+    /* ── Simulated new alert ── */
+    if (window.__ws) {
+      window.__ws.on('alert', function(a) {
+        var tbody = document.querySelector('.data-table tbody');
+        if (!tbody) return;
+        var tr = document.createElement('tr');
+        tr.setAttribute('data-severity', a.severity.toUpperCase());
+        tr.setAttribute('data-status', '未处理');
+        tr.style.cursor = 'pointer';
+        var sevBadge = a.severity === 'p1' ? '<span class="badge badge-danger">' + a.severity.toUpperCase() + '</span>' :
+                        a.severity === 'p2' ? '<span class="badge badge-warn">' + a.severity.toUpperCase() + '</span>' :
+                                              '<span class="badge badge-accent">' + a.severity.toUpperCase() + '</span>';
+        tr.innerHTML =
+          '<td>' + a.time + '</td>' +
+          '<td>' + sevBadge + '</td>' +
+          '<td>' + a.type + '</td>' +
+          '<td>' + a.location + '</td>' +
+          '<td><span class="badge badge-danger">未处理</span></td>';
+        tr.style.animation = 'alertSlideIn 0.4s ease';
+        tbody.insertBefore(tr, tbody.firstChild);
+        // Keep max 20
+        while (tbody.children.length > 20) tbody.removeChild(tbody.lastChild);
+      });
+    }
+  })();
+  </script>
+</body>
+</html>

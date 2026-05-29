@@ -1,0 +1,331 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>无人机路口交通态势监测平台 — CTO 演示</title>
+  <link rel="stylesheet" href="styles.css" />
+  <style>
+    .hero {
+      text-align: center;
+      padding: var(--sp-16) var(--sp-6) var(--sp-12);
+    }
+    .hero-badge {
+      display: inline-flex; align-items: center; gap: var(--sp-2);
+      background: var(--accent-dim);
+      border: 1px solid oklch(78% 0.14 210 / 0.25);
+      border-radius: 999px;
+      padding: var(--sp-1) var(--sp-4);
+      font-family: var(--font-mono);
+      font-size: 11px;
+      color: var(--accent);
+      margin-bottom: var(--sp-6);
+    }
+    .hero h1 {
+      font-size: clamp(2rem, 4vw, 3rem);
+      letter-spacing: -0.03em;
+      margin-bottom: var(--sp-3);
+    }
+    .hero h1 .accent { color: var(--accent); }
+    .hero p {
+      color: var(--fg-muted);
+      font-size: 1rem;
+      max-width: 600px;
+      margin: 0 auto;
+    }
+    .module-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+      gap: var(--sp-5);
+      max-width: 1400px;
+      margin: 0 auto;
+      padding: 0 var(--sp-6);
+    }
+    .module-card {
+      background: var(--glass);
+      backdrop-filter: blur(12px);
+      border: 1px solid var(--glass-border);
+      border-radius: var(--r-lg);
+      padding: var(--sp-6);
+      transition: all 0.3s ease;
+      cursor: pointer;
+      text-decoration: none;
+      display: block;
+    }
+    .module-card:hover {
+      border-color: var(--accent);
+      transform: translateY(-2px);
+      box-shadow: 0 8px 32px oklch(78% 0.14 210 / 0.12);
+    }
+    .module-icon {
+      width: 40px; height: 40px;
+      border-radius: var(--r-md);
+      display: grid; place-items: center;
+      font-size: 18px;
+      margin-bottom: var(--sp-4);
+    }
+    .module-icon.cyan  { background: var(--accent-dim); color: var(--accent); }
+    .module-icon.purple { background: var(--secondary-dim); color: var(--secondary); }
+    .module-icon.green { background: var(--success-dim); color: var(--success); }
+    .module-icon.orange { background: var(--warn-dim); color: var(--warn); }
+    .module-icon.red { background: var(--danger-dim); color: var(--danger); }
+    .module-card h3 {
+      font-size: 15px; font-weight: 600;
+      margin-bottom: var(--sp-2);
+      color: var(--fg);
+    }
+    .module-card p {
+      font-size: 13px;
+      color: var(--fg-muted);
+      line-height: 1.5;
+      margin-bottom: var(--sp-4);
+    }
+    .module-links {
+      display: flex; flex-wrap: wrap; gap: var(--sp-2);
+    }
+    .module-link {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      color: var(--fg-dim);
+      padding: 2px 8px;
+      background: oklch(50% 0.02 250 / 0.08);
+      border-radius: var(--r-sm);
+      transition: all var(--ease);
+      text-decoration: none;
+    }
+    .module-link:hover { color: var(--accent); background: var(--accent-dim); }
+    .pipeline-section {
+      max-width: 1400px;
+      margin: var(--sp-12) auto var(--sp-8);
+      padding: 0 var(--sp-6);
+    }
+    .pipeline-section h2 {
+      font-size: 12px; font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--fg-dim);
+      margin-bottom: var(--sp-5);
+    }
+    .sys-stats {
+      max-width: 1400px;
+      margin: 0 auto var(--sp-8);
+      padding: 0 var(--sp-6);
+    }
+  </style>
+</head>
+<body>
+  <!-- Hero -->
+  <div class="hero">
+    <div class="hero-badge">
+      <span class="statusbar-dot"></span>
+      SYSTEM ONLINE · v2.4.0
+    </div>
+    <h1>无人机路口交通态势<span class="accent">监测平台</span></h1>
+    <p>基于 YOLO 实时检测 + Homography BEV 变换 + VLM 语义分析，为交管部门提供路口级态势感知</p>
+  </div>
+
+  <!-- System Stats -->
+  <div class="sys-stats">
+    <div class="grid-6">
+      <div class="card kpi-card">
+        <div class="kpi-label">在线路口</div>
+        <div class="kpi-value">24</div>
+        <div class="kpi-trend up">↑ 2 新增</div>
+      </div>
+      <div class="card kpi-card">
+        <div class="kpi-label">在线无人机</div>
+        <div class="kpi-value">18</div>
+        <div class="kpi-trend flat">— 稳定</div>
+      </div>
+      <div class="card kpi-card">
+        <div class="kpi-label">GPU 利用率</div>
+        <div class="kpi-value">73<span style="font-size:0.5em;color:var(--fg-muted)">%</span></div>
+        <div class="kpi-trend up">↑ 5%</div>
+      </div>
+      <div class="card kpi-card">
+        <div class="kpi-label">今日车流量</div>
+        <div class="kpi-value">184<span style="font-size:0.5em;color:var(--fg-muted)">K</span></div>
+        <div class="kpi-trend up">↑ 12%</div>
+      </div>
+      <div class="card kpi-card">
+        <div class="kpi-label">异常事件</div>
+        <div class="kpi-value">7</div>
+        <div class="kpi-trend down">↑ 3</div>
+      </div>
+      <div class="card kpi-card">
+        <div class="kpi-label">系统延迟</div>
+        <div class="kpi-value">42<span style="font-size:0.5em;color:var(--fg-muted)">ms</span></div>
+        <div class="kpi-trend up">↓ 8ms</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Data Pipeline -->
+  <div class="pipeline-section">
+    <h2>数据流管线 · Data Pipeline</h2>
+    <div class="card" style="padding: var(--sp-5) var(--sp-6);">
+      <div class="pipeline" style="justify-content: center; flex-wrap: wrap;">
+        <span class="pipeline-node active-node">RTSP 图传</span>
+        <span class="pipeline-arrow flow">→</span>
+        <span class="pipeline-node active-node">Kafka</span>
+        <span class="pipeline-arrow flow">→</span>
+        <span class="pipeline-node active-node">YOLO11 推理</span>
+        <span class="pipeline-arrow flow">→</span>
+        <span class="pipeline-node active-node">BEV 变换</span>
+        <span class="pipeline-arrow flow">→</span>
+        <span class="pipeline-node active-node">VLM 语义</span>
+        <span class="pipeline-arrow flow">→</span>
+        <span class="pipeline-node">告警引擎</span>
+        <span class="pipeline-arrow">→</span>
+        <span class="pipeline-node">Webhook</span>
+      </div>
+      <div style="display:flex; justify-content:center; gap:var(--sp-8); margin-top:var(--sp-4);">
+        <span class="mono" style="font-size:11px; color:var(--fg-dim);">TPS: <span class="text-accent">2,847</span></span>
+        <span class="mono" style="font-size:11px; color:var(--fg-dim);">FPS: <span class="text-accent">28.3</span></span>
+        <span class="mono" style="font-size:11px; color:var(--fg-dim);">推理: <span class="text-accent">18ms</span></span>
+        <span class="mono" style="font-size:11px; color:var(--fg-dim);">Lag: <span class="text-success">12ms</span></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Module Grid -->
+  <div style="max-width:1400px; margin:var(--sp-8) auto var(--sp-16); padding:0 var(--sp-6);">
+    <h2 style="font-size:12px; font-weight:600; text-transform:uppercase; letter-spacing:0.1em; color:var(--fg-dim); margin-bottom:var(--sp-5);">平台模块 · Modules</h2>
+    <div class="module-grid">
+
+      <a class="module-card" href="dashboard.html">
+        <div class="module-icon cyan">◉</div>
+        <h3>Dashboard 首页</h3>
+        <p>GIS 总览 + 实时 KPI + WebSocket 状态 + 车道级 Hover 数据 + 告警流</p>
+        <div class="module-links">
+          <a class="module-link" href="dashboard.html">GIS 地图</a>
+          <a class="module-link" href="monitoring-intersection.html">实时监测</a>
+          <a class="module-link" href="gis-overview.html">GIS 总览</a>
+        </div>
+      </a>
+
+      <a class="module-card" href="monitoring-intersection.html">
+        <div class="module-icon cyan">◎</div>
+        <h3>实时路口监测</h3>
+        <p>视频 + YOLO + BEV 鸟瞰 + 车道级 LaneStats + 转向行为 TurnBehavior + 换道事件</p>
+        <div class="module-links">
+          <a class="module-link" href="monitoring-intersection.html">单路口详情</a>
+        </div>
+      </a>
+
+      <a class="module-card" href="gis-overview.html">
+        <div class="module-icon green">⊞</div>
+        <h3>GIS 总览</h3>
+        <p>城市级路口分布、无人机实时位置、拥堵热力图、飞行轨迹</p>
+        <div class="module-links">
+          <a class="module-link" href="gis-overview.html">GIS 地图</a>
+        </div>
+      </a>
+
+      <a class="module-card" href="calibration-homography.html">
+        <div class="module-icon purple">⊡</div>
+        <h3>标定中心</h3>
+        <p>Homography 标定、车道 Polygon 标注、参数库管理、插值覆盖热图</p>
+        <div class="module-links">
+          <a class="module-link" href="calibration-homography.html">Homography</a>
+          <a class="module-link" href="calibration-lanes.html">车道标注</a>
+          <a class="module-link" href="calibration-db.html">参数库</a>
+        </div>
+      </a>
+
+      <a class="module-card" href="video-realtime.html">
+        <div class="module-icon cyan">▷</div>
+        <h3>视频分析中心</h3>
+        <p>实时检测、回放、轨迹分析 + 换道矩阵 LaneChange + 转向分布 + VLM 语义</p>
+        <div class="module-links">
+          <a class="module-link" href="video-realtime.html">实时</a>
+          <a class="module-link" href="video-playback.html">回放</a>
+          <a class="module-link" href="video-trajectory.html">轨迹</a>
+          <a class="module-link" href="video-vlm.html">VLM</a>
+        </div>
+      </a>
+
+      <a class="module-card" href="alerts-center.html">
+        <div class="module-icon red">⚡</div>
+        <h3>告警中心</h3>
+        <p>实时告警 + 截图/视频自动生成 + AlertPushLog 推送记录 + Webhook 配置</p>
+        <div class="module-links">
+          <a class="module-link" href="alerts-center.html">实时告警</a>
+          <a class="module-link" href="alerts-detail.html">事件详情</a>
+          <a class="module-link" href="alerts-webhook.html">Webhook</a>
+        </div>
+      </a>
+
+      <a class="module-card" href="reports-daily.html">
+        <div class="module-icon orange">☰</div>
+        <h3>报告中心</h3>
+        <p>日报 + 高峰分析 + 转向流量矩阵 + 车头时距/排队统计 + 换道率 + AI 摘要</p>
+        <div class="module-links">
+          <a class="module-link" href="reports-daily.html">日报</a>
+          <a class="module-link" href="reports-peak.html">高峰分析</a>
+          <a class="module-link" href="reports-pdf.html">PDF 导出</a>
+        </div>
+      </a>
+
+      <a class="module-card" href="drone-monitor.html">
+        <div class="module-icon cyan">✦</div>
+        <h3>无人机管理</h3>
+        <p>飞行状态监控、电量/GPS/RTK 遥测、航线任务管理、图传状态</p>
+        <div class="module-links">
+          <a class="module-link" href="drone-monitor.html">飞行监控</a>
+          <a class="module-link" href="drone-trajectory.html">飞行轨迹</a>
+          <a class="module-link" href="drone-mission.html">航线任务</a>
+        </div>
+      </a>
+
+      <a class="module-card" href="admin-gpu.html">
+        <div class="module-icon purple">⚙</div>
+        <h3>系统管理</h3>
+        <p>GPU 监控、Kafka 5 类消息 Schema、模型热切换、用户权限、系统配置</p>
+        <div class="module-links">
+          <a class="module-link" href="admin-users.html">用户</a>
+          <a class="module-link" href="admin-gpu.html">GPU</a>
+          <a class="module-link" href="admin-kafka.html">Kafka</a>
+          <a class="module-link" href="admin-models.html">模型</a>
+          <a class="module-link" href="admin-config.html">配置</a>
+        </div>
+      </a>
+
+      <a class="module-card" href="mobile-alert.html">
+        <div class="module-icon red">📱</div>
+        <h3>移动端（交警）</h3>
+        <p>极简告警推送 + GIS 快速查看，红黄绿交通态势一目了然</p>
+        <div class="module-links">
+          <a class="module-link" href="mobile-alert.html">告警推送</a>
+          <a class="module-link" href="mobile-gis.html">GIS 态势</a>
+        </div>
+      </a>
+
+    </div>
+  </div>
+
+  <!-- Footer status bar -->
+  <div style="
+    position: fixed; bottom: 0; left: 0; right: 0;
+    background: var(--bg-deep);
+    border-top: 1px solid var(--border);
+    padding: 0 var(--sp-6);
+    height: var(--statusbar-h);
+    display: flex; align-items: center; gap: var(--sp-6);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--fg-muted);
+    z-index: 100;
+  ">
+    <div class="statusbar-item"><span class="statusbar-dot"></span> 系统正常</div>
+    <div class="statusbar-item">Kafka TPS: <span class="text-accent" style="margin-left:4px">2,847</span></div>
+    <div class="statusbar-item">FPS: <span class="text-accent" style="margin-left:4px">28.3</span></div>
+    <div class="statusbar-item">延迟: <span class="text-success" style="margin-left:4px">42ms</span></div>
+    <div class="statusbar-item">GPU VRAM: <span class="text-accent" style="margin-left:4px">14.2 / 24 GB</span></div>
+    <div class="statusbar-item">WS: <span class="text-success" style="margin-left:4px">18/18</span></div>
+    <div class="statusbar-item ml-auto">CTO Demo Mode</div>
+  </div>
+  <script src="app.js"></script>
+  <button class="theme-toggle" style="position:fixed;top:12px;right:12px;z-index:100;"><span class="theme-icon">⚡</span><span class="theme-label">CTO 模式</span></button>
+</body>
+</html>

@@ -23,26 +23,27 @@ class ProxyRouter:
 
         # Route mapping: path prefix -> service name
         self.routes = {
-            # Operations service - intersections, alerts, webhooks, reports
-            "api/v1/intersections": "operations",
-            "api/v1/alerts": "operations",
+            # Operations service - webhooks, reports, auth
             "api/v1/webhooks": "operations",
             "api/v1/reports": "operations",
             "api/v1/auth": "operations",
 
-            # Vision service - video streams, trajectories, detection
+            # Vision service - intersections, alerts, video, trajectories, detection, calibration, system
+            "api/v1/intersections": "vision",
+            "api/v1/alerts": "vision",
             "api/v1/video": "vision",
             "api/v1/trajectories": "vision",
             "api/v1/detection": "vision",
             "api/v1/tracks": "vision",
+            "api/v1/calibration": "vision",
+            "api/v1/system": "vision",
 
             # Flight service - drones, missions, telemetry
             "api/v1/drones": "flight",
             "api/v1/missions": "flight",
             "api/v1/telemetry": "flight",
 
-            # Annotation service - calibration, labels
-            "api/v1/calibration": "annotation",
+            # Annotation service - labels
             "api/v1/labels": "annotation",
         }
 

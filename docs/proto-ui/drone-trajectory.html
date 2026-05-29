@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" /><title>飞行轨迹 — 无人机路口交通态势监测平台</title><link rel="stylesheet" href="styles.css" /><style>.traj-layout{display:grid;grid-template-columns:1fr 320px;gap:var(--sp-4);height:calc(100vh - var(--topbar-h) - var(--statusbar-h) - var(--sp-12));}@media(max-width:1024px){.traj-layout{grid-template-columns:1fr;}}</style>
+</head>
+<body>
+<div class="app">
+<aside class="sidebar"><div class="sidebar-brand"><div class="logo">DT</div><span>DroneTraffic</span></div><nav class="nav"><div class="nav-section">指挥大屏</div><a class="nav-item" href="dashboard.html"><span class="nav-icon">◉</span> Dashboard</a><a class="nav-item" href="monitoring-intersection.html"><span class="nav-icon">◎</span> 实时监测</a><a class="nav-item" href="gis-overview.html"><span class="nav-icon">⊞</span> GIS 总览</a><div class="nav-section">业务操作</div><a class="nav-item" href="video-realtime.html"><span class="nav-icon">▷</span> 视频分析</a><a class="nav-item" href="calibration-homography.html"><span class="nav-icon">⊡</span> 标定中心</a><a class="nav-item" href="alerts-center.html"><span class="nav-icon">⚡</span> 告警中心 <span class="nav-badge">3</span></a><a class="nav-item" href="reports-daily.html"><span class="nav-icon">☰</span> 报告中心</a><div class="nav-section">管理</div><a class="nav-item active" href="drone-monitor.html"><span class="nav-icon">✦</span> 无人机管理</a><a class="nav-item" href="admin-gpu.html"><span class="nav-icon">⚙</span> 系统管理</a></nav></aside>
+<header class="topbar"><span class="topbar-title">无人机管理</span><span class="topbar-sep"></span><div class="tabs" style="border:0;margin:0;"><a class="tab" href="drone-monitor.html">飞行监控</a><button class="tab active">飞行轨迹</button><a class="tab" href="drone-mission.html">航线任务</a></div><div class="topbar-actions">
+        <button class="theme-toggle"><span class="theme-icon">⚡</span><span class="theme-label">CTO 模式</span></button><select class="select" style="width:auto;font-size:12px;"><option>UAV-07 · 今日</option><option>UAV-12 · 今日</option></select></div></header>
+<main class="main"><div class="traj-layout">
+  <div class="card" style="padding:0;overflow:hidden;position:relative;">
+    <div style="position:absolute;inset:0;background:radial-gradient(ellipse at 40% 45%,oklch(24% 0.03 210 / 0.4),transparent 60%),var(--bg-deep);"></div>
+    <div style="position:absolute;inset:0;background-image:linear-gradient(oklch(40% 0.01 250 / 0.05) 1px,transparent 1px),linear-gradient(90deg,oklch(40% 0.01 250 / 0.05) 1px,transparent 1px);background-size:50px 50px;"></div>
+    <!-- Roads -->
+    <div style="position:absolute;top:30%;left:5%;right:5%;height:4px;background:oklch(38% 0.015 250 / 0.4);"></div>
+    <div style="position:absolute;top:65%;left:10%;right:10%;height:3px;background:oklch(35% 0.01 250 / 0.3);"></div>
+    <div style="position:absolute;left:30%;top:5%;bottom:5%;width:4px;background:oklch(38% 0.015 250 / 0.4);"></div>
+    <div style="position:absolute;left:70%;top:10%;bottom:10%;width:3px;background:oklch(35% 0.01 250 / 0.3);"></div>
+    <!-- Flight trajectory -->
+    <div style="position:absolute;top:20%;left:25%;width:2px;height:15%;background:var(--accent);opacity:0.5;"></div>
+    <div style="position:absolute;top:35%;left:25%;width:20%;height:2px;background:var(--accent);opacity:0.5;"></div>
+    <div style="position:absolute;top:35%;left:45%;width:2px;height:20%;background:var(--accent);opacity:0.6;"></div>
+    <div style="position:absolute;top:55%;left:45%;width:25%;height:2px;background:var(--accent);opacity:0.6;"></div>
+    <div style="position:absolute;top:55%;left:70%;width:2px;height:15%;background:var(--accent);opacity:0.7;"></div>
+    <!-- Hover points -->
+    <div style="position:absolute;top:35%;left:25%;width:10px;height:10px;background:var(--warn);border-radius:50%;transform:translate(-50%,-50%);border:2px solid var(--bg-deep);"></div>
+    <div style="position:absolute;top:55%;left:45%;width:10px;height:10px;background:var(--warn);border-radius:50%;transform:translate(-50%,-50%);border:2px solid var(--bg-deep);"></div>
+    <!-- Alert point -->
+    <div style="position:absolute;top:55%;left:70%;width:14px;height:14px;background:var(--danger);border-radius:50%;transform:translate(-50%,-50%);border:2px solid var(--bg-deep);box-shadow:0 0 12px var(--danger);"></div>
+    <!-- Current position -->
+    <div class="map-marker drone" style="top:70%;left:70%;"></div>
+    <div style="position:absolute;top:var(--sp-3);left:var(--sp-3);display:flex;gap:var(--sp-2);"><span class="vc-btn active-ctrl">轨迹线</span><span class="vc-btn">悬停点</span><span class="vc-btn">告警点</span><span class="vc-btn">视频同步</span></div>
+    <div style="position:absolute;bottom:var(--sp-3);left:var(--sp-3);right:var(--sp-3);background:oklch(15% 0.02 250 / 0.9);backdrop-filter:blur(12px);border:1px solid var(--glass-border);border-radius:var(--r-md);padding:var(--sp-2) var(--sp-4);">
+      <div style="display:flex;justify-content:space-between;align-items:center;"><span class="mono" style="font-size:11px;color:var(--fg-dim);">视频时间轴</span><span class="mono" style="font-size:12px;color:var(--accent);">14:32:08</span></div>
+      <div style="height:4px;background:var(--border);border-radius:2px;margin-top:var(--sp-2);position:relative;"><div style="position:absolute;left:0;top:0;bottom:0;width:65%;background:var(--accent);border-radius:2px;"></div><div style="position:absolute;top:-2px;left:65%;width:8px;height:8px;background:var(--accent);border-radius:50%;transform:translateX(-50%);border:2px solid var(--bg-deep);"></div></div>
+    </div>
+  </div>
+  <div style="display:flex;flex-direction:column;gap:var(--sp-4);overflow-y:auto;">
+    <div class="card"><div class="card-header"><span class="card-title">飞行统计</span></div>
+      <div style="font-size:12px;line-height:2.2;">
+        <div class="flex justify-between"><span class="muted">起飞时间</span><span class="mono">08:15:00</span></div>
+        <div class="flex justify-between"><span class="muted">飞行时长</span><span class="mono">6h 17m</span></div>
+        <div class="flex justify-between"><span class="muted">总里程</span><span class="mono">42.8 km</span></div>
+        <div class="flex justify-between"><span class="muted">悬停次数</span><span class="mono">14</span></div>
+        <div class="flex justify-between"><span class="muted">告警标记</span><span class="mono" style="color:var(--danger);">3</span></div>
+        <div class="flex justify-between"><span class="muted">最大高度</span><span class="mono">105m</span></div>
+        <div class="flex justify-between"><span class="muted">平均高度</span><span class="mono">82m</span></div>
+      </div>
+    </div>
+    <div class="card"><div class="card-header"><span class="card-title">航点记录</span></div>
+      <div style="display:flex;flex-direction:column;gap:var(--sp-2);">
+        <div class="alert-item" style="padding:var(--sp-2);"><span class="alert-dot" style="background:var(--warn);width:6px;height:6px;"></span><div><div class="mono" style="font-size:11px;">09:32 悬停 3m24s</div><div class="dim" style="font-size:10px;">中山路/解放路</div></div></div>
+        <div class="alert-item" style="padding:var(--sp-2);"><span class="alert-dot" style="background:var(--warn);width:6px;height:6px;"></span><div><div class="mono" style="font-size:11px;">11:15 悬停 5m12s</div><div class="dim" style="font-size:10px;">人民大道/建设路</div></div></div>
+        <div class="alert-item" style="padding:var(--sp-2);"><span class="alert-dot p1" style="width:6px;height:6px;"></span><div><div class="mono" style="font-size:11px;color:var(--danger);">14:31 告警点</div><div class="dim" style="font-size:10px;">逆行事件 · EVT-0047</div></div></div>
+      </div>
+    </div>
+  </div>
+</div></main>
+<footer class="statusbar"><div class="statusbar-item"><span class="statusbar-dot"></span> 轨迹回放</div><div class="statusbar-item">UAV-07</div><div class="statusbar-item">里程: <span class="text-accent">42.8km</span></div><div class="statusbar-item ml-auto">飞行轨迹</div></footer>
+</div>
+  <script src="app.js"></script>
+</body></html>

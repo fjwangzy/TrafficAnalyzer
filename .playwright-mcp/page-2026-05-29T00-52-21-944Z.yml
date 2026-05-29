@@ -1,0 +1,238 @@
+- generic [ref=e2]:
+  - generic [ref=e42]:
+    - link "Skip to Main" [ref=e43] [cursor=pointer]:
+      - /url: "#content"
+    - generic [ref=e46]:
+      - list [ref=e48]:
+        - listitem [ref=e49]:
+          - button "DroneTraffic 路口态势监测平台" [ref=e50] [cursor=pointer]:
+            - img [ref=e52]
+            - generic [ref=e54]:
+              - generic [ref=e55]: DroneTraffic
+              - generic [ref=e56]: 路口态势监测平台
+            - img [ref=e57]
+      - generic [ref=e60]:
+        - generic [ref=e61]:
+          - generic [ref=e62]: 指挥大屏
+          - list [ref=e63]:
+            - listitem [ref=e64]:
+              - link "Dashboard" [ref=e65] [cursor=pointer]:
+                - /url: /
+                - img [ref=e66]
+                - generic [ref=e71]: Dashboard
+            - listitem [ref=e72]:
+              - link "实时监测" [ref=e73] [cursor=pointer]:
+                - /url: /monitoring
+                - img [ref=e74]
+                - generic [ref=e80]: 实时监测
+            - listitem [ref=e81]:
+              - link "GIS 总览" [ref=e82] [cursor=pointer]:
+                - /url: /gis
+                - img [ref=e83]
+                - generic [ref=e85]: GIS 总览
+        - generic [ref=e86]:
+          - generic [ref=e87]: 业务操作
+          - list [ref=e88]:
+            - listitem [ref=e89]:
+              - link "视频分析" [ref=e90] [cursor=pointer]:
+                - /url: /video
+                - img [ref=e91]
+                - generic [ref=e94]: 视频分析
+            - listitem [ref=e95]:
+              - link "标定中心" [ref=e96] [cursor=pointer]:
+                - /url: /calibration
+                - img [ref=e97]
+                - generic [ref=e99]: 标定中心
+            - listitem [ref=e100]:
+              - link "告警中心" [active] [ref=e101] [cursor=pointer]:
+                - /url: /alerts
+                - img [ref=e102]
+                - generic [ref=e104]: 告警中心
+            - listitem [ref=e105]:
+              - link "报告中心" [ref=e106] [cursor=pointer]:
+                - /url: /reports
+                - img [ref=e107]
+                - generic [ref=e110]: 报告中心
+        - generic [ref=e111]:
+          - generic [ref=e112]: 管理
+          - list [ref=e113]:
+            - listitem [ref=e114]:
+              - link "无人机管理" [ref=e115] [cursor=pointer]:
+                - /url: /drones
+                - img [ref=e116]
+                - generic [ref=e118]: 无人机管理
+            - listitem [ref=e119]:
+              - link "系统管理" [ref=e120] [cursor=pointer]:
+                - /url: /admin
+                - img [ref=e121]
+                - generic [ref=e124]: 系统管理
+            - listitem [ref=e125]:
+              - link "用户管理" [ref=e126] [cursor=pointer]:
+                - /url: /users
+                - img [ref=e127]
+                - generic [ref=e132]: 用户管理
+      - list [ref=e134]:
+        - listitem [ref=e135]:
+          - button "SN admin admin@traffic.local" [ref=e136] [cursor=pointer]:
+            - generic [ref=e138]: SN
+            - generic [ref=e139]:
+              - generic [ref=e140]: admin
+              - generic [ref=e141]: admin@traffic.local
+            - img [ref=e142]
+      - button "Toggle Sidebar" [ref=e145]
+    - generic [ref=e146]:
+      - generic [ref=e147]:
+        - banner [ref=e646]:
+          - generic [ref=e647]:
+            - button "Toggle Sidebar" [ref=e648] [cursor=pointer]:
+              - img
+              - generic [ref=e649]: Toggle Sidebar
+            - generic [ref=e650]:
+              - generic [ref=e651]: 告警中心
+              - generic [ref=e653]: 今日 9 条
+            - button "Search ⌘ K" [ref=e654] [cursor=pointer]:
+              - img
+              - generic [ref=e655]: Search
+              - generic:
+                - generic: ⌘
+                - text: K
+            - button "Toggle theme" [ref=e656] [cursor=pointer]:
+              - img
+              - generic [ref=e657]: Toggle theme
+            - button "SN" [ref=e658] [cursor=pointer]:
+              - generic [ref=e660]: SN
+        - main [ref=e661]:
+          - generic [ref=e662]:
+            - tablist [ref=e663]:
+              - tab "实时告警" [selected] [ref=e664] [cursor=pointer]
+              - tab "事件详情" [ref=e665] [cursor=pointer]
+              - tab "Webhook" [ref=e666] [cursor=pointer]
+            - tabpanel "实时告警" [ref=e667]:
+              - generic [ref=e668]:
+                - generic [ref=e669]:
+                  - generic [ref=e670]:
+                    - button "全部" [ref=e671] [cursor=pointer]
+                    - button "未处理" [ref=e672] [cursor=pointer]
+                    - button "处理中" [ref=e673] [cursor=pointer]
+                    - button "P1" [ref=e674] [cursor=pointer]
+                    - button "P2" [ref=e675] [cursor=pointer]
+                    - button "P3" [ref=e676] [cursor=pointer]
+                  - table [ref=e680]:
+                    - rowgroup [ref=e681]:
+                      - row "等级 时间 路口 类型 状态 操作" [ref=e682]:
+                        - columnheader "等级" [ref=e683]
+                        - columnheader "时间" [ref=e684]
+                        - columnheader "路口" [ref=e685]
+                        - columnheader "类型" [ref=e686]
+                        - columnheader "状态" [ref=e687]
+                        - columnheader "操作" [ref=e688]
+                    - rowgroup [ref=e689]:
+                      - row "P1 14:31:42 中山路/解放路 逆行事件 未处理 详情" [ref=e690] [cursor=pointer]:
+                        - cell "P1" [ref=e691]:
+                          - generic [ref=e694]: P1
+                        - cell "14:31:42" [ref=e695]
+                        - cell "中山路/解放路" [ref=e696]
+                        - cell "逆行事件" [ref=e697]
+                        - cell "未处理" [ref=e698]
+                        - cell "详情" [ref=e699]:
+                          - button "详情" [ref=e700]
+                      - row "P1 14:28:15 人民大道/建设路 疑似事故 未处理 详情" [ref=e701] [cursor=pointer]:
+                        - cell "P1" [ref=e702]:
+                          - generic [ref=e705]: P1
+                        - cell "14:28:15" [ref=e706]
+                        - cell "人民大道/建设路" [ref=e707]
+                        - cell "疑似事故" [ref=e708]
+                        - cell "未处理" [ref=e709]
+                        - cell "详情" [ref=e710]:
+                          - button "详情" [ref=e711]
+                      - row "P2 14:25:03 和平路/光华街 排队超限 未处理 详情" [ref=e712] [cursor=pointer]:
+                        - cell "P2" [ref=e713]:
+                          - generic [ref=e716]: P2
+                        - cell "14:25:03" [ref=e717]
+                        - cell "和平路/光华街" [ref=e718]
+                        - cell "排队超限" [ref=e719]
+                        - cell "未处理" [ref=e720]
+                        - cell "详情" [ref=e721]:
+                          - button "详情" [ref=e722]
+                      - row "P2 14:22:47 中山路/解放路 非机动车闯入 处理中 详情" [ref=e723] [cursor=pointer]:
+                        - cell "P2" [ref=e724]:
+                          - generic [ref=e727]: P2
+                        - cell "14:22:47" [ref=e728]
+                        - cell "中山路/解放路" [ref=e729]
+                        - cell "非机动车闯入" [ref=e730]
+                        - cell "处理中" [ref=e731]
+                        - cell "详情" [ref=e732]:
+                          - button "详情" [ref=e733]
+                      - row "P3 14:18:31 人民大道/建设路 拥堵超限 已处理 详情" [ref=e734] [cursor=pointer]:
+                        - cell "P3" [ref=e735]:
+                          - generic [ref=e738]: P3
+                        - cell "14:18:31" [ref=e739]
+                        - cell "人民大道/建设路" [ref=e740]
+                        - cell "拥堵超限" [ref=e741]
+                        - cell "已处理" [ref=e742]
+                        - cell "详情" [ref=e743]:
+                          - button "详情" [ref=e744]
+                      - row "P3 14:15:09 文化路/科技大道 行人违规 未处理 详情" [ref=e745] [cursor=pointer]:
+                        - cell "P3" [ref=e746]:
+                          - generic [ref=e749]: P3
+                        - cell "14:15:09" [ref=e750]
+                        - cell "文化路/科技大道" [ref=e751]
+                        - cell "行人违规" [ref=e752]
+                        - cell "未处理" [ref=e753]
+                        - cell "详情" [ref=e754]:
+                          - button "详情" [ref=e755]
+                      - row "P2 14:12:55 和平路/光华街 违规变道 处理中 详情" [ref=e756] [cursor=pointer]:
+                        - cell "P2" [ref=e757]:
+                          - generic [ref=e760]: P2
+                        - cell "14:12:55" [ref=e761]
+                        - cell "和平路/光华街" [ref=e762]
+                        - cell "违规变道" [ref=e763]
+                        - cell "处理中" [ref=e764]
+                        - cell "详情" [ref=e765]:
+                          - button "详情" [ref=e766]
+                      - row "P3 14:08:22 南京路/上海路 车流量超限 已处理 详情" [ref=e767] [cursor=pointer]:
+                        - cell "P3" [ref=e768]:
+                          - generic [ref=e771]: P3
+                        - cell "14:08:22" [ref=e772]
+                        - cell "南京路/上海路" [ref=e773]
+                        - cell "车流量超限" [ref=e774]
+                        - cell "已处理" [ref=e775]
+                        - cell "详情" [ref=e776]:
+                          - button "详情" [ref=e777]
+                      - row "P2 14:05:18 滨江路/新华街 违停 未处理 详情" [ref=e778] [cursor=pointer]:
+                        - cell "P2" [ref=e779]:
+                          - generic [ref=e782]: P2
+                        - cell "14:05:18" [ref=e783]
+                        - cell "滨江路/新华街" [ref=e784]
+                        - cell "违停" [ref=e785]
+                        - cell "未处理" [ref=e786]
+                        - cell "详情" [ref=e787]:
+                          - button "详情" [ref=e788]
+                - generic [ref=e790]: 选择一个告警查看详情
+      - contentinfo [ref=e301]:
+        - generic [ref=e302]: 系统正常
+        - generic [ref=e304]:
+          - text: Kafka TPS
+          - generic [ref=e305]: 2,847
+        - generic [ref=e306]:
+          - text: FPS
+          - generic [ref=e307]: "28.3"
+        - generic [ref=e308]:
+          - text: 延迟
+          - generic [ref=e309]: 42ms
+        - generic [ref=e310]:
+          - text: GPU VRAM
+          - generic [ref=e311]: 14.2/24 GB
+        - generic [ref=e312]:
+          - text: WS
+          - generic [ref=e313]: 18/18
+        - generic [ref=e314]:
+          - text: 路口
+          - generic [ref=e315]: 12 active
+        - generic [ref=e316]:
+          - generic [ref=e317]: 08:52:21
+          - generic [ref=e318]: CTO Demo · Dark Industrial
+  - generic [ref=e319]:
+    - heading "Command Palette" [level=2] [ref=e320]
+    - paragraph [ref=e321]: Search for a command to run...
+  - region "Notifications alt+T"

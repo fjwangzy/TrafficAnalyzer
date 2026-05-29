@@ -1,0 +1,336 @@
+- generic [ref=e2]:
+  - generic [ref=e42]:
+    - link "Skip to Main" [ref=e43] [cursor=pointer]:
+      - /url: "#content"
+    - generic [ref=e46]:
+      - list [ref=e48]:
+        - listitem [ref=e49]:
+          - button "DroneTraffic 路口态势监测平台" [ref=e50] [cursor=pointer]:
+            - img [ref=e52]
+            - generic [ref=e54]:
+              - generic [ref=e55]: DroneTraffic
+              - generic [ref=e56]: 路口态势监测平台
+            - img [ref=e57]
+      - generic [ref=e60]:
+        - generic [ref=e61]:
+          - generic [ref=e62]: 指挥大屏
+          - list [ref=e63]:
+            - listitem [ref=e64]:
+              - link "Dashboard" [ref=e65] [cursor=pointer]:
+                - /url: /
+                - img [ref=e66]
+                - generic [ref=e71]: Dashboard
+            - listitem [ref=e72]:
+              - link "实时监测" [active] [ref=e73] [cursor=pointer]:
+                - /url: /monitoring
+                - img [ref=e74]
+                - generic [ref=e80]: 实时监测
+            - listitem [ref=e81]:
+              - link "GIS 总览" [ref=e82] [cursor=pointer]:
+                - /url: /gis
+                - img [ref=e83]
+                - generic [ref=e85]: GIS 总览
+        - generic [ref=e86]:
+          - generic [ref=e87]: 业务操作
+          - list [ref=e88]:
+            - listitem [ref=e89]:
+              - link "视频分析" [ref=e90] [cursor=pointer]:
+                - /url: /video
+                - img [ref=e91]
+                - generic [ref=e94]: 视频分析
+            - listitem [ref=e95]:
+              - link "标定中心" [ref=e96] [cursor=pointer]:
+                - /url: /calibration
+                - img [ref=e97]
+                - generic [ref=e99]: 标定中心
+            - listitem [ref=e100]:
+              - link "告警中心" [ref=e101] [cursor=pointer]:
+                - /url: /alerts
+                - img [ref=e102]
+                - generic [ref=e104]: 告警中心
+            - listitem [ref=e105]:
+              - link "报告中心" [ref=e106] [cursor=pointer]:
+                - /url: /reports
+                - img [ref=e107]
+                - generic [ref=e110]: 报告中心
+        - generic [ref=e111]:
+          - generic [ref=e112]: 管理
+          - list [ref=e113]:
+            - listitem [ref=e114]:
+              - link "无人机管理" [ref=e115] [cursor=pointer]:
+                - /url: /drones
+                - img [ref=e116]
+                - generic [ref=e118]: 无人机管理
+            - listitem [ref=e119]:
+              - link "系统管理" [ref=e120] [cursor=pointer]:
+                - /url: /admin
+                - img [ref=e121]
+                - generic [ref=e124]: 系统管理
+            - listitem [ref=e125]:
+              - link "用户管理" [ref=e126] [cursor=pointer]:
+                - /url: /users
+                - img [ref=e127]
+                - generic [ref=e132]: 用户管理
+      - list [ref=e134]:
+        - listitem [ref=e135]:
+          - button "SN admin admin@traffic.local" [ref=e136] [cursor=pointer]:
+            - generic [ref=e138]: SN
+            - generic [ref=e139]:
+              - generic [ref=e140]: admin
+              - generic [ref=e141]: admin@traffic.local
+            - img [ref=e142]
+      - button "Toggle Sidebar" [ref=e145]
+    - generic [ref=e146]:
+      - generic [ref=e147]:
+        - banner [ref=e328]:
+          - generic [ref=e329]:
+            - button "Toggle Sidebar" [ref=e330] [cursor=pointer]:
+              - img
+              - generic [ref=e331]: Toggle Sidebar
+            - generic [ref=e332]:
+              - generic [ref=e333]: 单路口实时监测
+              - generic [ref=e337]: 12ms
+            - button "Search ⌘ K" [ref=e338] [cursor=pointer]:
+              - img
+              - generic [ref=e339]: Search
+              - generic:
+                - generic: ⌘
+                - text: K
+            - button "Toggle theme" [ref=e340] [cursor=pointer]:
+              - img
+              - generic [ref=e341]: Toggle theme
+            - button "SN" [ref=e342] [cursor=pointer]:
+              - generic [ref=e344]: SN
+        - main [ref=e345]:
+          - generic [ref=e347]:
+            - generic [ref=e348]:
+              - combobox [ref=e349] [cursor=pointer]:
+                - generic: 路口 1 (Camera 1)
+                - img
+              - generic [ref=e350]: ● ONLINE
+            - generic [ref=e351]:
+              - generic [ref=e352]: UAV-07
+              - generic [ref=e353]: 30.5728°N 104.0668°E
+              - generic [ref=e354]: ALT 82m
+              - generic [ref=e355]: 电池 67%
+              - generic [ref=e356]: RTK FIXED
+            - generic [ref=e357]:
+              - generic [ref=e358]: RTSP
+              - generic [ref=e359]: →
+              - generic [ref=e360]: YOLO11
+              - generic [ref=e361]: →
+              - generic [ref=e362]: BEV
+              - generic [ref=e363]: →
+              - generic [ref=e364]: VLM
+          - generic [ref=e365]:
+            - generic [ref=e367]:
+              - generic [ref=e371]: "car #T041 92%"
+              - generic [ref=e373]: "car #T042 89%"
+              - generic [ref=e375]: "bus #T038 95%"
+              - generic [ref=e377]: "moto #T043 78%"
+              - generic [ref=e379]: "car #T044 91%"
+              - generic [ref=e381]: "car #T045 87%"
+              - generic [ref=e383]: "truck #T039 93%"
+              - generic [ref=e384]:
+                - generic [ref=e385]: ● REC 14:32:08.342
+                - generic [ref=e386]: "FPS: 28.3 | 推理: 18ms"
+              - generic [ref=e387]:
+                - generic [ref=e388]: "目标: 12 辆 | 车道: 4"
+                - generic [ref=e389]: YOLO11m · conf≥0.5
+              - generic [ref=e390]:
+                - button "YOLO" [ref=e391] [cursor=pointer]
+                - button "VLM" [ref=e392] [cursor=pointer]
+                - button "EIS" [ref=e393] [cursor=pointer]
+                - button "暂停" [ref=e394] [cursor=pointer]
+                - button "ROI" [ref=e395] [cursor=pointer]
+                - button "RGB/IR" [ref=e396] [cursor=pointer]
+            - generic [ref=e398]:
+              - generic [ref=e410]: L1 ↑
+              - generic [ref=e411]: L2 ↑
+              - generic [ref=e412]: L3 ↓
+              - generic [ref=e413]: L4 ↓
+              - generic [ref=e429]:
+                - generic [ref=e430]: BEV · H_mat 3×3
+                - generic [ref=e431]: "覆盖率: 94.2%"
+                - generic [ref=e432]: "排队: L3 142m"
+                - generic [ref=e433]: "车辆: 12 tracked"
+              - generic [ref=e434]:
+                - button "车道" [ref=e435] [cursor=pointer]
+                - button "轨迹" [ref=e436] [cursor=pointer]
+                - button "热力" [ref=e437] [cursor=pointer]
+                - button "流向" [ref=e438] [cursor=pointer]
+          - generic [ref=e439]:
+            - generic [ref=e440]:
+              - generic [ref=e442]: 流量趋势 · 30min
+              - generic [ref=e457]: "当前: 847 veh/h"
+            - generic [ref=e458]:
+              - generic [ref=e460]: 车道流量分布
+              - generic [ref=e461]:
+                - generic [ref=e462]:
+                  - generic [ref=e463]: L1
+                  - generic [ref=e466]: "214"
+                - generic [ref=e467]:
+                  - generic [ref=e468]: L2
+                  - generic [ref=e471]: "268"
+                - generic [ref=e472]:
+                  - generic [ref=e473]: L3
+                  - generic [ref=e476]: "316"
+                - generic [ref=e477]:
+                  - generic [ref=e478]: L4
+                  - generic [ref=e481]: "154"
+            - generic [ref=e482]:
+              - generic [ref=e484]: 拥堵指数
+              - generic [ref=e485]:
+                - generic [ref=e491]: "1.47"
+                - generic [ref=e492]: 轻度拥堵 · 阈值 2.0
+            - generic [ref=e493]:
+              - generic [ref=e495]: 告警时间线
+              - generic [ref=e496]:
+                - generic [ref=e497]:
+                  - generic [ref=e499]: 14:31
+                  - generic [ref=e500]: 逆行事件
+                - generic [ref=e501]:
+                  - generic [ref=e503]: 14:25
+                  - generic [ref=e504]: 排队超限
+                - generic [ref=e505]:
+                  - generic [ref=e507]: 14:18
+                  - generic [ref=e508]: 拥堵指数超限
+                - generic [ref=e509]:
+                  - generic [ref=e511]: 14:12
+                  - generic [ref=e512]: 违规变道
+          - generic [ref=e513]:
+            - generic [ref=e514]:
+              - heading "车道级实时指标 · LaneStats 1s 刷新" [level=2] [ref=e515]:
+                - text: 车道级实时指标
+                - generic [ref=e516]: · LaneStats
+                - generic [ref=e517]: 1s 刷新
+              - generic [ref=e519]:
+                - generic [ref=e520]:
+                  - generic [ref=e523]: 车道 1
+                  - generic [ref=e524]:
+                    - generic [ref=e525]:
+                      - generic [ref=e526]: 流量
+                      - generic [ref=e527]: 0.0 v/m
+                    - generic [ref=e528]:
+                      - generic [ref=e529]: 车头时距
+                      - generic [ref=e530]: —
+                    - generic [ref=e531]:
+                      - generic [ref=e532]: 排队
+                      - generic [ref=e533]: 0 m
+                    - generic [ref=e534]:
+                      - generic [ref=e535]: 车速
+                      - generic [ref=e536]: 0.0 km/h
+                - generic [ref=e538]:
+                  - generic [ref=e541]: 车道 2
+                  - generic [ref=e542]:
+                    - generic [ref=e543]:
+                      - generic [ref=e544]: 流量
+                      - generic [ref=e545]: 0.0 v/m
+                    - generic [ref=e546]:
+                      - generic [ref=e547]: 车头时距
+                      - generic [ref=e548]: —
+                    - generic [ref=e549]:
+                      - generic [ref=e550]: 排队
+                      - generic [ref=e551]: 0 m
+                    - generic [ref=e552]:
+                      - generic [ref=e553]: 车速
+                      - generic [ref=e554]: 0.0 km/h
+                - generic [ref=e556]:
+                  - generic [ref=e559]: 车道 3
+                  - generic [ref=e560]:
+                    - generic [ref=e561]:
+                      - generic [ref=e562]: 流量
+                      - generic [ref=e563]: 0.0 v/m
+                    - generic [ref=e564]:
+                      - generic [ref=e565]: 车头时距
+                      - generic [ref=e566]: —
+                    - generic [ref=e567]:
+                      - generic [ref=e568]: 排队
+                      - generic [ref=e569]: 0 m
+                    - generic [ref=e570]:
+                      - generic [ref=e571]: 车速
+                      - generic [ref=e572]: 0.0 km/h
+                - generic [ref=e574]:
+                  - generic [ref=e577]: 车道 4
+                  - generic [ref=e578]:
+                    - generic [ref=e579]:
+                      - generic [ref=e580]: 流量
+                      - generic [ref=e581]: 0.0 v/m
+                    - generic [ref=e582]:
+                      - generic [ref=e583]: 车头时距
+                      - generic [ref=e584]: —
+                    - generic [ref=e585]:
+                      - generic [ref=e586]: 排队
+                      - generic [ref=e587]: 0 m
+                    - generic [ref=e588]:
+                      - generic [ref=e589]: 车速
+                      - generic [ref=e590]: 0.0 km/h
+                - generic [ref=e592]:
+                  - generic [ref=e595]: 车道 5
+                  - generic [ref=e596]:
+                    - generic [ref=e597]:
+                      - generic [ref=e598]: 流量
+                      - generic [ref=e599]: 0.0 v/m
+                    - generic [ref=e600]:
+                      - generic [ref=e601]: 车头时距
+                      - generic [ref=e602]: —
+                    - generic [ref=e603]:
+                      - generic [ref=e604]: 排队
+                      - generic [ref=e605]: 0 m
+                    - generic [ref=e606]:
+                      - generic [ref=e607]: 车速
+                      - generic [ref=e608]: 0.0 km/h
+            - generic [ref=e610]:
+              - generic [ref=e611]:
+                - generic [ref=e612]: 转向行为分布· TurnBehavior
+                - generic [ref=e613]: n=347
+              - generic [ref=e614]:
+                - generic [ref=e615]:
+                  - generic [ref=e616]:
+                    - generic [ref=e617]: ↑
+                    - generic [ref=e618]: 直行
+                    - generic [ref=e621]: "215"
+                    - generic [ref=e622]: 62%
+                  - generic [ref=e623]:
+                    - generic [ref=e624]: ↰
+                    - generic [ref=e625]: 左转
+                    - generic [ref=e628]: "76"
+                    - generic [ref=e629]: 22%
+                  - generic [ref=e630]:
+                    - generic [ref=e631]: ↱
+                    - generic [ref=e632]: 右转
+                    - generic [ref=e635]: "45"
+                    - generic [ref=e636]: 13%
+                  - generic [ref=e637]:
+                    - generic [ref=e638]: ↩
+                    - generic [ref=e639]: 掉头
+                    - generic [ref=e642]: "11"
+                    - generic [ref=e643]: 3%
+                - generic [ref=e645]: 换道率 8.4% (29/347)
+      - contentinfo [ref=e301]:
+        - generic [ref=e302]: 系统正常
+        - generic [ref=e304]:
+          - text: Kafka TPS
+          - generic [ref=e305]: 2,847
+        - generic [ref=e306]:
+          - text: FPS
+          - generic [ref=e307]: "28.3"
+        - generic [ref=e308]:
+          - text: 延迟
+          - generic [ref=e309]: 42ms
+        - generic [ref=e310]:
+          - text: GPU VRAM
+          - generic [ref=e311]: 14.2/24 GB
+        - generic [ref=e312]:
+          - text: WS
+          - generic [ref=e313]: 18/18
+        - generic [ref=e314]:
+          - text: 路口
+          - generic [ref=e315]: 12 active
+        - generic [ref=e316]:
+          - generic [ref=e317]: 08:52:11
+          - generic [ref=e318]: CTO Demo · Dark Industrial
+  - generic [ref=e319]:
+    - heading "Command Palette" [level=2] [ref=e320]
+    - paragraph [ref=e321]: Search for a command to run...
+  - region "Notifications alt+T"

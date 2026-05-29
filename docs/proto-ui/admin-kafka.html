@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" /><title>Kafka 监控 — 无人机路口交通态势监测平台</title><link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+<div class="app">
+<aside class="sidebar"><div class="sidebar-brand"><div class="logo">DT</div><span>DroneTraffic</span></div><nav class="nav"><div class="nav-section">指挥大屏</div><a class="nav-item" href="dashboard.html"><span class="nav-icon">◉</span> Dashboard</a><a class="nav-item" href="monitoring-intersection.html"><span class="nav-icon">◎</span> 实时监测</a><a class="nav-item" href="gis-overview.html"><span class="nav-icon">⊞</span> GIS 总览</a><div class="nav-section">业务操作</div><a class="nav-item" href="video-realtime.html"><span class="nav-icon">▷</span> 视频分析</a><a class="nav-item" href="calibration-homography.html"><span class="nav-icon">⊡</span> 标定中心</a><a class="nav-item" href="alerts-center.html"><span class="nav-icon">⚡</span> 告警中心 <span class="nav-badge">3</span></a><a class="nav-item" href="reports-daily.html"><span class="nav-icon">☰</span> 报告中心</a><div class="nav-section">管理</div><a class="nav-item" href="drone-monitor.html"><span class="nav-icon">✦</span> 无人机管理</a><a class="nav-item active" href="admin-gpu.html"><span class="nav-icon">⚙</span> 系统管理</a></nav></aside>
+<header class="topbar"><span class="topbar-title">系统管理</span><span class="topbar-sep"></span><div class="tabs" style="border:0;margin:0;"><a class="tab" href="admin-users.html">用户权限</a><a class="tab" href="admin-gpu.html">GPU 监控</a><button class="tab active">Kafka</button><a class="tab" href="admin-models.html">模型管理</a><a class="tab" href="admin-config.html">系统配置</a></div>  <div class="topbar-actions"><button class="theme-toggle"><span class="theme-icon">⚡</span><span class="theme-label">CTO 模式</span></button></div>
+    </header>
+<main class="main" style="display:flex;flex-direction:column;gap:var(--sp-4);height:calc(100vh - var(--topbar-h) - var(--statusbar-h) - var(--sp-12));overflow-y:auto;">
+  <div class="grid-4">
+    <div class="card kpi-card"><div class="kpi-label">Total TPS</div><div class="kpi-value">2,847</div><div class="kpi-trend up">↑ 8%</div></div>
+    <div class="card kpi-card"><div class="kpi-label">Consumer Lag</div><div class="kpi-value" style="color:var(--success)">12<span style="font-size:0.5em;color:var(--fg-muted)">ms</span></div></div>
+    <div class="card kpi-card"><div class="kpi-label">Topics</div><div class="kpi-value">8</div></div>
+    <div class="card kpi-card"><div class="kpi-label">消息延迟 P99</div><div class="kpi-value">38<span style="font-size:0.5em;color:var(--fg-muted)">ms</span></div></div>
+  </div>
+  <div class="card" style="flex:1;overflow:hidden;padding:0;min-height:200px;">
+    <div style="overflow-y:auto;height:100%;">
+      <table class="data-table">
+        <thead><tr><th>Topic</th><th>Partitions</th><th>TPS</th><th>Consumer Lag</th><th>延迟 P99</th><th>消息类型</th><th>状态</th></tr></thead>
+        <tbody>
+          <tr><td style="color:var(--fg);">drone_001_intersection_INT_小清河水屯</td><td>12</td><td>1,204</td><td>8ms</td><td>22ms</td><td><span class="badge badge-accent">stats</span> <span class="badge badge-success">detections</span></td><td><span class="badge badge-success">正常</span></td></tr>
+          <tr><td style="color:var(--fg);">rtsp-frames</td><td>12</td><td>847</td><td>12ms</td><td>35ms</td><td><span class="badge badge-accent">stats</span></td><td><span class="badge badge-success">正常</span></td></tr>
+          <tr><td style="color:var(--fg);">yolo-detections</td><td>8</td><td>423</td><td>15ms</td><td>38ms</td><td><span class="badge badge-success">detections</span></td><td><span class="badge badge-success">正常</span></td></tr>
+          <tr><td style="color:var(--fg);">bev-tracks</td><td>6</td><td>89</td><td>28ms</td><td>142ms</td><td><span class="badge badge-info">track_complete</span></td><td><span class="badge badge-success">正常</span></td></tr>
+          <tr><td style="color:var(--fg);">vlm-semantic</td><td>4</td><td>12</td><td>3ms</td><td>8ms</td><td><span class="badge badge-warn">vlm_analysis</span></td><td><span class="badge badge-success">正常</span></td></tr>
+          <tr><td style="color:var(--fg);">alerts</td><td>4</td><td>156</td><td>5ms</td><td>12ms</td><td><span class="badge badge-danger">alerts</span></td><td><span class="badge badge-success">正常</span></td></tr>
+          <tr><td style="color:var(--fg);">drone-telemetry</td><td>8</td><td>3</td><td>1ms</td><td>4ms</td><td><span class="badge badge-neutral">telemetry</span></td><td><span class="badge badge-success">正常</span></td></tr>
+          <tr><td style="color:var(--fg);">system-metrics</td><td>4</td><td>113</td><td>6ms</td><td>15ms</td><td><span class="badge badge-neutral">system_metrics</span></td><td><span class="badge badge-success">正常</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ═══ Kafka Message Type Schemas ═══ -->
+  <div class="card" style="padding:var(--sp-4);">
+    <div class="card-header" style="margin-bottom:var(--sp-4);">
+      <span class="card-title">消息类型 Schema · drone_{drone_id}_intersection_{intersection_id}</span>
+      <span class="mono" style="font-size:10px;color:var(--fg-dim);">5 msg_types</span>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:var(--sp-4);">
+
+      <!-- Schema 1: stats (CalcStatisticsNode, 1/s) -->
+      <div class="schema-card">
+        <div class="schema-header">
+          <span class="schema-type stats">stats</span>
+          <span class="schema-name">实时统计</span>
+          <span class="schema-freq">1 msg/s</span>
+        </div>
+        <div class="schema-body">
+          <div class="schema-field"><span class="sf-name">intersection_id</span><span class="sf-type">str</span><span class="sf-desc">路口标识</span></div>
+          <div class="schema-field"><span class="sf-name">cars</span><span class="sf-type">int</span><span class="sf-desc">当前车辆总数</span></div>
+          <div class="schema-field"><span class="sf-name">congestion_index</span><span class="sf-type">float</span><span class="sf-desc">拥堵指数</span></div>
+          <div class="schema-field"><span class="sf-name">queue_length_m</span><span class="sf-type">float</span><span class="sf-desc">排队长度(米)</span></div>
+          <div class="schema-field"><span class="sf-name">calib_quality</span><span class="sf-type">str</span><span class="sf-desc">标定质量 ok/interpolated/...</span></div>
+          <div class="schema-field"><span class="sf-name">lane_match_rate</span><span class="sf-type">float</span><span class="sf-desc">车道匹配率</span></div>
+          <div class="schema-field"><span class="sf-name">lanes[]</span><span class="sf-type">array</span><span class="sf-desc">车道级 LaneStats</span></div>
+          <div style="margin-top:var(--sp-2);padding-top:var(--sp-2);border-top:1px solid var(--border);">
+            <div class="schema-field"><span class="sf-name" style="color:var(--fg-dim);">  .flow_veh_per_min</span><span class="sf-type">float</span></div>
+            <div class="schema-field"><span class="sf-name" style="color:var(--fg-dim);">  .headway_sec</span><span class="sf-type">float?</span></div>
+            <div class="schema-field"><span class="sf-name" style="color:var(--fg-dim);">  .queue_length_m</span><span class="sf-type">float</span></div>
+            <div class="schema-field"><span class="sf-name" style="color:var(--fg-dim);">  .vehicle_count</span><span class="sf-type">int</span></div>
+            <div class="schema-field"><span class="sf-name" style="color:var(--fg-dim);">  .avg_speed_kmh</span><span class="sf-type">float</span></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Schema 2: detections (per frame, optional) -->
+      <div class="schema-card">
+        <div class="schema-header">
+          <span class="schema-type detections">detections</span>
+          <span class="schema-name">车辆检测</span>
+          <span class="schema-freq">per frame</span>
+        </div>
+        <div class="schema-body">
+          <div class="schema-field"><span class="sf-name">frame_ts</span><span class="sf-type">float</span><span class="sf-desc">帧时间戳</span></div>
+          <div class="schema-field"><span class="sf-name">vehicles[]</span><span class="sf-type">array</span><span class="sf-desc">检测列表</span></div>
+          <div style="margin-top:var(--sp-2);padding-top:var(--sp-2);border-top:1px solid var(--border);">
+            <div class="schema-field"><span class="sf-name" style="color:var(--fg-dim);">  .track_id</span><span class="sf-type">int</span></div>
+            <div class="schema-field"><span class="sf-name" style="color:var(--fg-dim);">  .class_name</span><span class="sf-type">str</span></div>
+            <div class="schema-field"><span class="sf-name" style="color:var(--fg-dim);">  .bbox</span><span class="sf-type">[4]float</span></div>
+            <div class="schema-field"><span class="sf-name" style="color:var(--fg-dim);">  .bev_x, bev_y</span><span class="sf-type">float?</span></div>
+            <div class="schema-field"><span class="sf-name" style="color:var(--fg-dim);">  .confidence</span><span class="sf-type">float</span></div>
+            <div class="schema-field"><span class="sf-name" style="color:var(--fg-dim);">  .lane_id</span><span class="sf-type">int?</span></div>
+            <div class="schema-field"><span class="sf-name" style="color:var(--fg-dim);">  .speed_kmh</span><span class="sf-type">float?</span></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Schema 3: track_complete (vehicle exits view) -->
+      <div class="schema-card">
+        <div class="schema-header">
+          <span class="schema-type track">track_complete</span>
+          <span class="schema-name">轨迹完成</span>
+          <span class="schema-freq">on exit</span>
+        </div>
+        <div class="schema-body">
+          <div class="schema-field"><span class="sf-name">track_id</span><span class="sf-type">int</span><span class="sf-desc">轨迹 ID</span></div>
+          <div class="schema-field"><span class="sf-name">start_lane → end_lane</span><span class="sf-type">int</span><span class="sf-desc">进出车道</span></div>
+          <div class="schema-field"><span class="sf-name">turn_behavior</span><span class="sf-type">enum</span><span class="sf-desc">straight/left/right/u_turn</span></div>
+          <div class="schema-field"><span class="sf-name">total_distance_m</span><span class="sf-type">float</span><span class="sf-desc">总距离</span></div>
+          <div class="schema-field"><span class="sf-name">avg_speed_kmh</span><span class="sf-type">float</span><span class="sf-desc">平均速度</span></div>
+          <div class="schema-field"><span class="sf-name">is_anomaly</span><span class="sf-type">bool</span><span class="sf-desc">逆行/异常停车</span></div>
+          <div class="schema-field"><span class="sf-name">positions_bev</span><span class="sf-type">[[x,y]]</span><span class="sf-desc">BEV 轨迹点</span></div>
+          <div class="schema-field"><span class="sf-name">lane_changes[]</span><span class="sf-type">array</span><span class="sf-desc">换道事件列表</span></div>
+        </div>
+      </div>
+
+      <!-- Schema 4: vlm_analysis (every 45 frames) -->
+      <div class="schema-card">
+        <div class="schema-header">
+          <span class="schema-type vlm">vlm_analysis</span>
+          <span class="schema-name">VLM 语义分析</span>
+          <span class="schema-freq">every 45f</span>
+        </div>
+        <div class="schema-body">
+          <div class="schema-field"><span class="sf-name">frame_ts</span><span class="sf-type">float</span><span class="sf-desc">分析帧时间</span></div>
+          <div class="schema-field"><span class="sf-name">accident</span><span class="sf-type">bool</span><span class="sf-desc">是否检测到事故</span></div>
+          <div class="schema-field"><span class="sf-name">congestion_level</span><span class="sf-type">int</span><span class="sf-desc">拥堵等级 0-3</span></div>
+          <div class="schema-field"><span class="sf-name">visible_lanes</span><span class="sf-type">int</span><span class="sf-desc">可见车道数</span></div>
+          <div class="schema-field"><span class="sf-name">anomaly</span><span class="sf-type">str?</span><span class="sf-desc">异常描述</span></div>
+          <div class="schema-field"><span class="sf-name">summary</span><span class="sf-type">str</span><span class="sf-desc">VLM 自然语言摘要</span></div>
+        </div>
+      </div>
+
+      <!-- Schema 5: system_metrics (every 5s) -->
+      <div class="schema-card">
+        <div class="schema-header">
+          <span class="schema-type system">system_metrics</span>
+          <span class="schema-name">系统指标</span>
+          <span class="schema-freq">every 5s</span>
+        </div>
+        <div class="schema-body">
+          <div class="schema-field"><span class="sf-name">fps</span><span class="sf-type">float</span><span class="sf-desc">处理帧率</span></div>
+          <div class="schema-field"><span class="sf-name">inference_ms</span><span class="sf-type">float</span><span class="sf-desc">YOLO 推理耗时</span></div>
+          <div class="schema-field"><span class="sf-name">tracking_ms</span><span class="sf-type">float</span><span class="sf-desc">ByteTrack 耗时</span></div>
+          <div class="schema-field"><span class="sf-name">track_buffer_size</span><span class="sf-type">int</span><span class="sf-desc">当前 track buffer</span></div>
+          <div class="schema-field"><span class="sf-name">gpu_util_pct</span><span class="sf-type">int</span><span class="sf-desc">GPU 利用率</span></div>
+          <div class="schema-field"><span class="sf-name">gpu_vram_used_mb</span><span class="sf-type">int</span><span class="sf-desc">VRAM 使用量</span></div>
+          <div class="schema-field"><span class="sf-name">gpu_temp_c</span><span class="sf-type">int</span><span class="sf-desc">GPU 温度</span></div>
+          <div class="schema-field"><span class="sf-name">kafka_lag</span><span class="sf-type">int</span><span class="sf-desc">Kafka 消费延迟</span></div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <div class="grid-2">
+    <div class="card"><div class="card-header"><span class="card-title">TPS 趋势 · 30min</span></div>
+      <div style="display:flex;align-items:flex-end;gap:2px;height:80px;">
+        <div style="flex:1;background:var(--accent);opacity:0.3;border-radius:1px 1px 0 0;height:40%"></div>
+        <div style="flex:1;background:var(--accent);opacity:0.4;border-radius:1px 1px 0 0;height:55%"></div>
+        <div style="flex:1;background:var(--accent);opacity:0.4;border-radius:1px 1px 0 0;height:48%"></div>
+        <div style="flex:1;background:var(--accent);opacity:0.5;border-radius:1px 1px 0 0;height:62%"></div>
+        <div style="flex:1;background:var(--accent);opacity:0.5;border-radius:1px 1px 0 0;height:58%"></div>
+        <div style="flex:1;background:var(--accent);opacity:0.6;border-radius:1px 1px 0 0;height:72%"></div>
+        <div style="flex:1;background:var(--accent);opacity:0.6;border-radius:1px 1px 0 0;height:68%"></div>
+        <div style="flex:1;background:var(--accent);opacity:0.7;border-radius:1px 1px 0 0;height:78%"></div>
+        <div style="flex:1;background:var(--accent);opacity:0.7;border-radius:1px 1px 0 0;height:82%"></div>
+        <div style="flex:1;background:var(--accent);opacity:0.8;border-radius:1px 1px 0 0;height:75%"></div>
+        <div style="flex:1;background:var(--accent);opacity:0.8;border-radius:1px 1px 0 0;height:88%"></div>
+        <div style="flex:1;background:var(--accent);opacity:0.9;border-radius:1px 1px 0 0;height:92%"></div>
+      </div>
+    </div>
+    <div class="card"><div class="card-header"><span class="card-title">Consumer Groups</span></div>
+      <div style="font-size:12px;line-height:2.2;">
+        <div class="flex justify-between"><span>yolo-inference-group</span><span class="mono text-success">8/8 active</span></div>
+        <div class="flex justify-between"><span>bev-tracking-group</span><span class="mono text-success">6/6 active</span></div>
+        <div class="flex justify-between"><span>vlm-analysis-group</span><span class="mono text-success">4/4 active</span></div>
+        <div class="flex justify-between"><span>alert-engine-group</span><span class="mono text-success">4/4 active</span></div>
+        <div class="flex justify-between"><span>websocket-broadcast-group</span><span class="mono text-success">2/2 active</span></div>
+      </div>
+    </div>
+  </div>
+</main>
+<footer class="statusbar"><div class="statusbar-item"><span class="statusbar-dot"></span> Kafka 正常</div><div class="statusbar-item">TPS: <span class="text-accent">2,847</span></div><div class="statusbar-item">Lag: <span class="text-success">12ms</span></div><div class="statusbar-item">Brokers: <span class="text-success">3/3</span></div><div class="statusbar-item ml-auto">Kafka 监控</div></footer>
+</div>
+  <script src="app.js"></script>
+</body></html>

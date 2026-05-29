@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" /><title>用户权限 — 无人机路口交通态势监测平台</title><link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+<div class="app">
+<aside class="sidebar"><div class="sidebar-brand"><div class="logo">DT</div><span>DroneTraffic</span></div><nav class="nav"><div class="nav-section">指挥大屏</div><a class="nav-item" href="dashboard.html"><span class="nav-icon">◉</span> Dashboard</a><a class="nav-item" href="monitoring-intersection.html"><span class="nav-icon">◎</span> 实时监测</a><a class="nav-item" href="gis-overview.html"><span class="nav-icon">⊞</span> GIS 总览</a><div class="nav-section">业务操作</div><a class="nav-item" href="video-realtime.html"><span class="nav-icon">▷</span> 视频分析</a><a class="nav-item" href="calibration-homography.html"><span class="nav-icon">⊡</span> 标定中心</a><a class="nav-item" href="alerts-center.html"><span class="nav-icon">⚡</span> 告警中心 <span class="nav-badge">3</span></a><a class="nav-item" href="reports-daily.html"><span class="nav-icon">☰</span> 报告中心</a><div class="nav-section">管理</div><a class="nav-item" href="drone-monitor.html"><span class="nav-icon">✦</span> 无人机管理</a><a class="nav-item active" href="admin-gpu.html"><span class="nav-icon">⚙</span> 系统管理</a></nav></aside>
+<header class="topbar"><span class="topbar-title">系统管理</span><span class="topbar-sep"></span><div class="tabs" style="border:0;margin:0;"><button class="tab active">用户权限</button><a class="tab" href="admin-gpu.html">GPU 监控</a><a class="tab" href="admin-kafka.html">Kafka</a><a class="tab" href="admin-models.html">模型管理</a><a class="tab" href="admin-config.html">系统配置</a></div><div class="topbar-actions">
+        <button class="theme-toggle"><span class="theme-icon">⚡</span><span class="theme-label">CTO 模式</span></button><button class="btn btn-primary btn-sm">+ 新增用户</button></div></header>
+<main class="main" style="display:flex;flex-direction:column;gap:var(--sp-4);height:calc(100vh - var(--topbar-h) - var(--statusbar-h) - var(--sp-12));">
+  <div class="grid-3">
+    <div class="card kpi-card"><div class="kpi-label">总用户</div><div class="kpi-value">24</div></div>
+    <div class="card kpi-card"><div class="kpi-label">在线</div><div class="kpi-value" style="color:var(--success)">8</div></div>
+    <div class="card kpi-card"><div class="kpi-label">角色</div><div class="kpi-value">4</div></div>
+  </div>
+  <div class="card" style="flex:1;overflow:hidden;padding:0;">
+    <div style="overflow-y:auto;height:100%;">
+      <table class="data-table">
+        <thead><tr><th>用户</th><th>角色</th><th>部门</th><th>权限范围</th><th>状态</th><th>最后登录</th><th style="text-align:right">操作</th></tr></thead>
+        <tbody>
+          <tr><td style="color:var(--fg);">张工 (admin)</td><td><span class="badge badge-danger">超级管理员</span></td><td>技术中心</td><td>全部</td><td><span class="badge badge-success">在线</span></td><td>当前会话</td><td style="text-align:right"><button class="btn btn-ghost btn-sm">编辑</button></td></tr>
+          <tr><td style="color:var(--fg);">李警官</td><td><span class="badge badge-warn">指挥员</span></td><td>交管局</td><td>监测 / 告警 / 报告</td><td><span class="badge badge-success">在线</span></td><td>14:28</td><td style="text-align:right"><button class="btn btn-ghost btn-sm">编辑</button></td></tr>
+          <tr><td style="color:var(--fg);">王工</td><td><span class="badge badge-accent">工程师</span></td><td>技术中心</td><td>全部（含标定/系统）</td><td><span class="badge badge-success">在线</span></td><td>13:45</td><td style="text-align:right"><button class="btn btn-ghost btn-sm">编辑</button></td></tr>
+          <tr><td style="color:var(--fg);">赵警官</td><td><span class="badge badge-warn">指挥员</span></td><td>交管局</td><td>监测 / 告警</td><td><span class="badge badge-neutral">离线</span></td><td>昨日 18:30</td><td style="text-align:right"><button class="btn btn-ghost btn-sm">编辑</button></td></tr>
+          <tr><td style="color:var(--fg);">刘工</td><td><span class="badge badge-accent">工程师</span></td><td>技术中心</td><td>标定 / 模型</td><td><span class="badge badge-neutral">离线</span></td><td>昨日 17:15</td><td style="text-align:right"><button class="btn btn-ghost btn-sm">编辑</button></td></tr>
+          <tr><td style="color:var(--fg);">陈警官</td><td><span class="badge badge-info">观察员</span></td><td>交管局</td><td>Dashboard / GIS</td><td><span class="badge badge-success">在线</span></td><td>14:10</td><td style="text-align:right"><button class="btn btn-ghost btn-sm">编辑</button></td></tr>
+          <tr><td style="color:var(--fg);">周工</td><td><span class="badge badge-accent">工程师</span></td><td>技术中心</td><td>全部</td><td><span class="badge badge-neutral">离线</span></td><td>2026-05-25</td><td style="text-align:right"><button class="btn btn-ghost btn-sm">编辑</button></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</main>
+<footer class="statusbar"><div class="statusbar-item"><span class="statusbar-dot"></span> 用户系统</div><div class="statusbar-item">在线: <span class="text-success">8/24</span></div><div class="statusbar-item ml-auto">用户权限管理</div></footer>
+</div>
+  <script src="app.js"></script>
+</body></html>

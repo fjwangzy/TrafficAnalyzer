@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>标定参数库 — 无人机路口交通态势监测平台</title>
+  <link rel="stylesheet" href="styles.css" />
+  <style>
+    .db-layout { display:grid; grid-template-columns:1fr 420px; gap:var(--sp-4); height:calc(100vh - var(--topbar-h) - var(--statusbar-h) - var(--sp-12)); }
+    .db-main { display:flex; flex-direction:column; gap:var(--sp-4); overflow:hidden; }
+    .db-sidebar { display:flex; flex-direction:column; gap:var(--sp-4); overflow-y:auto; }
+    .heatmap-grid { display:grid; grid-template-columns:repeat(10,1fr); gap:2px; }
+    .heat-cell-y { display:grid; place-items:center; font-family:var(--font-mono); font-size:9px; color:var(--fg-muted); height:28px; border-radius:var(--r-sm); }
+    .quality-list { display:flex; flex-direction:column; gap:var(--sp-2); }
+    .quality-item { display:flex; align-items:center; gap:var(--sp-3); padding:var(--sp-3); border-radius:var(--r-md); background:oklch(50% 0.02 250 / 0.06); }
+    .quality-dot { width:10px; height:10px; border-radius:50%; flex-shrink:0; }
+    @media (max-width:1200px) { .db-layout { grid-template-columns:1fr; } .db-sidebar { display:none; } }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="sidebar-brand"><div class="logo">DT</div><span>DroneTraffic</span></div>
+      <nav class="nav">
+        <div class="nav-section">指挥大屏</div>
+        <a class="nav-item" href="dashboard.html"><span class="nav-icon">◉</span> Dashboard</a>
+        <a class="nav-item" href="monitoring-intersection.html"><span class="nav-icon">◎</span> 实时监测</a>
+        <a class="nav-item" href="gis-overview.html"><span class="nav-icon">⊞</span> GIS 总览</a>
+        <div class="nav-section">业务操作</div>
+        <a class="nav-item" href="video-realtime.html"><span class="nav-icon">▷</span> 视频分析</a>
+        <a class="nav-item active" href="calibration-homography.html"><span class="nav-icon">⊡</span> 标定中心</a>
+        <a class="nav-item" href="alerts-center.html"><span class="nav-icon">⚡</span> 告警中心 <span class="nav-badge">3</span></a>
+        <a class="nav-item" href="reports-daily.html"><span class="nav-icon">☰</span> 报告中心</a>
+        <div class="nav-section">管理</div>
+        <a class="nav-item" href="drone-monitor.html"><span class="nav-icon">✦</span> 无人机管理</a>
+        <a class="nav-item" href="admin-gpu.html"><span class="nav-icon">⚙</span> 系统管理</a>
+      </nav>
+    </aside>
+    <header class="topbar">
+      <span class="topbar-title">标定中心</span>
+      <span class="topbar-sep"></span>
+      <div class="tabs" style="border:0;margin:0;">
+        <a class="tab" href="calibration-homography.html">Homography</a>
+        <a class="tab" href="calibration-lanes.html">车道标注</a>
+        <button class="tab active">参数库</button>
+      </div>
+      <div class="topbar-actions">
+        <button class="theme-toggle"><span class="theme-icon">⚡</span><span class="theme-label">CTO 模式</span></button>
+        <button class="btn btn-ghost btn-sm">导入</button>
+        <button class="btn btn-ghost btn-sm">导出</button>
+      </div>
+    </header>
+    <main class="main">
+      <div class="db-layout">
+        <div class="db-main">
+          <div class="card" style="flex:1; overflow:hidden; padding:0;">
+            <div style="overflow-y:auto; height:100%;">
+              <table class="data-table">
+                <thead><tr><th>路口 ID</th><th>路口名</th><th>高度 (m)</th><th>Pitch (°)</th><th>质量</th><th>覆盖率</th><th>标定时间</th><th>来源</th></tr></thead>
+                <tbody>
+                  <tr><td>INT-CS-0042</td><td style="color:var(--fg);">中山路/解放路</td><td>82.4</td><td>-87.2</td><td><span class="badge badge-success">OK</span></td><td>94.2%</td><td>2026-05-27 13:45</td><td>SRT+手动</td></tr>
+                  <tr><td>INT-RM-0018</td><td style="color:var(--fg);">人民大道/建设路</td><td>78.1</td><td>-88.5</td><td><span class="badge badge-success">OK</span></td><td>91.7%</td><td>2026-05-26 09:12</td><td>SRT</td></tr>
+                  <tr><td>INT-HP-0031</td><td style="color:var(--fg);">和平路/光华街</td><td>85.0</td><td>-86.8</td><td><span class="badge badge-warn">Interpolated</span></td><td>72.4%</td><td>2026-05-25 16:30</td><td>插值</td></tr>
+                  <tr><td>INT-WH-0007</td><td style="color:var(--fg);">文化路/科技大道</td><td>80.3</td><td>-89.1</td><td><span class="badge badge-success">OK</span></td><td>96.1%</td><td>2026-05-24 11:20</td><td>SRT+手动</td></tr>
+                  <tr><td>INT-BJ-0055</td><td style="color:var(--fg);">滨江路/望江街</td><td>90.2</td><td>-85.3</td><td><span class="badge badge-danger">Degraded</span></td><td>45.8%</td><td>2026-05-20 14:15</td><td>手动</td></tr>
+                  <tr><td>INT-XF-0023</td><td style="color:var(--fg);">学府路/创新大道</td><td>75.6</td><td>-88.9</td><td><span class="badge badge-success">OK</span></td><td>88.3%</td><td>2026-05-22 08:45</td><td>SRT</td></tr>
+                  <tr><td>INT-LY-0012</td><td style="color:var(--fg);">龙腾路/云飞街</td><td>—</td><td>—</td><td><span class="badge badge-neutral">Missing</span></td><td>—</td><td>—</td><td>—</td></tr>
+                  <tr><td>INT-JA-0089</td><td style="color:var(--fg);">建安路/和平门</td><td>83.7</td><td>-87.6</td><td><span class="badge badge-warn">Interpolated</span></td><td>68.9%</td><td>2026-05-21 10:30</td><td>插值</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+        <div class="db-sidebar">
+          <div class="card">
+            <div class="card-header"><span class="card-title">插值覆盖率热图</span></div>
+            <div style="font-size:10px; color:var(--fg-dim); margin-bottom:var(--sp-2);">X=高度(60-100m) · Y=pitch(-80~-90°)</div>
+            <div class="heatmap-grid">
+              <div class="heat-cell-y" style="background:oklch(72% 0.16 155 / 0.5);"></div>
+              <div class="heat-cell-y" style="background:oklch(72% 0.16 155 / 0.6);"></div>
+              <div class="heat-cell-y" style="background:oklch(72% 0.16 155 / 0.7);"></div>
+              <div class="heat-cell-y" style="background:oklch(72% 0.16 155 / 0.8);"></div>
+              <div class="heat-cell-y" style="background:oklch(72% 0.16 155 / 0.9);"></div>
+              <div class="heat-cell-y" style="background:oklch(72% 0.16 155 / 0.85);"></div>
+              <div class="heat-cell-y" style="background:oklch(72% 0.16 155 / 0.7);"></div>
+              <div class="heat-cell-y" style="background:oklch(80% 0.14 85 / 0.5);"></div>
+              <div class="heat-cell-y" style="background:oklch(80% 0.14 85 / 0.4);"></div>
+              <div class="heat-cell-y" style="background:oklch(68% 0.20 25 / 0.4);"></div>
+              <div class="heat-cell-y" style="background:oklch(72% 0.16 155 / 0.4);"></div>
+              <div class="heat-cell-y" style="background:oklch(72% 0.16 155 / 0.55);"></div>
+              <div class="heat-cell-y" style="background:oklch(72% 0.16 155 / 0.65);"></div>
+              <div class="heat-cell-y" style="background:oklch(72% 0.16 155 / 0.75);"></div>
+              <div class="heat-cell-y" style="background:oklch(72% 0.16 155 / 0.85);"></div>
+              <div class="heat-cell-y" style="background:oklch(72% 0.16 155 / 0.8);"></div>
+              <div class="heat-cell-y" style="background:oklch(80% 0.14 85 / 0.5);"></div>
+              <div class="heat-cell-y" style="background:oklch(80% 0.14 85 / 0.6);"></div>
+              <div class="heat-cell-y" style="background:oklch(80% 0.14 85 / 0.45);"></div>
+              <div class="heat-cell-y" style="background:oklch(68% 0.20 25 / 0.5);"></div>
+              <div class="heat-cell-y" style="background:oklch(80% 0.14 85 / 0.3);"></div>
+              <div class="heat-cell-y" style="background:oklch(72% 0.16 155 / 0.45);"></div>
+              <div class="heat-cell-y" style="background:oklch(72% 0.16 155 / 0.6);"></div>
+              <div class="heat-cell-y" style="background:oklch(72% 0.16 155 / 0.7);"></div>
+              <div class="heat-cell-y" style="background:oklch(72% 0.16 155 / 0.75);"></div>
+              <div class="heat-cell-y" style="background:oklch(80% 0.14 85 / 0.55);"></div>
+              <div class="heat-cell-y" style="background:oklch(80% 0.14 85 / 0.45);"></div>
+              <div class="heat-cell-y" style="background:oklch(68% 0.20 25 / 0.4);"></div>
+              <div class="heat-cell-y" style="background:oklch(68% 0.20 25 / 0.5);"></div>
+              <div class="heat-cell-y" style="background:oklch(68% 0.20 25 / 0.6);"></div>
+            </div>
+            <div style="display:flex;justify-content:space-between;margin-top:var(--sp-2);font-family:var(--font-mono);font-size:9px;color:var(--fg-dim);">
+              <span>60m</span><span>80m</span><span>100m</span>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-header"><span class="card-title">标定质量监控</span></div>
+            <div class="quality-list">
+              <div class="quality-item">
+                <span class="quality-dot" style="background:var(--success)"></span>
+                <div style="flex:1;"><div style="font-size:13px;">OK</div><div class="dim" style="font-size:11px;">lane_match ≥ 90%</div></div>
+                <span class="mono" style="font-size:16px;font-weight:700;color:var(--success);">16</span>
+              </div>
+              <div class="quality-item">
+                <span class="quality-dot" style="background:var(--warn)"></span>
+                <div style="flex:1;"><div style="font-size:13px;">Interpolated</div><div class="dim" style="font-size:11px;">插值覆盖 60-90%</div></div>
+                <span class="mono" style="font-size:16px;font-weight:700;color:var(--warn);">5</span>
+              </div>
+              <div class="quality-item">
+                <span class="quality-dot" style="background:var(--danger)"></span>
+                <div style="flex:1;"><div style="font-size:13px;">Degraded</div><div class="dim" style="font-size:11px;">覆盖率 &lt; 60%</div></div>
+                <span class="mono" style="font-size:16px;font-weight:700;color:var(--danger);">2</span>
+              </div>
+              <div class="quality-item">
+                <span class="quality-dot" style="background:var(--fg-dim)"></span>
+                <div style="flex:1;"><div style="font-size:13px;">Missing</div><div class="dim" style="font-size:11px;">未标定</div></div>
+                <span class="mono" style="font-size:16px;font-weight:700;">1</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </main>
+    <footer class="statusbar">
+      <div class="statusbar-item"><span class="statusbar-dot"></span> 参数库</div>
+      <div class="statusbar-item">总计: <span class="text-accent">24</span></div>
+      <div class="statusbar-item">OK: <span class="text-success">16</span></div>
+      <div class="statusbar-item">待标定: <span class="text-danger">1</span></div>
+      <div class="statusbar-item ml-auto">Calibration DB</div>
+    </footer>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>

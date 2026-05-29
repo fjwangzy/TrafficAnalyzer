@@ -1,0 +1,248 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>轨迹分析 — 无人机路口交通态势监测平台</title>
+  <link rel="stylesheet" href="styles.css" />
+  <style>
+    .traj-layout { display:grid; grid-template-columns:1fr 340px; gap:var(--sp-4); height:calc(100vh - var(--topbar-h) - var(--statusbar-h) - var(--sp-12)); }
+    .traj-canvas { position:relative; background:var(--bg-deep); border:1px solid var(--border); border-radius:var(--r-lg); overflow:hidden; }
+    .traj-sidebar { display:flex; flex-direction:column; gap:var(--sp-4); overflow-y:auto; }
+    .traj-path { position:absolute; height:2px; opacity:0.6; }
+    .traj-point { position:absolute; width:6px; height:6px; border-radius:50%; transform:translate(-50%,-50%); }
+    .traj-legend { position:absolute; bottom:var(--sp-4); left:var(--sp-4); display:flex; gap:var(--sp-4); font-size:11px; font-family:var(--font-mono); color:var(--fg-muted); background:oklch(15% 0.02 250 / 0.85); padding:var(--sp-2) var(--sp-3); border-radius:var(--r-sm); border:1px solid var(--border); }
+    .heat-area { position:absolute; border-radius:50%; filter:blur(20px); opacity:0.4; }
+    @media (max-width:1024px) { .traj-layout { grid-template-columns:1fr; } .traj-sidebar { display:none; } }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="sidebar-brand"><div class="logo">DT</div><span>DroneTraffic</span></div>
+      <nav class="nav">
+        <div class="nav-section">指挥大屏</div>
+        <a class="nav-item" href="dashboard.html"><span class="nav-icon">◉</span> Dashboard</a>
+        <a class="nav-item" href="monitoring-intersection.html"><span class="nav-icon">◎</span> 实时监测</a>
+        <a class="nav-item" href="gis-overview.html"><span class="nav-icon">⊞</span> GIS 总览</a>
+        <div class="nav-section">业务操作</div>
+        <a class="nav-item active" href="video-realtime.html"><span class="nav-icon">▷</span> 视频分析</a>
+        <a class="nav-item" href="calibration-homography.html"><span class="nav-icon">⊡</span> 标定中心</a>
+        <a class="nav-item" href="alerts-center.html"><span class="nav-icon">⚡</span> 告警中心 <span class="nav-badge">3</span></a>
+        <a class="nav-item" href="reports-daily.html"><span class="nav-icon">☰</span> 报告中心</a>
+        <div class="nav-section">管理</div>
+        <a class="nav-item" href="drone-monitor.html"><span class="nav-icon">✦</span> 无人机管理</a>
+        <a class="nav-item" href="admin-gpu.html"><span class="nav-icon">⚙</span> 系统管理</a>
+      </nav>
+    </aside>
+    <header class="topbar">
+      <span class="topbar-title">视频分析中心</span>
+      <span class="topbar-sep"></span>
+      <div class="tabs" style="border:0;margin:0;">
+        <a class="tab" href="video-realtime.html">实时分析</a>
+        <a class="tab" href="video-playback.html">回放分析</a>
+        <button class="tab active">轨迹分析</button>
+        <a class="tab" href="video-vlm.html">VLM 语义</a>
+      </div>
+      <div class="topbar-actions">
+        <button class="theme-toggle"><span class="theme-icon">⚡</span><span class="theme-label">CTO 模式</span></button>
+        <select class="select" style="width:auto;font-size:12px;"><option>全部车道</option><option>L1 直行↑</option><option>L2 左转↑</option><option>L3 直行↓</option></select>
+        <button class="btn btn-ghost btn-sm">导出轨迹</button>
+      </div>
+    </header>
+    <main class="main">
+      <div class="traj-layout">
+        <div class="traj-canvas">
+          <div style="position:absolute;inset:0;background-image:linear-gradient(oklch(40% 0.01 250 / 0.06) 1px,transparent 1px),linear-gradient(90deg,oklch(40% 0.01 250 / 0.06) 1px,transparent 1px);background-size:30px 30px;"></div>
+          <div style="position:absolute;top:0;bottom:0;left:38%;width:24%;background:oklch(28% 0.01 250 / 0.4);"></div>
+          <div style="position:absolute;left:0;right:0;top:38%;height:24%;background:oklch(28% 0.01 250 / 0.4);"></div>
+          <!-- Trajectory paths -->
+          <div class="traj-path" style="top:10%;left:42%;width:2px;height:30%;background:var(--accent);transform:rotate(2deg);"></div>
+          <div class="traj-path" style="top:8%;left:48%;width:2px;height:32%;background:var(--accent);transform:rotate(-1deg);"></div>
+          <div class="traj-path" style="top:60%;left:44%;width:2px;height:28%;background:var(--success);transform:rotate(1deg);"></div>
+          <div class="traj-path" style="top:58%;left:50%;width:2px;height:30%;background:var(--success);"></div>
+          <div class="traj-path" style="top:42%;left:8%;width:28%;height:2px;background:var(--secondary);transform:rotate(1deg);"></div>
+          <div class="traj-path" style="top:52%;left:10%;width:26%;height:2px;background:var(--secondary);transform:rotate(-1deg);"></div>
+          <div class="traj-path" style="top:44%;left:64%;width:28%;height:2px;background:var(--accent);transform:rotate(-2deg);"></div>
+          <!-- U-turn trajectory (anomaly) -->
+          <div style="position:absolute;top:35%;left:42%;width:80px;height:60px;border:2px solid var(--danger);border-radius:0 0 50% 50%;border-top:0;opacity:0.6;"></div>
+          <div class="traj-point" style="top:35%;left:42%;background:var(--danger);width:10px;height:10px;box-shadow:0 0 8px var(--danger);"></div>
+          <!-- Lane Change Event Markers -->
+          <div class="lc-marker" style="top:25%;left:46%;" title="L1→L2 换道 · #T087">
+            <div class="lc-dot"></div>
+            <div class="lc-arrow" style="transform:translate(0,-50%) rotate(40deg);"></div>
+          </div>
+          <div class="lc-marker" style="top:55%;left:50%;" title="L3→L4 换道 · #T092">
+            <div class="lc-dot"></div>
+            <div class="lc-arrow" style="transform:translate(0,-50%) rotate(30deg);"></div>
+          </div>
+          <div class="lc-marker" style="top:48%;left:28%;" title="L5→L4 换道 · #T103">
+            <div class="lc-dot"></div>
+            <div class="lc-arrow" style="transform:translate(0,-50%) rotate(-20deg);"></div>
+          </div>
+          <div class="lc-marker" style="top:42%;left:68%;" title="L4→L3 换道 · #T115">
+            <div class="lc-dot"></div>
+            <div class="lc-arrow" style="transform:translate(0,-50%) rotate(200deg);"></div>
+          </div>
+          <!-- Heat areas (停留分析) -->
+          <div class="heat-area" style="top:38%;left:38%;width:100px;height:80px;background:var(--danger);"></div>
+          <div class="heat-area" style="top:55%;left:44%;width:60px;height:50px;background:var(--warn);"></div>
+          <div style="position:absolute;top:var(--sp-4);left:var(--sp-4);display:flex;gap:var(--sp-2);">
+            <span class="vc-btn active-ctrl">单车轨迹</span>
+            <span class="vc-btn">路径热力</span>
+            <span class="vc-btn">停留分析</span>
+            <span class="vc-btn">逆行检测</span>
+            <span class="vc-btn">换道分析</span>
+          </div>
+          <div class="traj-legend">
+            <span style="display:flex;align-items:center;gap:4px;"><span style="width:12px;height:2px;background:var(--accent);"></span>北向南</span>
+            <span style="display:flex;align-items:center;gap:4px;"><span style="width:12px;height:2px;background:var(--success);"></span>南向北</span>
+            <span style="display:flex;align-items:center;gap:4px;"><span style="width:12px;height:2px;background:var(--secondary);"></span>东西向</span>
+            <span style="display:flex;align-items:center;gap:4px;"><span style="width:12px;height:2px;background:var(--danger);"></span>异常</span>
+            <span style="display:flex;align-items:center;gap:4px;"><span style="width:8px;height:8px;border-radius:50%;background:var(--secondary);box-shadow:0 0 6px var(--secondary-glow);"></span>换道</span>
+          </div>
+        </div>
+        <div class="traj-sidebar">
+          <div class="card">
+            <div class="card-header"><span class="card-title">轨迹统计</span></div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--sp-3);">
+              <div><div class="kpi-label">总轨迹数</div><div class="mono" style="font-size:20px;font-weight:700;">4,827</div></div>
+              <div><div class="kpi-label">异常轨迹</div><div class="mono" style="font-size:20px;font-weight:700;color:var(--danger);">23</div></div>
+              <div><div class="kpi-label">平均速度</div><div class="mono" style="font-size:20px;font-weight:700;">36<span style="font-size:0.5em;color:var(--fg-muted)">km/h</span></div></div>
+              <div><div class="kpi-label">逆行事件</div><div class="mono" style="font-size:20px;font-weight:700;color:var(--danger);">3</div></div>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-header"><span class="card-title">选中轨迹 · #T041</span></div>
+            <div style="font-size:12px;line-height:2;">
+              <div class="flex justify-between"><span class="muted">类型</span><span class="mono" style="color:var(--danger);">逆行</span></div>
+              <div class="flex justify-between"><span class="muted">转向行为</span><span class="badge badge-danger">u_turn</span></div>
+              <div class="flex justify-between"><span class="muted">车道</span><span class="mono">L2 → L1 (逆行)</span></div>
+              <div class="flex justify-between"><span class="muted">换道次数</span><span class="mono text-secondary">1</span></div>
+              <div class="flex justify-between"><span class="muted">持续时间</span><span class="mono">12.4s</span></div>
+              <div class="flex justify-between"><span class="muted">总距离</span><span class="mono">85.3m</span></div>
+              <div class="flex justify-between"><span class="muted">平均速度</span><span class="mono">23 km/h</span></div>
+              <div class="flex justify-between"><span class="muted">检测时间</span><span class="mono">14:31:42</span></div>
+            </div>
+            <div style="margin-top:var(--sp-3);padding-top:var(--sp-3);border-top:1px solid var(--border);">
+              <div class="card-title" style="margin-bottom:var(--sp-2);">换道事件</div>
+              <div style="font-size:11px;font-family:var(--font-mono);color:var(--fg-muted);line-height:1.8;">
+                <div>L2→L1 · bev(5.3, 24.5) · 14:31:47</div>
+              </div>
+            </div>
+            <div style="margin-top:var(--sp-3);display:flex;gap:var(--sp-2);">
+              <button class="btn btn-ghost btn-sm" style="flex:1;">查看视频</button>
+              <button class="btn btn-danger btn-sm" style="flex:1;">标记告警</button>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-header"><span class="card-title">速度分布</span></div>
+            <div style="display:flex;flex-direction:column;gap:var(--sp-2);">
+              <div style="display:flex;align-items:center;gap:var(--sp-2);"><span class="mono" style="font-size:10px;width:50px;color:var(--fg-dim);">0-20</span><div class="progress" style="flex:1;"><div class="progress-fill success-fill" style="width:12%"></div></div><span class="mono" style="font-size:10px;width:30px;">8%</span></div>
+              <div style="display:flex;align-items:center;gap:var(--sp-2);"><span class="mono" style="font-size:10px;width:50px;color:var(--fg-dim);">20-40</span><div class="progress" style="flex:1;"><div class="progress-fill accent-fill" style="width:62%"></div></div><span class="mono" style="font-size:10px;width:30px;">62%</span></div>
+              <div style="display:flex;align-items:center;gap:var(--sp-2);"><span class="mono" style="font-size:10px;width:50px;color:var(--fg-dim);">40-60</span><div class="progress" style="flex:1;"><div class="progress-fill warn-fill" style="width:24%"></div></div><span class="mono" style="font-size:10px;width:30px;">24%</span></div>
+              <div style="display:flex;align-items:center;gap:var(--sp-2);"><span class="mono" style="font-size:10px;width:50px;color:var(--fg-dim);">60+</span><div class="progress" style="flex:1;"><div class="progress-fill danger-fill" style="width:6%"></div></div><span class="mono" style="font-size:10px;width:30px;">6%</span></div>
+            </div>
+          </div>
+          <!-- Turn Behavior Distribution (from Track.turn_behavior) -->
+          <div class="card">
+            <div class="card-header"><span class="card-title">转向行为 · TurnBehavior</span><span class="mono" style="font-size:10px;color:var(--fg-dim);">n=4,827</span></div>
+            <div class="turn-dist">
+              <div class="turn-row">
+                <span class="turn-icon" style="color:var(--accent);">↑</span>
+                <span class="turn-label">直行</span>
+                <div class="turn-bar-track"><div class="turn-bar-fill" style="width:58%;background:var(--accent);"></div></div>
+                <span class="turn-count">2,800</span>
+                <span class="turn-pct">58%</span>
+              </div>
+              <div class="turn-row">
+                <span class="turn-icon" style="color:var(--secondary);">↰</span>
+                <span class="turn-label">左转</span>
+                <div class="turn-bar-track"><div class="turn-bar-fill" style="width:24%;background:var(--secondary);"></div></div>
+                <span class="turn-count">1,158</span>
+                <span class="turn-pct">24%</span>
+              </div>
+              <div class="turn-row">
+                <span class="turn-icon" style="color:var(--success);">↱</span>
+                <span class="turn-label">右转</span>
+                <div class="turn-bar-track"><div class="turn-bar-fill" style="width:15%;background:var(--success);"></div></div>
+                <span class="turn-count">724</span>
+                <span class="turn-pct">15%</span>
+              </div>
+              <div class="turn-row">
+                <span class="turn-icon" style="color:var(--danger);">↩</span>
+                <span class="turn-label">掉头</span>
+                <div class="turn-bar-track"><div class="turn-bar-fill" style="width:3%;background:var(--danger);"></div></div>
+                <span class="turn-count">145</span>
+                <span class="turn-pct">3%</span>
+              </div>
+            </div>
+          </div>
+          <!-- Lane Change Matrix (from Track.lane_changes) -->
+          <div class="card">
+            <div class="card-header"><span class="card-title">换道矩阵 · LaneChange</span><span class="badge badge-info">406 次</span></div>
+            <table class="flow-matrix">
+              <thead>
+                <tr><th>From\To</th><th>L1</th><th>L2</th><th>L3</th><th>L4</th><th>L5</th></tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>L1</td>
+                  <td><span class="cell-heat heat-0">—</span></td>
+                  <td><span class="cell-heat heat-4">47</span></td>
+                  <td><span class="cell-heat heat-0">0</span></td>
+                  <td><span class="cell-heat heat-0">0</span></td>
+                  <td><span class="cell-heat heat-1">3</span></td>
+                </tr>
+                <tr>
+                  <td>L2</td>
+                  <td><span class="cell-heat heat-3">38</span></td>
+                  <td><span class="cell-heat heat-0">—</span></td>
+                  <td><span class="cell-heat heat-1">5</span></td>
+                  <td><span class="cell-heat heat-0">0</span></td>
+                  <td><span class="cell-heat heat-0">0</span></td>
+                </tr>
+                <tr>
+                  <td>L3</td>
+                  <td><span class="cell-heat heat-0">0</span></td>
+                  <td><span class="cell-heat heat-1">4</span></td>
+                  <td><span class="cell-heat heat-0">—</span></td>
+                  <td><span class="cell-heat heat-5">82</span></td>
+                  <td><span class="cell-heat heat-2">12</span></td>
+                </tr>
+                <tr>
+                  <td>L4</td>
+                  <td><span class="cell-heat heat-0">0</span></td>
+                  <td><span class="cell-heat heat-0">0</span></td>
+                  <td><span class="cell-heat heat-4">68</span></td>
+                  <td><span class="cell-heat heat-0">—</span></td>
+                  <td><span class="cell-heat heat-3">24</span></td>
+                </tr>
+                <tr>
+                  <td>L5</td>
+                  <td><span class="cell-heat heat-1">2</span></td>
+                  <td><span class="cell-heat heat-0">0</span></td>
+                  <td><span class="cell-heat heat-2">15</span></td>
+                  <td><span class="cell-heat heat-5">106</span></td>
+                  <td><span class="cell-heat heat-0">—</span></td>
+                </tr>
+              </tbody>
+            </table>
+            <div style="margin-top:var(--sp-3);display:flex;justify-content:space-between;font-size:11px;">
+              <span class="muted">换道率</span>
+              <span class="mono text-secondary">8.4%<span style="color:var(--fg-dim);"> (406/4,827)</span></span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </main>
+    <footer class="statusbar">
+      <div class="statusbar-item"><span class="statusbar-dot"></span> 分析就绪</div>
+      <div class="statusbar-item">轨迹: <span class="text-accent">4,827</span></div>
+      <div class="statusbar-item">异常: <span class="text-danger">23</span></div>
+      <div class="statusbar-item ml-auto">轨迹分析</div>
+    </footer>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>

@@ -16,6 +16,8 @@ from nodes.HomographyCalibrationNode import HomographyCalibrationNode
 from nodes.SpeedEstimationNode import SpeedEstimationNode
 from nodes.DirectionFlowNode import DirectionFlowNode
 from nodes.LaneAnalysisNode import LaneAnalysisNode
+from nodes.TrajectoryNode import TrajectoryNode
+from nodes.ConflictDetectionNode import ConflictDetectionNode
 from elements.VideoEndBreakElement import VideoEndBreakElement
 from utils_local.utils import check_and_set_env_var
 
@@ -49,6 +51,8 @@ def proc_tracker_update_and_calc(queue_in: Queue, queue_out: Queue, config: dict
     speed_node = SpeedEstimationNode(config)
     direction_flow_node = DirectionFlowNode(config)
     lane_analysis_node = LaneAnalysisNode(config)
+    trajectory_node = TrajectoryNode(config)
+    conflict_node = ConflictDetectionNode(config)
     calc_statistics_node = CalcStatisticsNode(config)
     send_info_kafka = config["pipeline"]["send_info_kafka"]
     if send_info_kafka:
@@ -62,6 +66,8 @@ def proc_tracker_update_and_calc(queue_in: Queue, queue_out: Queue, config: dict
         frame_element = speed_node.process(frame_element)
         frame_element = direction_flow_node.process(frame_element)
         frame_element = lane_analysis_node.process(frame_element)
+        frame_element = trajectory_node.process(frame_element)
+        frame_element = conflict_node.process(frame_element)
         frame_element = calc_statistics_node.process(frame_element)
         if send_info_kafka:
             frame_element = kafka_producer_node.process(frame_element)

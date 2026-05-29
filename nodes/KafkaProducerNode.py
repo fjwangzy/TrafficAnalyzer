@@ -25,6 +25,13 @@ class KafkaProducerNode:
             config["general"]["buffer_analytics"] * 60 + config["general"]["min_time_life_track"]
         )  # 这是缓冲区积累的时间，过早输出统计信息还为时过早
 
+        # 扩展topic（用于轨迹和冲突事件）
+        base_topic = self.topic_name  # e.g., "statistics_1"
+        camera_suffix = base_topic.replace("statistics", "")  # e.g., "_1"
+        self.track_complete_topic = f"track_complete{camera_suffix}"
+        self.conflicts_topic = f"conflicts{camera_suffix}"
+        self.intersection_id = f"INT_camera_{self.camera_id}"
+
     @profile_time
     def process(self, frame_element: FrameElement):
         # 如果是VideoEndBreakElement而不是FrameElement则退出处理
@@ -92,5 +99,29 @@ class KafkaProducerNode:
             logging.info(f"KAFKA sent message: {data} topic {self.topic_name}")
             self.last_send_time = current_time
             frame_element.send_to_kafka = True
+
+        # 发布完成轨迹到独立topic
+        completed_tracks = getattr(frame_element, "completed_tracks", None)
+        if completed_tracks:
+            for ct in completed_tracks:
+                ct_msg = {
+                    "msg_type": "track_complete",
+                    "intersection_id": self.intersection_id,
+                    **ct,
+                }
+                self.kafka_producer.send(self.track_complete_topic, value=ct_msg)
+                logging.info(f"KAFKA sent track_complete: id={ct.get('track_id')} topic {self.track_complete_topic}")
+
+        # 发布冲突事件到独立topic
+        conflict_events = getattr(frame_element, "conflict_events", None)
+        if conflict_events:
+            for event in conflict_events:
+                event_msg = {
+                    "msg_type": "conflict",
+                    "intersection_id": self.intersection_id,
+                    **event,
+                }
+                self.kafka_producer.send(self.conflicts_topic, value=event_msg)
+                logging.info(f"KAFKA sent conflict: {event.get('severity')} topic {self.conflicts_topic}")
 
         return frame_element

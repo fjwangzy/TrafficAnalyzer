@@ -15,6 +15,9 @@ from nodes.CalcStatisticsNode import CalcStatisticsNode
 from nodes.FlaskServerVideoNode import VideoServer
 from nodes.KafkaProducerNode import KafkaProducerNode
 from nodes.HomographyCalibrationNode import HomographyCalibrationNode
+from nodes.SpeedEstimationNode import SpeedEstimationNode
+from nodes.DirectionFlowNode import DirectionFlowNode
+from nodes.LaneAnalysisNode import LaneAnalysisNode
 from elements.VideoEndBreakElement import VideoEndBreakElement
 from utils_local.utils import check_and_set_env_var
 
@@ -46,6 +49,9 @@ def proc_proceessor(frame_queue_in: Queue, config: dict, frame_process: Process)
     detection_node = DetectionTrackingNodes(config)
     homography_node = HomographyCalibrationNode(config)
     tracker_info_update_node = TrackerInfoUpdateNode(config)
+    speed_node = SpeedEstimationNode(config)
+    direction_flow_node = DirectionFlowNode(config)
+    lane_analysis_node = LaneAnalysisNode(config)
     calc_statistics_node = CalcStatisticsNode(config)
     send_info_kafka = config["pipeline"]["send_info_kafka"]
     if send_info_kafka:
@@ -75,6 +81,9 @@ def proc_proceessor(frame_queue_in: Queue, config: dict, frame_process: Process)
         frame_element = detection_node.process(frame_element)
         frame_element = homography_node.process(frame_element)
         frame_element = tracker_info_update_node.process(frame_element)
+        frame_element = speed_node.process(frame_element)
+        frame_element = direction_flow_node.process(frame_element)
+        frame_element = lane_analysis_node.process(frame_element)
         frame_element = calc_statistics_node.process(frame_element)
         if send_info_kafka:
             frame_element = kafka_producer_node.process(frame_element)

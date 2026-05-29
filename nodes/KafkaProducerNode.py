@@ -67,6 +67,27 @@ class KafkaProducerNode:
                     else None
                 ),
             }
+
+            # 扩展字段：方向流量统计（始终输出）
+            direction_stats = getattr(frame_element, "direction_stats", None)
+            if direction_stats:
+                data["direction_flow"] = direction_stats
+                data["queue_count"] = getattr(frame_element, "queue_count", 0)
+                # 计算整体平均车速
+                all_speeds = []
+                for d in ["straight", "left_turn", "right_turn", "u_turn"]:
+                    if d in direction_stats and direction_stats[d].get("avg_speed_kmh", 0) > 0:
+                        all_speeds.append(direction_stats[d]["avg_speed_kmh"])
+                data["avg_speed_kmh"] = round(sum(all_speeds) / len(all_speeds), 1) if all_speeds else 0
+
+            # 扩展字段：车道级统计（仅在有标注且点位命中时输出）
+            lane_stats = getattr(frame_element, "lane_stats", None)
+            data["lane_stats"] = lane_stats  # None when no lane data
+
+            # 扩展字段：冲突事件
+            conflicts = getattr(frame_element, "conflict_events", None)
+            data["conflict_count"] = len(conflicts) if conflicts else 0
+
             self.kafka_producer.send(self.topic_name, value=data).get(timeout=1)
             logging.info(f"KAFKA sent message: {data} topic {self.topic_name}")
             self.last_send_time = current_time

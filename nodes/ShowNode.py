@@ -31,6 +31,20 @@ class ShowNode:
 
         self.show_number_of_road = True  # 显示道路编号
 
+        # 新增：交通态势可视化选项
+        self.show_speed_labels = True  # 显示车速标签
+        self.show_direction_stats = True  # 显示方向流量统计
+        self.show_lane_polygons = True  # 显示车道多边形（有标注时）
+
+        # 方向流量颜色映射
+        self.direction_colors = {
+            "straight": (0, 255, 0),    # 绿色
+            "left_turn": (255, 165, 0),  # 橙色
+            "right_turn": (0, 165, 255), # 橙蓝
+            "u_turn": (128, 0, 128),     # 紫色
+            "unknown": (128, 128, 128),  # 灰色
+        }
+
         # 字体参数：
         self.fontFace = 1
         self.fontScale = 2.0
@@ -94,9 +108,16 @@ class ShowNode:
 
                 cv2.rectangle(frame_result, (x1, y1), (x2, y2), color, self.thickness_lines)
                 # 添加ID标签
+                id_label = f"{id}"
+                # 叠加车速标签（km/h或px/s）
+                if self.show_speed_labels and frame_element.buffer_tracks:
+                    track = frame_element.buffer_tracks.get(int(id))
+                    if track and track.avg_speed_kmh > 0:
+                        id_label += f" {track.avg_speed_kmh:.0f}"
+
                 cv2.putText(
                     frame_result,
-                    f"{id}",
+                    id_label,
                     (x1, y1 - 10),
                     fontFace=self.fontFace,
                     fontScale=self.fontScale,
@@ -181,6 +202,19 @@ class ShowNode:
                 thickness=self.thickness,
                 color=(255, 255, 255),
             )
+
+        # 绘制方向流量统计信息叠加层
+        if self.show_direction_stats:
+            direction_stats = getattr(frame_element, "direction_stats", None)
+            if direction_stats:
+                self._draw_direction_overlay(frame_result, direction_stats,
+                                              getattr(frame_element, "queue_count", 0))
+
+        # 绘制车道多边形（数据驱动：有标注时叠加显示）
+        if self.show_lane_polygons:
+            lane_polygons = getattr(frame_element, "lane_polygons", None)
+            if lane_polygons:
+                self._draw_lane_polygons(frame_result, lane_polygons)
 
         # 处理显示统计信息的单独窗口
         if self.show_info_statistics:
@@ -278,3 +312,42 @@ class ShowNode:
         binary_mask = cv2.fillPoly(binary_mask, pts=[points], color=1)
         colored_mask = (binary_mask[:, :, np.newaxis] * mask_color).astype(np.uint8)
         return cv2.addWeighted(img, 1, colored_mask, alpha, 0)
+
+    def _draw_direction_overlay(self, frame_result, direction_stats, queue_count):
+        """在画面左上角绘制方向流量统计（FPS下方）。"""
+        y_offset = 75  # FPS信息下方
+        h = frame_result.shape[0]
+        label_scale = self.fontScale * 0.8
+        label_thickness = max(1, self.thickness - 1)
+
+        # 方向流量标题
+        direction_labels = {
+            "straight": "S:", "left_turn": "L:", "right_turn": "R:", "u_turn": "U:",
+        }
+
+        # 背景条
+        cv2.rectangle(frame_result, (0, y_offset - 5), (280, y_offset + 25), (0, 0, 0), -1)
+        parts = []
+        for d, label in direction_labels.items():
+            if d in direction_stats:
+                count = direction_stats[d].get("count", 0)
+                parts.append(f"{label}{count}")
+        text = "  ".join(parts) + f"  Q:{queue_count}"
+        cv2.putText(frame_result, text, (5, y_offset + 15),
+                    fontFace=self.fontFace, fontScale=label_scale,
+                    thickness=label_thickness, color=(255, 255, 255))
+
+    def _draw_lane_polygons(self, frame_result, lane_polygons):
+        """在画面上叠加绘制车道多边形。"""
+        lane_color = (0, 200, 200)  # 青色
+        for lane_id, poly in lane_polygons.items():
+            coords = np.array(poly.exterior.coords, dtype=np.int32)
+            coords = coords.reshape((-1, 1, 2))
+            cv2.polylines(frame_result, [coords], isClosed=True,
+                          color=lane_color, thickness=2)
+            # 车道ID标签
+            cx = int(np.mean(coords[:, 0, 0]))
+            cy = int(np.mean(coords[:, 0, 1]))
+            cv2.putText(frame_result, str(lane_id), (cx - 10, cy),
+                        fontFace=self.fontFace, fontScale=self.fontScale * 0.7,
+                        thickness=1, color=lane_color)

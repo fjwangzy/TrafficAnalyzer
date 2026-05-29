@@ -108,3 +108,88 @@ main*.py → elements/* → nodes/* → byte_tracker/*
                                   ↓
                      configs/*.yaml + configs/*.json
 ```
+
+---
+
+## 平台目录结构（platform/）
+
+> 2026-05-29 从微服务重构为单体架构。
+
+```
+platform/
+├── app/                             # 单体应用
+│   ├── main.py                      #   FastAPI 应用入口 + lifespan
+│   ├── __init__.py
+│   │
+│   ├── core/                        #   核心配置
+│   │   ├── config.py                #     Pydantic Settings（统一配置）
+│   │   └── database.py              #     SQLAlchemy async engine + session
+│   │
+│   ├── api/                         #   API 路由层
+│   │   └── v1/
+│   │       ├── auth.py              #     认证端点（register/login/me）
+│   │       ├── intersections.py     #     路口管理
+│   │       ├── drones.py            #     无人机管理
+│   │       ├── trajectories.py      #     车辆轨迹查询
+│   │       ├── alerts.py            #     告警规则和告警历史
+│   │       ├── video.py             #     视频流管理
+│   │       ├── calibration.py       #     摄像头标定
+│   │       └── system.py            #     系统健康检查
+│   │
+│   ├── kafka/                       #   Kafka 集成
+│   │   ├── consumer.py              #     Kafka 消费者（aiokafka）
+│   │   └── ws_manager.py            #     WebSocket pub/sub 管理器
+│   │
+│   ├── middleware/                  #   中间件
+│   │   └── auth.py                  #     JWT 认证中间件
+│   │
+│   ├── services/                    #   业务逻辑层
+│   │   ├── auth_service.py          #     用户认证（PyJWT + bcrypt）
+│   │   └── alert_engine.py          #     告警规则引擎
+│   │
+│   ├── models/                      #   数据模型
+│   │   ├── user.py                  #     User SQLAlchemy 模型
+│   │   └── drone_store.py           #     无人机内存存储
+│   │
+│   ├── schemas/                     #   Pydantic 模式
+│   │   └── auth.py                  #     认证相关 schema
+│   │
+│   └── utils/                       #   工具函数
+│       └── influx_query.py          #     InfluxDB 查询封装
+│
+├── docker/                          # Docker 配置
+│   └── docker-compose.platform.yml  #   平台完整栈（platform + postgres + kafka + influxdb + frontend）
+│
+├── scripts/                         # 开发脚本
+│   └── run_local.py                 #   本地启动脚本（设置默认环境变量）
+│
+├── Dockerfile                       # 平台容器镜像
+├── pyproject.toml                   # 依赖清单（hatchling 构建）
+├── README.md                        # 平台说明文档
+├── MONOLITH.md                      # 单体架构迁移说明
+└── REFACTORING_SUMMARY.md           # 重构总结
+```
+
+### 遗留目录（待删除）
+
+以下目录是微服务架构遗留代码，已不再使用：
+
+```
+platform/
+├── gateway/                         # [已弃用] API 网关
+├── services/                        # [已弃用] 微服务（flight/vision/operations）
+├── shared/                          # [已弃用] 共享库
+└── frontend/                        # [已弃用] 前端（已迁移至 traffic-fly-console/）
+```
+
+### 前端目录（traffic-fly-console/）
+
+```
+traffic-fly-console/
+├── nginx.conf                       # Nginx 反向代理配置
+│                                    #   /api/ → platform:8000
+│                                    #   /ws/  → platform:8000
+├── Dockerfile                       # 前端容器镜像
+└── ...                              # Vue.js 源码
+```
+

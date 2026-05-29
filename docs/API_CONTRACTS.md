@@ -187,3 +187,176 @@ Content-Type: application/json
 ### ⚠️ 安全风险
 - `export_dashboards.py` 和 `fetch_dashboard.py` 中硬编码了 `admin:admin` 凭据
 - 这些脚本仅用于开发环境，生产环境不应使用
+
+---
+
+## 7. 平台 Web 服务 API（platform/app/api/v1/）
+
+> 2026-05-29 从微服务重构为单体架构，所有端点路径和响应格式保持不变。
+
+### 基础 URL
+- 本地开发：`http://localhost:8000`
+- Docker Compose：`http://localhost:8000`（通过 nginx 代理：`http://localhost:8080/api/`）
+
+### 健康检查端点（无需认证）
+
+#### `GET /health`
+- 返回：`{"status": "healthy"}`
+- 用途：存活检查（liveness probe）
+
+#### `GET /ready`
+- 返回：
+```json
+{
+  "status": "ready",
+  "services": {
+    "database": "healthy",
+    "kafka": "healthy",
+    "influxdb": "healthy",
+    "websocket": "healthy"
+  }
+}
+```
+- 用途：就绪检查（readiness probe），各服务可能为 `healthy`、`degraded` 或 `unavailable`
+
+### 认证端点（无需 JWT）
+
+#### `POST /api/v1/auth/register`
+- 请求体：
+```json
+{
+  "username": "string",
+  "email": "user@example.com",
+  "password": "string",
+  "role": "viewer"
+}
+```
+- 返回（201）：
+```json
+{
+  "id": 1,
+  "username": "string",
+  "email": "user@example.com",
+  "role": "viewer",
+  "is_active": true
+}
+```
+- 错误（400）：`{"detail": "Username already registered"}`
+
+#### `POST /api/v1/auth/login`
+- 请求体：
+```json
+{
+  "username": "string",
+  "password": "string"
+}
+```
+- 返回（200）：
+```json
+{
+  "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "token_type": "bearer"
+}
+```
+- 错误（401）：`{"detail": "Incorrect username or password"}`
+
+#### `GET /api/v1/auth/me`
+- 请求头：`Authorization: Bearer <token>`
+- 返回（200）：
+```json
+{
+  "id": 1,
+  "username": "string",
+  "email": "user@example.com",
+  "role": "admin",
+  "is_active": true
+}
+```
+
+### 受保护端点（需 Bearer token）
+
+#### `GET /api/v1/intersections`
+- 请求头：`Authorization: Bearer <token>`
+- 返回（200）：
+```json
+{
+  "intersections": [
+    {
+      "id": "int-001",
+      "name": "Demo Roundabout A",
+      "roads": 5,
+      "cameras": 2
+    }
+  ]
+}
+```
+
+#### `GET /api/v1/drones`
+- 请求头：`Authorization: Bearer <token>`
+- 返回（200）：
+```json
+[
+  {
+    "id": "DJI-M300-001",
+    "model": "DJI Matrice 300 RTK",
+    "status": "idle",
+    "battery": 85
+  }
+]
+```
+
+#### `POST /api/v1/drones`
+- 请求头：`Authorization: Bearer <token>`
+- 请求体：
+```json
+{
+  "id": "string",
+  "model": "string",
+  "status": "idle"
+}
+```
+- 返回（201）：创建的无人机对象
+
+#### `GET /api/v1/system/health`
+- 请求头：`Authorization: Bearer <token>`
+- 返回（200）：
+```json
+{
+  "status": "healthy",
+  "uptime_seconds": 3600,
+  "kafka_connected": true,
+  "influxdb_connected": true
+}
+```
+
+### WebSocket 端点
+
+#### `WS /ws/{channel}`
+- 连接后发送订阅消息：
+```json
+{
+  "action": "subscribe",
+  "channels": ["stats:int-001", "alerts:int-001"]
+}
+```
+- 服务端推送消息格式：
+```json
+{
+  "type": "stats",
+  "data": {
+    "intersection_id": "int-001",
+    "cars": 12,
+    "timestamp": "2026-05-29T10:00:00Z"
+  }
+}
+```
+- Channel 命名：
+  - `stats:{intersection_id}` — 实时统计
+  - `alerts:{intersection_id}` — 告警
+  - `detections:{intersection_id}` — 检测事件
+
+### 认证机制
+- JWT token 在 `Authorization: Bearer <token>` 头中传递
+- Token 包含 `sub`（user_id）、`username`、`role` 字段
+- 中间件在 `platform/app/middleware/auth.py` 中实现
+- 公开路径白名单：`/health`、`/ready`、`/api/v1/auth/login`、`/api/v1/auth/register`、`/docs`、`/openapi.json`

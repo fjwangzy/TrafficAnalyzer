@@ -136,3 +136,86 @@ JSON files in `configs/` (e.g., `entry_exit_lanes.json`). Keys are road IDs (str
 ```
 
 A vehicle is assigned to a road when the center of its bounding box falls inside the polygon (via `shapely.geometry.Polygon.contains`).
+
+## Platform (Web Management Console)
+
+The `platform/` directory contains a FastAPI-based web management console for monitoring intersections, managing drones, viewing trajectories, and configuring alerts. It was refactored from microservices to a **monolith** in 2026-05-29.
+
+### Platform architecture
+
+```
+platform/
+├── app/                          # Monolith application
+│   ├── main.py                   # FastAPI app with lifespan management
+│   ├── core/
+│   │   ├── config.py             # Unified Settings (Pydantic)
+│   │   └── database.py           # SQLAlchemy async engine
+│   ├── api/v1/                   # REST endpoints
+│   │   ├── auth.py               # JWT authentication
+│   │   ├── intersections.py      # Intersection management
+│   │   ├── drones.py             # Drone fleet management
+│   │   ├── trajectories.py       # Vehicle trajectories
+│   │   ├── alerts.py             # Alert rules & history
+│   │   ├── video.py              # Video streams
+│   │   ├── calibration.py        # Camera calibration
+│   │   └── system.py             # System health
+│   ├── kafka/
+│   │   ├── consumer.py           # Kafka consumer (aiokafka)
+│   │   └── ws_manager.py         # WebSocket pub/sub manager
+│   ├── middleware/
+│   │   └── auth.py               # JWT middleware
+│   ├── services/
+│   │   ├── auth_service.py       # User auth (PyJWT + bcrypt)
+│   │   └── alert_engine.py       # Alert rule evaluation
+│   ├── models/                   # SQLAlchemy models
+│   ├── schemas/                  # Pydantic schemas
+│   └── utils/
+│       └── influx_query.py       # InfluxDB query helper
+├── docker/
+│   └── docker-compose.platform.yml  # Docker Compose for platform stack
+├── scripts/
+│   └── run_local.py              # Local development launcher
+├── Dockerfile                    # Platform container image
+└── pyproject.toml                # Dependencies (hatchling build)
+```
+
+### Platform dependencies
+
+- **FastAPI** + **uvicorn** — web framework
+- **SQLAlchemy** (async) + **asyncpg** — PostgreSQL ORM
+- **PyJWT** + **bcrypt** — authentication (NOT python-jose, which has ARM64 issues)
+- **aiokafka** — Kafka consumer for real-time data
+- **influxdb** — time-series queries (InfluxQL, not Flux)
+- **websockets** — real-time updates to frontend
+
+### Running the platform
+
+**Docker Compose (full stack):**
+```bash
+cd platform/docker
+docker compose -f docker-compose.platform.yml up -d --build
+# Platform: http://localhost:8000
+# Frontend: http://localhost:8080
+```
+
+**Local development:**
+```bash
+cd platform
+pip install -e .
+python scripts/run_local.py
+# Platform: http://localhost:8000
+```
+
+### Frontend (traffic-fly-console/)
+
+The frontend is a Vue.js SPA served via nginx. It proxies `/api/` and `/ws/` to the platform service.
+
+**Important:** `traffic-fly-console/nginx.conf` must proxy to `platform:8000` (not `gateway:8000`).
+
+### Legacy microservices directories
+
+The following directories are **deprecated** and should be removed after verification:
+- `platform/gateway/` — former API gateway
+- `platform/services/` — former microservices (flight, vision, operations)
+- `platform/shared/` — former shared library
+- `platform/frontend/` — former frontend (now at `traffic-fly-console/`)

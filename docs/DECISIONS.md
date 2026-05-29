@@ -154,3 +154,43 @@
 - ❌ Flask 的 GIL 限制了并发性能
 - ❌ 帧更新无锁保护，可能出现画面撕裂
 - ❌ 不支持自适应码率或分辨率切换
+
+---
+
+## ADR-008: 平台从微服务重构为单体架构
+
+**状态**：已采纳（2026-05-29）
+
+**背景**：`platform/` 最初设计为 4 个微服务（gateway、operations、vision、flight），每个服务独立部署。经过实际使用发现：
+- 团队规模小，不需要独立部署和扩展
+- 微服务增加了网络延迟、服务发现、分布式追踪等复杂度
+- API 端点之间共享大量状态（Kafka 消费者缓存、WebSocket 连接池）
+- 开发和调试成本高（需要同时启动多个容器）
+
+**决策**：将 4 个微服务合并为单一 FastAPI 应用，保留所有原始 API 端点路径和响应格式。
+
+**实现细节**：
+- 统一配置类：`platform/app/core/config.py:Settings`（Pydantic Settings）
+- 统一数据库连接：`platform/app/core/database.py`（SQLAlchemy async）
+- JWT 库迁移：python-jose → PyJWT（ARM64 兼容性）
+- Kafka 消费者：`platform/app/kafka/consumer.py`（aiokafka，模式订阅）
+- WebSocket 管理：`platform/app/kafka/ws_manager.py`（channel-based pub/sub）
+- 前端代理：`traffic-fly-console/nginx.conf` 更新为 `proxy_pass http://platform:8000`
+
+**后果**：
+- ✅ 开发和调试简化（单一进程，统一日志）
+- ✅ 消除了服务间网络延迟
+- ✅ 共享状态（Kafka 缓存、WebSocket 连接）更自然
+- ✅ 部署简单（1 个容器 vs 5 个）
+- ❌ 单一故障点（通过优雅降级缓解）
+- ❌ 无法独立扩展某个 API（当前规模不需要）
+
+**替代方案**：
+- 保持微服务，引入服务网格（Istio/Linkerd）— 过重
+- 合并为 2 个服务（API + WebSocket）— 仍有网络开销
+- 使用 serverless 架构 — 不适合有状态服务
+
+**验证**：
+- 本地启动：✅ 通过（所有端点测试通过）
+- Docker Compose：✅ 通过（完整栈启动，5 个容器）
+- 前端集成：✅ 通过（nginx 代理正常工作）

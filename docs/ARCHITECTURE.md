@@ -145,3 +145,112 @@ http://localhost:8009/camera_{n}
 **决策**：CalcStatisticsNode 和 KafkaProducerNode 中硬编码了 5 条道路（road_1..5）。
 **原因**：原始项目针对特定的环形交叉路口设计，恰好有 5 条道路。
 **代价**：增加或减少道路数量需要修改多个文件和 Grafana 仪表盘。这是最大的技术债之一。
+
+---
+
+## 平台 Web 服务架构（platform/）
+
+> 2026-05-29 从微服务重构为单体架构。
+
+### 系统总览
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                        前端（traffic-fly-console）                │
+│                    Vue.js SPA + Nginx (:8080)                    │
+└────────────────────────────┬────────────────────────────────────┘
+                             │ /api/*  /ws/*
+                             ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                    平台单体应用（platform/app）                    │
+│                      FastAPI + Uvicorn (:8000)                   │
+│  ┌─────────────────────────────────────────────────────────────┐│
+│  │                    JWT 认证中间件                             ││
+│  │           （公开端点：/health, /ready, /auth/*, /docs）       ││
+│  └─────────────────────────────────────────────────────────────┘│
+│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌────────┐│
+│  │ auth.py  │ │intersec- │ │ drones.py│ │ alerts.py│ │system. ││
+│  │          │ │tions.py  │ │          │ │          │ │py      ││
+│  └────┬─────┘ └────┬─────┘ └────┬─────┘ └────┬─────┘ └───┬────┘│
+│       │            │            │            │           │      │
+│  ┌────┴────────────┴────────────┴────────────┴───────────┴────┐ │
+│  │                    业务逻辑层（services/）                   │ │
+│  │   auth_service.py  │  alert_engine.py                       │ │
+│  └────────┬───────────┴──────────────┬─────────────────────────┘ │
+│           │                          │                           │
+│  ┌────────┴────────┐    ┌────────────┴────────────┐             │
+│  │   PostgreSQL    │    │   Kafka Consumer        │             │
+│  │  （SQLAlchemy） │    │  （aiokafka）           │             │
+│  └─────────────────┘    └────────────┬────────────┘             │
+│                                      │                          │
+│                           ┌──────────┴──────────┐               │
+│                           │  WebSocket Manager  │               │
+│                           │   （ws_manager.py） │               │
+│                           └─────────────────────┘               │
+│                                                                 │
+│                           ┌─────────────────────┐               │
+│                           │   InfluxDB Query    │               │
+│                           │ （influx_query.py） │               │
+│                           └─────────────────────┘               │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### 数据流
+
+```
+1. 用户认证流程：
+   POST /api/v1/auth/login
+     → auth.py
+     → auth_service.authenticate_user()
+     → PostgreSQL (users 表)
+     → auth_service.create_access_token() (PyJWT)
+     → 返回 JWT token
+
+2. 实时数据推送流程：
+   视频分析管道 → Kafka topic (statistics_*, detections_*, etc.)
+     → KafkaConsumerService.consume_loop()
+     → 解析消息类型
+     → ws_manager.broadcast(channel, data)
+     → WebSocket 客户端
+
+3. 时序数据查询流程：
+   GET /api/v1/trajectories?intersection_id=X&start=T1&end=T2
+     → trajectories.py
+     → influx_query.query_track_events()
+     → InfluxDB 1.8 (InfluxQL)
+     → 返回轨迹列表
+```
+
+### 关键设计决策
+
+#### 1. 单体架构（2026-05-29 迁移）
+**决策**：将 4 个微服务（gateway、operations、vision、flight）合并为单一 FastAPI 应用。
+**原因**：
+- 微服务增加了网络延迟、服务发现、分布式追踪等复杂度
+- 团队规模小，不需要独立部署和扩展
+- API 端点之间共享大量状态（Kafka 消费者缓存、WebSocket 连接池）
+**代价**：单一故障点，但通过优雅降级模式缓解
+
+#### 2. 优雅降级模式
+**决策**：应用启动时不要求所有依赖（DB、Kafka、InfluxDB）可用，而是在 lifespan 中尝试连接并记录状态。
+**原因**：开发环境可能没有完整的基础设施栈，应用应该能够部分工作。
+**实现**：`/ready` 端点返回各依赖的健康状态，客户端根据可用功能调整 UI。
+
+#### 3. PyJWT 替代 python-jose
+**决策**：使用 PyJWT 而非 python-jose 作为 JWT 库。
+**原因**：python-jose 的 cryptography 依赖在 ARM64 架构上触发 SIGILL（exit code 132）。
+**代价**：API 略有不同，但功能等价。
+
+### 配置系统
+
+使用 **Pydantic Settings** 管理环境变量：
+- 主配置类：`platform/app/core/config.py:Settings`
+- 环境变量前缀：无（直接使用变量名）
+- 默认值：适合本地开发（localhost）
+- Docker 覆盖：通过 `docker-compose.platform.yml` 的 `environment` 字段
+
+**关键环境变量**：
+- `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME` — PostgreSQL
+- `KAFKA_BOOTSTRAP` — Kafka broker
+- `INFLUX_HOST`, `INFLUX_PORT`, `INFLUX_DATABASE` — InfluxDB
+- `JWT_SECRET_KEY`, `JWT_ALGORITHM` — JWT 签名

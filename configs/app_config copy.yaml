@@ -111,6 +111,7 @@ direction_flow:
   min_position_points: 8
   heading_window: 5
   queue_speed_threshold_kmh: 5.0
+  max_drone_speed_for_world_heading_ms: 5.0
   turn_thresholds:
     straight: 25
     turn: 120

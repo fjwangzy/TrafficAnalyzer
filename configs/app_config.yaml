@@ -108,6 +108,7 @@ direction_flow:
   min_position_points: 8         # 轨迹最少位置点
   heading_window: 5              # 计算heading的帧窗口
   queue_speed_threshold_kmh: 5.0 # 低于此速度视为排队
+  max_drone_speed_for_world_heading_ms: 5.0  # 无人机超过此速度(m/s)时回退到像素空间heading
   turn_thresholds:
     straight: 25                 # |delta| <= 25度 → 直行
     turn: 120                    # |delta| >= 120度 → 掉头

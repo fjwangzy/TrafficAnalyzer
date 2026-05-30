@@ -15,43 +15,75 @@ TrafficAnalyzer 是一个环形交叉路口交通分析系统。核心功能：�
 ┌─────────────────────────────────────────────────────────┐
 │                   VideoReader (生成器)                    │
 │  逐帧产出 FrameElement(source, frame, timestamp, roads)  │
+│  注入遥测数据 + 车道多边形（如有配置）                      │
 └─────────────────────┬───────────────────────────────────┘
                       │ FrameElement
                       ▼
 ┌─────────────────────────────────────────────────────────┐
 │             DetectionTrackingNodes                       │
-│  YOLOv11 检测 → detected_* 字段                           │
+│  YOLOv11 检测 → detected_* + tracked_cls_ids             │
 │  ByteTrack 跟踪 → tracked_* + id_list 字段               │
 └─────────────────────┬───────────────────────────────────┘
                       │ FrameElement（带检测结果）
                       ▼
 ┌─────────────────────────────────────────────────────────┐
+│             HomographyCalibrationNode                    │
+│  遥测→H矩阵（Nadir/Oblique模式）或参考点→静态H            │
+└─────────────────────┬───────────────────────────────────┘
+                      ▼
+┌─────────────────────────────────────────────────────────┐
+│             MotionCompensationNode                       │
+│  GPS锚定世界坐标系、无人机位移/速度矢量、悬停检测          │
+└─────────────────────┬───────────────────────────────────┘
+                      │ FrameElement（带运动补偿字段）
+                      ▼
+┌─────────────────────────────────────────────────────────┐
 │             TrackerInfoUpdateNode                        │
 │  维护 buffer_tracks 字典（TrackElement）                  │
-│  通过 shapely 判断车辆所属道路（start_road）               │
-│  清理超时轨迹（> buffer_analytics 分钟）                  │
+│  道路分配 + 出口道路检测 + motor/non_motor分类            │
+│  轨迹点累积 + 完成轨迹发射（含世界坐标）                  │
 └─────────────────────┬───────────────────────────────────┘
-                      │ FrameElement（带 buffer_tracks）
+                      ▼
+┌─────────────────────────────────────────────────────────┐
+│             SpeedEstimationNode                          │
+│  透视变换+帧间位移→车速(km/h)，减去无人机速度             │
+└─────────────────────┬───────────────────────────────────┘
+                      ▼
+┌─────────────────────────────────────────────────────────┐
+│             DirectionFlowNode                            │
+│  世界坐标系航向→左转/直行/右转/掉头分类+排队检测          │
+└─────────────────────┬───────────────────────────────────┘
+                      ▼
+┌─────────────────────────────────────────────────────────┐
+│             LaneAnalysisNode（数据驱动）                  │
+│  车道级流量/排队长度/车头时距（有标注时自动输出）          │
+└─────────────────────┬───────────────────────────────────┘
+                      ▼
+┌─────────────────────────────────────────────────────────┐
+│             TrajectoryNode                               │
+│  轨迹转向分类 + 世界坐标轨迹输出                          │
+└─────────────────────┬───────────────────────────────────┘
+                      ▼
+┌─────────────────────────────────────────────────────────┐
+│             ConflictDetectionNode（默认关闭）             │
+│  机非冲突TTC检测 + 世界坐标位置输出                       │
+└─────────────────────┬───────────────────────────────────┘
                       ▼
 ┌─────────────────────────────────────────────────────────┐
 │             CalcStatisticsNode                           │
-│  cars_amount = 滑动窗口平均车辆数                         │
-│  roads_activity = 每条道路的车辆/分钟                     │
+│  cars_amount + roads_activity                            │
 └─────────────────────┬───────────────────────────────────┘
-                      │ FrameElement（带 info 字典）
                       ▼
 ┌─────────────────────────────────────────────────────────┐
-│             KafkaProducerNode（可选）                     │
-│  每 N 秒发送 JSON → Kafka topic (statistics_{n})          │
+│             KafkaProducerNode                            │
+│  statistics_{n} + track_complete_{n} + conflicts_{n}     │
+│  含方向流量/车道统计/车速/无人机位置/冲突计数             │
 └─────────────────────┬───────────────────────────────────┘
-                      │ FrameElement
                       ▼
 ┌─────────────────────────────────────────────────────────┐
 │             ShowNode                                     │
-│  绘制检测框 + 跟踪 ID + 道路多边形 + FPS + 统计面板       │
-│  输出 → frame_result 字段                                │
+│  检测框+ID+道路多边形+车速标签+方向流量+车道多边形+FPS    │
 └─────────────────────┬───────────────────────────────────┘
-                      │ FrameElement（带 frame_result）
                       ▼
 ┌──────────────────────────┐  ┌──────────────────────────┐
 │  VideoSaverNode（可选）    │  │ FlaskServerVideoNode     │
@@ -70,10 +102,11 @@ TrafficAnalyzer 是一个环形交叉路口交通分析系统。核心功能：�
 ### main_optimized.py — 三进程并行模式（推荐）
 
 - **进程 1**：VideoReader + DetectionTrackingNodes（CPU 读取 + GPU 推理）
-- **进程 2**：TrackerInfoUpdate + CalcStatistics + KafkaProducer（CPU 密集）
+- **进程 2**：Homography + MotionCompensation + TrackerInfoUpdate + Speed + Direction + Lane + Trajectory + Conflict + CalcStatistics + KafkaProducer（CPU 密集）
 - **进程 3**：ShowNode + VideoSaver + FlaskServer（渲染 + IO）
 - **队列**：maxsize=50，进程间通过 `multiprocessing.Queue` 传递 FrameElement
 - **为什么这样设计**：将 GPU 推理、CPU 计算、IO 操作分离到不同进程，利用多核并行
+- **运动补偿位置**：MotionCompensationNode 在进程 2 中，位于 HomographyCalibrationNode 之后
 
 ### main_stream_optimized.py — 双进程 RTSP 模式 v1
 
@@ -92,23 +125,30 @@ TrafficAnalyzer 是一个环形交叉路口交通分析系统。核心功能：�
 
 ```
 Backend (KafkaProducerNode)
-  │ JSON: {camera_id, cars, road_1..5}
+  │ statistics_{n}:  {camera_id, cars, road_1..5, direction_flow, lane_stats, avg_speed_kmh, drone_position, ...}
+  │ track_complete_{n}: {track_id, turn_behavior, vehicle_class, trajectory_px, trajectory_world_m, ...}
+  │ conflicts_{n}:   {motor_id, non_motor_id, distance_m, ttc_sec, severity, motor_position_m, ...}
   ▼
-Kafka topic: statistics_{n}
+Kafka topics (3 个 per camera)
   │
   ▼
 Telegraf (kafka_consumer input, json data_format)
-  │ name_override: camera_{n}
+  │ name_override: camera_{n} (仅 statistics topic)
   ▼
 InfluxDB 1.8 (database: "influx")
   │ measurement: camera_{n}
-  │ fields: cars(float), road_1..5(float), camera_id(string)
+  │ fields: cars, road_1..5, avg_speed_kmh, direction_flow_*, ...
   ▼
 Grafana (provisioned dashboards)
-  │ InfluxQL queries: SELECT mean("cars") FROM "camera_1"
-  │                   SELECT road_1..5 FROM "camera_1"
   ▼
-Dashboard panels: 车辆数时序图 + 道路拥堵条形图 + 趋势折线图
+Dashboard panels: 车辆数 + 道路拥堵 + 车速 + 方向流量
+
+Platform Consumer (platform/app/kafka/consumer.py)
+  │ 订阅 statistics_* + track_complete_* + conflicts_*
+  │ track_complete → InfluxDB track_events
+  │ conflicts → WebSocket broadcast + alert_engine
+  ▼
+Platform Web UI: 轨迹回放 + 冲突告警 + 路口热力图
 ```
 
 ### Nginx 视频流聚合
@@ -156,6 +196,29 @@ http://localhost:8009/camera_{n}
 **决策**：CalcStatisticsNode 和 KafkaProducerNode 中硬编码了 5 条道路（road_1..5）。
 **原因**：原始项目针对特定的环形交叉路口设计，恰好有 5 条道路。
 **代价**：增加或减少道路数量需要修改多个文件和 Grafana 仪表盘。这是最大的技术债之一。
+
+### 5. 无人机运动补偿（2026-05-30）
+
+**决策**：采用混合方案——GPS锚定世界坐标系 + 帧间遥测速度积分 + 悬停自动跳过。
+**原因**：
+- 无人机巡飞速度可达 12 m/s（43 km/h），不减去无人机速度会导致车速估计误差 ±43 km/h
+- 云台偏航旋转会污染像素空间方向分类
+- GPS提供绝对参考，帧间速度积分平滑GPS噪声
+
+**实现**：
+- `MotionCompensationNode`：注入 world_anchor（首10帧GPS均值）、drone_displacement（GPS增量）、drone_velocity（遥测速度矢量）
+- `SpeedEstimationNode`：减去无人机速度矢量 → 真实地面车速
+- `DirectionFlowNode`：世界坐标系航向（无人机>5m/s回退像素空间）
+- 事件输出补充世界坐标（东北偏移米）
+
+**已知限制**：
+- 轨迹世界坐标在快速巡飞时误差=无人机速度×轨迹时长（12m/s×8s=96m）
+- 方向分类在无人机>5m/s时降级为像素空间heading
+
+**代价**：
+- 依赖MQTT遥测数据（需DJI SDK或类似遥测源）
+- 首10帧需等待GPS锚点初始化
+- GPS丢失时保持上次位移（非绝对准确）
 
 ---
 

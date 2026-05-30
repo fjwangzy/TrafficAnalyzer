@@ -29,6 +29,36 @@
 - **影响**：安全风险（虽然这些脚本仅用于开发环境）
 - **建议**：从环境变量或 `.env` 文件读取
 
+#### TD-013: CalcStatisticsNode 硬编码 5 条道路
+- **位置**：`nodes/CalcStatisticsNode.py`
+- **问题**：`roads_activity` 字典硬编码为 `{1:0, 2:0, 3:0, 4:0, 5:0}`，不从 `roads_info` 动态获取
+- **影响**：不同路口道路数量不同时统计不完整
+- **建议**：从 `frame_element.roads_info` 动态构建字典（与 TD-001 关联）
+
+#### TD-014: congestion_index 未计算
+- **位置**：`nodes/CalcStatisticsNode.py`
+- **问题**：Kafka 消息格式中预留了 `congestion_index` 字段但从未计算
+- **影响**：该字段始终为 0 或缺失
+- **建议**：实现基于道路活跃度和车道排队长度的拥堵指数计算
+
+#### TD-015: motion_compensation.py 死代码
+- **位置**：`utils_local/motion_compensation.py`
+- **问题**：`compensate_speed()`、`compensate_heading()`、`world_to_gps()` 函数已定义但未被任何节点调用
+- **影响**：API表面积增大，可能误导后续开发者
+- **建议**：删除死代码或明确标记为平台侧工具函数
+
+#### TD-016: 轨迹世界坐标精度有限
+- **位置**：`nodes/TrajectoryNode.py`、`nodes/TrackerInfoUpdateNode.py`
+- **问题**：使用当前帧H+当前drone_displacement统一转换所有历史轨迹点，未存储每帧的独立位移
+- **影响**：快速巡飞时（12m/s）长轨迹（8s）世界坐标误差达96m
+- **建议**：在TrackElement中存储per-frame `(px, py, displacement_e, displacement_n)` 或接受限制（用于热力图足够）
+
+#### TD-017: lane_history / segment_queues_by_gap 未使用
+- **位置**：`elements/TrackElement.py:24`、`utils_local/lane_geometry.py`
+- **问题**：`lane_history` 字段和 `segment_queues_by_gap()` 函数已实现但未被使用
+- **影响**：代码冗余
+- **建议**：删除或实现队列分段逻辑
+
 ### 🟡 中优先级
 
 #### TD-005: FrameElement 动态属性

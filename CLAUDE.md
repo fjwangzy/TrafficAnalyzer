@@ -16,6 +16,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | `docs/DATABASE_SCHEMA.md` | 数据库结构（InfluxDB measurement、Kafka topic） |
 | `docs/DECISIONS.md` | 架构决策记录（ADR） |
 | `docs/TASKS.md` | 技术债清单和待办事项 |
+| `docs/2026-05-29-srt-traffic-situation-design.md` | 交通态势感知系统设计（方向/车道/轨迹/冲突） |
+| `docs/2026-05-30-drone-motion-compensation-design.md` | 无人机运动补偿 + 事件世界坐标设计 |
+| `docs/superpowers/specs/` | 设计规格文档目录 |
 
 ## Project Overview
 
@@ -76,26 +79,35 @@ Uses **Hydra** (`hydra-core`). Main config: `configs/app_config.yaml`. Config va
 Frames flow through a chain of **nodes**, each enriching a shared `FrameElement` object with more data:
 
 ```
-VideoReader → DetectionTrackingNodes → TrackerInfoUpdateNode → CalcStatisticsNode
+VideoReader → DetectionTrackingNodes → HomographyCalibrationNode → MotionCompensationNode
+  → TrackerInfoUpdateNode → SpeedEstimationNode → DirectionFlowNode → LaneAnalysisNode
+  → TrajectoryNode → ConflictDetectionNode → CalcStatisticsNode
   → [KafkaProducerNode] → ShowNode → [VideoSaverNode | FlaskServerVideoNode]
 ```
 
-- **`elements/FrameElement.py`** — the shared data carrier. Starts with raw `frame`, `timestamp`, `roads_info`. Nodes progressively populate `detected_*`, `tracked_*`, `id_list`, `buffer_tracks`, `info`, and `frame_result`.
-- **`elements/TrackElement.py`** — per-vehicle tracking state (ID, first/last seen timestamp, originating road).
+- **`elements/FrameElement.py`** — the shared data carrier. Starts with raw `frame`, `timestamp`, `roads_info`. Nodes progressively populate `detected_*`, `tracked_*`, `id_list`, `buffer_tracks`, `info`, `homography_matrix`, `drone_displacement_m`, `direction_stats`, `completed_tracks`, `conflict_events`, and `frame_result`.
+- **`elements/TrackElement.py`** — per-vehicle tracking state (ID, first/last seen timestamp, originating road, speed, trajectory, vehicle_class, direction_class).
 - **`elements/VideoEndBreakElement.py`** — sentinel that signals end-of-stream; all nodes must pass it through.
 
 ### Node responsibilities
 
-| Node                     | File                              | Purpose                                                                                                                                                                                           |
-| ------------------------ | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `VideoReader`            | `nodes/VideoReader.py`            | Generator yielding `FrameElement` per frame from MP4/RTSP/webcam. Loads road polygon JSON.                                                                                                        |
-| `DetectionTrackingNodes` | `nodes/DetectionTrackingNodes.py` | YOLOv8 inference + ByteTrack tracking. Populates `detected_*` and `tracked_*` fields.                                                                                                             |
-| `TrackerInfoUpdateNode`  | `nodes/TrackerInfoUpdateNode.py`  | Maintains `buffer_tracks` dict of active `TrackElement`s. Assigns each track a `start_road` when its bbox center first enters a road polygon. Prunes tracks older than `buffer_analytics` window. |
-| `CalcStatisticsNode`     | `nodes/CalcStatisticsNode.py`     | Computes `cars_amount` (smoothed via sliding window) and `roads_activity` (vehicles/minute per road). Writes to `frame_element.info`.                                                             |
-| `KafkaProducerNode`      | `nodes/KafkaProducerNode.py`      | Sends `info` dict to Kafka every `how_often_sec` seconds.                                                                                                                                         |
-| `ShowNode`               | `nodes/ShowNode.py`               | Renders bounding boxes, road polygons, FPS, and statistics overlay onto `frame_result`.                                                                                                           |
-| `VideoSaverNode`         | `nodes/VideoSaverNode.py`         | Writes `frame_result` to MP4 file.                                                                                                                                                                |
-| `FlaskServerVideoNode`   | `nodes/FlaskServerVideoNode.py`   | Streams `frame_result` via Flask MJPEG endpoint at `/video`.                                                                                                                                      |
+| Node                        | File                                   | Purpose                                                                                                                                                                                              |
+| --------------------------- | -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `VideoReader`               | `nodes/VideoReader.py`                 | Generator yielding `FrameElement` per frame. Loads road polygon JSON. Injects telemetry + lane polygons.                                                                                             |
+| `DetectionTrackingNodes`    | `nodes/DetectionTrackingNodes.py`      | YOLOv8 inference + ByteTrack tracking. Preserves YOLO class IDs in `tracked_cls_ids`.                                                                                                                |
+| `HomographyCalibrationNode` | `nodes/HomographyCalibrationNode.py`   | Computes per-frame H matrix from telemetry (Nadir/Oblique) or static reference points.                                                                                                               |
+| `MotionCompensationNode`    | `nodes/MotionCompensationNode.py`      | GPS-anchored world frame. Injects `drone_displacement_m`, `drone_velocity_ms`, `is_hovering`, `gimbal_yaw_delta`.                                                                                    |
+| `TrackerInfoUpdateNode`     | `nodes/TrackerInfoUpdateNode.py`       | Maintains `buffer_tracks`. Road assignment, exit_road detection, motor/non_motor classification, trajectory accumulation, completed_tracks emission (with world coordinates).                        |
+| `SpeedEstimationNode`       | `nodes/SpeedEstimationNode.py`         | Speed in km/h via homography + frame displacement. Subtracts drone velocity vector. EMA smoothing.                                                                                                    |
+| `DirectionFlowNode`         | `nodes/DirectionFlowNode.py`           | Left/straight/right/U-turn classification via world-coordinate heading. Queue detection. Headway tracking.                                                                                            |
+| `LaneAnalysisNode`          | `nodes/LaneAnalysisNode.py`            | Lane-level flow, queue length, headway. Data-driven (auto-skips when no lane polygons).                                                                                                              |
+| `TrajectoryNode`            | `nodes/TrajectoryNode.py`              | Turn behavior classification + world-coordinate trajectory output (`trajectory_world_m`).                                                                                                            |
+| `ConflictDetectionNode`     | `nodes/ConflictDetectionNode.py`       | Motor/non-motor conflict via TTC + proximity. World-coordinate positions. `enabled: false` by default.                                                                                                |
+| `CalcStatisticsNode`        | `nodes/CalcStatisticsNode.py`          | Computes `cars_amount` (smoothed) and `roads_activity` (vehicles/minute per road).                                                                                                                    |
+| `KafkaProducerNode`         | `nodes/KafkaProducerNode.py`           | Multi-topic: `statistics_{n}`, `track_complete_{n}`, `conflicts_{n}`. Sends every `how_often_sec` seconds. Includes direction_flow, drone_position, is_hovering.                                     |
+| `ShowNode`                  | `nodes/ShowNode.py`                    | Renders bounding boxes, road polygons, speed labels, direction overlay (S:/L:/R:), lane polygons, FPS, statistics.                                                                                   |
+| `VideoSaverNode`            | `nodes/VideoSaverNode.py`              | Writes `frame_result` to MP4 file.                                                                                                                                                                   |
+| `FlaskServerVideoNode`      | `nodes/FlaskServerVideoNode.py`        | Streams `frame_result` via Flask MJPEG endpoint at `/video`.                                                                                                                                         |
 
 ### Entry points
 

@@ -25,12 +25,19 @@ TrafficAnalyzer/
 │   └── VideoEndBreakElement.py    #   视频流结束哨兵
 │
 ├── nodes/                         # 管道节点层
-│   ├── VideoReader.py             #   视频帧读取（MP4/RTSP/摄像头）
-│   ├── DetectionTrackingNodes.py  #   YOLOv8 检测 + ByteTrack 跟踪
-│   ├── TrackerInfoUpdateNode.py   #   轨迹缓冲区管理 + 道路分配
+│   ├── VideoReader.py             #   视频帧读取（MP4/RTSP/摄像头）+ 遥测注入
+│   ├── DetectionTrackingNodes.py  #   YOLOv8 检测 + ByteTrack 跟踪（保留YOLO原始类别）
+│   ├── HomographyCalibrationNode.py # 单应性矩阵计算（遥测/参考点/auto模式）
+│   ├── MotionCompensationNode.py  #   无人机运动补偿（GPS锚定+位移+速度+悬停检测）
+│   ├── TrackerInfoUpdateNode.py   #   轨迹缓冲区 + 道路分配 + motor/non_motor + 完成轨迹发射
+│   ├── SpeedEstimationNode.py     #   车速估计（km/h，减去无人机速度）
+│   ├── DirectionFlowNode.py       #   方向流量分类（左转/直行/右转/掉头）
+│   ├── LaneAnalysisNode.py        #   车道级分析（流量/排队/车头时距，数据驱动）
+│   ├── TrajectoryNode.py          #   轨迹转向分类 + 世界坐标轨迹输出
+│   ├── ConflictDetectionNode.py   #   机非冲突TTC检测（默认关闭）
 │   ├── CalcStatisticsNode.py      #   统计计算（车辆数 + 道路活跃度）
-│   ├── KafkaProducerNode.py       #   Kafka 消息发送
-│   ├── ShowNode.py                #   OpenCV 可视化渲染
+│   ├── KafkaProducerNode.py       #   Kafka 多topic消息发送
+│   ├── ShowNode.py                #   OpenCV 可视化渲染（含车速/方向/车道叠加）
 │   ├── VideoSaverNode.py          #   视频文件保存
 │   └── FlaskServerVideoNode.py    #   Flask MJPEG 视频流服务
 │
@@ -43,8 +50,15 @@ TrafficAnalyzer/
 │
 ├── utils_local/                   # 工具层
 │   ├── utils.py                   #   环境变量、FPS 计数器、几何判定
+│   ├── homography.py              #   单应性矩阵计算（遥测/参考点）、像素↔世界坐标变换
+│   ├── motion_compensation.py     #   无人机运动补偿（GPS→ENU、速度矢量、补偿变换）
+│   ├── trajectory_classifier.py   #   转向行为分类（直行/左转/右转/掉头）
+│   ├── lane_geometry.py           #   车道多边形操作、排队长度计算
 │   └── templates/
 │       └── index.html             #   Flask 视频流页面模板
+│
+├── services/                      # 微服务配置 + 运行时服务
+│   ├── TelemetrySubscriber.py     #   MQTT遥测订阅器（paho-mqtt v2，时间戳同步缓冲区）
 │
 ├── configs/                       # 配置层
 │   ├── app_config.yaml            #   Hydra 主配置（中文版）
@@ -91,9 +105,9 @@ TrafficAnalyzer/
 
 | 类别 | 数量 | 说明 |
 |------|------|------|
-| Python 源码 | 24 | 核心业务逻辑 |
+| Python 源码 | 32 | 核心业务逻辑（含8个新增节点/工具） |
 | 配置文件 | 12 | YAML/JSON/CONF |
-| 文档 | 7 | README + 设计文档 |
+| 文档 | 11 | README + 设计文档 + 架构文档 |
 | 基础设施 | 4 | Dockerfile + Compose + 服务配置 |
 | 工具脚本 | 4 | 标注/导出/获取/更新 |
 | 模型权重 | 2 | .pt 二进制文件 |

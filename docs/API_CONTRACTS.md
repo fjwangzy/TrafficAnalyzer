@@ -5,28 +5,111 @@
 ## 1. Kafka 消息契约
 
 ### Topic 命名
-- 格式：`statistics_{camera_id}`
-- 示例：`statistics_1`、`statistics_2`
+- 统计：`statistics_{camera_id}`（如 `statistics_1`）
+- 完成轨迹：`track_complete_{camera_id}`（如 `track_complete_1`）
+- 冲突事件：`conflicts_{camera_id}`（如 `conflicts_1`）
 
-### 消息格式（JSON）
+### 统计消息格式（statistics_{n}，向后兼容扩展）
 ```json
 {
   "camera_id": "id_1",
   "cars": 12,
+  "msg_type": "stats",
+  "intersection_id": "INT_camera_1",
   "road_1": 4.2,
   "road_2": 3.8,
   "road_3": null,
   "road_4": 2.1,
-  "road_5": 1.5
+  "road_5": 1.5,
+  "direction_flow": {
+    "straight": {"count": 5, "avg_speed_kmh": 28.3, "avg_headway_sec": 2.1, "min_headway_sec": 1.5},
+    "left_turn": {"count": 3, "avg_speed_kmh": 22.1, "avg_headway_sec": null, "min_headway_sec": null},
+    "right_turn": {"count": 2, "avg_speed_kmh": 25.0, "avg_headway_sec": null, "min_headway_sec": null},
+    "u_turn": {"count": 0, "avg_speed_kmh": 0, "avg_headway_sec": null, "min_headway_sec": null},
+    "unknown": {"count": 1}
+  },
+  "queue_count": 2,
+  "avg_speed_kmh": 26.5,
+  "lane_stats": null,
+  "conflict_count": 0,
+  "drone_position": {
+    "anchor_lat": 31.234567,
+    "anchor_lon": 121.456789,
+    "easting_m": 15.3,
+    "northing_m": -8.2
+  },
+  "is_hovering": false
 }
 ```
 
-### 字段说明
+### 完成轨迹消息格式（track_complete_{n}）
+```json
+{
+  "msg_type": "track_complete",
+  "intersection_id": "INT_camera_1",
+  "track_id": 142,
+  "start_road": 1,
+  "exit_road": 3,
+  "turn_behavior": "left_turn",
+  "vehicle_class": "motor",
+  "yolo_class_id": 2,
+  "duration_sec": 8.4,
+  "avg_speed_kmh": 22.3,
+  "max_speed_kmh": 35.1,
+  "trajectory_px": [[100,200], [105,210]],
+  "trajectory_world_m": [[12.3, -5.2], [12.8, -4.9]],
+  "entry_point_m": [10.1, -6.5],
+  "exit_point_m": [18.4, 2.1],
+  "world_anchor_lat_lon": [31.234567, 121.456789],
+  "timestamp_first": 120.5,
+  "timestamp_last": 128.9
+}
+```
+
+### 冲突事件消息格式（conflicts_{n}）
+```json
+{
+  "msg_type": "conflict",
+  "intersection_id": "INT_camera_1",
+  "motor_id": 142,
+  "non_motor_id": 156,
+  "motor_position_m": [12.3, -5.2],
+  "non_motor_position_m": [12.8, -4.9],
+  "distance_m": 2.3,
+  "ttc_sec": 1.5,
+  "severity": "warning",
+  "motor_speed_kmh": 25.0,
+  "world_anchor_lat_lon": [31.234567, 121.456789]
+}
+```
+
+### 世界坐标说明
+
+所有世界坐标使用**东北天(ENU)**坐标系，单位为米，原点为世界锚点GPS位置：
+- `easting_m` (+X) = 东向偏移
+- `northing_m` (+Y) = 北向偏移
+
+**GPS还原公式**：
+```
+lat = anchor_lat + northing_m / 111320
+lon = anchor_lon + easting_m / (111320 × cos(radians(anchor_lat)))
+```
+
+### 字段说明（统计消息）
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | `camera_id` | string | 格式 `id_{N}`，N 为摄像头编号 |
 | `cars` | int | 当前帧滑动窗口平均车辆数 |
-| `road_1` ~ `road_5` | float \| null | 每条道路的车辆活跃度（辆/分钟），缓冲区未充满时为 null |
+| `road_1` ~ `road_5` | float \| null | 每条道路的车辆活跃度（辆/分钟） |
+| `msg_type` | string | 消息类型标识（"stats"） |
+| `intersection_id` | string | 路口标识（`INT_camera_{N}`） |
+| `direction_flow` | dict \| null | 方向流量统计（始终输出） |
+| `queue_count` | int | 当前排队车辆数 |
+| `avg_speed_kmh` | float | 整体平均车速 |
+| `lane_stats` | dict \| null | 车道级统计（有标注时输出） |
+| `conflict_count` | int | 当前帧冲突事件数 |
+| `drone_position` | dict \| null | 无人机位置（有遥测时输出） |
+| `is_hovering` | bool | 是否悬停 |
 
 ### 发送频率
 - 由 `kafka_producer_node.how_often_sec` 控制（默认 1 秒）

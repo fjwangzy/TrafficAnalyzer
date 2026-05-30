@@ -28,6 +28,10 @@ class DirectionFlowNode:
             "straight": 25,
             "turn": 120,
         })
+        # 无人机速度阈值：超过此速度时回退到像素空间heading（世界坐标近似误差过大）
+        self.max_drone_speed_for_world_heading_ms = cfg.get(
+            "max_drone_speed_for_world_heading_ms", 5.0
+        )
         # 方向级车头时距跟踪
         self._last_passage_time: dict[str, float] = {}
         self._headway_accumulator: dict[str, list[float]] = {
@@ -53,7 +57,14 @@ class DirectionFlowNode:
         H = frame_element.homography_matrix
         has_H = is_valid_homography(H)
         drone_disp = getattr(frame_element, "drone_displacement_m", None)
-        use_world_coords = has_H and drone_disp is not None
+        drone_vel = getattr(frame_element, "drone_velocity_ms", None)
+        drone_speed = float(np.linalg.norm(drone_vel)) if drone_vel is not None else 0
+        # 无人机速度过快时世界坐标近似误差大，回退到像素空间heading
+        use_world_coords = (
+            has_H
+            and drone_disp is not None
+            and drone_speed < self.max_drone_speed_for_world_heading_ms
+        )
 
         # 1. 对每条活跃轨迹计算当前方向
         direction_counts = {"straight": 0, "left_turn": 0, "right_turn": 0, "u_turn": 0, "unknown": 0}

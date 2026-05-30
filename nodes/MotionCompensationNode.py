@@ -48,6 +48,7 @@ class MotionCompensationNode:
         self._anchor_samples: list[tuple[float, float]] = []  # GPS采样（取均值）
         self._anchor_sample_count = 10  # 前N帧取GPS均值
         self._logged_init = False
+        self._last_displacement: np.ndarray | None = None  # GPS丢失时的回退值
 
     @profile_time
     def process(self, frame_element: FrameElement) -> FrameElement:
@@ -97,8 +98,13 @@ class MotionCompensationNode:
         if self._world_anchor is None:
             return frame_element
 
-        # 计算无人机世界位移（GPS增量）
+        # 计算无人机世界位移（GPS增量），GPS丢失时保持上次值
         drone_disp = compute_drone_displacement(telemetry, *self._world_anchor)
+        if telemetry.get("latitude") is not None and telemetry.get("longitude") is not None:
+            self._last_displacement = drone_disp.copy()
+        elif self._last_displacement is not None:
+            drone_disp = self._last_displacement
+            logger.debug("MotionCompensation: GPS丢失，使用上次位移")
 
         # 计算无人机速度矢量（m/s，东北坐标系）
         drone_vel = compute_drone_velocity_vector(telemetry)
@@ -108,9 +114,13 @@ class MotionCompensationNode:
         if hovering:
             drone_vel = np.zeros(2, dtype=np.float64)
 
-        # 云台偏航增量
+        # 云台偏航增量（归一化到[-180, 180]避免±180°跳变）
         gimbal_yaw = telemetry.get("gimbal_yaw", 0) or 0
         yaw_delta = gimbal_yaw - (self._gimbal_yaw_initial or 0)
+        while yaw_delta > 180:
+            yaw_delta -= 360
+        while yaw_delta < -180:
+            yaw_delta += 360
 
         # 注入FrameElement
         frame_element.world_anchor_lat_lon = self._world_anchor

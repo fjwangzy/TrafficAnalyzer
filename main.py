@@ -14,6 +14,7 @@ from nodes.DirectionFlowNode import DirectionFlowNode
 from nodes.LaneAnalysisNode import LaneAnalysisNode
 from nodes.TrajectoryNode import TrajectoryNode
 from nodes.ConflictDetectionNode import ConflictDetectionNode
+from nodes.MotionCompensationNode import MotionCompensationNode
 from utils_local.utils import check_and_set_env_var
 
 
@@ -22,6 +23,7 @@ def main(config) -> None:
     video_reader = VideoReader(config["video_reader"], config.get("telemetry"))
     detection_node = DetectionTrackingNodes(config)
     homography_node = HomographyCalibrationNode(config)
+    motion_compensation_node = MotionCompensationNode(config)
     tracker_info_update_node = TrackerInfoUpdateNode(config)
     speed_node = SpeedEstimationNode(config)
     direction_flow_node = DirectionFlowNode(config)
@@ -46,6 +48,7 @@ def main(config) -> None:
 
         frame_element = detection_node.process(frame_element)
         frame_element = homography_node.process(frame_element)
+        frame_element = motion_compensation_node.process(frame_element)
         frame_element = tracker_info_update_node.process(frame_element)
         frame_element = speed_node.process(frame_element)
         frame_element = direction_flow_node.process(frame_element)

@@ -18,6 +18,7 @@ from nodes.DirectionFlowNode import DirectionFlowNode
 from nodes.LaneAnalysisNode import LaneAnalysisNode
 from nodes.TrajectoryNode import TrajectoryNode
 from nodes.ConflictDetectionNode import ConflictDetectionNode
+from nodes.MotionCompensationNode import MotionCompensationNode
 from elements.VideoEndBreakElement import VideoEndBreakElement
 from utils_local.utils import check_and_set_env_var
 
@@ -47,6 +48,7 @@ def proc_frame_reader_and_detection(queue_out: Queue, config: dict, time_sleep_s
 
 def proc_tracker_update_and_calc(queue_in: Queue, queue_out: Queue, config: dict):
     homography_node = HomographyCalibrationNode(config)
+    motion_compensation_node = MotionCompensationNode(config)
     tracker_info_update_node = TrackerInfoUpdateNode(config)
     speed_node = SpeedEstimationNode(config)
     direction_flow_node = DirectionFlowNode(config)
@@ -62,6 +64,7 @@ def proc_tracker_update_and_calc(queue_in: Queue, queue_out: Queue, config: dict
         frame_element = queue_in.get()
         ts1 = time()
         frame_element = homography_node.process(frame_element)
+        frame_element = motion_compensation_node.process(frame_element)
         frame_element = tracker_info_update_node.process(frame_element)
         frame_element = speed_node.process(frame_element)
         frame_element = direction_flow_node.process(frame_element)

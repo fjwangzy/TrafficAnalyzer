@@ -74,6 +74,11 @@ kafka_producer_node: #// 摄像头 id
 
 # ------------------------------------------------- TRAFFIC SITUATION AWARENESS --------------------------------------------------
 
+motion_compensation:
+  enabled: true              # 启用无人机运动补偿（需遥测数据）
+  hover_threshold_ms: 1.0    # 低于此速度(m/s)视为悬停，跳过速度补偿
+  world_anchor: null         # null=自动取首帧GPS均值，或手动 [lat, lon]
+
 calibration:
   mode: "auto"             # "auto" | "telemetry" | "reference_points"
   # 相机内参（一次性配置，从无人机型号获取）

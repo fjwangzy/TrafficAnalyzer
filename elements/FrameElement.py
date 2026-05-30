@@ -46,6 +46,14 @@ class FrameElement:
         self.calibration_mode: str | None = None  # "telemetry" | "reference_points" | None
         self.homography_matrix: np.ndarray | None = None  # 3×3 单应性矩阵（像素→世界米坐标）
 
+        # ── 新增：运动补偿 ──
+        self.world_anchor_lat_lon: tuple | None = None  # (lat, lon) 世界锚点GPS
+        self.drone_displacement_m: np.ndarray | None = None  # [easting, northing] 无人机位移(m)
+        self.drone_velocity_ms: np.ndarray | None = None  # [v_east, v_north] 无人机速度(m/s)
+        self.gimbal_yaw_delta: float = 0.0  # 当前云台偏航 - 首帧云台偏航(度)
+        self.gimbal_yaw_initial: float | None = None  # 首帧云台偏航角(度)
+        self.is_hovering: bool = False  # 是否悬停
+
         # ── 新增：交通态势统计 ──
         self.direction_stats: dict | None = None  # 方向流量统计（DirectionFlowNode始终输出）
         self.lane_stats: dict | None = None  # 车道级统计（LaneAnalysisNode，仅点位命中时输出）

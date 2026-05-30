@@ -1,9 +1,12 @@
 import logging
+import numpy as np
 
 from elements.FrameElement import FrameElement
 from elements.TrackElement import TrackElement
 from elements.VideoEndBreakElement import VideoEndBreakElement
 from utils_local.utils import profile_time, intersects_central_point
+from utils_local.homography import pixel_to_world, is_valid_homography
+from utils_local.motion_compensation import pixel_to_world_compensated
 
 logger = logging.getLogger("buffer_tracks")
 
@@ -114,6 +117,13 @@ class TrackerInfoUpdateNode:
                 keys_to_remove.append(key)  # 添加要删除的键
 
         # 发射完成轨迹数据（供下游节点使用）
+        # 运动补偿数据（用于世界坐标转换）
+        H = frame_element.homography_matrix
+        has_H = is_valid_homography(H)
+        drone_disp = getattr(frame_element, "drone_displacement_m", None)
+        world_anchor = getattr(frame_element, "world_anchor_lat_lon", None)
+        can_convert_world = has_H and drone_disp is not None
+
         completed_tracks = []
         for key in keys_to_remove:
             track = self.buffer_tracks[key]
@@ -133,6 +143,24 @@ class TrackerInfoUpdateNode:
                     "timestamp_first": track.timestamp_first,
                     "timestamp_last": track.timestamp_last,
                 }
+
+                # 入口/出口点世界坐标
+                if can_convert_world and track.trajectory_points:
+                    entry_px = np.array([track.trajectory_points[0]])
+                    exit_px = np.array([track.trajectory_points[-1]])
+                    entry_world = pixel_to_world_compensated(entry_px, H, drone_disp)[0]
+                    exit_world = pixel_to_world_compensated(exit_px, H, drone_disp)[0]
+                    completed_track_data["entry_point_m"] = [
+                        round(float(entry_world[0]), 2), round(float(entry_world[1]), 2)
+                    ]
+                    completed_track_data["exit_point_m"] = [
+                        round(float(exit_world[0]), 2), round(float(exit_world[1]), 2)
+                    ]
+                    if world_anchor:
+                        completed_track_data["world_anchor_lat_lon"] = [
+                            round(world_anchor[0], 6), round(world_anchor[1], 6)
+                        ]
+
                 completed_tracks.append(completed_track_data)
             self.buffer_tracks.pop(key)  # 从字典中删除元素
             logger.info(f"Removed tracker with key {key}")

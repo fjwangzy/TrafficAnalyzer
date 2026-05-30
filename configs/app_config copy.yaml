@@ -79,6 +79,11 @@ kafka_producer_node: #// камера id
 
 # ------------------------------------------------- АНАЛИЗ ТРАНСПОРТНОЙ СИТУАЦИИ --------------------------------------------------
 
+motion_compensation:
+  enabled: true
+  hover_threshold_ms: 1.0
+  world_anchor: null
+
 calibration:
   mode: "auto"             # "auto" | "telemetry" | "reference_points"
   camera_intrinsics:

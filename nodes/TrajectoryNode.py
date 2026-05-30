@@ -1,9 +1,12 @@
 import logging
+import numpy as np
 
 from elements.FrameElement import FrameElement
 from elements.VideoEndBreakElement import VideoEndBreakElement
 from utils_local.utils import profile_time
 from utils_local.trajectory_classifier import classify_turning_movement
+from utils_local.homography import is_valid_homography
+from utils_local.motion_compensation import pixel_to_world_compensated
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +43,13 @@ class TrajectoryNode:
         if not completed:
             return frame_element
 
+        # 世界坐标转换所需数据
+        H = frame_element.homography_matrix
+        has_H = is_valid_homography(H)
+        drone_disp = getattr(frame_element, "drone_displacement_m", None)
+        world_anchor = getattr(frame_element, "world_anchor_lat_lon", None)
+        can_convert_world = has_H and drone_disp is not None
+
         for ct in completed:
             trajectory_px = ct.get("trajectory_px", [])
 
@@ -58,6 +68,19 @@ class TrajectoryNode:
             if len(trajectory_px) > 50:
                 step = len(trajectory_px) // 50
                 ct["trajectory_px"] = trajectory_px[::step]
+
+            # 世界坐标转换：像素→东北偏移（米）
+            if can_convert_world:
+                pts_px = np.array(ct["trajectory_px"])  # Nx2（降采样后）
+                pts_world = pixel_to_world_compensated(pts_px, H, drone_disp)
+                ct["trajectory_world_m"] = [
+                    [round(float(p[0]), 2), round(float(p[1]), 2)]
+                    for p in pts_world
+                ]
+                if world_anchor:
+                    ct["world_anchor_lat_lon"] = [
+                        round(world_anchor[0], 6), round(world_anchor[1], 6)
+                    ]
 
         frame_element.completed_tracks = completed
         return frame_element

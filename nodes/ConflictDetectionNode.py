@@ -103,14 +103,36 @@ class ConflictDetectionNode:
 
                 severity = self._classify_severity(dist_m, ttc)
                 if severity:
-                    conflict_events.append({
+                    event = {
                         "motor_id": motor["track_id"],
                         "non_motor_id": non_motor["track_id"],
                         "distance_m": round(dist_m, 2),
                         "ttc_sec": round(ttc, 2) if ttc else None,
                         "severity": severity,
                         "motor_speed_kmh": round(motor["speed_kmh"], 1),
-                    })
+                    }
+
+                    # 世界坐标（含运动补偿）
+                    drone_disp = getattr(frame_element, "drone_displacement_m", None)
+                    world_anchor = getattr(frame_element, "world_anchor_lat_lon", None)
+                    if drone_disp is not None:
+                        motor_world = pts[0] + drone_disp
+                        non_motor_world = pts[1] + drone_disp
+                        event["motor_position_m"] = [
+                            round(float(motor_world[0]), 2),
+                            round(float(motor_world[1]), 2),
+                        ]
+                        event["non_motor_position_m"] = [
+                            round(float(non_motor_world[0]), 2),
+                            round(float(non_motor_world[1]), 2),
+                        ]
+                        if world_anchor:
+                            event["world_anchor_lat_lon"] = [
+                                round(world_anchor[0], 6),
+                                round(world_anchor[1], 6),
+                            ]
+
+                    conflict_events.append(event)
                     self._pair_cooldown[pair_key] = current_time
 
         frame_element.conflict_events = conflict_events

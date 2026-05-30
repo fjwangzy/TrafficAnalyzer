@@ -97,6 +97,18 @@ class KafkaProducerNode:
             conflicts = getattr(frame_element, "conflict_events", None)
             data["conflict_count"] = len(conflicts) if conflicts else 0
 
+            # 扩展字段：无人机位置（运动补偿）
+            anchor = getattr(frame_element, "world_anchor_lat_lon", None)
+            drone_disp = getattr(frame_element, "drone_displacement_m", None)
+            if anchor and drone_disp is not None:
+                data["drone_position"] = {
+                    "anchor_lat": round(anchor[0], 6),
+                    "anchor_lon": round(anchor[1], 6),
+                    "easting_m": round(float(drone_disp[0]), 2),
+                    "northing_m": round(float(drone_disp[1]), 2),
+                }
+            data["is_hovering"] = getattr(frame_element, "is_hovering", False)
+
             self.kafka_producer.send(self.topic_name, value=data).get(timeout=1)
             logging.info(f"KAFKA sent message: {data} topic {self.topic_name}")
             self.last_send_time = current_time

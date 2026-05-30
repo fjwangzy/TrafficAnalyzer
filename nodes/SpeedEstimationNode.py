@@ -42,6 +42,10 @@ class SpeedEstimationNode:
 
         alpha = 2.0 / (self.smoothing_window + 1)
 
+        # 运动补偿数据
+        drone_vel = getattr(frame_element, "drone_velocity_ms", None)
+        is_hovering = getattr(frame_element, "is_hovering", False)
+
         for track_id, track in frame_element.buffer_tracks.items():
             # 裁剪position_history到history_frames窗口
             if len(track.position_history) > self.history_frames:
@@ -57,27 +61,40 @@ class SpeedEstimationNode:
                 continue
 
             if has_H:
-                # 世界坐标位移（米）
+                # 用当前帧H转换所有历史点到无人机相对坐标系（同一参考系）
                 pts_px = np.array([[p_old[0], p_old[1]], [p_new[0], p_new[1]]])
                 pts_world = pixel_to_world(pts_px, H)
-                dist_m = float(np.linalg.norm(pts_world[1] - pts_world[0]))
-                track.speed_kmh = (dist_m / dt) * 3.6
+                displacement = pts_world[1] - pts_world[0]
+                apparent_vel = displacement / dt  # m/s, 无人机相对速度
+
+                # 运动补偿：减去无人机速度矢量
+                # H矩阵已包含gimbal_yaw旋转，所以pts_world方向与世界坐标系对齐
+                if drone_vel is not None and not is_hovering:
+                    true_vel = apparent_vel - drone_vel
+                    speed_ms = float(np.linalg.norm(true_vel))
+                else:
+                    speed_ms = float(np.linalg.norm(apparent_vel))
+
+                track.speed_kmh = speed_ms * 3.6
+
+                # 更新heading_angle（世界坐标系方向）
+                if speed_ms > 0.5:
+                    track.heading_angle = math.degrees(math.atan2(displacement[1], displacement[0]))
             else:
-                # 像素位移回退
+                # 像素位移回退（无标定）
                 dist_px = np.sqrt((p_new[0] - p_old[0]) ** 2 + (p_new[1] - p_old[1]) ** 2)
                 if dist_px < self.min_displacement_px:
                     track.speed_kmh = 0.0
                 else:
                     track.speed_kmh = (dist_px / dt) * 3.6  # 像素/秒 * 3.6（非真实km/h）
 
+                dx = p_new[0] - p_old[0]
+                dy = p_new[1] - p_old[1]
+                if abs(dx) > 0.5 or abs(dy) > 0.5:
+                    track.heading_angle = math.degrees(math.atan2(dy, dx))
+
             # EMA平滑
             track.avg_speed_kmh = alpha * track.speed_kmh + (1 - alpha) * track.avg_speed_kmh
             track.max_speed_kmh = max(track.max_speed_kmh, track.speed_kmh)
-
-            # 更新当前运动方向角度
-            dx = p_new[0] - p_old[0]
-            dy = p_new[1] - p_old[1]
-            if abs(dx) > 0.5 or abs(dy) > 0.5:
-                track.heading_angle = math.degrees(math.atan2(dy, dx))
 
         return frame_element

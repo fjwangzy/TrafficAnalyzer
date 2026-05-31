@@ -1,6 +1,7 @@
 from ultralytics import YOLO
 import torch
 import numpy as np
+import time
 
 from utils_local.utils import profile_time
 from elements.FrameElement import FrameElement
@@ -12,10 +13,22 @@ class DetectionTrackingNodes:
     """检测模型推理+跟踪算法模块"""
 
     def __init__(self, config) -> None:
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        config_yolo = config["detection_node"]
+
+        # 设备选择: auto → 自动检测 (cuda>mps>cpu) | 也可通过config显式指定
+        device_cfg = config_yolo.get("device", "auto")
+        if device_cfg == "auto":
+            if torch.cuda.is_available():
+                device = torch.device("cuda")
+            elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+                device = torch.device("mps")
+            else:
+                device = torch.device("cpu")
+        else:
+            device = torch.device(device_cfg)
+        self.device = device
         print(f'检测将在 {device} 上进行')
 
-        config_yolo = config["detection_node"]
         self.model = YOLO(config_yolo["weight_pth"], task='detect')
         self.classes = self.model.names
         self.conf = config_yolo["confidence"]
@@ -46,8 +59,14 @@ class DetectionTrackingNodes:
 
         frame = frame_element.frame.copy()
 
+        t_detect_start = time.time()
         outputs = self.model.predict(frame, imgsz=self.imgsz, conf=self.conf, verbose=False,
-                                     iou=self.iou, classes=self.classes_to_detect)
+                                     iou=self.iou, classes=self.classes_to_detect,
+                                     device=self.device)
+        t_detect_end = time.time()
+
+        # 记录推理耗时（毫秒），供Kafka发送到前端展示
+        frame_element.inference_ms = round((t_detect_end - t_detect_start) * 1000, 1)
 
         frame_element.detected_conf = outputs[0].boxes.conf.cpu().tolist()
         detected_cls = outputs[0].boxes.cls.cpu().int().tolist()

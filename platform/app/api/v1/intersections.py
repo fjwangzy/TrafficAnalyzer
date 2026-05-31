@@ -2,6 +2,7 @@
 from fastapi import APIRouter, Request, Query
 from typing import Optional
 
+from app.models.drone_store import get_drone_for_intersection, DRONES
 
 router = APIRouter(prefix="/intersections", tags=["intersections"])
 
@@ -32,6 +33,22 @@ _INTERSECTIONS: dict[str, dict] = {
         "lanes": [
             {"id": i, "name": f"车道 {i}", "direction": "inbound", "compass": d}
             for i, d in enumerate(["north", "east", "south", "west", "north"], 1)
+        ],
+    },
+    "INT_camera_3": {
+        "id": "INT_camera_3",
+        "name": "小清河北路与水屯路路口",
+        "center_lat": 36.7040,
+        "center_lon": 117.0230,
+        "lane_count": 5,
+        "status": "active",
+        "current_drone_id": None,
+        "lanes": [
+            {"id": 1, "name": "水屯路北段", "direction": "inbound", "compass": "north"},
+            {"id": 2, "name": "小清河北路东段", "direction": "inbound", "compass": "east"},
+            {"id": 3, "name": "水屯路南段", "direction": "inbound", "compass": "south"},
+            {"id": 4, "name": "小清河北路西段", "direction": "inbound", "compass": "west"},
+            {"id": 5, "name": "路口中心区", "direction": "inbound", "compass": "north"},
         ],
     },
 }
@@ -91,7 +108,15 @@ async def get_summary(request: Request):
         "total_flow": total_flow,
         "congestion_index": round(max_congestion, 2),
         "anomalies": open_alerts,
-        "drones_online": 0,
+        "drones_online": sum(
+            1 for d in DRONES.values()
+            if d.get("status") in ("flying", "hovering")
+        ),
+        "pipelines_active": (
+            request.app.state.pipeline_manager.get_active_count()
+            if hasattr(request.app.state, "pipeline_manager")
+            else 0
+        ),
         "gpu_pct": sys_metrics.get("gpu_util_pct", sys_metrics.get("gpu_utilization", 0)),
         "latency_ms": sys_metrics.get("kafka_lag", 0) * 33 + 42,
     }
@@ -103,7 +128,19 @@ async def get_intersection(intersection_id: str):
     data = _INTERSECTIONS.get(intersection_id)
     if not data:
         return {"error": "not_found", "id": intersection_id}
-    return data
+
+    # Enrich with real-time drone assignment
+    drone = get_drone_for_intersection(intersection_id)
+    result = {**data}
+    if drone:
+        result["current_drone_id"] = drone["id"]
+        result["current_drone"] = {
+            "id": drone["id"],
+            "name": drone["name"],
+            "status": drone["status"],
+            "battery_pct": drone["battery_pct"],
+        }
+    return result
 
 
 @router.get("/{intersection_id}/stats")

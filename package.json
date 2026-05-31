@@ -1,0 +1,27 @@
+{
+  "name": "trafficanalyzer",
+  "version": "1.0.0",
+  "description": "**带有多摄像头、Influx时序数据库和Grafana仪表盘的生产版本**",
+  "main": "index.js",
+  "directories": {
+    "doc": "docs"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/fjwangzy/TrafficAnalyzer.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/fjwangzy/TrafficAnalyzer/issues"
+  },
+  "homepage": "https://github.com/fjwangzy/TrafficAnalyzer#readme",
+  "dependencies": {
+    "pptxgenjs": "^4.0.1"
+  }
+}

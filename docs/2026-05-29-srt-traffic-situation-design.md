@@ -91,7 +91,7 @@
 | `nodes/CalcStatisticsNode.py` | 动态道路数(移除硬编码5)、聚合方向流量统计 |
 | `nodes/KafkaProducerNode.py` | 扩展消息格式(方向流量、车道统计、车速、冲突、轨迹) |
 | `nodes/ShowNode.py` | 渲染车速标签、方向流量统计、车道多边形（有标注时叠加）、轨迹尾迹、冲突标记 |
-| `main_optimized.py` / `main_stream_optimized*.py` | 插入新节点到管道 |
+| `main_optimized.py` | 插入新节点到管道 |
 | `configs/app_config.yaml` | 新增calibration/speed/direction_flow/lane_analysis/trajectory/conflict配置段 |
 | `Dockerfile` | 添加 `paho-mqtt` 依赖 |
 | `services/telegraf/telegraf.conf` | 新增measurement和字段 |

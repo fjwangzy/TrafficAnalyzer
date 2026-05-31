@@ -11,10 +11,12 @@ from app.middleware.auth import AuthMiddleware
 from app.kafka.ws_manager import WSManager
 from app.kafka.consumer import KafkaConsumerService
 from app.services.alert_engine import AlertEngine
+from app.services.pipeline_manager import PipelineManager
 from app.utils.influx_query import InfluxQuery
 from app.api.v1 import intersections, alerts, system, trajectories, video, calibration, auth
 from app.api.v1.drones import router as drones_router
 from app.api.v1.drones import telemetry_router
+from app.api.v1.pipelines import router as pipelines_router
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -63,11 +65,17 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Kafka consumer failed to start (real-time disabled): {e}")
 
+    # Pipeline manager (always available — manages detection pipeline processes)
+    pipeline_manager = PipelineManager(
+        kafka_bootstrap=settings.kafka_bootstrap,
+    )
+
     # Store on app state
     app.state.ws_manager = ws_manager
     app.state.alert_engine = alert_engine
     app.state.influx = influx
     app.state.kafka_service = kafka_service
+    app.state.pipeline_manager = pipeline_manager
     app.state.settings = settings
 
     logger.info(f"🚀 Traffic Platform started on port {settings.service_port}")
@@ -78,6 +86,7 @@ async def lifespan(app: FastAPI):
     yield
 
     # ── Shutdown ──
+    await pipeline_manager.stop_all()
     if kafka_service:
         await kafka_service.stop()
     await ws_manager.close_all()
@@ -117,6 +126,7 @@ app.include_router(video.router, prefix="/api/v1")
 app.include_router(calibration.router, prefix="/api/v1")
 app.include_router(drones_router, prefix="/api/v1")
 app.include_router(telemetry_router, prefix="/api/v1")
+app.include_router(pipelines_router, prefix="/api/v1")
 
 
 @app.get("/")
@@ -141,6 +151,7 @@ async def readiness_check():
         "database": "healthy",
         "kafka": "unknown",
         "influxdb": "unknown",
+        "pipeline_manager": "healthy",
     }
 
     # Check Kafka
@@ -159,11 +170,21 @@ async def readiness_check():
     else:
         services["influxdb"] = "not_configured"
 
-    all_ready = all(s == "healthy" or s == "not_configured" for s in services.values())
+    # Pipeline manager
+    pm = getattr(app.state, "pipeline_manager", None)
+    services["pipeline_manager"] = "healthy" if pm else "not_configured"
+    pipelines_active = pm.get_active_count() if pm else 0
+
+    all_ready = all(
+        v in ("healthy", "not_configured")
+        for k, v in services.items()
+        if k != "pipelines_active"
+    )
 
     return {
         "status": "ready" if all_ready else "degraded",
         "services": services,
+        "pipelines_active": pipelines_active,
     }
 
 

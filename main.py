@@ -1,3 +1,6 @@
+import os
+os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")  # MPS设备NMS等操作回退CPU
+
 import hydra
 from nodes.VideoReader import VideoReader
 from nodes.ShowNode import ShowNode

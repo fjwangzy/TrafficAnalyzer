@@ -7,9 +7,7 @@
 ```
 TrafficAnalyzer/
 ├── main.py                        # 单进程顺序入口（调试用）
-├── main_optimized.py              # 三进程并行入口（MP4 推荐）
-├── main_stream_optimized.py       # 双进程入口（RTSP v1）
-├── main_stream_optimized_v2.py    # 双进程入口（RTSP v2，带健康检查）
+├── main_optimized.py              # 多进程并行入口（唯一生产入口，含健康检查）
 ├── generate_lanes.py              # 交互式道路多边形标注工具
 ├── export_dashboards.py           # Grafana 仪表盘导出脚本
 ├── fetch_dashboard.py             # Grafana 仪表盘获取脚本
@@ -26,7 +24,7 @@ TrafficAnalyzer/
 │
 ├── nodes/                         # 管道节点层
 │   ├── VideoReader.py             #   视频帧读取（MP4/RTSP/摄像头）+ 遥测注入
-│   ├── DetectionTrackingNodes.py  #   YOLOv8 检测 + ByteTrack 跟踪（保留YOLO原始类别）
+│   ├── DetectionTrackingNodes.py  #   YOLO11 检测 + ByteTrack 跟踪（保留YOLO原始类别）
 │   ├── HomographyCalibrationNode.py # 单应性矩阵计算（遥测/参考点/auto模式）
 │   ├── MotionCompensationNode.py  #   无人机运动补偿（GPS锚定+位移+速度+悬停检测）
 │   ├── TrackerInfoUpdateNode.py   #   轨迹缓冲区 + 道路分配 + motor/non_motor + 完成轨迹发射
@@ -59,6 +57,8 @@ TrafficAnalyzer/
 │
 ├── services/                      # 微服务配置 + 运行时服务
 │   ├── TelemetrySubscriber.py     #   MQTT遥测订阅器（paho-mqtt v2，时间戳同步缓冲区）
+│   ├── TelemetryFileReader.py     #   文件遥测加载器（DJI Cloud API JSON，离线回放）
+│   └── SrtTelemetryParser.py      #   SRT遥测解析器（DJI视频字幕，逐帧同步）
 │
 ├── configs/                       # 配置层
 │   ├── app_config.yaml            #   Hydra 主配置（中文版）
@@ -71,9 +71,9 @@ TrafficAnalyzer/
 │           └── custom.yaml        #   Hydra 日志格式配置
 │
 ├── weights/                       # 模型权重
-│   ├── uav_best.pt                #   自定义无人机视角 YOLOv8 模型
-│   ├── yolov8m.pt                 #   YOLOv8 Medium 预训练模型
-│   └── YOLOv8_TensorRT_converter.ipynb
+│   ├── uav_best.pt                #   自定义无人机视角 YOLO11 模型
+│   ├── yolov8m.pt                 #   YOLOv8 Medium 预训练模型（旧版，已弃用）
+│   └── YOLOv8_TensorRT_converter.ipynb  # TensorRT 转换工具（旧版）
 │
 ├── services/                      # 微服务配置
 │   ├── kafka/
@@ -95,7 +95,34 @@ TrafficAnalyzer/
 │   │   ├── docker-compose.yaml    #     MediaMTX 容器
 │   │   ├── mediamtx.yml           #     MediaMTX 配置
 │   │   └── ffmpeg_rtsp.ipynb      #     FFmpeg 推流 notebook
+│   ├── inter_xqh/                 #   济南小清河北路无人机采集（4K+SRT遥测）
+│   │   ├── DJI_*.mp4              #     4K@30fps, 16.5min 飞行视频
+│   │   ├── telemetry.srt          #     29,741 条逐帧遥测记录
+│   │   └── 航线计划*.txt           #     DJI 飞行计划
 │   └── 交通路口数据采集2/          #   济南路口采集记录
+│
+├── test_pipeline_inter_xqh.py     # 管道端到端测试（4K视频+SRT遥测，49项检查）
+├── test_pipeline_no_yolo.py       # 管道测试（无YOLO，CI用）
+│
+├── platform/                      # Web 管理平台（FastAPI 单体应用）
+│   ├── app/
+│   │   ├── main.py                #   FastAPI 入口 + lifespan
+│   │   ├── api/v1/
+│   │   │   ├── pipelines.py       #   管道管理 REST API
+│   │   │   ├── drones.py          #   无人机管理
+│   │   │   ├── intersections.py   #   路口管理（含无人机分配）
+│   │   │   └── system.py          #   系统健康 + GPU 指标
+│   │   ├── kafka/
+│   │   │   ├── consumer.py        #   Kafka 消费者（stats/track/conflict/telemetry）
+│   │   │   └── ws_manager.py      #   WebSocket 频道 pub/sub
+│   │   ├── services/
+│   │   │   ├── pipeline_manager.py #  管道生命周期管理（子进程）
+│   │   │   └── alert_engine.py    #   告警规则引擎
+│   │   └── models/
+│   │       └── drone_store.py     #   无人机状态存储（Kafka双源更新）
+│   ├── scripts/
+│   │   └── run_local.py           #   本地开发启动脚本
+│   └── pyproject.toml             #   平台依赖清单
 │
 └── content_for_readme/            # README 素材
     └── architecture.drawio        #   架构图源文件
@@ -105,13 +132,14 @@ TrafficAnalyzer/
 
 | 类别 | 数量 | 说明 |
 |------|------|------|
-| Python 源码 | 32 | 核心业务逻辑（含8个新增节点/工具） |
+| Python 源码 | 38 | 核心业务逻辑（含8个新增节点/工具/测试） |
 | 配置文件 | 12 | YAML/JSON/CONF |
-| 文档 | 11 | README + 设计文档 + 架构文档 |
+| 文档 | 13 | README + 设计文档 + 架构文档 + 测试报告 |
 | 基础设施 | 4 | Dockerfile + Compose + 服务配置 |
+| 平台 | 14 | FastAPI 单体应用（API/Kafka/Services/Models） |
 | 工具脚本 | 4 | 标注/导出/获取/更新 |
 | 模型权重 | 2 | .pt 二进制文件 |
-| 测试数据 | 4+ | 视频 + 采集记录 |
+| 测试数据 | 6+ | 视频 + SRT遥测 + 采集记录 |
 
 ## 核心依赖关系
 
@@ -175,7 +203,9 @@ platform/
 │   └── docker-compose.platform.yml  #   平台完整栈（platform + postgres + kafka + influxdb + frontend）
 │
 ├── scripts/                         # 开发脚本
-│   └── run_local.py                 #   本地启动脚本（设置默认环境变量）
+│   ├── run_local.py                 #   本地启动脚本（设置默认环境变量）
+│   ├── fix_kafka_and_restart.sh     #   Kafka 基础设施修复脚本（清除 stale data + 重建 topics）
+│   └── inject_test_data.py          #   WebSocket 测试数据注入（Kafka 不可用时验证前端）
 │
 ├── Dockerfile                       # 平台容器镜像
 ├── pyproject.toml                   # 依赖清单（hatchling 构建）

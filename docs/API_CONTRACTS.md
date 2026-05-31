@@ -419,27 +419,174 @@ Content-Type: application/json
 ```json
 {
   "action": "subscribe",
-  "channels": ["stats:int-001", "alerts:int-001"]
+  "channels": ["intersection:INT_camera_1", "alerts", "telemetry:drone_001"]
 }
 ```
 - 服务端推送消息格式：
 ```json
 {
+  "channel": "intersection:INT_camera_1",
   "type": "stats",
   "data": {
-    "intersection_id": "int-001",
+    "intersection_id": "INT_camera_1",
     "cars": 12,
-    "timestamp": "2026-05-29T10:00:00Z"
-  }
+    "direction_flow": {...},
+    "drone_position": {...}
+  },
+  "ts": 1234567890.123
 }
 ```
-- Channel 命名：
-  - `stats:{intersection_id}` — 实时统计
-  - `alerts:{intersection_id}` — 告警
-  - `detections:{intersection_id}` — 检测事件
+- Channel 命名（已对齐 Kafka topic）：
+  - `intersection:{intersection_id}` — 实时统计 + 轨迹完成 + 冲突事件
+  - `alerts` — 系统级告警（AlertEngine 触发）
+  - `telemetry:{drone_id}` — 无人机实时遥测
+  - `system` — GPU/系统指标
 
 ### 认证机制
 - JWT token 在 `Authorization: Bearer <token>` 头中传递
 - Token 包含 `sub`（user_id）、`username`、`role` 字段
 - 中间件在 `platform/app/middleware/auth.py` 中实现
 - 公开路径白名单：`/health`、`/ready`、`/api/v1/auth/login`、`/api/v1/auth/register`、`/docs`、`/openapi.json`
+
+## 8. 平台 REST API（43 条路由）
+
+### 管道管理 `/api/v1/pipelines`
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/v1/pipelines` | 列出所有管道实例 |
+| GET | `/api/v1/pipelines/summary` | 管道概览（running/stopped/error 计数） |
+| POST | `/api/v1/pipelines` | 启动新管道（201 Created） |
+| GET | `/api/v1/pipelines/{id}` | 获取管道详情 |
+| GET | `/api/v1/pipelines/{id}/status` | 获取管道健康状态 |
+| DELETE | `/api/v1/pipelines/{id}` | 停止管道（SIGTERM → 10s → SIGKILL） |
+
+#### 启动管道请求体
+```json
+{
+  "drone_id": "drone_001",
+  "intersection_id": "INT_camera_1",
+  "video_src": "rtsp://192.168.1.100:554/stream",
+  "roads_json": "configs/entry_exit_lanes.json"
+}
+```
+
+#### 管道响应体
+```json
+{
+  "pipeline_id": "pipe-a1b2c3d4",
+  "drone_id": "drone_001",
+  "intersection_id": "INT_camera_1",
+  "video_src": "rtsp://...",
+  "roads_json": "configs/entry_exit_lanes.json",
+  "topic_name": "statistics_10",
+  "camera_id": 10,
+  "status": "running",
+  "started_at": 1234567890.123,
+  "stopped_at": 0,
+  "error_message": "",
+  "uptime_seconds": 120.5
+}
+```
+
+### 路口管理 `/api/v1/intersections`
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/v1/intersections` | 列出所有路口 |
+| GET | `/api/v1/intersections/summary` | 系统级概览（车流量/拥堵/告警/无人机在线/管道数） |
+| GET | `/api/v1/intersections/{id}` | 路口详情（含当前分配的无人机信息） |
+| GET | `/api/v1/intersections/{id}/stats` | 历史统计（InfluxDB） |
+| GET | `/api/v1/intersections/{id}/lane-stats` | 车道级历史统计 |
+
+### 无人机管理 `/api/v1/drones`
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/v1/drones` | 列出所有无人机（drone_store 实时状态） |
+| GET | `/api/v1/drones/{id}` | 无人机详情 + 最后遥测 |
+| GET | `/api/v1/drones/{id}/trajectory` | 无人机飞行轨迹 |
+| GET | `/api/v1/drones/{id}/hover-points` | 悬停点位列表 |
+| GET | `/api/v1/telemetry/{id}` | 最新遥测数据 |
+| GET | `/api/v1/telemetry/{id}/history` | 遥测历史 |
+| GET | `/api/v1/missions` | 任务列表 |
+| GET | `/api/v1/missions/{id}` | 任务详情 |
+
+### 系统监控 `/api/v1/system`
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/v1/system/health` | 健康检查（含 pipelines_active） |
+| GET | `/api/v1/system/gpu` | GPU 实时指标 |
+| GET | `/api/v1/system/gpu/history` | GPU 历史（InfluxDB） |
+| GET | `/api/v1/system/kafka/topics` | Kafka topic 状态 |
+| GET | `/api/v1/system/kafka/consumers` | Kafka consumer group 状态 |
+| GET | `/api/v1/system/models` | YOLO 模型列表 |
+
+### 就绪检查 `/ready`
+
+```json
+{
+  "status": "ready",
+  "services": {
+    "database": "healthy",
+    "kafka": "healthy",
+    "influxdb": "healthy",
+    "pipeline_manager": "healthy"
+  },
+  "pipelines_active": 2
+}
+```
+
+## 9. WebSocket 消息类型
+
+### `stats` 消息
+通过 `intersection:{id}` 频道推送，与 Kafka statistics topic 格式一致（含 direction_flow, drone_position, lane_stats）。
+
+### `track_complete` 消息
+通过 `intersection:{id}` 频道推送，与 Kafka track_complete topic 格式一致（含 trajectory_px, trajectory_world_m, turn_behavior）。
+
+### `conflict` 消息
+通过 `intersection:{id}` 频道推送，与 Kafka conflicts topic 格式一致。
+- severity="critical" → AlertEngine 创建 P1 告警
+- severity="warning" → AlertEngine 创建 P2 告警
+
+### `telemetry` 消息
+通过 `telemetry:{drone_id}` 频道推送：
+```json
+{
+  "channel": "telemetry:drone_001",
+  "type": "telemetry",
+  "data": {
+    "drone_id": "drone_001",
+    "lat": 36.702909,
+    "lon": 117.022330,
+    "alt_agl": 130.0,
+    "gimbal_pitch": -90.0,
+    "gimbal_yaw": 0.8,
+    "horizontal_speed": 0.0,
+    "is_hovering": true,
+    "timestamp": 1234567890.123
+  },
+  "ts": 1234567890.456
+}
+```
+
+### `alert_new` 消息
+通过 `alerts` 频道推送（AlertEngine 触发）：
+```json
+{
+  "channel": "alerts",
+  "type": "alert_new",
+  "data": {
+    "id": "alert-xxx",
+    "intersection_id": "INT_camera_1",
+    "alert_type": "conflict",
+    "severity": "P1",
+    "title": "机非冲突 (TTC=1.5s)",
+    "status": "open",
+    "created_at": "2026-05-30T21:00:00Z"
+  },
+  "ts": 1234567890.789
+}
+```

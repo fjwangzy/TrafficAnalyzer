@@ -31,16 +31,34 @@ class VideoReader:
 
         self.break_element_sent = False  # 是否已发送视频流中断元素
 
-        # MQTT遥测订阅（可选）
+        # 遥测订阅（可选）：支持MQTT实时订阅或文件回放
         self.telemetry_subscriber = None
         if telemetry_config and telemetry_config.get("enabled", False):
+            source = telemetry_config.get("source", "mqtt")
             try:
-                from services.TelemetrySubscriber import TelemetrySubscriber
-                self.telemetry_subscriber = TelemetrySubscriber(telemetry_config)
-                self.telemetry_subscriber.start()
-                logger.info("VideoReader: MQTT遥测订阅已启动")
+                if source == "file":
+                    from services.TelemetryFileReader import TelemetryFileReader
+                    file_path = telemetry_config.get("file_path", "")
+                    sync_tol = telemetry_config.get("sync_tolerance_sec", 0.5)
+                    time_offset = telemetry_config.get("time_offset_sec", 0.0)
+                    self.telemetry_subscriber = TelemetryFileReader(file_path, sync_tol, time_offset)
+                    self.telemetry_subscriber.start()
+                    logger.info(f"VideoReader: 文件遥测加载已启动 ({file_path}, offset={time_offset}s)")
+                elif source == "srt":
+                    from services.SrtTelemetryParser import SrtTelemetryParser
+                    file_path = telemetry_config.get("file_path", "")
+                    sync_tol = telemetry_config.get("sync_tolerance_sec", 0.5)
+                    time_offset = telemetry_config.get("time_offset_sec", 0.0)
+                    self.telemetry_subscriber = SrtTelemetryParser(file_path, sync_tol, time_offset)
+                    self.telemetry_subscriber.start()
+                    logger.info(f"VideoReader: SRT遥测加载已启动 ({file_path}, offset={time_offset}s)")
+                else:
+                    from services.TelemetrySubscriber import TelemetrySubscriber
+                    self.telemetry_subscriber = TelemetrySubscriber(telemetry_config)
+                    self.telemetry_subscriber.start()
+                    logger.info("VideoReader: MQTT遥测订阅已启动")
             except Exception as e:
-                logger.warning(f"VideoReader: MQTT遥测启动失败: {e}")
+                logger.warning(f"VideoReader: 遥测启动失败: {e}")
 
         # 设置处理摄像机视频时的宽度和高度（输入为int类型的摄像机编号）
         if type(self.video_pth) == int:
@@ -77,6 +95,15 @@ class VideoReader:
                         self.lane_polygons[lane_id] = Polygon(
                             [(coords[i], coords[i + 1]) for i in range(0, len(coords), 2)]
                         )
+            elif self.roads_info:
+                # 无车道标注 → 用道路多边形作为车道（road-level 降级为 lane-level）
+                from shapely.geometry import Polygon
+                self.lane_polygons = {}
+                for road_id, coords in self.roads_info.items():
+                    if len(coords) >= 6:  # 至少 3 个点
+                        self.lane_polygons[road_id] = Polygon(
+                            [(coords[i], coords[i + 1]) for i in range(0, len(coords), 2)]
+                        )
         else:
             # 旧格式：扁平道路多边形 {"1": [x1,y1,...], ...}
             self.roads_info = {
@@ -86,6 +113,12 @@ class VideoReader:
     def process(self) -> Generator[FrameElement, None, None]:
         # 当前视频的帧号
         frame_number = 0
+
+        # 实时节奏控制：防止读取速度超过视频原始帧率
+        # 对于文件视频源，用 wall-clock 对齐视频时间戳
+        is_file_source = type(self.video_pth) != int and "://" not in self.video_pth
+        wall_clock_start = None
+        video_time_start = None
 
         while True:
             ret, frame = self.stream.read()
@@ -112,6 +145,18 @@ class VideoReader:
                 continue
 
             self.last_frame_timestamp = timestamp
+
+            # Wall-clock 实时节奏控制：确保帧产出速度不超过视频原始帧率
+            if is_file_source:
+                if wall_clock_start is None:
+                    wall_clock_start = time.time()
+                    video_time_start = timestamp
+                else:
+                    video_elapsed = timestamp - video_time_start
+                    wall_elapsed = time.time() - wall_clock_start
+                    ahead = video_elapsed - wall_elapsed
+                    if ahead > 0.01:
+                        time.sleep(ahead)
 
             frame_number += 1
 

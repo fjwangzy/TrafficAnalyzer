@@ -91,6 +91,18 @@ def compute_homography_from_telemetry(
         # 取 P 的第1、2、4列（消除z列），得到 3x3 矩阵
         H = np.column_stack([P[:, 0], P[:, 1], P[:, 3]])
 
+        # 设置平移：图像中心 (cx,cy) 映射到世界原点 (0,0)
+        cx, cy = img_w / 2.0, img_h / 2.0
+        center_h = np.array([cx, cy, 1.0])
+        center_world_h = H @ center_h
+        # 齐次坐标→欧氏坐标
+        center_world = center_world_h[:2] / center_world_h[2]
+        # 调整H的平移列，使中心映射到(0,0)
+        H_adjust = np.eye(3, dtype=np.float64)
+        H_adjust[0, 2] = -center_world[0]
+        H_adjust[1, 2] = -center_world[1]
+        H = H_adjust @ H
+
     return H
 
 

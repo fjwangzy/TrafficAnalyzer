@@ -24,29 +24,30 @@ services:
     restart: always
     ports:
       - "9092:9092"
-    volumes:
-      - ./services/kafka/kafka_server_jaas.conf:/kafka_server_jaas.conf
-      - ./services/kafka/init-kafka-broker.sh:/etc/init-kafka-broker.sh
-    command: /bin/bash /etc/init-kafka-broker.sh
+      - "9093:9093"
     environment:
       ALLOW_PLAINTEXT_LISTENER: 'yes'
-      KAFKA_LISTENERS: INTERNAL://0.0.0.0:29092,EXTERNAL://0.0.0.0:9092
-      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:29092,EXTERNAL://localhost:9092
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,EXTERNAL:SASL_PLAINTEXT
+      KAFKA_LISTENERS: INTERNAL://0.0.0.0:29092,EXTERNAL://0.0.0.0:9092,HOST://0.0.0.0:9093
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:29092,EXTERNAL://localhost:9092,HOST://host.docker.internal:9093
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT,HOST:PLAINTEXT
       KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
-      KAFKA_SASL_ENABLED_MECHANISMS: PLAIN
-      KAFKA_SASL_MECHANISM_INTER_BROKER_PROTOCOL: PLAIN
+      KAFKA_BROKER_ID: 1
       KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
-      KAFKA_OPTS: "-Djava.security.auth.login.config=/etc/kafka/kafka_server_jaas.conf"
       ZOOKEEPER_SASL_ENABLED: 'false'
       KAFKA_LOG_RETENTION_HOURS: 24 # 24小时后删除消息
-      KAFKA_USERNAME: ${KAFKA_USERNAME}
-      KAFKA_PASSWORD: ${KAFKA_PASSWORD}
+      # SASL auth — disabled by default; enable if HOST listener needs auth:
+      # KAFKA_SASL_ENABLED_MECHANISMS: PLAIN
+      # KAFKA_SASL_MECHANISM_INTER_BROKER_PROTOCOL: PLAIN
+      # KAFKA_OPTS: "-Djava.security.auth.login.config=/etc/kafka/kafka_server_jaas.conf"
+      # volumes:
+      #   - ./services/kafka/kafka_server_jaas.conf:/kafka_server_jaas.conf
+      #   - ./services/kafka/init-kafka-broker.sh:/etc/init-kafka-broker.sh
+      # command: /bin/bash /etc/init-kafka-broker.sh
     depends_on:
       zookeeper:
         condition: service_healthy
     healthcheck:
-      test: [ "CMD", "nc", "-vz", "localhost", "9092" ] 
+      test: [ "CMD", "nc", "-vz", "localhost", "9092" ]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -66,7 +67,7 @@ services:
       - kafka
     networks:
       - prod_network
-      
+
   grafana:
     container_name: traffic_grafana
     image: grafana/grafana:latest
@@ -122,15 +123,48 @@ services:
     container_name: traffic_nginx
     restart: always
     volumes:
-      - ./services/nginx/nginx.conf:/etc/nginx/nginx.conf 
+      - ./services/nginx/nginx.conf:/etc/nginx/nginx.conf
+      - hls_data:/hls
     ports:
       - 8009:8009
     networks:
       - prod_network
 
+  # ============================================
+  # NVIDIA MPS 守护进程（多进程共享 GPU）
+  # ============================================
+
+  nvidia-mps:
+    image: nvidia/cuda:12.4.0-base-ubuntu22.04
+    container_name: traffic_nvidia_mps
+    restart: always
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        mkdir -p /tmp/nvidia-mps /var/log/nvidia-mps
+        nvidia-cuda-mps-control -d
+        echo "NVIDIA MPS daemon started"
+        tail -f /var/log/nvidia-mps/control.log
+    volumes:
+      - nvidia_mps_pipes:/tmp/nvidia-mps
+      - nvidia_mps_logs:/var/log/nvidia-mps
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    networks:
+      - prod_network
+
+  # ============================================
+  # 检测管道（GPU 容器 + MPS）
+  # ============================================
+
   traffic_analyzer_camera_1:
     build: .
-    image: traffic_analyzer:latest 
+    image: traffic_analyzer:latest
     restart: always
     container_name: traffic_analyzer_camera_1
     command: python main_optimized.py
@@ -139,13 +173,21 @@ services:
       - ROADS_JSON=configs/inter1_lanes.json
       - TOPIC_NAME=statistics_1
       - CAMERA_ID=1
+      - CUDA_MPS_PIPE_DIRECTORY=/tmp/nvidia-mps
+      - CUDA_MPS_LOG_DIRECTORY=/var/log/nvidia-mps
     volumes:
       - ./configs:/app/configs
       - ./weights:/app/weights
       - ./test_videos:/app/test_videos
+      - nvidia_mps_pipes:/tmp/nvidia-mps
+      - nvidia_mps_logs:/var/log/nvidia-mps
+    ports:
+      - "8101:8100"
     depends_on:
       kafka:
         condition: service_healthy
+      nvidia-mps:
+        condition: service_started
     deploy:
       resources:
         reservations:
@@ -157,7 +199,7 @@ services:
       - prod_network
 
   traffic_analyzer_camera_2:
-    image: traffic_analyzer:latest 
+    image: traffic_analyzer:latest
     restart: always
     container_name: traffic_analyzer_camera_2
     command: python main_optimized.py
@@ -166,13 +208,21 @@ services:
       - ROADS_JSON=configs/inter2_lanes.json
       - TOPIC_NAME=statistics_2
       - CAMERA_ID=2
+      - CUDA_MPS_PIPE_DIRECTORY=/tmp/nvidia-mps
+      - CUDA_MPS_LOG_DIRECTORY=/var/log/nvidia-mps
     depends_on:
       kafka:
         condition: service_healthy
+      nvidia-mps:
+        condition: service_started
     volumes:
       - ./configs:/app/configs
       - ./weights:/app/weights
       - ./test_videos:/app/test_videos
+      - nvidia_mps_pipes:/tmp/nvidia-mps
+      - nvidia_mps_logs:/var/log/nvidia-mps
+    ports:
+      - "8102:8100"
     deploy:
       resources:
         reservations:
@@ -183,6 +233,120 @@ services:
     networks:
       - prod_network
 
+  traffic_analyzer_camera_3:
+    image: traffic_analyzer:latest
+    restart: always
+    container_name: traffic_analyzer_camera_3
+    command: >
+      python main_optimized.py
+      telemetry.enabled=true
+      telemetry.source=srt
+      telemetry.file_path=test_videos/inter_xqh/telemetry.srt
+      telemetry.sync_tolerance_sec=0.033
+      telemetry.time_offset_sec=0
+      calibration.mode=telemetry
+    environment:
+      - VIDEO_SRC=test_videos/inter_xqh/DJI_20260403142902_0001_V小清河北路与水屯路路口.mp4
+      - ROADS_JSON=configs/entry_exit_lanes.json
+      - TOPIC_NAME=statistics_3
+      - CAMERA_ID=3
+      - CUDA_MPS_PIPE_DIRECTORY=/tmp/nvidia-mps
+      - CUDA_MPS_LOG_DIRECTORY=/var/log/nvidia-mps
+    depends_on:
+      kafka:
+        condition: service_healthy
+      nvidia-mps:
+        condition: service_started
+    volumes:
+      - ./configs:/app/configs
+      - ./weights:/app/weights
+      - ./test_videos:/app/test_videos
+      - nvidia_mps_pipes:/tmp/nvidia-mps
+      - nvidia_mps_logs:/var/log/nvidia-mps
+    ports:
+      - "8103:8100"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    networks:
+      - prod_network
+
+  # ============================================
+  # 管理平台（新增）
+  # ============================================
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: traffic_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: traffic
+      POSTGRES_PASSWORD: traffic123
+      POSTGRES_DB: traffic_platform
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - prod_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U traffic"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  platform:
+    build:
+      context: ./platform
+      dockerfile: Dockerfile
+    container_name: traffic_platform
+    restart: unless-stopped
+    environment:
+      DEBUG: "false"
+      SERVICE_PORT: 8000
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: traffic
+      DB_PASSWORD: traffic123
+      DB_NAME: traffic_platform
+      KAFKA_BOOTSTRAP: kafka:29092
+      KAFKA_CONSUMER_GROUP: platform-consumer
+      KAFKA_TOPICS_PATTERN: "(statistics|track_complete|conflicts|telemetry)_.*"
+      INFLUX_HOST: influxdb
+      INFLUX_PORT: 8086
+      INFLUX_DB: influx
+      INFLUX_USER: ${INFLUXDB_ADMIN_USER:-}
+      INFLUX_PASS: ${INFLUXDB_ADMIN_PASSWORD:-}
+      JWT_SECRET_KEY: "change-me-in-production"
+      JWT_ALGORITHM: "HS256"
+      JWT_ACCESS_TOKEN_EXPIRE_MINUTES: 30
+      PIPELINE_VIDEO_BASE: "http://traffic_analyzer_camera_1:8100/video"
+      HLS_OUTPUT_DIR: /hls
+    ports:
+      - "8000:8000"
+    volumes:
+      - hls_data:/hls
+      - ./configs:/app/configs:ro
+    depends_on:
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      influxdb:
+        condition: service_started
+    networks:
+      - prod_network
+
 networks:
   prod_network:
     driver: bridge
+
+volumes:
+  postgres_data:
+  hls_data:
+  nvidia_mps_pipes:
+  nvidia_mps_logs:

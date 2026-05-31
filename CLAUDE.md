@@ -1,6 +1,7 @@
 # CLAUDE.md
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+**模型不支持图片**
 
 ## 项目文档索引
 
@@ -18,7 +19,39 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | `docs/TASKS.md` | 技术债清单和待办事项 |
 | `docs/2026-05-29-srt-traffic-situation-design.md` | 交通态势感知系统设计（方向/车道/轨迹/冲突） |
 | `docs/2026-05-30-drone-motion-compensation-design.md` | 无人机运动补偿 + 事件世界坐标设计 |
+| `docs/2026-05-30-pipeline-platform-integration.md` | **视频检测流×平台整合方案**（Kafka对齐、PipelineManager、docker-compose统一） |
+| `docs/2026-05-31-uav-traffic-perception-system-design.md` | **总体技术设计方案**（背景/架构/模型/数据/平台/实施路径/风险/演进，完整版） |
+| `docs/test_report_inter_xqh.md` | 端到端测试报告（inter_xqh视频+SRT遥测，49/49 PASS） |
 | `docs/superpowers/specs/` | 设计规格文档目录 |
+
+## 文档维护规则
+每次完成任务后，必须同步更新相关文档。
+
+## 快速验证
+### 管道端到端测试
+```bash
+# 使用 inter_xqh 视频 + SRT 遥测（需 YOLO 权重 weights/uav_best.pt）
+python test_pipeline_inter_xqh.py
+# 预期: 49 PASS / 0 FAIL（CPU上约3分钟，GPU约1分钟）
+```
+
+### 平台启动
+```bash
+cd platform
+pip install -e .
+python scripts/run_local.py
+# 访问 http://localhost:8000 — 43 条 API 路由
+# /api/v1/pipelines — 管道管理
+# /api/v1/drones — 无人机管理
+# /api/v1/intersections — 路口管理
+```
+
+### Docker 全栈
+```bash
+docker compose -p traffic_analyzer up -d --build
+# Kafka:9092, InfluxDB:8087, Platform:8000, Grafana:3111
+```
+
 
 ## Project Overview
 
@@ -94,7 +127,7 @@ VideoReader → DetectionTrackingNodes → HomographyCalibrationNode → MotionC
 | Node                        | File                                   | Purpose                                                                                                                                                                                              |
 | --------------------------- | -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `VideoReader`               | `nodes/VideoReader.py`                 | Generator yielding `FrameElement` per frame. Loads road polygon JSON. Injects telemetry + lane polygons.                                                                                             |
-| `DetectionTrackingNodes`    | `nodes/DetectionTrackingNodes.py`      | YOLOv8 inference + ByteTrack tracking. Preserves YOLO class IDs in `tracked_cls_ids`.                                                                                                                |
+| `DetectionTrackingNodes`    | `nodes/DetectionTrackingNodes.py`      | YOLO11 inference + ByteTrack tracking. Preserves YOLO class IDs in `tracked_cls_ids`.                                                                                                                |
 | `HomographyCalibrationNode` | `nodes/HomographyCalibrationNode.py`   | Computes per-frame H matrix from telemetry (Nadir/Oblique) or static reference points.                                                                                                               |
 | `MotionCompensationNode`    | `nodes/MotionCompensationNode.py`      | GPS-anchored world frame. Injects `drone_displacement_m`, `drone_velocity_ms`, `is_hovering`, `gimbal_yaw_delta`.                                                                                    |
 | `TrackerInfoUpdateNode`     | `nodes/TrackerInfoUpdateNode.py`       | Maintains `buffer_tracks`. Road assignment, exit_road detection, motor/non_motor classification, trajectory accumulation, completed_tracks emission (with world coordinates).                        |
@@ -111,10 +144,8 @@ VideoReader → DetectionTrackingNodes → HomographyCalibrationNode → MotionC
 
 ### Entry points
 
-- **`main.py`** — single-process sequential loop. Simple but slow.
-- **`main_optimized.py`** — 3-process multiprocessing pipeline (reader+detection | tracker+stats+kafka | show+save+flask). The recommended default for MP4 files. Queues have `maxsize=50`.
-- **`main_stream_optimized.py`** — 2-process variant for live RTSP. Reader process drops frames when queue is full (`maxsize=2`) to always process the latest frame.
-- **`main_stream_optimized_v2.py`** — same as above but adds `process.is_alive()` cross-checks so if one process dies, the other exits too.
+- **`main.py`** — single-process sequential loop. Debug only.
+- **`main_optimized.py`** — 3-process multiprocessing pipeline (reader+detection | tracker+stats+kafka | show+save+flask). The **only** production entry point. Includes process health checks (is_alive + queue timeout) from the old stream variants. Queues have `maxsize=50`.
 
 ### Microservices data path
 
@@ -129,9 +160,30 @@ Backend (KafkaProducerNode) → Kafka topic statistics_{n}
 - **Nginx** (`services/nginx/nginx.conf`): reverse proxy aggregating all Flask video streams on port 8009.
 - **Grafana**: provisioned via `services/grafana/provisioning/`; dashboards stored in `services/grafana/provisioning/dashboards/`.
 
+### Telemetry sources
+
+| Source | File | Format | Usage |
+|---|---|---|---|
+| MQTT real-time | `services/TelemetrySubscriber.py` | DJI Cloud API JSON | Production (live drone) |
+| JSON file | `services/TelemetryFileReader.py` | DJI Cloud API JSON export | Offline replay |
+| SRT subtitle | `services/SrtTelemetryParser.py` | DJI video subtitle (.srt) | Offline replay (frame-accurate) |
+
+All implement the same `get_nearest(timestamp) -> dict` interface, so VideoReader can switch between them transparently via `telemetry.source` config.
+
+### Test scripts
+
+| Script | Purpose |
+|---|---|
+| `test_pipeline_inter_xqh.py` | Full pipeline E2E test with 4K drone video + SRT telemetry (49 checks) |
+| `test_pipeline_no_yolo.py` | Pipeline test without YOLO (for CI without GPU) |
+
+### Test data
+
+- `test_videos/inter_xqh/` — DJI M300 drone video (4K@30fps, 16.5min) + SRT telemetry (29,741 records) + flight plan
+
 ### Key libraries
 
-- **ultralytics** (YOLOv8) — object detection; weights in `weights/` (default: `uav_best.pt`, a custom UAV-trained model detecting COCO classes 2–9)
+- **ultralytics** (YOLO11) — object detection; weights in `weights/` (default: `uav_best.pt`, a custom UAV-trained model detecting COCO classes 2–9)
 - **ByteTrack** — multi-object tracking (`byte_tracker/byte_tracker_model.py` + `byte_tracker/utils/`)
 - **shapely** — point-in-polygon tests for road assignment (`utils_local/utils.py:intersects_central_point`)
 - **kafka-python** — Kafka producer
@@ -162,15 +214,16 @@ platform/
 │   ├── core/
 │   │   ├── config.py             # Unified Settings (Pydantic)
 │   │   └── database.py           # SQLAlchemy async engine
-│   ├── api/v1/                   # REST endpoints
+│   ├── api/v1/                   # REST endpoints (43 routes)
 │   │   ├── auth.py               # JWT authentication
-│   │   ├── intersections.py      # Intersection management
+│   │   ├── intersections.py      # Intersection management + drone enrichment
 │   │   ├── drones.py             # Drone fleet management
+│   │   ├── pipelines.py          # Pipeline lifecycle API (start/stop/monitor)
 │   │   ├── trajectories.py       # Vehicle trajectories
 │   │   ├── alerts.py             # Alert rules & history
-│   │   ├── video.py              # Video streams
+│   │   ├── video.py              # Video streams (HLS)
 │   │   ├── calibration.py        # Camera calibration
-│   │   └── system.py             # System health
+│   │   └── system.py             # System health + pipeline status
 │   ├── kafka/
 │   │   ├── consumer.py           # Kafka consumer (aiokafka)
 │   │   └── ws_manager.py         # WebSocket pub/sub manager
@@ -178,8 +231,10 @@ platform/
 │   │   └── auth.py               # JWT middleware
 │   ├── services/
 │   │   ├── auth_service.py       # User auth (PyJWT + bcrypt)
-│   │   └── alert_engine.py       # Alert rule evaluation
-│   ├── models/                   # SQLAlchemy models
+│   │   ├── alert_engine.py       # Alert rule evaluation
+│   │   └── pipeline_manager.py   # Pipeline lifecycle (subprocess管理)
+│   ├── models/
+│   │   └── drone_store.py        # In-memory drone state (Kafka实时更新)
 │   ├── schemas/                  # Pydantic schemas
 │   └── utils/
 │       └── influx_query.py       # InfluxDB query helper
@@ -218,9 +273,29 @@ python scripts/run_local.py
 # Platform: http://localhost:8000
 ```
 
+### Platform Kafka Consumer
+
+The platform subscribes to all pipeline topics via regex pattern `(statistics|track_complete|conflicts|telemetry)_.*` and routes messages to WebSocket channels:
+
+| Topic pattern | msg_type | Handler | WebSocket channel |
+|---|---|---|---|
+| `statistics_*` | `stats` | `_handle_stats()` | `intersection:{id}` |
+| `track_complete_*` | `track_complete` | `_handle_track_complete()` | `intersection:{id}` |
+| `conflicts_*` | `conflict` | `_handle_conflict()` | `intersection:{id}` + `alerts` |
+| `telemetry_*` | `telemetry` | `_handle_telemetry()` | `telemetry:{drone_id}` |
+
+Stats messages also update `drone_store` via `update_drone_from_stats()` (extracts `drone_position` field). Telemetry messages update via `update_drone_telemetry()`.
+
+### PipelineManager
+
+`PipelineManager` manages detection pipeline lifecycle as child subprocesses. It spawns `python main_optimized.py` with env vars (`VIDEO_SRC`, `ROADS_JSON`, `TOPIC_NAME`, `CAMERA_ID`), monitors health via background task, and supports graceful shutdown (SIGTERM → 10s → SIGKILL).
+
 ### Frontend (traffic-fly-console/)
 
-The frontend is a Vue.js SPA served via nginx. It proxies `/api/` and `/ws/` to the platform service.
+The frontend is a **React** SPA (Vite + TypeScript + Tailwind CSS). It uses:
+- `useWebSocket` hook for real-time channel subscriptions (`intersection:{id}`, `alerts`, `system`, `telemetry:{drone_id}`)
+- `trafficApi` service for REST calls to the platform
+- React Query for data fetching and caching
 
 **Important:** `traffic-fly-console/nginx.conf` must proxy to `platform:8000` (not `gateway:8000`).
 

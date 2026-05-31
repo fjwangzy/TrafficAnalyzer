@@ -21,7 +21,7 @@ TrafficAnalyzer 是一个环形交叉路口交通分析系统。核心功能：�
                       ▼
 ┌─────────────────────────────────────────────────────────┐
 │             DetectionTrackingNodes                       │
-│  YOLOv11 检测 → detected_* + tracked_cls_ids             │
+│  YOLO11 检测 → detected_* + tracked_cls_ids              │
 │  ByteTrack 跟踪 → tracked_* + id_list 字段               │
 └─────────────────────┬───────────────────────────────────┘
                       │ FrameElement（带检测结果）
@@ -99,27 +99,16 @@ TrafficAnalyzer 是一个环形交叉路口交通分析系统。核心功能：�
 - **特点**：所有节点在同一进程内顺序执行
 - **缺点**：YOLO 推理阻塞后续节点，吞吐量最低
 
-### main_optimized.py — 三进程并行模式（推荐）
+### main_optimized.py — 三进程并行模式（唯一生产入口）
 
 - **进程 1**：VideoReader + DetectionTrackingNodes（CPU 读取 + GPU 推理）
 - **进程 2**：Homography + MotionCompensation + TrackerInfoUpdate + Speed + Direction + Lane + Trajectory + Conflict + CalcStatistics + KafkaProducer（CPU 密集）
 - **进程 3**：ShowNode + VideoSaver + FlaskServer（渲染 + IO）
 - **队列**：maxsize=50，进程间通过 `multiprocessing.Queue` 传递 FrameElement
+- **健康检查**：下游进程通过 `get(timeout=10)` + `is_alive()` 检测上游崩溃并自动退出
 - **为什么这样设计**：将 GPU 推理、CPU 计算、IO 操作分离到不同进程，利用多核并行
 - **运动补偿位置**：MotionCompensationNode 在进程 2 中，位于 HomographyCalibrationNode 之后
-
-### main_stream_optimized.py — 双进程 RTSP 模式 v1
-
-- **进程 1**（daemon）：VideoReader，队列满时丢弃旧帧（put_nowait）
-- **主进程**：所有其他节点顺序执行
-- **队列**：maxsize=2，保证处理最新帧
-- **为什么这样设计**：RTSP 流不能暂停，必须优先保证实时性
-
-### main_stream_optimized_v2.py — 双进程 RTSP 模式 v2
-
-- 与 v1 相同架构，但增加了 `process.is_alive()` 双向健康检查
-- 读取进程异常退出时，处理进程自动终止
-- **为什么有 v1 和 v2**：v1 是快速原型，v2 修复了进程联动问题
+- **历史**：整合了旧版 `main_stream_optimized.py`（2 进程 RTSP v1）和 `main_stream_optimized_v2.py`（2 进程 RTSP v2 + 健康检查）的特性
 
 ## 微服务数据路径
 
@@ -144,11 +133,35 @@ Grafana (provisioned dashboards)
 Dashboard panels: 车辆数 + 道路拥堵 + 车速 + 方向流量
 
 Platform Consumer (platform/app/kafka/consumer.py)
-  │ 订阅 statistics_* + track_complete_* + conflicts_*
-  │ track_complete → InfluxDB track_events
-  │ conflicts → WebSocket broadcast + alert_engine
+  │ 订阅 (statistics|track_complete|conflicts|telemetry)_.*
+  │
+  │ statistics_* → _handle_stats()
+  │   ├── WebSocket → intersection:{id}
+  │   ├── AlertEngine.check_stats()
+  │   └── drone_store.update_drone_from_stats()
+  │
+  │ track_complete_* → _handle_track_complete()
+  │   ├── WebSocket → intersection:{id}
+  │   └── AlertEngine.on_anomaly_track() (if is_anomaly)
+  │
+  │ conflicts_* → _handle_conflict()
+  │   ├── WebSocket → intersection:{id}
+  │   └── AlertEngine._create_alert() (P1/P2)
+  │
+  │ telemetry_* → _handle_telemetry()
+  │   ├── WebSocket → telemetry:{drone_id}
+  │   └── drone_store.update_drone_telemetry()
+  │
   ▼
-Platform Web UI: 轨迹回放 + 冲突告警 + 路口热力图
+Platform Web UI: 轨迹回放 + 冲突告警 + 路口热力图 + 实时遥测
+
+PipelineManager (platform/app/services/pipeline_manager.py)
+  │ 管理检测管道生命周期
+  │ POST /api/v1/pipelines → 启动子进程(python main_optimized.py)
+  │ DELETE /api/v1/pipelines/{id} → SIGTERM → 10s → SIGKILL
+  │ 后台监控任务: 每5s检查进程存活状态
+  ▼
+检测管道子进程: GPU推理 + CPU计算 + Kafka输出
 ```
 
 ### Nginx 视频流聚合
@@ -159,6 +172,35 @@ http://localhost:8009/camera_{n}
 ```
 
 使用正则 `~ ^/camera_(\d+)$` 动态路由到对应摄像头容器的 Flask MJPEG 端点。
+
+### WebSocket 频道模型
+
+前端通过 `useWebSocket` hook 订阅频道，平台 Kafka consumer 按频道广播：
+
+| 频道名 | 消息类型 | 来源 | 前端页面 |
+|---|---|---|---|
+| `intersection:{id}` | stats, track_complete, conflict | Kafka stats/track/conflict topics | Monitoring, Dashboard |
+| `alerts` | alert_new | AlertEngine | Dashboard |
+| `system` | system_metrics | Kafka system_metrics topic | Dashboard |
+| `telemetry:{drone_id}` | telemetry | Kafka telemetry topic | Drones |
+
+订阅协议：
+```json
+// 订阅
+{"action": "subscribe", "channel": "intersection:INT_camera_1"}
+// 推送
+{"channel": "intersection:INT_camera_1", "type": "stats", "data": {...}, "ts": 1234567890}
+```
+
+### 遥测数据源
+
+| 源 | 文件 | 格式 | 场景 |
+|---|---|---|---|
+| MQTT 实时 | `services/TelemetrySubscriber.py` | DJI Cloud API JSON | 生产（直播无人机） |
+| JSON 文件 | `services/TelemetryFileReader.py` | DJI Cloud API JSON 导出 | 离线回放 |
+| SRT 字幕 | `services/SrtTelemetryParser.py` | DJI 视频字幕 (.srt) | 离线回放（逐帧精确） |
+
+三种源实现相同的 `get_nearest(timestamp) -> dict` 接口，VideoReader 通过 `telemetry.source` 配置切换。
 
 ## 配置系统
 

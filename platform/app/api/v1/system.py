@@ -10,14 +10,16 @@ async def health_check(request: Request):
     """System health check."""
     kafka = request.app.state.kafka_service
     ws = request.app.state.ws_manager
+    pm = getattr(request.app.state, "pipeline_manager", None)
 
     kafka_healthy = kafka is not None and kafka._running
     return {
         "status": "healthy",
-        "service": "vision",
+        "service": "platform",
         "kafka_connected": kafka_healthy,
         "ws_connections": ws.total_connections if ws else 0,
         "ws_channels": ws.channel_stats if ws else {},
+        "pipelines_active": pm.get_active_count() if pm else 0,
     }
 
 

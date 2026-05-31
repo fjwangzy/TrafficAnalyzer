@@ -61,7 +61,7 @@
 | 模块 | 文件 | 状态 |
 |---|---|---|
 | RTSP 流输入 | `nodes/VideoReader.py` | `"://"` 判断已兼容无人机图传 |
-| 多进程流式管道 | `main_stream_optimized_v2.py` | 直接复用 |
+| 多进程流式管道 | `main_optimized.py` | 直接复用（已整合旧 stream 变体） |
 | 检测→追踪链路 | `DetectionTrackingNode` | 调参即用 |
 | 统计计算节点 | `CalcStatisticsNode` | 扩展字段即用 |
 | 数据推送栈 | Kafka + Telegraf + InfluxDB + Grafana | 直接复用 |

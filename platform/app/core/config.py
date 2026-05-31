@@ -32,7 +32,7 @@ class Settings(BaseSettings):
     # ── Kafka ──
     kafka_bootstrap: str = "kafka:9092"
     kafka_consumer_group: str = "vision-service"
-    kafka_topics_pattern: str = "statistics_.*"
+    kafka_topics_pattern: str = "(statistics|track_complete|conflicts|telemetry)_.*"
 
     # ── InfluxDB ──
     influx_host: str = "influxdb"

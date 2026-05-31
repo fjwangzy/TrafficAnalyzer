@@ -72,7 +72,7 @@ class WSManager:
             await self.disconnect(ws)
 
     async def handle_message(self, ws: WebSocket, raw: str):
-        """Process an incoming WebSocket message (subscribe/unsubscribe/ping)."""
+        """Process an incoming WebSocket message (subscribe/unsubscribe/publish/ping)."""
         try:
             msg = json.loads(raw)
         except json.JSONDecodeError:
@@ -97,6 +97,25 @@ class WSManager:
                 await self.unsubscribe(ws, channel)
                 await ws.send_text(json.dumps({
                     "action": "unsubscribed",
+                    "channel": channel,
+                    "ts": time.time(),
+                }))
+
+        elif action == "publish":
+            # Broadcast a message to all subscribers of a channel.
+            # Used for dev/testing: inject mock data to verify frontend displays.
+            # The message must contain "channel", "type", and "data" fields.
+            channel = msg.get("channel", "")
+            if channel:
+                broadcast_msg = {
+                    "channel": channel,
+                    "type": msg.get("type", "stats"),
+                    "data": msg.get("data", {}),
+                    "ts": time.time(),
+                }
+                await self.broadcast(channel, broadcast_msg)
+                await ws.send_text(json.dumps({
+                    "action": "published",
                     "channel": channel,
                     "ts": time.time(),
                 }))

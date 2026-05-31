@@ -5,7 +5,7 @@
 
 ## 项目概要
 
-TrafficAnalyzer 是一个环形交叉路口交通分析系统。使用 YOLOv8 检测车辆、ByteTrack 跟踪轨迹、shapely 判定道路归属，通过 Kafka→Telegraf→InfluxDB→Grafana 管道实现多摄像头实时监控。
+TrafficAnalyzer 是一个环形交叉路口交通分析系统。使用 YOLO11 检测车辆、ByteTrack 跟踪轨迹、shapely 判定道路归属，通过 Kafka→Telegraf→InfluxDB→Grafana 管道实现多摄像头实时监控。
 
 ## 开发规则
 
@@ -34,8 +34,8 @@ TrafficAnalyzer 是一个环形交叉路口交通分析系统。使用 YOLOv8 �
 - 道路数量不得硬编码（当前是技术债，见 DECISIONS.md）
 
 ### 5. 进程模型规范
-- 新增入口点必须基于 `main_optimized.py` 的三进程模式
-- 队列的 `maxsize` 是关键调优参数：MP4 用 50，RTSP 用 2
+- 唯一的管道入口是 `main_optimized.py`（3 进程并行 + 健康检查），不得新增入口文件
+- 队列的 `maxsize` 是关键调优参数：当前使用 50
 - 所有子进程必须设置 `daemon=True`
 - VideoEndBreakElement 是唯一的流结束信号，不得使用 Queue 关闭或其他机制
 

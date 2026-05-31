@@ -21,7 +21,7 @@
 - 置信度阈值 0.10 较低，是为了捕获更多候选框供 ByteTracker 第二轮关联使用
 - NMS IOU 阈值 0.7 较高，允许更多重叠框通过
 
-**模型**：`weights/uav_best.pt` — 自定义无人机视角 YOLOv8 模型，检测 COCO 类别 2-9（各类交通工具，排除行人）
+**模型**：`weights/uav_best.pt` — 自定义无人机视角 YOLO11 模型，检测 COCO 类别 2-9（各类交通工具，排除行人）
 
 ### 2. 多目标跟踪（ByteTrack）
 

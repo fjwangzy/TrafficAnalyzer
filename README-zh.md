@@ -99,13 +99,11 @@ graph TD;
 
 **main.py** - 项目的主要代码，在循环中实现帧通过所有节点的处理。
 
-**main_optimized.py** - 使用multiprocessing优化后的main.py版本。由于所有资源密集型操作分布在独立且并行工作的进程之间，因此可以实现更高的处理速度（超过35帧/秒）。
+**main_optimized.py** - 使用multiprocessing优化后的main.py版本。由于所有资源密集型操作分布在独立且并行工作的进程之间，因此可以实现更高的处理速度（超过35帧/秒）。包含进程健康检查（`is_alive()` + 队列超时）以确保可靠退出。
 
-#### <ins>附加运行选项（仅适用于实时RTSP流）：<ins>
+#### <ins>已废弃的启动选项（已删除，功能已整合到 main_optimized.py）：<ins>
 
-**main_stream_optimized.py** — 用于处理实时流媒体的版本，它确保只处理最新的帧而不使用缓冲区。这是通过在一个单独的进程中处理帧，而主进程总是只获取最新的可用帧进行处理来实现的。
-
-**main_stream_optimized_v2.py** — main_stream_optimized.py的改进版本。主要区别在于，当某个进程终止或崩溃时，另一个进程也会自动终止。通过 `process.is_alive()` 方法监控进程状态，从而实现了更可靠的进程生命周期管理。
+之前存在 `main_stream_optimized.py` 和 `main_stream_optimized_v2.py`——用于RTSP实时流的版本。它们的功能（`is_alive()` 检查、队列超时）已整合到 `main_optimized.py` 中。
 
 **generate_lanes车道标定** python d:\ai\TrafficAnalyzer\generate_lanes.py d:\ai\TrafficAnalyzer\test_videos\inter2.mp4 d:\ai\TrafficAnalyzer\configs\inter2_lanes.json
 ---

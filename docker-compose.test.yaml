@@ -1,0 +1,24 @@
+# 本地测试覆盖：仅启动基础设施 + 平台 + Nginx（无 GPU）
+# 用法: docker compose -f docker-compose.yaml -f docker-compose.test.yaml up -d
+
+services:
+  # 禁用 GPU 服务
+  nvidia-mps:
+    profiles: ["gpu-only"]
+
+  traffic_analyzer_camera_1:
+    profiles: ["gpu-only"]
+
+  traffic_analyzer_camera_2:
+    profiles: ["gpu-only"]
+
+  traffic_analyzer_camera_3:
+    profiles: ["gpu-only"]
+
+  # 平台本地运行
+  platform:
+    environment:
+      DEBUG: "true"
+      PIPELINE_VIDEO_BASE: "http://host.docker.internal:8100/video"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

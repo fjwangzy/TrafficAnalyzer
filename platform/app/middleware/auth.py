@@ -1,58 +1,101 @@
-"""Authentication Middleware."""
-from fastapi import Request, Response
-from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.responses import JSONResponse
+"""Authentication Middleware — pure ASGI implementation.
+
+BaseHTTPMiddleware cannot properly handle WebSocket connections because
+it wraps the ASGI scope in a Request object, which breaks the WebSocket
+upgrade protocol. This implementation uses pure ASGI to correctly
+pass through WebSocket connections while enforcing JWT auth on HTTP routes.
+"""
 from app.services.auth_service import verify_token
 
 
-class AuthMiddleware(BaseHTTPMiddleware):
-    """JWT authentication middleware."""
+# Public paths that skip authentication
+PUBLIC_PATHS = [
+    "/health",
+    "/ready",
+    "/ws/",          # WebSocket connections (auth handled via channel subscriptions)
+    "/video/",       # Video stream endpoints (MJPEG proxy)
+    "/api/v1/auth/login",
+    "/api/v1/auth/register",
+    "/docs",
+    "/openapi.json",
+    "/redoc",
+]
 
-    async def dispatch(self, request: Request, call_next):
-        """Validate JWT token for protected routes."""
 
-        # Skip authentication for health checks and public endpoints
-        public_paths = [
-            "/health",
-            "/ready",
-            "/api/v1/auth/login",
-            "/api/v1/auth/register",
-            "/docs",
-            "/openapi.json",
-            "/redoc",
-        ]
+class AuthMiddleware:
+    """JWT authentication middleware — pure ASGI implementation.
 
-        if any(request.url.path.startswith(path) for path in public_paths):
-            return await call_next(request)
+    Correctly handles WebSocket connections by passing them through
+    without attempting JWT validation. HTTP routes are validated normally.
+    """
 
-        # Extract Authorization header
-        auth_header = request.headers.get("Authorization")
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        """ASGI middleware entry point."""
+        # Pass through non-HTTP/WebSocket scopes (lifespan, etc.)
+        if scope["type"] not in ("http", "websocket"):
+            await self.app(scope, receive, send)
+            return
+
+        # Pass through WebSocket connections without auth check
+        if scope["type"] == "websocket":
+            await self.app(scope, receive, send)
+            return
+
+        # HTTP: check if path is public
+        path = scope.get("path", "")
+        if any(path.startswith(prefix) for prefix in PUBLIC_PATHS):
+            await self.app(scope, receive, send)
+            return
+
+        # HTTP: extract and validate JWT token from Authorization header
+        headers = dict(scope.get("headers", []))
+        # headers are bytes pairs, decode the Authorization header
+        auth_header = None
+        for key, value in headers.items():
+            if key == b"authorization":
+                auth_header = value.decode("utf-8")
+                break
+
         if not auth_header:
-            return JSONResponse(
-                status_code=401,
-                content={"detail": "Missing Authorization header"},
-            )
+            # Return 401 JSON response
+            await self._send_json_response(send, 401, {"detail": "Missing Authorization header"})
+            return
 
-        # Validate Bearer token format
         if not auth_header.startswith("Bearer "):
-            return JSONResponse(
-                status_code=401,
-                content={"detail": "Invalid Authorization header format"},
-            )
+            await self._send_json_response(send, 401, {"detail": "Invalid Authorization header format"})
+            return
 
         token = auth_header.replace("Bearer ", "")
 
-        # Verify JWT token
         try:
             payload = verify_token(token)
-            # Attach user info to request state for downstream use
-            request.state.user = type("User", (), payload)()
+            # Inject user info into scope state
+            scope.setdefault("state", {})
+            scope["state"]["user"] = payload
         except Exception as e:
-            return JSONResponse(
-                status_code=401,
-                content={"detail": f"Invalid token: {str(e)}"},
-            )
+            await self._send_json_response(send, 401, {"detail": f"Invalid token: {str(e)}"})
+            return
 
-        # Continue to next middleware or route
-        response = await call_next(request)
-        return response
+        # Auth passed — continue to app
+        await self.app(scope, receive, send)
+
+    async def _send_json_response(self, send, status_code, body: dict):
+        """Send a JSON HTTP response directly through ASGI."""
+        import json
+
+        body_bytes = json.dumps(body, default=str).encode("utf-8")
+        await send({
+            "type": "http.response.start",
+            "status": status_code,
+            "headers": [
+                [b"content-type", b"application/json"],
+                [b"content-length", str(len(body_bytes)).encode()],
+            ],
+        })
+        await send({
+            "type": "http.response.body",
+            "body": body_bytes,
+        })

@@ -108,7 +108,11 @@ def classify_turning_movement(
     abs_angle = abs(angle_deg)
 
     u_turn_range = thresholds.get("u_turn", [150, 180])
-    u_turn_thresh = u_turn_range[0] if isinstance(u_turn_range, list) else u_turn_range
+    # Hydra ListConfig 不是 Python list，需转换为 list 后再判断
+    if not isinstance(u_turn_range, (int, float)):
+        u_turn_thresh = list(u_turn_range)[0]
+    else:
+        u_turn_thresh = u_turn_range
 
     if abs_angle <= thresholds.get("straight", 30):
         return "straight"

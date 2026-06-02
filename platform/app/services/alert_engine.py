@@ -1,8 +1,14 @@
-"""Alert engine — rule-based + VLM-based alert detection."""
+"""Alert engine — rule-based + VLM-based alert detection.
+
+改进点（审查报告 T-104 / S-001）:
+  新增 high_avg_speed (P3): avg_speed > 60km/h 持续 3 帧
+  新增 multiple_conflicts (P2): conflict_count > 3/min 滑动窗口
+"""
 import asyncio
 import logging
 import time
 import uuid
+from collections import deque
 from datetime import datetime, timezone
 from typing import Any
 
@@ -78,6 +84,15 @@ class AlertEngine:
         self._calibration_threshold = getattr(settings, "calibration_drift_match_rate", 0.80)
         self._consecutive_frames = getattr(settings, "consecutive_congestion_frames", 30)
 
+        # T-104: high_avg_speed 规则参数
+        self._high_speed_threshold_kmh = getattr(settings, "high_avg_speed_threshold_kmh", 60.0)
+        self._consecutive_high_speed: dict[str, int] = {}  # intersection_id → count
+        self._high_speed_frames = 3  # 连续 N 帧超速才触发
+
+        # T-104: multiple_conflicts 规则参数 — 滑动窗口(60s)
+        self._conflict_threshold_per_min = 3
+        self._conflict_windows: dict[str, deque] = {}  # intersection_id → deque of timestamps
+
     @property
     def alerts(self) -> dict[str, Alert]:
         return self._alerts
@@ -95,7 +110,6 @@ class AlertEngine:
             result = [a for a in result if a.severity == severity]
         if status:
             result = [a for a in result if a.status == status]
-        # Sort by timestamp descending
         result.sort(key=lambda a: a.timestamp, reverse=True)
         return [a.to_dict() for a in result[offset:offset + limit]]
 
@@ -156,6 +170,61 @@ class AlertEngine:
                 severity="P3",
                 title=f"标定漂移预警 (匹配率 {match_rate:.0%})",
                 description=f"路口 {intersection_id} 车道匹配率 {match_rate:.0%} 低于阈值 {self._calibration_threshold:.0%}",
+            )
+
+        # T-104: high_avg_speed check — 连续帧计数
+        avg_speed = data.get("avg_speed_kmh", 0)
+        if avg_speed and avg_speed > self._high_speed_threshold_kmh:
+            count = self._consecutive_high_speed.get(intersection_id, 0) + 1
+            self._consecutive_high_speed[intersection_id] = count
+            if count >= self._high_speed_frames:
+                await self._create_alert(
+                    intersection_id,
+                    alert_type="high_avg_speed",
+                    severity="P3",
+                    title=f"路口平均车速过高 ({avg_speed:.0f}km/h)",
+                    description=(
+                        f"路口 {intersection_id} 连续 {count} 帧平均车速 "
+                        f"{avg_speed:.0f}km/h 超过阈值 {self._high_speed_threshold_kmh:.0f}km/h"
+                    ),
+                )
+                self._consecutive_high_speed[intersection_id] = 0
+        else:
+            self._consecutive_high_speed[intersection_id] = 0
+
+    def record_conflict(self, intersection_id: str):
+        """Record a conflict event for the multiple_conflicts rate tracker.
+
+        T-104: 调用此方法记录冲突事件时间戳，用于滑动窗口检测。
+        """
+        now = time.time()
+        window = self._conflict_windows.setdefault(intersection_id, deque(maxlen=100))
+        window.append(now)
+
+        # 清理 60s 前的记录
+        cutoff = now - 60
+        while window and window[0] < cutoff:
+            window.popleft()
+
+        return len(window)
+
+    async def check_conflict_rate(self, intersection_id: str):
+        """T-104: 检查过去 1 分钟内冲突数是否超过阈值。"""
+        window = self._conflict_windows.get(intersection_id, deque())
+        now = time.time()
+        cutoff = now - 60
+        # 只计算最近 60s 的冲突
+        recent = sum(1 for t in window if t >= cutoff)
+        if recent > self._conflict_threshold_per_min:
+            await self._create_alert(
+                intersection_id,
+                alert_type="multiple_conflicts",
+                severity="P2",
+                title=f"冲突事件频发 ({recent}次/分钟)",
+                description=(
+                    f"路口 {intersection_id} 过去 1 分钟内检测到 {recent} 次冲突事件，"
+                    f"超过阈值 {self._conflict_threshold_per_min} 次/分钟"
+                ),
             )
 
     async def on_anomaly_track(self, intersection_id: str, data: dict):

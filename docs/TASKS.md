@@ -1,16 +1,17 @@
 # TASKS.md — TrafficAnalyzer 任务追踪
 
-> 基于 commit `e69acee` 的真实代码分析。
+> 最后更新：2026-05-31（基于设计审查 `2026-05-31-design-review-and-tasks.md` 实施）
 
 ## 技术债清单
 
 ### 🔴 高优先级
 
-#### TD-001: 硬编码 5 条道路
-- **位置**：`nodes/CalcStatisticsNode.py:38-44`、`nodes/KafkaProducerNode.py:44-68`、`services/grafana/provisioning/dashboards/*.json`
-- **问题**：道路数量硬编码为 5，不同路口有不同数量的道路（inter2 只有 2 条）
-- **影响**：新增摄像头时如果道路数量不是 5，需要修改多个文件
-- **建议**：从 `roads_info` 字典动态获取道路数量，Kafka 消息使用数组格式
+#### TD-001: 硬编码 5 条道路 → ✅ 已解决
+- **状态**：✅ 已修复（2026-05-31）
+- **修复内容**：
+  - `CalcStatisticsNode.py`: 从 `roads_info.keys()` 动态获取道路ID列表
+  - `KafkaProducerNode.py`: 新增 `roads` 数组字段（动态道路数），保留 `road_1..road_N` 向后兼容
+  - `influx_query.py`: `write_stats()` 动态写入 road_* 字段；`query_stats()` 动态查询
 
 #### TD-002: 4 个入口点代码重复
 - **位置**：`main.py`、`main_optimized.py`
@@ -30,23 +31,13 @@
 - **影响**：安全风险（虽然这些脚本仅用于开发环境）
 - **建议**：从环境变量或 `.env` 文件读取
 
-#### TD-013: Kafka 基础设施稳定性
-- **位置**：`nodes/CalcStatisticsNode.py`
-- **问题**：`roads_activity` 字典硬编码为 `{1:0, 2:0, 3:0, 4:0, 5:0}`，不从 `roads_info` 动态获取
-- **影响**：不同路口道路数量不同时统计不完整
-- **建议**：从 `frame_element.roads_info` 动态构建字典（与 TD-001 关联）
+#### TD-014: congestion_index 未计算 → ✅ 已解决
+- **状态**：✅ 已修复（2026-05-31）
+- **修复内容**：`KafkaProducerNode._compute_congestion_index()` 实现三因子计算（车辆密度0-4 + 排队0-3 + 低速0-3 = 0-10分）
 
-#### TD-014: congestion_index 未计算
-- **位置**：`nodes/CalcStatisticsNode.py`
-- **问题**：Kafka 消息格式中预留了 `congestion_index` 字段但从未计算
-- **影响**：该字段始终为 0 或缺失
-- **建议**：实现基于道路活跃度和车道排队长度的拥堵指数计算
-
-#### TD-015: motion_compensation.py 死代码
-- **位置**：`utils_local/motion_compensation.py`
-- **问题**：`compensate_speed()`、`compensate_heading()`、`world_to_gps()` 函数已定义但未被任何节点调用
-- **影响**：API表面积增大，可能误导后续开发者
-- **建议**：删除死代码或明确标记为平台侧工具函数
+#### TD-015: motion_compensation.py 死代码 → ✅ 已解决
+- **状态**：✅ 已修复（2026-05-31）
+- **修复内容**：`compensate_speed()`、`compensate_heading()`、`world_to_gps()` 标记为 deprecated + warnings.warn()
 
 #### TD-016: 轨迹世界坐标精度有限
 - **位置**：`nodes/TrajectoryNode.py`、`nodes/TrackerInfoUpdateNode.py`
@@ -69,14 +60,12 @@
 
 ### 🟡 中优先级
 
-#### TD-005: FrameElement 动态属性
-- **位置**：`nodes/KafkaProducerNode.py:73`
-- **问题**：`frame_element.send_to_kafka = True` 动态添加未声明的属性
-- **影响**：FrameElement 的接口不明确，IDE 无法提供自动补全
-- **建议**：在 FrameElement.__init__ 中声明 `send_to_kafka: bool = False`
+#### TD-005: FrameElement 动态属性 → ✅ 已解决
+- **状态**：✅ 已修复（2026-05-31）
+- **修复内容**：`FrameElement.__init__` 新增 `self.send_to_kafka: bool = False`
 
 #### TD-006: ShowNode 过于庞大
-- **位置**：`nodes/ShowNode.py`（280 行）
+- **位置**：`nodes/ShowNode.py`（352 行）
 - **问题**：渲染逻辑（绘制框、多边形、文本、统计面板）全部在一个文件中
 - **影响**：难以维护和测试
 - **建议**：拆分为 `BoxRenderer`、`RoadRenderer`、`StatsPanelRenderer` 等子组件
@@ -87,11 +76,9 @@
 - **影响**：如果某个节点忘记 isinstance 检查就访问 FrameElement 字段，会抛出 AttributeError
 - **建议**：调用 `super().__init__()` 传入空值，或不继承 FrameElement
 
-#### TD-008: TrackerInfoUpdateNode 假设字典有序
-- **位置**：`nodes/TrackerInfoUpdateNode.py:61`
-- **问题**：`for key, track_element in sorted(self.buffer_tracks.items())` 后使用 `break` 假设后续元素都更新，但 sorted 按 key（ID）排序而非按时间戳排序
-- **影响**：如果旧 ID 的轨迹比新 ID 的轨迹存活时间更长，可能不会被正确清理
-- **建议**：不使用 break，遍历所有元素检查时间条件
+#### TD-008: TrackerInfoUpdateNode 假设字典有序 → ✅ 已解决
+- **状态**：✅ 已修复（2026-05-31）
+- **修复内容**：移除 `sorted()` + `break`，改为遍历所有元素检查时间条件
 
 #### TD-009: export_dashboards.py 硬编码 Windows 路径
 - **位置**：`export_dashboards.py:25`
@@ -119,16 +106,57 @@
 
 #### TD-013: Kafka 基础设施稳定性
 - **位置**：`docker-compose.yaml`、`services/kafka/kafka_server_jaas.conf`、`platform/app/kafka/consumer.py`
-- **问题**：
-  - Kafka broker ID 不匹配（容器重启后 ID 变化，topic 分区 Leader:none）
-  - SASL凭据通过空环境变量注入，JAAS配置无效
-  - Platform Kafka consumer 无限重试阻塞 HTTP 服务
-  - Kafka HOST listener advertised hostname 不支持本地 producer 路由
-- **影响**：所有 Kafka 操作失败（LeaderNotAvailableError, GroupCoordinatorNotAvailableError），Platform HTTP 服务卡死
-- **状态**：🟡 部分修复 — consumer 代码已修复（有限重试+降级模式）；docker-compose 配置已修复（固定 broker ID, HOST listener, PLAINTEXT EXTERNAL）；Kafka stale data 需手动清除
-- **修复文件**：`docker-compose.yaml`, `services/kafka/kafka_server_jaas.conf`, `services/kafka/init-kafka-broker.sh`, `platform/app/kafka/consumer.py`, `services/nginx/nginx.conf`
-- **修复脚本**：`scripts/fix_kafka_and_restart.sh`
-- **建议**：开发环境优先使用 PLAINTEXT listener；生产环境需恢复 SASL 并创建 `.env`
+- **问题**：Kafka broker ID 不匹配、SASL 配置、consumer 重试策略
+- **状态**：🟡 部分修复 — consumer 已增加指数退避重连（T-403）
+
+---
+
+## 审查改进实施记录（2026-05-31）
+
+基于 `2026-05-31-design-review-and-tasks.md` 审查报告，以下任务已完成实施：
+
+### Sprint 1: 数据链路打通 ✅
+
+| ID | 任务 | 状态 | 修改文件 |
+|----|------|------|----------|
+| T-101 | KafkaProducerNode 异步发送 | ✅ | `nodes/KafkaProducerNode.py` — 独立发送线程 + Queue(maxsize=200)，Kafka 不可用时不阻塞管道 |
+| T-102 | track/conflict 持久化到 InfluxDB | ✅ | `platform/app/utils/influx_query.py` — 新增 write_track_event/write_conflict_event/write_stats；`platform/app/kafka/consumer.py` — 注入 influx_client 并在 handler 中调用写入 |
+| T-103 | 遥测 Topic 发布 | ✅ | `nodes/KafkaProducerNode.py` — 新增 `telemetry_{N}` topic，5Hz 节流发布 |
+| T-104 | AlertEngine 补充规则 | ✅ | `platform/app/services/alert_engine.py` — 新增 high_avg_speed (P3) + multiple_conflicts (P2) 规则 |
+| T-105 | Kafka 端到端验证 | ⏳ | 待环境验证 |
+| T-106 | MJPEG 视频流验证 | ⏳ | 待环境验证 |
+
+### Sprint 2: 数据质量提升 ✅
+
+| ID | 任务 | 状态 | 修改文件 |
+|----|------|------|----------|
+| T-201 | 动态道路数 | ✅ | `CalcStatisticsNode.py` + `KafkaProducerNode.py` + `influx_query.py` + `consumer.py` — 从 roads_info 动态获取，Kafka 使用 roads 数组 |
+| T-202 | 速度计算线性回归 | ✅ | `SpeedEstimationNode.py` — np.polyfit 全点拟合替代首尾两点法 |
+| T-203 | 多因子拥堵指数 | ✅ | `KafkaProducerNode.py` — 车辆密度(0-4) + 排队(0-3) + 低速(0-3) = 0-10 分 |
+| T-204 | TrackerInfoUpdateNode break 修复 | ✅ | `TrackerInfoUpdateNode.py` — 移除 sorted+break，遍历所有元素 |
+| T-205 | FrameElement send_to_kafka 声明 | ✅ | `FrameElement.py` — __init__ 中声明 send_to_kafka: bool = False |
+| T-206 | drone_store mock 移除 | ✅ | `drone_store.py` — DRONES={} / MISSIONS={}，通过 telemetry 自动注册 |
+
+### Sprint 4: 质量加固（部分）
+
+| ID | 任务 | 状态 | 修改文件 |
+|----|------|------|----------|
+| T-402 | motion_compensation.py 死代码 | ✅ | `utils_local/motion_compensation.py` — 3 个函数标记 deprecated + warnings.warn |
+| T-403 | KafkaConsumer 自动重连 | ✅ | `platform/app/kafka/consumer.py` — 指数退避重连(5s→120s) |
+| T-404 | InfluxQuery 字段名统一 | ✅ | `influx_query.py` + `trajectories.py` — trajectory_world_m 统一，反序列化 JSON 字段 |
+
+### 待完成
+
+- [ ] T-105: Kafka 端到端验证（需启动完整环境）
+- [ ] T-106: MJPEG 视频流验证（需启动完整环境）
+- [ ] T-301: Drones 页面对接 telemetry WebSocket
+- [ ] T-302: GIS 轨迹回放
+- [ ] T-303: Mission-Pipeline 绑定
+- [ ] T-304: Dashboard pipelines_active 真实数据
+- [ ] T-305: Alert 持久化到 PostgreSQL
+- [ ] T-401: ShowNode 拆分
+- [ ] T-405: utils_local/utils.py 单元测试
+- [ ] T-406: ByteTrack 核心单元测试
 
 ---
 
@@ -150,37 +178,49 @@
 - [x] Monitor 页面实时数据验证（WebSocket publish 注入 → 前端显示）
 - [x] WebSocket 数据注入脚本（`scripts/inject_test_data.py`）
 - [x] Kafka 修复脚本（`scripts/fix_kafka_and_restart.sh`）
+- [x] **KafkaProducerNode 异步发送（T-101）**
+- [x] **track/conflict InfluxDB 持久化（T-102）**
+- [x] **遥测 Topic 发布（T-103）**
+- [x] **AlertEngine high_avg_speed + multiple_conflicts 规则（T-104）**
+- [x] **动态道路数改造（T-201）**
+- [x] **速度计算线性回归优化（T-202）**
+- [x] **多因子拥堵指数（T-203）**
+- [x] **TrackerInfoUpdateNode break 修复（T-204）**
+- [x] **FrameElement send_to_kafka 声明（T-205）**
+- [x] **drone_store mock 数据移除（T-206）**
+- [x] **死代码标记 deprecated（T-402）**
+- [x] **KafkaConsumer 指数退避重连（T-403）**
+- [x] **InfluxQuery 字段名统一 + JSON 反序列化（T-404）**
 
 ### 近期（1-2 周）
 - [ ] 清除 Kafka stale data（运行 `scripts/fix_kafka_and_restart.sh`）
-- [ ] 验证本地 Kafka → Platform 完整数据流（HOST listener 路由修复后）
-- [ ] 验证 MJPEG 视频流（管道 + Flask → nginx → Monitor 页面）
+- [ ] 验证 Kafka → Platform → InfluxDB 全链路数据流（T-105）
+- [ ] 验证 MJPEG 视频流（管道 + Flask → nginx → Monitor 页面）（T-106）
 - [ ] 优化 inter_xqh 道路多边形（精确标注道路区域）
-- [ ] 修复 TD-008：TrackerInfoUpdateNode 的字典排序问题
-- [ ] 修复 TD-005：FrameElement 动态属性
 - [ ] 修复 TD-009：export_dashboards.py 路径问题
-- [ ] 为 `utils_local/utils.py` 添加单元测试
-- [ ] Mission-Pipeline 绑定：创建任务时自动启动检测管道
-- [ ] 前端 Drones 页面接入 `telemetry:{drone_id}` WebSocket 实时遥测
-- [ ] 前端 Dashboard 的 `pipelines_active` 字段对接真实数据
+- [ ] 为 `utils_local/utils.py` 添加单元测试（T-405）
+- [ ] Mission-Pipeline 绑定：创建任务时自动启动检测管道（T-303）
+- [ ] 前端 Drones 页面接入 `telemetry:{drone_id}` WebSocket 实时遥测（T-301）
+- [ ] 前端 Dashboard 的 `pipelines_active` 字段对接真实数据（T-304）
 
 ### 中期（1-2 月）
-- [ ] 解决 TD-001：道路数量配置化
 - [ ] 解决 TD-002：统一入口点
-- [ ] 解决 TD-006：ShowNode 拆分
-- [ ] 为 ByteTrack 核心算法添加单元测试
+- [ ] 解决 TD-006：ShowNode 拆分（T-401）
+- [ ] 为 ByteTrack 核心算法添加单元测试（T-406）
 - [ ] 合并 docker-compose 文件（统一 Kafka/InfluxDB/Nginx 实例）
-- [ ] GIS 轨迹回放（基于 track_complete Kafka 消息）
+- [ ] GIS 轨迹回放（基于 track_complete + InfluxDB 数据）（T-302）
 - [ ] 管道健康监控面板（PipelineManager 状态 + 进程日志流）
+- [ ] Alert 持久化到 PostgreSQL（T-305）
 
 ### 远期（3-6 月）
 - [ ] 评估是否升级到 InfluxDB 2.x
 - [ ] 评估是否使用 ultralytics 内置跟踪替代 byte_tracker/
 - [ ] 添加 RTSP 流的自动重连机制
-- [ ] 支持任意数量的道路（动态 Grafana 仪表盘）
 - [ ] 巡检报告自动生成（PDF/HTML）
 - [ ] 多无人机任务调度
 - [ ] VLM 语义分析旁路
+- [ ] 模型微调：uav_best.pt 增加 person + bicycle
+- [ ] 冲突检测启用 + 精度验证
 
 ---
 

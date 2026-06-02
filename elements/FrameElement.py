@@ -64,3 +64,6 @@ class FrameElement:
 
         # ── 新增：性能指标 ──
         self.inference_ms: float = 0.0  # YOLO推理耗时（毫秒）
+
+        # ── 新增：Kafka发送控制 ──
+        self.send_to_kafka: bool = False  # 本帧是否已发送到Kafka

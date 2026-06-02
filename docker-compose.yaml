@@ -326,11 +326,15 @@ services:
       JWT_ACCESS_TOKEN_EXPIRE_MINUTES: 30
       PIPELINE_VIDEO_BASE: "http://traffic_analyzer_camera_1:8100/video"
       HLS_OUTPUT_DIR: /hls
+      # Pipeline manager: project root for spawning pipelines
+      PIPELINE_PROJECT_ROOT: /project
     ports:
       - "8000:8000"
     volumes:
       - hls_data:/hls
       - ./configs:/app/configs:ro
+      # Mount project root so PipelineManager can spawn main_optimized.py
+      - .:/project:ro
     depends_on:
       kafka:
         condition: service_healthy

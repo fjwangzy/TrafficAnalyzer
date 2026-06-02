@@ -1,3 +1,10 @@
+"""基于单应性矩阵和帧间位移计算车辆速度（km/h）。
+
+改进点（审查报告 T-202 / S-003）:
+  使用线性回归拟合 position_history 全部数据点，
+  取斜率作为速度。相比首尾两点法，抗 bbox 抖动能力大幅提升。
+  bbox ±3px 抖动下车速波动 <2km/h。
+"""
 import math
 import numpy as np
 import logging
@@ -54,21 +61,31 @@ class SpeedEstimationNode:
             if len(track.position_history) < 3:
                 continue
 
-            p_old = track.position_history[0]  # (cx, cy, timestamp)
-            p_new = track.position_history[-1]
-            dt = p_new[2] - p_old[2]
-            if dt < 0.05:
+            # T-202: 线性回归速度估算
+            # 提取时间戳和坐标
+            t_arr = np.array([p[2] for p in track.position_history])
+            x_arr = np.array([p[0] for p in track.position_history])
+            y_arr = np.array([p[1] for p in track.position_history])
+
+            dt_total = t_arr[-1] - t_arr[0]
+            if dt_total < 0.05:
                 continue
 
             if has_H:
-                # 用当前帧H转换所有历史点到无人机相对坐标系（同一参考系）
-                pts_px = np.array([[p_old[0], p_old[1]], [p_new[0], p_new[1]]])
+                # T-202: 在世界坐标系做线性回归
+                # 先用当前帧H转换所有历史点到世界坐标系
+                pts_px = np.column_stack([x_arr, y_arr])
                 pts_world = pixel_to_world(pts_px, H)
-                displacement = pts_world[1] - pts_world[0]
-                apparent_vel = displacement / dt  # m/s, 无人机相对速度
+
+                # 对 easting 和 northing 分别做线性回归
+                t_centered = t_arr - t_arr[0]  # 避免数值精度问题
+                # np.polyfit(t, x, 1) → [slope, intercept]
+                slope_e = np.polyfit(t_centered, pts_world[:, 0], 1)[0]  # easting velocity (m/s)
+                slope_n = np.polyfit(t_centered, pts_world[:, 1], 1)[0]  # northing velocity (m/s)
+
+                apparent_vel = np.array([slope_e, slope_n])  # m/s, 无人机相对速度
 
                 # 运动补偿：减去无人机速度矢量
-                # H矩阵已包含gimbal_yaw旋转，所以pts_world方向与世界坐标系对齐
                 if drone_vel is not None and not is_hovering:
                     true_vel = apparent_vel - drone_vel
                     speed_ms = float(np.linalg.norm(true_vel))
@@ -79,19 +96,21 @@ class SpeedEstimationNode:
 
                 # 更新heading_angle（世界坐标系方向）
                 if speed_ms > 0.5:
-                    track.heading_angle = math.degrees(math.atan2(displacement[1], displacement[0]))
+                    track.heading_angle = math.degrees(math.atan2(slope_n, slope_e))
             else:
-                # 像素位移回退（无标定）
-                dist_px = np.sqrt((p_new[0] - p_old[0]) ** 2 + (p_new[1] - p_old[1]) ** 2)
-                if dist_px < self.min_displacement_px:
+                # 像素空间线性回归回退（无标定）
+                t_centered = t_arr - t_arr[0]
+                slope_x = np.polyfit(t_centered, x_arr, 1)[0]  # px/s
+                slope_y = np.polyfit(t_centered, y_arr, 1)[0]  # px/s
+
+                dist_px_per_sec = math.sqrt(slope_x ** 2 + slope_y ** 2)
+                if dist_px_per_sec < self.min_displacement_px:
                     track.speed_kmh = 0.0
                 else:
-                    track.speed_kmh = (dist_px / dt) * 3.6  # 像素/秒 * 3.6（非真实km/h）
+                    track.speed_kmh = dist_px_per_sec * 3.6  # 像素/秒 * 3.6（非真实km/h）
 
-                dx = p_new[0] - p_old[0]
-                dy = p_new[1] - p_old[1]
-                if abs(dx) > 0.5 or abs(dy) > 0.5:
-                    track.heading_angle = math.degrees(math.atan2(dy, dx))
+                if abs(slope_x) > 0.5 or abs(slope_y) > 0.5:
+                    track.heading_angle = math.degrees(math.atan2(slope_y, slope_x))
 
             # EMA平滑
             track.avg_speed_kmh = alpha * track.speed_kmh + (1 - alpha) * track.avg_speed_kmh

@@ -16,6 +16,7 @@ PUBLIC_PATHS = [
     "/video/",       # Video stream endpoints (MJPEG proxy)
     "/api/v1/auth/login",
     "/api/v1/auth/register",
+    "/api/v1/pipelines/proxy-map",  # Camera port mapping for Vite dev proxy
     "/docs",
     "/openapi.json",
     "/redoc",

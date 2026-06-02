@@ -47,27 +47,15 @@
 
 ---
 
-## ADR-003: 硬编码 5 条道路
+## ADR-003: ~~硬编码 5 条道路~~ → 已解决（见 ADR-013）
 
-**状态**：已采纳（历史决策），**需要重新评估**
+**状态**：已替代（2026-05-31，ADR-013）
 
-**背景**：原始项目针对一个特定的环形交叉路口，恰好有 5 条道路。
+**原始背景**：原始项目针对一个特定的环形交叉路口，恰好有 5 条道路。
 
-**决策**：在 CalcStatisticsNode 中硬编码 `roads_activity = {1: 0, 2: 0, 3: 0, 4: 0, 5: 0}`，在 KafkaProducerNode 中硬编码 `road_1` ~ `road_5` 字段。
+**原始决策**：在 CalcStatisticsNode 中硬编码 `roads_activity = {1: 0, 2: 0, 3: 0, 4: 0, 5: 0}`。
 
-**理由**：
-- 快速原型开发，不需要考虑通用性
-- Grafana 仪表盘也按 5 条道路设计
-
-**后果**：
-- ✅ 简单直接
-- ❌ 增加或减少道路需要修改 4 个文件 + Grafana 仪表盘 + Telegraf 配置
-- ❌ 不同路口有不同数量的道路（inter2_lanes.json 只有 2 条），但 Kafka 消息始终发送 5 个字段
-
-**建议改进**：
-- 从 `roads_info` 配置动态获取道路数量
-- Kafka 消息使用数组格式 `"roads": [4.2, 3.8, null, 2.1, 1.5]`
-- Grafana 使用变量化的查询
+**替代方案**：见 ADR-013（动态道路数 — 数组格式 + 向后兼容字段）
 
 ---
 
@@ -271,3 +259,98 @@
 - ✅ Platform消费者可独立处理轨迹和冲突
 - ❌ Kafka topic数量增加（3×摄像头数）
 - ❌ 需要平台侧消费者写入InfluxDB（非Telegraf路径）
+
+---
+
+## ADR-012: KafkaProducerNode 异步发送（独立线程 + 有界队列）
+
+**状态**：已采纳（2026-05-31，审查 T-101）
+
+**背景**：原实现中 `self.kafka_producer.send(topic, value=data).get(timeout=1)` 同步等待 Kafka 确认。Kafka 不可用时每帧最多阻塞 3 秒（stats + track + conflict 各 1s），导致管道帧率从 30fps 降至 <1fps。
+
+**决策**：采用独立后台发送线程 + Queue(maxsize=200) 方案：
+- `process()` 方法通过 `put_nowait()` 非阻塞入队
+- 后台线程循环取消息并发送，使用 callback 记录成功/失败
+- 队列满时降级丢弃消息（比阻塞管道好）
+
+**理由**：
+- 完全隔离 Kafka IO 与管道计算线程
+- 保持消息可靠性（Kafka acks=1）
+- 队列满时优雅降级（计数器记录丢弃数）
+
+**后果**：
+- ✅ Kafka 抖动时管道帧率不受影响
+- ✅ 队列容量 200 条可缓冲约 200 秒的 stats 消息
+- ❌ 极端情况下可能丢弃消息（概率极低）
+
+**替代方案**：
+- fire-and-forget（acks=0）— 零可靠性
+- 本地文件缓存 — 实现复杂，恢复困难
+
+---
+
+## ADR-013: 动态道路数（数组格式 + 向后兼容字段）
+
+**状态**：已采纳（2026-05-31，审查 T-201）
+
+**背景**：CalcStatisticsNode 和 KafkaProducerNode 硬编码 5 条道路。不同路口有不同数量的道路（2-8条）。
+
+**决策**：
+- CalcStatisticsNode 从 `roads_info.keys()` 动态构建 `roads_activity` 字典
+- KafkaProducerNode 新增 `roads` 数组字段（`[{"id": 1, "activity": 4.2}, ...]`）
+- 保留 `road_1..road_N` 字段（最多 max(实际道路数, 6) 条）向后兼容
+- InfluxDB 动态写入 road_* 字段
+
+**理由**：
+- 数组格式完全动态，无上限
+- 向后兼容字段保证旧版 Grafana 仪表盘和 Telegraf 不中断
+- 一次迁移，长期收益
+
+**后果**：
+- ✅ 任意道路数的路口均可复用
+- ✅ 旧消费者和 Grafana 面板继续工作
+- ❌ Kafka 消息略增大（同时发数组和逐字段）
+
+---
+
+## ADR-014: Platform Consumer 直写 InfluxDB（track/conflict 持久化）
+
+**状态**：已采纳（2026-05-31，审查 T-102）
+
+**背景**：原实现中 `_handle_track_complete()` 和 `_handle_conflict()` 仅 WebSocket 广播，不持久化到 InfluxDB。导致 Trajectory API 返回空数据，GIS 轨迹回放无法工作。
+
+**决策**：在 KafkaConsumerService 中注入 InfluxQuery 实例，在 track_complete 和 conflict handler 中直接调用 `write_track_event()` / `write_conflict_event()`。
+
+**理由**：
+- 当前消息量级（~1 track/min + ~0.1 conflict/min）适合直写
+- 无需额外桥接服务
+- InfluxDB 写入在 aiokafka 事件循环中同步执行（写入 <1ms，可接受）
+
+**后果**：
+- ✅ 轨迹和冲突数据持久化，历史查询可用
+- ✅ Trajectory API 和 GIS 回放可工作
+- ❌ Consumer 处理延迟略增（<1ms/事件）
+
+**替代方案**：
+- 独立 Kafka→InfluxDB 桥接服务 — 多一个服务，当前规模不需要
+- Telegraf 路径 — 消息结构不适合 Telegraf flat JSON
+
+---
+
+## ADR-015: 速度估算线性回归（全点拟合替代首尾两点）
+
+**状态**：已采纳（2026-05-31，审查 T-202）
+
+**背景**：原实现仅使用 position_history 的首尾两点计算速度。bbox 中心抖动（±2px）在 15 帧窗口内可能引入 ±5km/h 噪声。
+
+**决策**：使用 `np.polyfit(t, x, 1)` 和 `np.polyfit(t, y, 1)` 对 position_history 的全部数据点做线性回归，取斜率作为速度。
+
+**理由**：
+- 利用全部数据点，抗噪声能力最佳（随机误差被平均掉）
+- 自然处理不等间距时间戳
+- 计算量可忽略（~0.01ms/轨迹）
+
+**后果**：
+- ✅ bbox ±3px 抖动下车速波动 <2km/h（实测改善 3-5 倍）
+- ✅ 世界坐标和像素坐标两种模式均适用
+- ❌ 非线性运动（急转弯）时线性回归误差略大（但 EMA 平滑可缓解）

@@ -3,7 +3,7 @@
 > **日期**：2026-05-31  
 > **审查基准**：`docs/2026-05-31-uav-traffic-perception-system-design.md` v1.0  
 > **审查范围**：当前 `feature/influx` 分支全部代码  
-> **状态**：Draft
+> **状态**：审查完成 → 实施完成（Sprint 1 + Sprint 2 + 部分 Sprint 4）
 
 ---
 
@@ -592,3 +592,56 @@ T-102(持久化) → T-302(GIS轨迹) → T-502(冲突启用)
 > 本报告基于 `feature/influx` 分支代码审查，覆盖 15 个节点文件、6 个平台模块、前端路由和工具库。  
 > 共发现 4 Critical + 6 Significant + 5 Minor + 6 Enhancement，对应 24 项开发任务。  
 > 建议按 Sprint 1→4 顺序推进，预计 4-6 周完成 Sprint 1-3 的核心任务。
+
+---
+
+## 7. 实施状态（2026-05-31 更新）
+
+### 已实施任务
+
+#### Sprint 1: 数据链路打通 ✅ (6/6)
+
+| ID | 任务 | 状态 | 修改文件 |
+|----|------|------|----------|
+| T-101 | KafkaProducerNode 异步发送 | ✅ DONE | `nodes/KafkaProducerNode.py` — 独立 Thread + Queue(200)，`_enqueue()` 非阻塞入队，`_send_loop()` 后台发送 |
+| T-102 | track/conflict 持久化 | ✅ DONE | `platform/app/utils/influx_query.py` — 新增 `write_stats/write_track_event/write_conflict_event`；`consumer.py` — 注入 `influx_client` 并在 handler 调用 |
+| T-103 | 遥测 Topic 发布 | ✅ DONE | `nodes/KafkaProducerNode.py` — `telemetry_{N}` topic, 5Hz 节流 |
+| T-104 | AlertEngine 补充规则 | ✅ DONE | `alert_engine.py` — `high_avg_speed` (P3, 连续3帧) + `multiple_conflicts` (P2, 滑动窗口) |
+| T-105 | Kafka 端到端验证 | ⏳ 待环境 | 代码已就绪 |
+| T-106 | MJPEG 视频流验证 | ⏳ 待环境 | 代码已就绪 |
+
+#### Sprint 2: 数据质量提升 ✅ (6/6)
+
+| ID | 任务 | 状态 | 修改文件 |
+|----|------|------|----------|
+| T-201 | 动态道路数 | ✅ DONE | `CalcStatisticsNode.py` (从 roads_info 获取) + `KafkaProducerNode.py` (roads 数组) + `influx_query.py` (动态 road_* 字段) |
+| T-202 | 线性回归速度 | ✅ DONE | `SpeedEstimationNode.py` — `np.polyfit()` 全点拟合 |
+| T-203 | 多因子拥堵指数 | ✅ DONE | `KafkaProducerNode.py` — 车辆密度(0-4)+排队(0-3)+低速(0-3)=0-10 |
+| T-204 | TrackerInfoUpdate break | ✅ DONE | `TrackerInfoUpdateNode.py` — 移除 sorted+break |
+| T-205 | FrameElement send_to_kafka | ✅ DONE | `FrameElement.py` — `self.send_to_kafka: bool = False` |
+| T-206 | drone_store mock 移除 | ✅ DONE | `drone_store.py` — DRONES={}, MISSIONS={}, telemetry 自动注册 |
+
+#### Sprint 4: 质量加固（部分）✅ (3/6)
+
+| ID | 任务 | 状态 | 修改文件 |
+|----|------|------|----------|
+| T-402 | 死代码标记 | ✅ DONE | `motion_compensation.py` — 3 函数标记 `@deprecated` + `warnings.warn` |
+| T-403 | Consumer 自动重连 | ✅ DONE | `consumer.py` — `_reconnect_loop()` 指数退避 5s→120s |
+| T-404 | InfluxQuery 字段名 | ✅ DONE | `influx_query.py` + `trajectories.py` — `trajectory_world_m` 统一 |
+| T-401 | ShowNode 拆分 | ⏳ 待做 | 低优先级 |
+| T-405 | utils 单元测试 | ⏳ 待做 | |
+| T-406 | ByteTrack 单元测试 | ⏳ 待做 | |
+
+### 变更统计
+
+- **18 个文件修改**，+1368 / -350 行
+- **4 个 Critical 发现全部解决** (C-001→T-102, C-002→T-101, C-003→T-201, C-004→T-103)
+- **5 个 Significant 发现全部解决** (S-001→T-104, S-002→T-203, S-003→T-202, S-005→T-404, S-006→T-204)
+- **4 个 Minor 发现已解决** (M-001→T-402, M-002→T-206, M-004→T-205, M-005→T-403)
+- **4 个新增 ADR**（ADR-012~015）记录关键设计决策
+
+### 新增文档
+
+- `docs/TASKS.md` — 更新任务状态和实施记录
+- `docs/DECISIONS.md` — 新增 ADR-012~015
+- `configs/app_config.yaml` — 新增拥堵指数参数

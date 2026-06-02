@@ -71,6 +71,10 @@ kafka_producer_node: #// 摄像头 id
   topic_name: ${oc.env:TOPIC_NAME}
   how_often_sec: 1 # 每隔多少秒发送一次结果
   camera_id: ${oc.decode:${oc.env:CAMERA_ID}}
+  # T-203: 多因子拥堵指数参数
+  capacity_veh_per_min: 30.0    # 路口设计通行能力（辆/分钟）
+  queue_threshold_m: 80.0       # 排队长度阈值（米）
+  free_flow_speed_kmh: 40.0     # 自由流速度（km/h）
 
 # ------------------------------------------------- TRAFFIC SITUATION AWARENESS --------------------------------------------------
 

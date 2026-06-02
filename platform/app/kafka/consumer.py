@@ -1,4 +1,11 @@
-"""Kafka consumer service — consumes pipeline messages and broadcasts via WebSocket."""
+"""Kafka consumer service — consumes pipeline messages, persists to InfluxDB,
+and broadcasts via WebSocket.
+
+改进点（审查报告 T-102 / T-403 / T-201）:
+  T-102: track_complete / conflict 事件持久化到 InfluxDB
+  T-403: 降级模式下指数退避自动重连
+  T-201: 动态道路数兼容（consumer 已接收 roads 数组）
+"""
 import asyncio
 import json
 import logging
@@ -24,12 +31,14 @@ class KafkaConsumerService:
         topics_pattern: str,
         ws_manager: WSManager,
         alert_engine: Any = None,
+        influx_client: Any = None,
     ):
         self._bootstrap = bootstrap_servers
         self._group_id = group_id
         self._topics_pattern = topics_pattern
         self._ws = ws_manager
         self._alert_engine = alert_engine
+        self._influx = influx_client  # T-102: InfluxDB 写入客户端
         self._consumer: AIOKafkaConsumer | None = None
         self._task: asyncio.Task | None = None
         self._running = False
@@ -51,38 +60,48 @@ class KafkaConsumerService:
     async def start(self):
         """Start the Kafka consumer background task."""
         self._running = True
-        self._consumer = AIOKafkaConsumer(
+        self._consumer = await self._create_consumer()
+
+        if self._consumer is None:
+            logger.warning("Kafka consumer could not start — running in degraded mode")
+            self._task = asyncio.create_task(self._reconnect_loop())
+            return
+
+        self._task = asyncio.create_task(self._consume_loop())
+        logger.info("Kafka consumer started")
+
+    async def _create_consumer(self) -> AIOKafkaConsumer | None:
+        """Create and start an AIOKafkaConsumer. Returns None if broker unavailable."""
+        consumer = AIOKafkaConsumer(
             bootstrap_servers=self._bootstrap,
             group_id=self._group_id,
             auto_offset_reset="latest",
             enable_auto_commit=True,
             value_deserializer=lambda v: json.loads(v.decode("utf-8")),
-            # 限流：避免GroupCoordinatorNotAvailableError导致无限重试阻塞事件循环
             request_timeout_ms=10000,
             retry_backoff_ms=500,
             max_poll_interval_ms=300000,
         )
 
         try:
-            # Try pattern-based subscription first
             pattern = re.compile(self._topics_pattern)
-            self._consumer.subscribe(pattern=pattern)
+            consumer.subscribe(pattern=pattern)
             logger.info(f"Kafka consumer subscribing to pattern: {self._topics_pattern}")
         except Exception:
-            # Fallback: subscribe to specific known topics
             topics = ["statistics_1", "statistics_2"]
-            self._consumer.subscribe(topics=topics)
+            consumer.subscribe(topics=topics)
             logger.info(f"Kafka consumer subscribing to topics: {topics}")
 
         try:
-            await asyncio.wait_for(self._consumer.start(), timeout=15)
+            await asyncio.wait_for(consumer.start(), timeout=15)
+            return consumer
         except asyncio.TimeoutError:
-            logger.warning("Kafka consumer start timed out (broker may be unavailable) — running in degraded mode")
-            self._consumer = None
-            return
-
-        self._task = asyncio.create_task(self._consume_loop())
-        logger.info("Kafka consumer started")
+            logger.warning("Kafka consumer start timed out (broker may be unavailable)")
+            try:
+                await consumer.stop()
+            except Exception:
+                pass
+            return None
 
     async def stop(self):
         """Stop the Kafka consumer."""
@@ -97,17 +116,44 @@ class KafkaConsumerService:
             await self._consumer.stop()
         logger.info("Kafka consumer stopped")
 
+    # ── T-403: 指数退避重连 ──
+
+    async def _reconnect_loop(self):
+        """指数退避重连循环（降级模式下使用）。"""
+        backoff = 5  # 初始退避秒数
+        max_backoff = 120  # 最大退避
+
+        while self._running:
+            if self._consumer is not None:
+                # Consumer 已恢复，切回正常消费循环
+                self._task = asyncio.create_task(self._consume_loop())
+                return
+
+            logger.info(f"Kafka consumer in degraded mode — reconnecting in {backoff}s")
+            await asyncio.sleep(backoff)
+
+            if not self._running:
+                break
+
+            consumer = await self._create_consumer()
+            if consumer is not None:
+                self._consumer = consumer
+                logger.info("Kafka consumer reconnected successfully")
+                self._task = asyncio.create_task(self._consume_loop())
+                return
+
+            backoff = min(backoff * 2, max_backoff)
+
     async def _consume_loop(self):
         """Main consumption loop with bounded retry."""
         consecutive_errors = 0
-        max_consecutive_errors = 10  # 最多连续错误次数，超过后暂停消费
+        max_consecutive_errors = 10
 
         while self._running:
             if self._consumer is None:
-                # 降级模式：Kafka不可用，等待重连
-                logger.info("Kafka consumer in degraded mode — waiting for reconnect")
-                await asyncio.sleep(30)
-                continue
+                # T-403: 切到重连循环
+                self._task = asyncio.create_task(self._reconnect_loop())
+                return
 
             try:
                 async for msg in self._consumer:
@@ -115,7 +161,7 @@ class KafkaConsumerService:
                         break
                     try:
                         await self._process_message(msg.value, msg.topic)
-                        consecutive_errors = 0  # 成功处理后重置错误计数
+                        consecutive_errors = 0
                     except Exception as e:
                         logger.error(f"Error processing Kafka message: {e}")
             except asyncio.CancelledError:
@@ -124,9 +170,15 @@ class KafkaConsumerService:
                 consecutive_errors += 1
                 logger.error(f"Kafka consumer error ({consecutive_errors}/{max_consecutive_errors}): {e}")
                 if consecutive_errors >= max_consecutive_errors:
-                    logger.warning(f"Kafka consumer: {max_consecutive_errors} consecutive errors — pausing for 60s")
-                    await asyncio.sleep(60)
-                    consecutive_errors = 0
+                    logger.warning(f"Kafka consumer: {max_consecutive_errors} consecutive errors — switching to reconnect mode")
+                    # 关闭旧 consumer
+                    try:
+                        await self._consumer.stop()
+                    except Exception:
+                        pass
+                    self._consumer = None
+                    self._task = asyncio.create_task(self._reconnect_loop())
+                    return
                 else:
                     await asyncio.sleep(2)
 
@@ -150,7 +202,6 @@ class KafkaConsumerService:
         elif msg_type == "telemetry":
             await self._handle_telemetry(data)
         else:
-            # Legacy format (old KafkaProducerNode): treat as stats
             await self._handle_legacy_stats(data, topic)
 
     async def _handle_stats(self, data: dict, intersection_id: str):
@@ -160,7 +211,6 @@ class KafkaConsumerService:
         # Extract drone position from stats and update drone store
         drone_pos = data.get("drone_position")
         if drone_pos:
-            # Stats messages carry drone position — use it to update drone state
             update_drone_from_stats(
                 intersection_id=intersection_id,
                 drone_position=drone_pos,
@@ -168,19 +218,23 @@ class KafkaConsumerService:
             )
 
         # Transform lane_stats dict → lanes array for frontend compatibility
-        # KafkaProducerNode sends: {"lane_stats": {"1": {"count": 3, "avg_speed_kmh": 25, ...}, ...}}
-        # Frontend expects:       {"lanes": [{"lane_id": 1, "vehicle_count": 3, "avg_speed_kmh": 25, ...}, ...]}
         lane_stats = data.get("lane_stats")
         if lane_stats and isinstance(lane_stats, dict):
             lanes_arr = []
             for lid, v in lane_stats.items():
                 entry = {"lane_id": int(lid), "vehicle_count": v.get("count", 0), **v}
-                # Compute headway from vehicle count (60s window / count)
                 cnt = v.get("count", 0)
                 if cnt > 0:
                     entry["headway_sec"] = round(60.0 / cnt, 1)
                 lanes_arr.append(entry)
             data["lanes"] = lanes_arr
+
+        # T-102: 持久化 stats 到 InfluxDB
+        if self._influx:
+            try:
+                self._influx.write_stats(data)
+            except Exception as e:
+                logger.error(f"InfluxDB write_stats error: {e}")
 
         ws_msg = {
             "channel": f"intersection:{intersection_id}",
@@ -196,7 +250,6 @@ class KafkaConsumerService:
 
     async def _handle_detections(self, data: dict, intersection_id: str):
         """Handle detections message."""
-        # Keep ring buffer of last 5 frames
         buf = self._latest_detections.setdefault(intersection_id, [])
         buf.append(data)
         if len(buf) > 5:
@@ -211,7 +264,17 @@ class KafkaConsumerService:
         await self._ws.broadcast(f"intersection:{intersection_id}", ws_msg)
 
     async def _handle_track_complete(self, data: dict, intersection_id: str):
-        """Handle track complete message."""
+        """Handle track complete message.
+
+        T-102: 新增 InfluxDB 持久化。
+        """
+        # T-102: 写入 InfluxDB track_events measurement
+        if self._influx:
+            try:
+                self._influx.write_track_event(data)
+            except Exception as e:
+                logger.error(f"InfluxDB write_track_event error: {e}")
+
         ws_msg = {
             "channel": f"intersection:{intersection_id}",
             "type": "track_complete",
@@ -234,7 +297,6 @@ class KafkaConsumerService:
         }
         await self._ws.broadcast(f"intersection:{intersection_id}", ws_msg)
 
-        # Check VLM alert
         if self._alert_engine and (data.get("accident") or data.get("anomaly_detected")):
             await self._alert_engine.on_vlm_alert(intersection_id, data)
 
@@ -251,12 +313,22 @@ class KafkaConsumerService:
         await self._ws.broadcast("system", ws_msg)
 
     async def _handle_conflict(self, data: dict, intersection_id: str):
-        """Handle conflict event from the detection pipeline."""
+        """Handle conflict event from the detection pipeline.
+
+        T-102: 新增 InfluxDB 持久化。
+        """
         # Keep ring buffer of recent conflicts per intersection
         buf = self._latest_conflicts.setdefault(intersection_id, [])
         buf.append(data)
         if len(buf) > 20:
             buf.pop(0)
+
+        # T-102: 写入 InfluxDB conflict_events measurement
+        if self._influx:
+            try:
+                self._influx.write_conflict_event(data)
+            except Exception as e:
+                logger.error(f"InfluxDB write_conflict_event error: {e}")
 
         ws_msg = {
             "channel": f"intersection:{intersection_id}",
@@ -265,6 +337,11 @@ class KafkaConsumerService:
             "ts": time.time(),
         }
         await self._ws.broadcast(f"intersection:{intersection_id}", ws_msg)
+
+        # T-104: 记录冲突事件并检查冲突频率
+        if self._alert_engine:
+            self._alert_engine.record_conflict(intersection_id)
+            await self._alert_engine.check_conflict_rate(intersection_id)
 
         # Trigger alert for severe conflicts
         if self._alert_engine and data.get("severity") in ("critical", "warning"):
@@ -333,7 +410,6 @@ class KafkaConsumerService:
             "cars": data.get("cars", 0),
             "lanes": lanes,
         }
-        # Preserve raw road_N fields
         for i in range(1, 6):
             normalized[f"road_{i}"] = data.get(f"road_{i}")
 
@@ -341,10 +417,6 @@ class KafkaConsumerService:
 
     def _extract_intersection(self, topic: str) -> str:
         """Extract intersection ID from topic name."""
-        # statistics_1 → INT_camera_1
-        # track_complete_1 → INT_camera_1
-        # conflicts_1 → INT_camera_1
-        # telemetry_drone_001 → drone_001
         for prefix in ("statistics_", "track_complete_", "conflicts_"):
             if topic.startswith(prefix):
                 cam_id = topic[len(prefix):]

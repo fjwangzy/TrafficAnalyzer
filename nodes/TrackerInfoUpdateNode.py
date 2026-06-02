@@ -109,12 +109,11 @@ class TrackerInfoUpdateNode:
                     self.buffer_tracks[id].timestamp_init_road = frame_element.timestamp
 
         # 如果id的生存时间> size_buffer_analytics，则从字典中删除旧id
+        # 修复(TD-008): 不使用break，遍历所有元素，避免高ID新轨迹遮蔽低ID旧轨迹
         keys_to_remove = []
-        for key, track_element in sorted(self.buffer_tracks.items()):  # 按键对元素进行排序
-            if frame_element.timestamp - track_element.timestamp_first < self.size_buffer_analytics:
-                break  # 如果time_delta大于check，则中断循环
-            else:
-                keys_to_remove.append(key)  # 添加要删除的键
+        for key, track_element in self.buffer_tracks.items():
+            if frame_element.timestamp - track_element.timestamp_first >= self.size_buffer_analytics:
+                keys_to_remove.append(key)
 
         # 发射完成轨迹数据（供下游节点使用）
         # 运动补偿数据（用于世界坐标转换）

@@ -2,9 +2,14 @@
 
 提供GPS锚定世界坐标系、无人机位移/速度计算、像素→世界坐标变换、
 悬停检测、速度补偿和航向修正。
+
+注(T-402): compensate_speed / compensate_heading / world_to_gps 三个函数
+已被 SpeedEstimationNode 和 drone_store 的内联逻辑替代，标记为 deprecated。
+保留以备外部工具或测试引用，不应在新代码中使用。
 """
 
 import math
+import warnings
 import numpy as np
 import logging
 
@@ -115,6 +120,9 @@ def compensate_speed(
 ) -> np.ndarray:
     """从表观速度中减去无人机速度，得到真实地面速度。
 
+    .. deprecated:: T-402
+        SpeedEstimationNode 已内联实现矢量减法。保留仅供测试引用。
+
     Args:
         apparent_speed_vector: [v_east, v_north] 表观速度(m/s, 世界坐标系)
         drone_velocity: [v_east, v_north] 无人机速度(m/s)
@@ -122,6 +130,10 @@ def compensate_speed(
     Returns:
         [v_east, v_north] 真实地面速度(m/s)
     """
+    warnings.warn(
+        "compensate_speed is deprecated (T-402); use SpeedEstimationNode inline logic",
+        DeprecationWarning, stacklevel=2,
+    )
     return apparent_speed_vector - drone_velocity
 
 
@@ -131,6 +143,9 @@ def compensate_heading(
 ) -> float:
     """修正像素空间航向角，去除云台偏航旋转影响。
 
+    .. deprecated:: T-402
+        DirectionFlowNode 已内联实现 heading 修正。保留仅供测试引用。
+
     Args:
         heading_pixel_deg: 像素空间计算得到的航向（度）
         gimbal_yaw_delta: 当前云台偏航 - 首帧云台偏航（度）
@@ -138,6 +153,10 @@ def compensate_heading(
     Returns:
         修正后的世界参考系航向角（度），归一化到[-180, 180]
     """
+    warnings.warn(
+        "compensate_heading is deprecated (T-402); use DirectionFlowNode inline logic",
+        DeprecationWarning, stacklevel=2,
+    )
     corrected = heading_pixel_deg - gimbal_yaw_delta
     while corrected > 180:
         corrected -= 360
@@ -154,6 +173,9 @@ def world_to_gps(
 ) -> tuple[float, float]:
     """世界坐标（东北偏移米）→ GPS坐标。
 
+    .. deprecated:: T-402
+        drone_store.update_drone_from_stats() 已内联实现。保留仅供测试引用。
+
     Args:
         easting_m, northing_m: 世界坐标偏移（米）
         anchor_lat, anchor_lon: 世界锚点GPS
@@ -161,6 +183,10 @@ def world_to_gps(
     Returns:
         (latitude, longitude)
     """
+    warnings.warn(
+        "world_to_gps is deprecated (T-402); use drone_store inline logic",
+        DeprecationWarning, stacklevel=2,
+    )
     lat = anchor_lat + math.degrees(northing_m / EARTH_RADIUS_M)
     lon = anchor_lon + math.degrees(easting_m / (EARTH_RADIUS_M * math.cos(math.radians(anchor_lat))))
     return lat, lon

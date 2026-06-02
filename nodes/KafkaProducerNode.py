@@ -1,12 +1,25 @@
-from kafka import KafkaProducer
-from json import dumps
+"""KafkaProducerNode — 异步发送 + 遥测发布 + 动态道路数 + 多因子拥堵指数
+
+改进点（审查报告 T-101 / T-103 / T-201 / T-203）:
+  T-101: 独立发送线程 + 有界队列，Kafka 不可用时不阻塞管道
+  T-103: 新增 telemetry_{N} topic，5Hz 节流发布遥测数据
+  T-201: roads_activity 改为动态数组 [{"id": 1, "activity": 4.2}, ...]
+  T-203: congestion_index 改为多因子计算 (车辆密度 + 排队 + 低速比例)
+"""
+import logging
 import os
 import time
+from queue import Queue, Full
+from threading import Thread
+
+from kafka import KafkaProducer
+from json import dumps
 
 from utils_local.utils import profile_time
 from elements.VideoEndBreakElement import VideoEndBreakElement
 from elements.FrameElement import FrameElement
-import logging
+
+logger = logging.getLogger(__name__)
 
 
 class KafkaProducerNode:
@@ -20,6 +33,10 @@ class KafkaProducerNode:
         self.kafka_producer = KafkaProducer(
             bootstrap_servers=bootstrap_servers,
             value_serializer=lambda x: dumps(x).encode("utf-8"),
+            # 增加重试和超时配置以提高可靠性
+            retries=3,
+            request_timeout_ms=5000,
+            delivery_timeout_ms=10000,
         )
 
         self.buffer_analytics_sec = (
@@ -44,6 +61,74 @@ class KafkaProducerNode:
         else:
             self.intersection_id = f"INT_camera_{self.camera_id}"
 
+        # ── T-103: 遥测发布 ──
+        self.telemetry_topic = f"telemetry{camera_suffix}"
+        self._telemetry_interval = 0.2  # 5Hz 节流
+        self._last_telemetry_time = 0.0
+
+        # ── T-101: 异步发送线程 + 有界队列 ──
+        self._send_queue: Queue = Queue(maxsize=200)
+        self._sender_thread = Thread(
+            target=self._send_loop, name="kafka_sender", daemon=True
+        )
+        self._sender_thread.start()
+        self._dropped_count = 0  # 队列满时丢弃的消息计数
+
+        # ── T-203: 拥堵指数参数 ──
+        # 路口设计通行能力（辆/分钟），用于归一化车辆密度因子
+        # 可从配置覆盖，默认 30 veh/min（典型四向路口）
+        self._capacity_veh_per_min = config.get("kafka_producer_node", {}).get(
+            "capacity_veh_per_min", 30.0
+        )
+        # 排队长度阈值（米），超过视为严重排队
+        self._queue_threshold_m = config.get("kafka_producer_node", {}).get(
+            "queue_threshold_m", 80.0
+        )
+        # 自由流速度（km/h），用于计算低速因子
+        self._free_flow_speed_kmh = config.get("kafka_producer_node", {}).get(
+            "free_flow_speed_kmh", 40.0
+        )
+
+    def _send_loop(self):
+        """后台发送线程：从有界队列取消息并发送到 Kafka。
+
+        独立于主管道线程运行，Kafka 阻塞不影响管道帧率。
+        发送失败仅记录日志，不抛异常。
+        """
+        while True:
+            try:
+                topic, data = self._send_queue.get(timeout=1.0)
+            except Exception:
+                continue  # 队列空，继续等待
+            try:
+                future = self.kafka_producer.send(topic, value=data)
+                future.add_callback(self._on_send_success, topic=topic)
+                future.add_errback(self._on_send_error, topic=topic)
+            except Exception as e:
+                logger.warning(f"Kafka send failed (topic={topic}): {e}")
+
+    @staticmethod
+    def _on_send_success(record_metadata, topic=None):
+        logger.debug(
+            f"Kafka sent OK: topic={topic} partition={record_metadata.partition} "
+            f"offset={record_metadata.offset}"
+        )
+
+    @staticmethod
+    def _on_send_error(exc, topic=None):
+        logger.warning(f"Kafka send error (topic={topic}): {exc}")
+
+    def _enqueue(self, topic: str, data: dict):
+        """非阻塞入队。队列满时丢弃消息并计数。"""
+        try:
+            self._send_queue.put_nowait((topic, data))
+        except Full:
+            self._dropped_count += 1
+            if self._dropped_count % 100 == 1:
+                logger.warning(
+                    f"Kafka send queue full, dropped {self._dropped_count} messages total"
+                )
+
     def _compute_fps(self) -> float:
         """基于wall-clock滑动窗口计算实时FPS。"""
         now = time.time()
@@ -55,6 +140,48 @@ class KafkaProducerNode:
             if dt > 0:
                 return round(len(self._fps_timestamps) / dt, 1)
         return 0.0
+
+    def _compute_congestion_index(
+        self, cars: int, roads_activity: dict, frame_element: FrameElement
+    ) -> float:
+        """多因子拥堵指数 (0-10)。
+
+        因子1: 车辆密度 (0-4分) — 当前车辆数 / 路口通行能力
+        因子2: 排队严重度 (0-3分) — 最大排队长度 / 阈值
+        因子3: 低速比例 (0-3分) — 排队车辆占比
+        """
+        # 因子1: 车辆密度 (0-4)
+        density = cars / max(self._capacity_veh_per_min, 1)
+        vehicle_score = min(density, 1.0) * 4
+
+        # 因子2: 排队严重度 (0-3) — 从 direction_stats 或 lane_stats 获取排队长度
+        max_queue_m = 0.0
+        direction_stats = getattr(frame_element, "direction_stats", None)
+        if direction_stats:
+            for d_key in ("straight", "left_turn", "right_turn", "u_turn"):
+                d = direction_stats.get(d_key, {})
+                q = d.get("queue_length_m", 0)
+                if q > max_queue_m:
+                    max_queue_m = q
+        lane_stats = getattr(frame_element, "lane_stats", None)
+        if lane_stats:
+            for lid, lv in lane_stats.items():
+                q = lv.get("queue_length_m", 0) if isinstance(lv, dict) else 0
+                if q > max_queue_m:
+                    max_queue_m = q
+        queue_score = min(max_queue_m / max(self._queue_threshold_m, 1), 1.0) * 3
+
+        # 因子3: 低速比例 (0-3) — 从 buffer_tracks 中统计低速车辆占比
+        slow_count = 0
+        total_tracks = 0
+        for track in frame_element.buffer_tracks.values():
+            total_tracks += 1
+            if track.avg_speed_kmh < 10:
+                slow_count += 1
+        slow_ratio = slow_count / max(total_tracks, 1)
+        speed_score = slow_ratio * 3
+
+        return round(vehicle_score + queue_score + speed_score, 1)
 
     @profile_time
     def process(self, frame_element: FrameElement):
@@ -70,46 +197,42 @@ class KafkaProducerNode:
             self.last_send_time = current_time
 
         if current_time - self.last_send_time > self.how_often_sec or frame_element.frame_num == 1:
+            cars_amount = frame_element.info["cars_amount"]
+            roads_activity = frame_element.info["roads_activity"]
+
+            # T-201: 动态道路数 — 从 roads_activity dict 构建数组
+            roads_array = []
+            for road_id in sorted(roads_activity.keys()):
+                val = roads_activity[road_id]
+                roads_array.append({
+                    "id": road_id,
+                    "activity": round(val, 2) if timestamp >= self.buffer_analytics_sec else None,
+                })
+
             data = {
-                f"camera_id": f"id_{self.camera_id}",
-                f"cars": frame_element.info["cars_amount"],
-                f"msg_type": "stats",
-                f"intersection_id": self.intersection_id,
+                "camera_id": f"id_{self.camera_id}",
+                "cars": cars_amount,
+                "msg_type": "stats",
+                "intersection_id": self.intersection_id,
                 # ── 前端所需字段：FPS / 推理 / 跟踪 / 累计 ──
                 "fps": current_fps,
                 "inference_ms": getattr(frame_element, "inference_ms", 0),
                 "active_tracks": len(frame_element.id_list),
-                "total_vehicles": frame_element.info["cars_amount"],
-                "congestion_index": round(
-                    sum(v for v in frame_element.info["roads_activity"].values() if v is not None) / max(1, len(frame_element.info["roads_activity"])),
-                    2,
-                ),
-                f"road_1": (
-                    frame_element.info["roads_activity"][1]
-                    if timestamp >= self.buffer_analytics_sec
-                    else None
-                ),
-                f"road_2": (
-                    frame_element.info["roads_activity"][2]
-                    if timestamp >= self.buffer_analytics_sec
-                    else None
-                ),
-                f"road_3": (
-                    frame_element.info["roads_activity"][3]
-                    if timestamp >= self.buffer_analytics_sec
-                    else None
-                ),
-                f"road_4": (
-                    frame_element.info["roads_activity"][4]
-                    if timestamp >= self.buffer_analytics_sec
-                    else None
-                ),
-                f"road_5": (
-                    frame_element.info["roads_activity"][5]
-                    if timestamp >= self.buffer_analytics_sec
-                    else None
+                "total_vehicles": cars_amount,
+                # T-201: 动态道路数组（替代 road_1..road_5）
+                "roads": roads_array,
+                # T-203: 多因子拥堵指数
+                "congestion_index": self._compute_congestion_index(
+                    cars_amount, roads_activity, frame_element
                 ),
             }
+
+            # 向后兼容：保留 road_1..road_N 字段（最多 8 条，不足的为 None）
+            for road_id in range(1, max(len(roads_activity) + 1, 6)):
+                val = roads_activity.get(road_id)
+                data[f"road_{road_id}"] = (
+                    round(val, 2) if (val is not None and timestamp >= self.buffer_analytics_sec) else None
+                )
 
             # 扩展字段：方向流量统计（始终输出）
             direction_stats = getattr(frame_element, "direction_stats", None)
@@ -143,12 +266,13 @@ class KafkaProducerNode:
                 }
             data["is_hovering"] = getattr(frame_element, "is_hovering", False)
 
-            self.kafka_producer.send(self.topic_name, value=data).get(timeout=1)
-            logging.info(f"KAFKA sent message: {data} topic {self.topic_name}")
+            # T-101: 异步发送（替代同步 .get(timeout=1)）
+            self._enqueue(self.topic_name, data)
+            logger.info(f"KAFKA enqueued stats: topic={self.topic_name} cars={cars_amount}")
             self.last_send_time = current_time
             frame_element.send_to_kafka = True
 
-        # 发布完成轨迹到独立topic
+        # 发布完成轨迹到独立topic（T-101: 异步发送）
         completed_tracks = getattr(frame_element, "completed_tracks", None)
         if completed_tracks:
             for ct in completed_tracks:
@@ -157,10 +281,10 @@ class KafkaProducerNode:
                     "intersection_id": self.intersection_id,
                     **ct,
                 }
-                self.kafka_producer.send(self.track_complete_topic, value=ct_msg).get(timeout=1)
-                logging.info(f"KAFKA sent track_complete: id={ct.get('track_id')} topic {self.track_complete_topic}")
+                self._enqueue(self.track_complete_topic, ct_msg)
+                logger.info(f"KAFKA enqueued track_complete: id={ct.get('track_id')} topic={self.track_complete_topic}")
 
-        # 发布冲突事件到独立topic
+        # 发布冲突事件到独立topic（T-101: 异步发送）
         conflict_events = getattr(frame_element, "conflict_events", None)
         if conflict_events:
             for event in conflict_events:
@@ -169,7 +293,20 @@ class KafkaProducerNode:
                     "intersection_id": self.intersection_id,
                     **event,
                 }
-                self.kafka_producer.send(self.conflicts_topic, value=event_msg).get(timeout=1)
-                logging.info(f"KAFKA sent conflict: {event.get('severity')} topic {self.conflicts_topic}")
+                self._enqueue(self.conflicts_topic, event_msg)
+                logger.info(f"KAFKA enqueued conflict: {event.get('severity')} topic={self.conflicts_topic}")
+
+        # ── T-103: 遥测发布（5Hz 节流） ──
+        telemetry = getattr(frame_element, "telemetry", None)
+        if telemetry and (current_time - self._last_telemetry_time > self._telemetry_interval):
+            tel_msg = {
+                "msg_type": "telemetry",
+                "drone_id": f"drone_{self.camera_id}",
+                "intersection_id": self.intersection_id,
+                **telemetry,
+            }
+            self._enqueue(self.telemetry_topic, tel_msg)
+            self._last_telemetry_time = current_time
+            logger.debug(f"KAFKA enqueued telemetry: topic={self.telemetry_topic}")
 
         return frame_element

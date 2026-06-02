@@ -22,13 +22,15 @@ class EndpointAction(object):
 class VideoServer(object):
     app = None
     def __init__(self, config):
+        import os as _os
         config_server = config["video_server_node"]
         self.app = Flask(__name__, template_folder=config_server["template_folder"])
         self.app.add_url_rule('/', 'index', EndpointAction(self._index))
         self.app.add_url_rule('/video', 'video', self._update_page)
 
         self.host_ip = config_server["host_ip"]
-        self.port = config_server["port"]
+        # 支持 VIDEO_PORT 环境变量覆盖（多管道并行时避免端口冲突）
+        self.port = int(_os.environ.get("VIDEO_PORT", config_server["port"]))
         self.index_page = config_server["index_page"]
         self.output_size = config_server["output_size"]
         self.target_fps = config_server.get("target_fps", 15)  # MJPEG 输出帧率上限

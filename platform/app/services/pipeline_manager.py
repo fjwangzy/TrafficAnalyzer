@@ -56,6 +56,7 @@ class PipelineInstance:
     roads_json: str
     topic_name: str
     camera_id: int
+    video_port: int = 8100  # MJPEG server port
     status: PipelineStatus = PipelineStatus.PENDING
     process: Any = field(default=None, repr=False)
     started_at: float = 0.0
@@ -71,6 +72,7 @@ class PipelineInstance:
             "roads_json": self.roads_json,
             "topic_name": self.topic_name,
             "camera_id": self.camera_id,
+            "video_port": self.video_port,
             "status": self.status.value,
             "started_at": self.started_at,
             "stopped_at": self.stopped_at,
@@ -104,13 +106,66 @@ class PipelineManager:
         project_root: str | Path | None = None,
         kafka_bootstrap: str = "kafka:9092",
     ):
-        self._root = Path(project_root) if project_root else _PROJECT_ROOT
+        # Priority: explicit arg > PIPELINE_PROJECT_ROOT env var > fallback
+        env_root = os.environ.get("PIPELINE_PROJECT_ROOT")
+        if project_root:
+            self._root = Path(project_root)
+        elif env_root:
+            self._root = Path(env_root)
+        else:
+            self._root = _PROJECT_ROOT
         self._kafka_bootstrap = kafka_bootstrap
         self._pipelines: dict[str, PipelineInstance] = {}
         self._next_camera_id = 10  # start from 10 to avoid collision with static cameras
+        self._next_video_port = 8101  # 8100 reserved for manually-started pipelines
         self._monitor_task: asyncio.Task | None = None
 
     # ── Public API ──
+
+    def register_pipeline(
+        self,
+        drone_id: str,
+        intersection_id: str,
+        video_src: str,
+        roads_json: str = "configs/entry_exit_lanes.json",
+        camera_id: int | None = None,
+        video_port: int | None = None,
+        topic_name: str | None = None,
+    ) -> PipelineInstance:
+        """Register an externally-running pipeline (e.g. started locally).
+
+        This allows the Platform to track pipelines that were started
+        outside the Platform container (where PyTorch dependencies may
+        not be available).
+        """
+        pipeline_id = f"pipe-{uuid.uuid4().hex[:8]}"
+        cid = camera_id if camera_id is not None else self._next_camera_id
+        if camera_id is None:
+            self._next_camera_id += 1
+        port = video_port if video_port is not None else self._next_video_port
+        if video_port is None:
+            self._next_video_port += 1
+        topic = topic_name or f"statistics_{cid}"
+
+        pipeline = PipelineInstance(
+            pipeline_id=pipeline_id,
+            drone_id=drone_id,
+            intersection_id=intersection_id,
+            video_src=video_src,
+            roads_json=roads_json,
+            topic_name=topic,
+            camera_id=cid,
+            video_port=port,
+            status=PipelineStatus.RUNNING,
+            started_at=time.time(),
+        )
+        self._pipelines[pipeline_id] = pipeline
+        assign_drone_to_intersection(drone_id, intersection_id)
+        logger.info(
+            f"Registered external pipeline {pipeline_id} "
+            f"camera={cid} port={port} intersection={intersection_id}"
+        )
+        return pipeline
 
     async def start_pipeline(
         self,
@@ -135,6 +190,8 @@ class PipelineManager:
         pipeline_id = f"pipe-{uuid.uuid4().hex[:8]}"
         camera_id = self._next_camera_id
         self._next_camera_id += 1
+        video_port = self._next_video_port
+        self._next_video_port += 1
         topic_name = f"statistics_{camera_id}"
 
         pipeline = PipelineInstance(
@@ -145,6 +202,7 @@ class PipelineManager:
             roads_json=roads_json,
             topic_name=topic_name,
             camera_id=camera_id,
+            video_port=video_port,
         )
 
         # Build environment for the child process
@@ -155,6 +213,7 @@ class PipelineManager:
             "TOPIC_NAME": topic_name,
             "CAMERA_ID": str(camera_id),
             "INTERSECTION_ID": intersection_id,  # pass real intersection ID (e.g. INT_camera_1)
+            "VIDEO_PORT": str(video_port),  # unique MJPEG port per pipeline
         }
         if kafka_bootstrap:
             env["KAFKA_BOOTSTRAP"] = kafka_bootstrap
@@ -252,11 +311,22 @@ class PipelineManager:
                 if proc is None:
                     continue
                 if proc.returncode is not None:
-                    # Process exited unexpectedly
+                    # Process exited unexpectedly — capture stderr for diagnostics
+                    stderr_msg = ""
+                    try:
+                        if proc.stderr:
+                            stderr_bytes = await proc.stderr.read()
+                            stderr_msg = stderr_bytes.decode("utf-8", errors="replace")[:500]
+                    except Exception:
+                        pass
                     pipeline.status = PipelineStatus.ERROR
                     pipeline.stopped_at = time.time()
-                    pipeline.error_message = f"Process exited with code {proc.returncode}"
+                    pipeline.error_message = (
+                        f"Process exited with code {proc.returncode}"
+                        + (f": {stderr_msg}" if stderr_msg else "")
+                    )
                     logger.warning(
                         f"Pipeline {pipeline.pipeline_id} exited unexpectedly "
                         f"(code={proc.returncode})"
+                        + (f" stderr: {stderr_msg}" if stderr_msg else "")
                     )

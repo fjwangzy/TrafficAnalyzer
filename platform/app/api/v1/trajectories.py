@@ -37,7 +37,8 @@ async def get_trajectory_heatmap(
         # Aggregate positions into grid cells
         grid: dict[str, int] = {}
         for t in tracks:
-            positions = t.get("positions_bev", "[]")
+            # T-404: 统一使用 trajectory_world_m（与 Kafka 消息和 InfluxDB 字段一致）
+            positions = t.get("trajectory_world_m") or t.get("positions_bev", "[]")
             if isinstance(positions, str):
                 import json
                 try:

@@ -59,6 +59,7 @@ async def lifespan(app: FastAPI):
             topics_pattern=settings.kafka_topics_pattern,
             ws_manager=ws_manager,
             alert_engine=alert_engine,
+            influx_client=influx,  # T-102: 注入 InfluxDB 客户端用于持久化
         )
         await kafka_service.start()
         logger.info(f"Kafka consumer started: {settings.kafka_bootstrap}")

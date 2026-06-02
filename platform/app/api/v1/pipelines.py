@@ -80,6 +80,22 @@ async def pipeline_summary(request: Request):
     }
 
 
+@router.get("/proxy-map", summary="Camera ID → MJPEG port mapping")
+async def proxy_map(request: Request):
+    """Return a mapping of {camera_id: video_port} for running pipelines.
+
+    Used by the Vite dev proxy to route ``/camera_N`` requests to the
+    correct MJPEG server port (each pipeline binds to a unique port).
+    """
+    pm = _get_pm(request)
+    pipelines = pm.list_pipelines()
+    return {
+        str(p["camera_id"]): p["video_port"]
+        for p in pipelines
+        if p["status"] == "running"
+    }
+
+
 @router.post("", status_code=201, summary="Start a new detection pipeline")
 async def start_pipeline(body: PipelineCreateRequest, request: Request):
     """Start a detection pipeline bound to a drone and intersection.
@@ -96,6 +112,39 @@ async def start_pipeline(body: PipelineCreateRequest, request: Request):
         intersection_id=body.intersection_id,
         video_src=body.video_src,
         roads_json=body.roads_json,
+    )
+    return pipeline.to_dict()
+
+
+class PipelineRegisterRequest(BaseModel):
+    """Request body for registering an externally-running pipeline."""
+
+    drone_id: str
+    intersection_id: str
+    video_src: str
+    roads_json: str = "configs/entry_exit_lanes.json"
+    camera_id: int | None = None
+    video_port: int | None = None
+    topic_name: str | None = None
+
+
+@router.post("/register", status_code=201, summary="Register an externally-running pipeline")
+async def register_pipeline(body: PipelineRegisterRequest, request: Request):
+    """Register a pipeline that was started outside the Platform.
+
+    Use this when the pipeline is running locally (e.g. via
+    ``python main_optimized.py``) and the Platform container does not
+    have the pipeline dependencies.
+    """
+    pm = _get_pm(request)
+    pipeline = pm.register_pipeline(
+        drone_id=body.drone_id,
+        intersection_id=body.intersection_id,
+        video_src=body.video_src,
+        roads_json=body.roads_json,
+        camera_id=body.camera_id,
+        video_port=body.video_port,
+        topic_name=body.topic_name,
     )
     return pipeline.to_dict()
 

@@ -141,20 +141,34 @@ for key in roads_activity:
 
 ### 6. 可视化渲染
 
-**实现文件**：`nodes/ShowNode.py`（280 行，最大的节点文件）
+**实现文件**：`nodes/ShowNode.py`（使用 supervision 库优化展示效果）
 
 **渲染内容**：
-1. 检测框或跟踪框（取决于 `show_only_yolo_detections` 配置）
-2. 跟踪 ID 标签
-3. 道路多边形轮廓 + 可选透明遮罩
-4. 道路编号（在区域中心）
-5. FPS 计数器
-6. 统计面板（独立黑色窗口，拼接在主帧右侧）
+1. 检测框或跟踪框（取决于 `show_only_yolo_detections` 配置）— 使用 `sv.BoxAnnotator` / `sv.RoundBoxAnnotator`
+2. 跟踪 ID 标签 + 车速（km/h）— 使用 `sv.LabelAnnotator`（带圆角彩色背景）
+3. 轨迹尾迹 — 使用 `sv.TraceAnnotator`（可通过 `show_trace_trails` 配置）
+4. 道路多边形轮廓 + 可选透明遮罩（`sv.MaskAnnotator`）
+5. 道路编号（在区域中心）
+6. FPS 计数器
+7. 方向流量统计叠加（S:/L:/R:/U: + Q:）
+8. 车道多边形叠加（带标签背景）
+9. 统计面板（独立黑色窗口，拼接在主帧右侧）
 
-**颜色逻辑**：
-- 如果 `show_track_id_different_colors=True`：每个 ID 使用 `random.seed(id)` 生成固定随机颜色
-- 否则：根据 `start_road` 使用预定义的道路颜色（BGR 格式）
+**颜色逻辑**（通过 `ColorPalette` + `ColorLookup` 管理）：
+- 如果 `show_track_id_different_colors=True`：使用 `sv.ColorPalette.DEFAULT`（21色循环）+ `ColorLookup.TRACK`，按 tracker_id 自动着色
+- 否则：构建自定义 `ColorPalette`（从 `colors_roads` BGR→RGB 转换）+ `np.ndarray` color_idx 数组，按 `start_road` 道路颜色着色
 - 如果车辆尚未分配到道路或已被清理：黑色框
+
+**代码结构**：
+- `_draw_detections()` — 纯检测模式
+- `_draw_tracked()` — 跟踪模式（圆角边框 + 标签 + 轨迹）
+- `_draw_roads()` — 道路多边形（边框 + 遮罩 + 编号）
+- `_draw_fps()` — FPS 信息
+- `_draw_direction_overlay()` — 方向流量统计
+- `_draw_lane_polygons()` — 车道多边形
+- `_draw_stats_panel()` — 统计信息面板
+- `_build_detections()` — 从列表构建 `sv.Detections` 对象
+- `_configure_tracking_colors()` — 配置颜色方案
 
 ## 统计数据的完整生命周期
 

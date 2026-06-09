@@ -354,3 +354,44 @@
 - ✅ bbox ±3px 抖动下车速波动 <2km/h（实测改善 3-5 倍）
 - ✅ 世界坐标和像素坐标两种模式均适用
 - ❌ 非线性运动（急转弯）时线性回归误差略大（但 EMA 平滑可缓解）
+
+---
+
+## ADR-016: 使用 supervision 库优化 ShowNode 可视化
+
+**状态**：已采纳（2026-06-09）
+
+**背景**：ShowNode 原实现使用纯 OpenCV `cv2.rectangle` + `cv2.putText` 循环绘制，存在以下问题：
+- 每个目标单独循环调用 OpenCV 绘图函数，代码冗长且难以维护
+- 标签为红色纯文本无背景，可读性差
+- 边框为直角矩形，视觉风格较原始
+- 着色使用 `random.seed(id)` 方式不可靠（可能影响其他随机逻辑）
+- 352 行全部塞在一个 `process()` 方法中，无法拆分和测试
+
+**决策**：引入 `supervision` 库（>=0.24.0，已在 requirements.txt 中）重构 ShowNode：
+- `sv.RoundBoxAnnotator` — 圆角边框（替代 `cv2.rectangle`）
+- `sv.LabelAnnotator` — 带圆角彩色背景的标签（替代 `cv2.putText`）
+- `sv.TraceAnnotator` — 新增轨迹尾迹可视化
+- `sv.MaskAnnotator` — 道路半透明遮罩（替代手动 `cv2.addWeighted`）
+- `sv.ColorPalette` + `ColorLookup.TRACK` — 确定性着色（替代 `random.seed`）
+- `sv.Detections` 统一数据结构 — 批量处理所有目标
+
+**理由**：
+- supervision 是 Roboflow 开源的专业 CV 可视化工具库（8k+ GitHub stars）
+- 提供圆角边框、轨迹尾迹等高质量可视化效果
+- `ColorPalette` 21色循环着色稳定可靠
+- 批量绘制性能优于逐目标循环
+- 代码量减少约 40%，可读性和可维护性大幅提升
+
+**后果**：
+- ✅ 可视化效果显著提升（圆角边框 + 标签背景 + 轨迹尾迹）
+- ✅ 着色逻辑确定性（`ColorLookup.TRACK` + `ColorPalette`）
+- ✅ `process()` 拆分为 10 个子方法（`_draw_detections`、`_draw_tracked`、`_draw_roads` 等）
+- ✅ 新增 `show_trace_trails` 配置项
+- ✅ 标签格式增强：`#id class_name speed km/h`
+- ❌ 新增 supervision 运行时依赖（已存在于 requirements.txt）
+
+**替代方案**：
+- 保持纯 OpenCV — 代码冗长，效果差
+- 使用 ultralytics 内置可视化 — 耦合度高，定制性差
+- 自行封装 OpenCV 绘图工具 — 重复造轮子

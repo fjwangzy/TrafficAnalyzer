@@ -64,11 +64,9 @@
 - **状态**：✅ 已修复（2026-05-31）
 - **修复内容**：`FrameElement.__init__` 新增 `self.send_to_kafka: bool = False`
 
-#### TD-006: ShowNode 过于庞大
-- **位置**：`nodes/ShowNode.py`（352 行）
-- **问题**：渲染逻辑（绘制框、多边形、文本、统计面板）全部在一个文件中
-- **影响**：难以维护和测试
-- **建议**：拆分为 `BoxRenderer`、`RoadRenderer`、`StatsPanelRenderer` 等子组件
+#### TD-006: ShowNode 过于庞大 → ✅ 已解决
+- **状态**：✅ 已修复（2026-06-09）
+- **修复内容**：使用 supervision 库重构，拆分为 10 个聚焦子方法（`_draw_detections`、`_draw_tracked`、`_draw_roads`、`_draw_fps`、`_draw_stats_panel` 等），新增圆角边框、轨迹尾迹、标签背景等功能，去除 `random` 依赖改用 `ColorPalette` 确定性着色
 
 #### TD-007: VideoEndBreakElement 未初始化父类
 - **位置**：`elements/VideoEndBreakElement.py`
@@ -154,7 +152,7 @@
 - [ ] T-303: Mission-Pipeline 绑定
 - [ ] T-304: Dashboard pipelines_active 真实数据
 - [ ] T-305: Alert 持久化到 PostgreSQL
-- [ ] T-401: ShowNode 拆分
+- [x] T-401: ShowNode supervision 重构（TD-006）
 - [ ] T-405: utils_local/utils.py 单元测试
 - [ ] T-406: ByteTrack 核心单元测试
 
@@ -205,7 +203,7 @@
 
 ### 中期（1-2 月）
 - [ ] 解决 TD-002：统一入口点
-- [ ] 解决 TD-006：ShowNode 拆分（T-401）
+- [x] 解决 TD-006：ShowNode supervision 重构（T-401） ✅
 - [ ] 为 ByteTrack 核心算法添加单元测试（T-406）
 - [ ] 合并 docker-compose 文件（统一 Kafka/InfluxDB/Nginx 实例）
 - [ ] GIS 轨迹回放（基于 track_complete + InfluxDB 数据）（T-302）

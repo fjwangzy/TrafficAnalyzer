@@ -135,7 +135,7 @@ graph TD;
     C --> D["CalcStatisticsNode<br>Вычисляет загруженность дорог"];
     D --send_info_kafka==False --> F;
     D --send_info_kafka==True --> E["KafkaProducerNode<br>Отправляет результаты в Kafka"];
-    E --> F["ShowNode<br>Реализует визуализацию результатов"];
+    E --> F["ShowNode<br>Визуализация результатов (supervision)"];
     F --save_video==True --> H["VideoSaverNode<br>Сохраняет обработанные кадры"];
     F --show_in_web==True & save_video==False --> L["FlaskServerVideoNode<br>Выводит обработанные кадры в веб-интерфейсе"];
     H --show_in_web==True --> L

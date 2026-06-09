@@ -35,7 +35,7 @@ TrafficAnalyzer/
 │   ├── ConflictDetectionNode.py   #   机非冲突TTC检测（默认关闭）
 │   ├── CalcStatisticsNode.py      #   统计计算（车辆数 + 道路活跃度）
 │   ├── KafkaProducerNode.py       #   Kafka 多topic消息发送
-│   ├── ShowNode.py                #   OpenCV 可视化渲染（含车速/方向/车道叠加）
+│   ├── ShowNode.py                #   supervision 可视化渲染（圆角边框/标签/轨迹尾迹/道路遮罩/统计面板）
 │   ├── VideoSaverNode.py          #   视频文件保存
 │   └── FlaskServerVideoNode.py    #   Flask MJPEG 视频流服务
 │

@@ -140,7 +140,7 @@ graph TD;
     C --> D["CalcStatisticsNode<br>计算道路拥堵情况"];
     D --send_info_kafka==False --> F;
     D --send_info_kafka==True --> E["KafkaProducerNode<br>将结果发送到Kafka"];
-    E --> F["ShowNode<br>实现结果可视化"];
+    E --> F["ShowNode<br>supervision库实现结果可视化"];
     F --save_video==True --> H["VideoSaverNode<br>保存处理后的帧"];
     F --show_in_web==True & save_video==False --> L["FlaskServerVideoNode<br>在Web界面中输出处理后的帧"];
     H --show_in_web==True --> L

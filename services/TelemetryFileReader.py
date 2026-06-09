@@ -109,7 +109,9 @@ class TelemetryFileReader:
             "longitude": payload.get("longitude"),
             "height": height,
             "elevation": elevation,
-            "altitude_agl": height - elevation,
+            # height (rel_alt) 是相对起飞点高度，即最佳 AGL 近似
+            # 旧公式 height-elevation 在 DJI 数据中是错误的
+            "altitude_agl": height,
             "attitude_head": payload.get("attitude_head", 0) or 0,
             "attitude_pitch": payload.get("attitude_pitch", 0) or 0,
             "gimbal_pitch": osd.get("gimbal_pitch", -90),

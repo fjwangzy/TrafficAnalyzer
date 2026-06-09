@@ -48,7 +48,7 @@ python scripts/run_local.py
 
 ### Docker 全栈
 ```bash
-docker compose -p traffic_analyzer up -d --build
+docker compose -f ./docker-compose.yaml -f ./docker-compose.test.yaml -p traffic_analyzer up -d --build
 # Kafka:9092, InfluxDB:8087, Platform:8000, Grafana:3111
 ```
 
@@ -296,7 +296,7 @@ The frontend is a **React** SPA (Vite + TypeScript + Tailwind CSS). It uses:
 - `useWebSocket` hook for real-time channel subscriptions (`intersection:{id}`, `alerts`, `system`, `telemetry:{drone_id}`)
 - `trafficApi` service for REST calls to the platform
 - React Query for data fetching and caching
-
+- login user: `admin` , password:`admin123`
 **Important:** `traffic-fly-console/nginx.conf` must proxy to `platform:8000` (not `gateway:8000`).
 
 ### Legacy microservices directories

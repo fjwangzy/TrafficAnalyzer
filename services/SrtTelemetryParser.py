@@ -129,7 +129,9 @@ class SrtTelemetryParser:
             "longitude": lon,
             "height": height,
             "elevation": elevation,
-            "altitude_agl": height - elevation if elevation > 0 else height,
+            # rel_alt 是相对起飞点高度，即最佳 AGL 近似（无 DEM 时）
+            # 旧公式 height-elevation = 2*rel_alt - abs_alt 是错误的
+            "altitude_agl": rel_alt,
             "attitude_head": gb_yaw,
             "attitude_pitch": 0,
             "gimbal_pitch": gb_pitch,

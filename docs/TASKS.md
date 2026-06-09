@@ -233,3 +233,11 @@
 - **位置**：`nodes/VideoSaverNode.py:24`
 - **描述**：如果视频的第一帧就是 VideoEndBreakElement（空视频），`self._cv2_writer` 为 None，调用 `.release()` 会抛出 AttributeError
 - **修复**：添加 `if self._cv2_writer is not None:` 检查
+
+## 下一步
+要实际使用 GCP 修正解决你的东西向偏移问题，需要：
+
+在路口找 2-3 个特征点（路灯、标线端点），用 Google Earth 获取其经纬度
+在视频截图中标注这些点的像素坐标
+将经纬度转为相对锚点的 ENU 偏移填入 app_config.yaml 的 gcp.points
+

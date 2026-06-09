@@ -114,12 +114,6 @@ class VideoReader:
         # 当前视频的帧号
         frame_number = 0
 
-        # 实时节奏控制：防止读取速度超过视频原始帧率
-        # 对于文件视频源，用 wall-clock 对齐视频时间戳
-        is_file_source = type(self.video_pth) != int and "://" not in self.video_pth
-        wall_clock_start = None
-        video_time_start = None
-
         while True:
             ret, frame = self.stream.read()
             if not ret:
@@ -145,18 +139,6 @@ class VideoReader:
                 continue
 
             self.last_frame_timestamp = timestamp
-
-            # Wall-clock 实时节奏控制：确保帧产出速度不超过视频原始帧率
-            if is_file_source:
-                if wall_clock_start is None:
-                    wall_clock_start = time.time()
-                    video_time_start = timestamp
-                else:
-                    video_elapsed = timestamp - video_time_start
-                    wall_elapsed = time.time() - wall_clock_start
-                    ahead = video_elapsed - wall_elapsed
-                    if ahead > 0.01:
-                        time.sleep(ahead)
 
             frame_number += 1
 

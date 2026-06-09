@@ -45,6 +45,8 @@ class FrameElement:
         self.telemetry: dict | None = None  # MQTT遥测数据（与帧同步后的）
         self.calibration_mode: str | None = None  # "telemetry" | "reference_points" | None
         self.homography_matrix: np.ndarray | None = None  # 3×3 单应性矩阵（像素→世界米坐标）
+        self.dist_coeffs: list[float] | None = None  # 镜头畸变系数 [k1,k2,p1,p2,k3]
+        self.camera_intrinsics: dict | None = None  # 相机内参（畸变校正用）
 
         # ── 新增：运动补偿 ──
         self.world_anchor_lat_lon: tuple | None = None  # (lat, lon) 世界锚点GPS

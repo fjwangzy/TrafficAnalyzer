@@ -5,7 +5,7 @@ from elements.FrameElement import FrameElement
 from elements.TrackElement import TrackElement
 from elements.VideoEndBreakElement import VideoEndBreakElement
 from utils_local.utils import profile_time, intersects_central_point
-from utils_local.homography import pixel_to_world, is_valid_homography
+from utils_local.homography import pixel_to_world, is_valid_homography, undistort_points
 from utils_local.motion_compensation import pixel_to_world_compensated
 
 logger = logging.getLogger("buffer_tracks")
@@ -123,6 +123,11 @@ class TrackerInfoUpdateNode:
         world_anchor = getattr(frame_element, "world_anchor_lat_lon", None)
         can_convert_world = has_H and drone_disp is not None
 
+        # 镜头畸变校正数据
+        dist_coeffs = getattr(frame_element, "dist_coeffs", None)
+        cam_intrinsics = getattr(frame_element, "camera_intrinsics", None)
+        img_size = (frame_element.frame.shape[1], frame_element.frame.shape[0]) if dist_coeffs else None
+
         completed_tracks = []
         for key in keys_to_remove:
             track = self.buffer_tracks[key]
@@ -145,8 +150,12 @@ class TrackerInfoUpdateNode:
 
                 # 入口/出口点世界坐标
                 if can_convert_world and track.trajectory_points:
-                    entry_px = np.array([track.trajectory_points[0]])
-                    exit_px = np.array([track.trajectory_points[-1]])
+                    entry_px = np.array([track.trajectory_points[0]], dtype=np.float64)
+                    exit_px = np.array([track.trajectory_points[-1]], dtype=np.float64)
+                    # 镜头畸变校正
+                    if dist_coeffs and cam_intrinsics and img_size:
+                        entry_px = undistort_points(entry_px, cam_intrinsics, img_size, dist_coeffs)
+                        exit_px = undistort_points(exit_px, cam_intrinsics, img_size, dist_coeffs)
                     entry_world = pixel_to_world_compensated(entry_px, H, drone_disp)[0]
                     exit_world = pixel_to_world_compensated(exit_px, H, drone_disp)[0]
                     completed_track_data["entry_point_m"] = [

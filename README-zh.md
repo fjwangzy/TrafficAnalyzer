@@ -5,6 +5,65 @@
 
 关于项目及其架构的详细教程 - [__视频链接__](https://vk.com/video-145052891_456247910)
 
+## 快速启动：视频流检测器
+
+### 本地启动（无需 Kafka / Docker）
+
+```bash
+python main_optimized.py pipeline.send_info_kafka=False
+```
+
+启动后访问：
+- MJPEG 视频流：http://127.0.0.1:8100/video
+- Flask 主页：http://127.0.0.1:8100/
+
+### inter_xqh 视频 + SRT 遥测 + Kafka（推荐）
+
+```bash
+VIDEO_SRC="test_videos/inter_xqh/DJI_20260403142902_0001_V小清河北路与水屯路路口.mp4" \
+ROADS_JSON="configs/inter_xqh_lanes.json" \
+TOPIC_NAME="statistics_1" \
+CAMERA_ID=1 \
+KAFKA_BOOTSTRAP="localhost:9092" \
+python main_optimized.py \
+  pipeline.send_info_kafka=True \
+  telemetry.enabled=true \
+  telemetry.source=srt \
+  +telemetry.file_path=test_videos/inter_xqh/telemetry.srt
+```
+
+后台运行加 `nohup ... > /tmp/detector_xqh.log 2>&1 &`。
+
+### 自定义视频源
+
+```bash
+VIDEO_SRC=test_videos/inter1.mp4 python main_optimized.py pipeline.send_info_kafka=False
+```
+
+### 启用 Kafka 数据推送（完整管道）
+
+```bash
+python main_optimized.py
+```
+
+### 关键环境变量
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `VIDEO_SRC` | `test_videos/test_video.mp4` | 视频文件路径、RTSP URL 或摄像头索引 |
+| `ROADS_JSON` | `configs/entry_exit_lanes.json` | 道路多边形坐标 JSON 文件 |
+| `TOPIC_NAME` | `statistics_1` | Kafka 主题名 |
+| `CAMERA_ID` | `1` | 摄像头 ID |
+| `KAFKA_BOOTSTRAP` | `kafka:29092` | Kafka 地址（本地运行改为 `localhost:9092`）|
+
+### 停止检测器
+
+```bash
+pkill -f main_optimized.py
+```
+
+---
+
 ## 安装和启动：
 
 克隆仓库：

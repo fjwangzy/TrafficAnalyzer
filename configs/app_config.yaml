@@ -90,6 +90,23 @@ calibration:
     focal_length_mm: 4.5      # 镜头焦距(mm)
     sensor_width_mm: 6.4      # 传感器宽度(mm)，1/2"传感器
     sensor_height_mm: 3.6     # 传感器高度(mm)
+  # 镜头畸变系数 [k1, k2, p1, p2, k3]（Brown-Conrady模型）
+  # 从相机标定获取，空列表=不做畸变校正
+  # DJI Zenmuse H20 典型值（可从 DJI Assistant 2 导出或棋盘格标定）
+  dist_coeffs: []  # 示例: [-0.0135, 0.0089, 0.0, 0.0, 0.0]
+  # 地面控制点(GCP)配置 — 用于修正H矩阵的系统性偏移
+  gcp:
+    mode: "rigid"            # "rigid"(≥2点, 旋转+平移) | "affine"(≥3点, 含缩放+剪切)
+    max_residual_m: 5.0      # 单点残差超过此值标记为异常
+    # GCP点列表: 每项为 {pixel_x, pixel_y, world_x, world_y, label}
+    # world_x/y 为相对世界锚点的东北偏移(米)，或绝对ENU坐标
+    # 可从 Google Earth 测量路口特征点经纬度，再转为ENU偏移
+    points: []
+    # 示例:
+    # points:
+    #   - {pixel_x: 960, pixel_y: 540, world_x: 0.0, world_y: 0.0, label: "路口中心"}
+    #   - {pixel_x: 1800, pixel_y: 300, world_x: 25.5, world_y: 18.2, label: "东北角"}
+    #   - {pixel_x: 200, pixel_y: 800, world_x: -22.0, world_y: -15.0, label: "西南角"}
   # 回退：固定摄像头无遥测时使用传统标定点
   reference_points: []    # [[px, py, world_x_m, world_y_m], ...]
 

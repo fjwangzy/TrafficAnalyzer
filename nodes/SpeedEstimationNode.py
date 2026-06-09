@@ -12,7 +12,7 @@ import logging
 from elements.FrameElement import FrameElement
 from elements.VideoEndBreakElement import VideoEndBreakElement
 from utils_local.utils import profile_time
-from utils_local.homography import pixel_to_world, is_valid_homography
+from utils_local.homography import pixel_to_world, is_valid_homography, undistort_points
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +53,11 @@ class SpeedEstimationNode:
         drone_vel = getattr(frame_element, "drone_velocity_ms", None)
         is_hovering = getattr(frame_element, "is_hovering", False)
 
+        # 镜头畸变校正数据
+        dist_coeffs = getattr(frame_element, "dist_coeffs", None)
+        cam_intrinsics = getattr(frame_element, "camera_intrinsics", None)
+        img_size = (frame_element.frame.shape[1], frame_element.frame.shape[0]) if dist_coeffs else None
+
         for track_id, track in frame_element.buffer_tracks.items():
             # 裁剪position_history到history_frames窗口
             if len(track.position_history) > self.history_frames:
@@ -75,6 +80,9 @@ class SpeedEstimationNode:
                 # T-202: 在世界坐标系做线性回归
                 # 先用当前帧H转换所有历史点到世界坐标系
                 pts_px = np.column_stack([x_arr, y_arr])
+                # 镜头畸变校正（如果配置了）
+                if dist_coeffs and cam_intrinsics and img_size:
+                    pts_px = undistort_points(pts_px, cam_intrinsics, img_size, dist_coeffs)
                 pts_world = pixel_to_world(pts_px, H)
 
                 # 对 easting 和 northing 分别做线性回归

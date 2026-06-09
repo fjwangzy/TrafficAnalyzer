@@ -67,6 +67,12 @@ def build_test_config():
                 "sensor_width_mm": 6.4,
                 "sensor_height_mm": 3.6,
             },
+            "dist_coeffs": [],  # 空=不校正（测试时无畸变系数）
+            "gcp": {
+                "mode": "rigid",
+                "max_residual_m": 5.0,
+                "points": [],  # 空=不做 GCP 修正
+            },
             "reference_points": [],
         },
         "telemetry": {
@@ -378,6 +384,95 @@ def main():
 
     results.check("H矩阵至少一次有效", h_matrix_ok)
     results.check("运动补偿至少一次有效", motion_comp_ok)
+
+    # ── Phase 4b: GCP 修正单元测试 ──
+    print("\n" + "="*60)
+    print("Phase 4b: GCP修正单元测试")
+    print("="*60)
+
+    from utils_local.gcp_refinement import GCPRefinement
+    from utils_local.homography import undistort_points, build_camera_matrix
+
+    # 创建合成GCP点：用已知H矩阵反算世界坐标，然后加偏移模拟误差
+    if h_matrix_ok:
+        # 从上面Phase 4获取最后fe的H矩阵
+        H_test = fe.homography_matrix
+        if H_test is not None:
+            # 合成 4 个 GCP 点：图像四个越越
+            test_pixels = np.array([
+                [480, 270], [1440, 270], [1440, 810], [480, 810]
+            ], dtype=np.float64)
+            test_world = pixel_to_world(test_pixels, H_test)
+
+            # 添加系统性偏移（模拟真实场景）
+            bias = np.array([1.5, -0.8])  # 1.5m东向偏移, 0.8m南向偏移
+            actual_world = test_world + bias
+
+            gcp_list = []
+            for i in range(4):
+                gcp_list.append({
+                    "pixel_x": float(test_pixels[i, 0]),
+                    "pixel_y": float(test_pixels[i, 1]),
+                    "world_x": float(actual_world[i, 0]),
+                    "world_y": float(actual_world[i, 1]),
+                    "label": f"synth-{i+1}",
+                })
+
+            # 测试残差计算
+            refiner = GCPRefinement(gcp_list, mode="rigid")
+            pre_report = refiner.compute_residuals(H_test)
+            results.check(
+                "GCP残差计算",
+                pre_report["rmse_m"] > 0,
+                f"RMSE={pre_report['rmse_m']:.3f}m (应接近{np.linalg.norm(bias):.2f}m)"
+            )
+            results.check(
+                "GCP残差匹配偏移",
+                abs(pre_report["rmse_m"] - np.linalg.norm(bias)) < 0.5,
+                f"RMSE={pre_report['rmse_m']:.3f}m vs bias={np.linalg.norm(bias):.3f}m"
+            )
+
+            # 测试修正
+            H_refined = refiner.refine(H_test)
+            post_report = refiner.compute_residuals(H_refined)
+            results.check(
+                "GCP修正后RMSE下降",
+                post_report["rmse_m"] < pre_report["rmse_m"] * 0.5,
+                f"RMSE: {pre_report['rmse_m']:.3f}m → {post_report['rmse_m']:.3f}m"
+            )
+            results.check(
+                "GCP修正后RMSE<0.1m",
+                post_report["rmse_m"] < 0.1,
+                f"RMSE={post_report['rmse_m']:.3f}m"
+            )
+
+            # 测试 undistort_points 不崩溃（空系数）
+            pts_pass = undistort_points(
+                test_pixels,
+                config["calibration"]["camera_intrinsics"],
+                (1920, 1080),
+                dist_coeffs=None
+            )
+            results.check(
+                "undistort_points空系数透传",
+                np.allclose(pts_pass, test_pixels),
+                "pass-through OK"
+            )
+
+            # 测试 build_camera_matrix
+            K = build_camera_matrix(
+                config["calibration"]["camera_intrinsics"],
+                (1920, 1080)
+            )
+            results.check(
+                "build_camera_matrix",
+                K.shape == (3, 3) and K[0, 0] > 0,
+                f"fx={K[0,0]:.1f}, fy={K[1,1]:.1f}"
+            )
+        else:
+            results.warn("Phase 4b: H矩阵为None，跳过GCP测试")
+    else:
+        results.warn("Phase 4b: 无有效H矩阵，跳过GCP测试")
 
     # ── Phase 5: VideoReader集成（含遥测注入） ──
     print("\n" + "="*60)

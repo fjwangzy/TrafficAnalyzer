@@ -14,42 +14,30 @@ _INTERSECTIONS: dict[str, dict] = {
         "name": "路口 1 (Camera 1)",
         "center_lat": 36.7029,
         "center_lon": 117.0223,
-        "lane_count": 5,
+        "lane_count": 0,
         "status": "active",
         "current_drone_id": None,
-        "lanes": [
-            {"id": i, "name": f"车道 {i}", "direction": "inbound", "compass": d}
-            for i, d in enumerate(["north", "east", "south", "west", "north"], 1)
-        ],
+        "lanes": [],
     },
     "INT_camera_2": {
         "id": "INT_camera_2",
         "name": "路口 2 (Camera 2)",
         "center_lat": 36.7050,
         "center_lon": 117.0250,
-        "lane_count": 5,
+        "lane_count": 0,
         "status": "active",
         "current_drone_id": None,
-        "lanes": [
-            {"id": i, "name": f"车道 {i}", "direction": "inbound", "compass": d}
-            for i, d in enumerate(["north", "east", "south", "west", "north"], 1)
-        ],
+        "lanes": [],
     },
     "INT_camera_3": {
         "id": "INT_camera_3",
         "name": "小清河北路与水屯路路口",
         "center_lat": 36.7040,
         "center_lon": 117.0230,
-        "lane_count": 5,
+        "lane_count": 0,
         "status": "active",
         "current_drone_id": None,
-        "lanes": [
-            {"id": 1, "name": "水屯路北段", "direction": "inbound", "compass": "north"},
-            {"id": 2, "name": "小清河北路东段", "direction": "inbound", "compass": "east"},
-            {"id": 3, "name": "水屯路南段", "direction": "inbound", "compass": "south"},
-            {"id": 4, "name": "小清河北路西段", "direction": "inbound", "compass": "west"},
-            {"id": 5, "name": "路口中心区", "direction": "inbound", "compass": "north"},
-        ],
+        "lanes": [],
     },
 }
 
@@ -62,12 +50,17 @@ def update_intersection(int_id: str, data: dict):
             "name": f"路口 ({int_id})",
             "center_lat": 0.0,
             "center_lon": 0.0,
-            "lane_count": len(data.get("lanes", [])) or 5,
+            "lane_count": 0,
             "status": "active",
             "current_drone_id": None,
             "lanes": [],
         }
     _INTERSECTIONS[int_id]["status"] = "active"
+    # Track lane count from real-time data
+    lanes = data.get("lanes", [])
+    if lanes:
+        _INTERSECTIONS[int_id]["lane_count"] = len(lanes)
+        _INTERSECTIONS[int_id]["lane_source"] = data.get("lane_source")
 
 
 @router.get("")
@@ -123,7 +116,7 @@ async def get_summary(request: Request):
 
 
 @router.get("/{intersection_id}")
-async def get_intersection(intersection_id: str):
+async def get_intersection(intersection_id: str, request: Request):
     """Get a single intersection by ID."""
     data = _INTERSECTIONS.get(intersection_id)
     if not data:
@@ -140,6 +133,18 @@ async def get_intersection(intersection_id: str):
             "status": drone["status"],
             "battery_pct": drone["battery_pct"],
         }
+
+    # Enrich with real-time lane data from Kafka consumer cache
+    kafka = request.app.state.kafka_service
+    if kafka:
+        latest = kafka.latest_stats.get(intersection_id)
+        if latest:
+            lanes = latest.get("lanes", [])
+            if lanes:
+                result["lanes"] = lanes
+                result["lane_count"] = len(lanes)
+                result["lane_source"] = latest.get("lane_source")
+
     return result
 
 

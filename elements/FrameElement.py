@@ -63,6 +63,7 @@ class FrameElement:
         self.queue_count: int = 0  # 当前排队车辆数
         self.conflict_events: list[dict] | None = None  # 冲突事件列表
         self.completed_tracks: list[dict] | None = None  # 本帧完成的轨迹数据
+        self.inferred_lanes: dict | None = None  # 自动推断的车道（AutoLaneInferenceNode输出）
 
         # ── 新增：性能指标 ──
         self.inference_ms: float = 0.0  # YOLO推理耗时（毫秒）

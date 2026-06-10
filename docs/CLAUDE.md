@@ -180,6 +180,7 @@ platform/app/ ← 单体 Web 平台，独立模块
 ### 允许的重构
 - 提取重复的进程启动逻辑到公共函数
 - ~~将 ShowNode 的渲染逻辑拆分为子方法~~ ✅ 已完成（2026-06-09，使用 supervision 库重构为 10 个子方法）
+- ~~从轨迹数据自动推断车道中心线~~ ✅ 已完成（2026-06-09，AutoLaneInferenceNode 替代人工标注）
 - 为 CalcStatisticsNode 和 KafkaProducerNode 中的硬编码道路数量引入配置化
 - **清理 platform/ 下的遗留微服务目录**（gateway/、services/、shared/、frontend/）— 已确认不再使用
 

@@ -1,6 +1,6 @@
 # BUSINESS_LOGIC.md — TrafficAnalyzer 核心业务逻辑
 
-> 基于 commit `e69acee` 的真实代码分析。
+> 基于 commit `84c6bd6` 的真实代码分析。
 
 ## 核心业务流程
 
@@ -131,15 +131,67 @@ for key in roads_activity:
   "road_2": 3.8,
   "road_3": null,
   "road_4": 2.1,
-  "road_5": 1.5
+  "road_5": 1.5,
+  "lane_source": "manual|auto|null",
+  "lanes": [
+    {
+      "lane_id": "auto_1",
+      "name": "东→西 直行",
+      "direction": "straight",
+      "flow_veh_per_min": 4.2,
+      "avg_speed_kmh": 22.1,
+      "queue_length_m": 45.2,
+      "stopped_count": 3,
+      "headway_sec": 14.3
+    }
+  ]
 }
 ```
 - `road_N` 为 `null` 当 `timestamp < buffer_analytics_sec`（缓冲区未充满时）
 - `cars` 始终发送（不等待缓冲区）
+- `lane_source`: `"manual"` (有人工标注) | `"auto"` (自动推断) | `null` (无车道数据)
+- `lanes`: 统一格式数组，前端直接读取，无需区分来源
 
-**⚠️ 已知问题**：KafkaProducerNode 设置了 `frame_element.send_to_kafka = True`（第 73 行），但 FrameElement 类中没有定义这个属性。它被动态添加，不会被其他节点使用。
+`send_to_kafka` 字段已在 FrameElement 中声明（TD-005 已修复），KafkaProducerNode 设置后由下游节点消费。
 
-### 6. 可视化渲染
+### 6. 自动车道推断
+
+**实现文件**：`nodes/AutoLaneInferenceNode.py` + `utils_local/auto_lane_inference.py`
+
+**目标**：完全移除对人工标注线的依赖，从车辆轨迹数据中自动推断车道中心线和交通指标。
+
+**向下兼容**：如果存在车道标注数据（`lane_polygons`），以标注数据为准（`LaneAnalysisNode` 输出 `lane_stats`），`AutoLaneInferenceNode` 自动跳过。无标注数据时才启用自动推断。
+
+**算法步骤**：
+
+1. **收集已完成轨迹**：从 `completed_tracks` 中收集轨迹点序列、方向类别、车速等，存入滚动缓冲区（默认 3 分钟窗口）
+
+2. **方向分桶**：按 `turn_behavior` 将轨迹分为 直行/左转/右转/掉头 四个桶
+
+3. **空间聚类**：在每个桶内，使用层次聚类（scipy `fcluster`），以入口点和出口点的最大距离为距离度量，将空间邻近的轨迹归为同一车道
+
+4. **中心线拟合**：对每个聚类内的所有轨迹重采样到等距点，取均值生成平滑中心线
+
+5. **自动标签**：根据入口朝向角度自动转换为中文方位词（东/南/西/北），生成如 "东→西 直行" 的标签
+
+6. **活跃轨迹匹配**：将当前帧的活跃跟踪匹配到最近的推断车道（基于 bbox 中心到中心线的最小距离）
+
+7. **实时指标计算**：
+   - **count**：当前车道内的活跃车辆数
+   - **avg_speed_kmh**：平均车速
+   - **stopped_count / queue_length_m**：排队车辆数和排队长度
+   - **flow_per_min**：滑动窗口内的完成轨迹数（辆/分钟）
+   - **avg_headway_sec**：连续完成轨迹之间的时间间隔（车头时距）
+
+**聚类参数**（可通过 `configs/app_config.yaml` 的 `auto_lane` 部分调整）：
+- `window_sec=180`：轨迹缓冲窗口
+- `min_tracks_per_lane=3`：最少轨迹数（低于则不成簇）
+- `entry_exit_threshold_px=120`：聚类距离阈值（像素）
+- `recluster_interval_sec=5`：重新聚类间隔（避免每帧都聚类）
+
+**输出**：`FrameElement.inferred_lanes` — `{lane_id: InferredLane}` 字典
+
+### 7. 可视化渲染
 
 **实现文件**：`nodes/ShowNode.py`（使用 supervision 库优化展示效果）
 
@@ -152,7 +204,8 @@ for key in roads_activity:
 6. FPS 计数器
 7. 方向流量统计叠加（S:/L:/R:/U: + Q:）
 8. 车道多边形叠加（带标签背景）
-9. 统计面板（独立黑色窗口，拼接在主帧右侧）
+9. 自动推断车道中心线 + 统计面板（入口/出口标记 + 方向箭头 + 各车道指标）
+10. 统计面板（独立黑色窗口，拼接在主帧右侧）
 
 **颜色逻辑**（通过 `ColorPalette` + `ColorLookup` 管理）：
 - 如果 `show_track_id_different_colors=True`：使用 `sv.ColorPalette.DEFAULT`（21色循环）+ `ColorLookup.TRACK`，按 tracker_id 自动着色
@@ -166,6 +219,7 @@ for key in roads_activity:
 - `_draw_fps()` — FPS 信息
 - `_draw_direction_overlay()` — 方向流量统计
 - `_draw_lane_polygons()` — 车道多边形
+- `_draw_inferred_lanes()` — 自动推断车道中心线 + 统计
 - `_draw_stats_panel()` — 统计信息面板
 - `_build_detections()` — 从列表构建 `sv.Detections` 对象
 - `_configure_tracking_colors()` — 配置颜色方案
@@ -184,6 +238,10 @@ for key in roads_activity:
 帧 N 进入 CalcStatisticsNode
   → cars_amount = mean([15,14,16,...]) = 15
   → roads_activity = {1: 8, 2: 12, 3: 6, 4: 4, 5: 2} / 0.5min
+帧 N 进入 AutoLaneInferenceNode
+  → 收集完成的轨迹 ID 3,5 → 缓冲区达到 12 条
+  → 空间聚类发现 3 个车道: "东→西 直行"(4条) "南→东 左转"(4条) "西→东 直行"(4条)
+  → 匹配活跃轨迹到最近车道 → TrackElement.current_lane = "auto_1"
 帧 N 进入 KafkaProducerNode
   → 距离上次发送 > 1 秒 → 发送 JSON 到 statistics_1 topic
 帧 N 进入 ShowNode

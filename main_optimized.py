@@ -10,7 +10,7 @@ main_stream_optimized_v2.py 的特性：
     进程 2 (proc_tracker_update_and_calc)
         Homography → MotionCompensation → TrackerInfoUpdate →
         Speed → DirectionFlow → LaneAnalysis → Trajectory →
-        ConflictDetection → CalcStatistics → KafkaProducer
+        AutoLaneInference → ConflictDetection → CalcStatistics → KafkaProducer
         产出: 完整分析后的 FrameElement
 
     进程 3 (proc_show_node)
@@ -44,6 +44,7 @@ from nodes.HomographyCalibrationNode import HomographyCalibrationNode
 from nodes.SpeedEstimationNode import SpeedEstimationNode
 from nodes.DirectionFlowNode import DirectionFlowNode
 from nodes.LaneAnalysisNode import LaneAnalysisNode
+from nodes.AutoLaneInferenceNode import AutoLaneInferenceNode
 from nodes.TrajectoryNode import TrajectoryNode
 from nodes.ConflictDetectionNode import ConflictDetectionNode
 from nodes.MotionCompensationNode import MotionCompensationNode
@@ -112,6 +113,7 @@ def proc_tracker_update_and_calc(
     direction_flow_node = DirectionFlowNode(config)
     lane_analysis_node = LaneAnalysisNode(config)
     trajectory_node = TrajectoryNode(config)
+    auto_lane_node = AutoLaneInferenceNode(config)
     conflict_node = ConflictDetectionNode(config)
     calc_statistics_node = CalcStatisticsNode(config)
     send_info_kafka = config["pipeline"]["send_info_kafka"]
@@ -134,6 +136,7 @@ def proc_tracker_update_and_calc(
         frame_element = direction_flow_node.process(frame_element)
         frame_element = lane_analysis_node.process(frame_element)
         frame_element = trajectory_node.process(frame_element)
+        frame_element = auto_lane_node.process(frame_element)
         frame_element = conflict_node.process(frame_element)
         frame_element = calc_statistics_node.process(frame_element)
         if send_info_kafka:

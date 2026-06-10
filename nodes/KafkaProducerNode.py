@@ -246,9 +246,59 @@ class KafkaProducerNode:
                         all_speeds.append(direction_stats[d]["avg_speed_kmh"])
                 data["avg_speed_kmh"] = round(sum(all_speeds) / len(all_speeds), 1) if all_speeds else 0
 
-            # 扩展字段：车道级统计（仅在有标注且点位命中时输出）
+            # 扩展字段：车道级统计 — 向下兼容统一输出
+            # 优先级：人工标注 > 自动推断
             lane_stats = getattr(frame_element, "lane_stats", None)
-            data["lane_stats"] = lane_stats  # None when no lane data
+            inferred_lanes = getattr(frame_element, "inferred_lanes", None)
+            data["lane_stats"] = lane_stats  # 原始格式保留（向后兼容）
+
+            if lane_stats:
+                # 来源：人工标注
+                data["lane_source"] = "manual"
+                data["lanes"] = [
+                    {
+                        "lane_id": lid,
+                        "name": f"车道 {lid}",
+                        "direction": "unknown",
+                        "flow_veh_per_min": v.get("count", 0),
+                        "avg_speed_kmh": v.get("avg_speed_kmh", 0),
+                        "queue_length_m": v.get("queue_length_m", 0),
+                        "stopped_count": v.get("stopped_count", 0),
+                        "headway_sec": round(60.0 / v["count"], 1) if v.get("count", 0) > 0 else None,
+                    }
+                    for lid, v in lane_stats.items()
+                ]
+            elif inferred_lanes:
+                # 来源：自动推断
+                data["lane_source"] = "auto"
+                data["inferred_lanes"] = {
+                    lane_id: {
+                        "label": lane.label,
+                        "direction_class": lane.direction_class,
+                        "count": lane.count,
+                        "avg_speed_kmh": lane.avg_speed_kmh,
+                        "queue_length_m": lane.queue_length_m,
+                        "stopped_count": lane.stopped_count,
+                        "flow_per_min": lane.flow_per_min,
+                        "avg_headway_sec": lane.avg_headway_sec,
+                    }
+                    for lane_id, lane in inferred_lanes.items()
+                }
+                data["lanes"] = [
+                    {
+                        "lane_id": lane_id,
+                        "name": lane.label,
+                        "direction": lane.direction_class,
+                        "flow_veh_per_min": lane.flow_per_min,
+                        "avg_speed_kmh": lane.avg_speed_kmh,
+                        "queue_length_m": lane.queue_length_m,
+                        "stopped_count": lane.stopped_count,
+                        "headway_sec": lane.avg_headway_sec,
+                    }
+                    for lane_id, lane in inferred_lanes.items()
+                ]
+            else:
+                data["lane_source"] = None
 
             # 扩展字段：冲突事件
             conflicts = getattr(frame_element, "conflict_events", None)

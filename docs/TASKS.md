@@ -142,6 +142,10 @@
 | T-402 | motion_compensation.py 死代码 | ✅ | `utils_local/motion_compensation.py` — 3 个函数标记 deprecated + warnings.warn |
 | T-403 | KafkaConsumer 自动重连 | ✅ | `platform/app/kafka/consumer.py` — 指数退避重连(5s→120s) |
 | T-404 | InfluxQuery 字段名统一 | ✅ | `influx_query.py` + `trajectories.py` — trajectory_world_m 统一，反序列化 JSON 字段 |
+| T-407 | 自动车道推断 | ✅ | `AutoLaneInferenceNode.py` + `auto_lane_inference.py` — 轨迹聚类→中心线→自动标签，无需人工标注 |
+| T-408 | 方向分类 heading 精度修复 (P0) | ✅ | `trajectory_classifier.py` + `auto_lane_inference.py` — heading 窗口从固定5帧改为 n//2（平滑短轨迹噪声），最小位移阈值 10px |
+| T-409 | 车道聚类合并阈值优化 (P1) | ✅ | `AutoLaneInferenceNode.py` — merge 阈值从 entry_exit_threshold_px 提升到 3.5x（420px），减少平行车道碎片化 |
+| T-410 | U-turn 自引用标签修复 (P2) | ✅ | `auto_lane_inference.py` — 新增 OPPOSITE_CARDINAL 映射 + 自引用保护逻辑，消除"北→北 掉头"等不合理标签 |
 
 ### 待完成
 
@@ -153,6 +157,10 @@
 - [ ] T-304: Dashboard pipelines_active 真实数据
 - [ ] T-305: Alert 持久化到 PostgreSQL
 - [x] T-401: ShowNode supervision 重构（TD-006）
+- [x] T-407: 自动车道推断（AutoLaneInferenceNode，无需人工标注）
+- [x] T-408: 方向分类 heading 精度修复（P0，窗口 n//2 + 位移阈值）
+- [x] T-409: 车道聚类合并阈值优化（P1，3.5x 阈值）
+- [x] T-410: U-turn 自引用标签修复（P2，OPPOSITE_CARDINAL + 自引用保护）
 - [ ] T-405: utils_local/utils.py 单元测试
 - [ ] T-406: ByteTrack 核心单元测试
 
@@ -189,6 +197,9 @@
 - [x] **死代码标记 deprecated（T-402）**
 - [x] **KafkaConsumer 指数退避重连（T-403）**
 - [x] **InfluxQuery 字段名统一 + JSON 反序列化（T-404）**
+- [x] **方向分类 heading 精度修复（T-408 / P0）**
+- [x] **车道聚类合并阈值优化（T-409 / P1）**
+- [x] **U-turn 自引用标签修复（T-410 / P2）**
 
 ### 近期（1-2 周）
 - [ ] 清除 Kafka stale data（运行 `scripts/fix_kafka_and_restart.sh`）
@@ -204,6 +215,7 @@
 ### 中期（1-2 月）
 - [ ] 解决 TD-002：统一入口点
 - [x] 解决 TD-006：ShowNode supervision 重构（T-401） ✅
+- [x] 自动车道推断：从轨迹数据自动发现车道中心线+各方向指标（T-407） ✅
 - [ ] 为 ByteTrack 核心算法添加单元测试（T-406）
 - [ ] 合并 docker-compose 文件（统一 Kafka/InfluxDB/Nginx 实例）
 - [ ] GIS 轨迹回放（基于 track_complete + InfluxDB 数据）（T-302）

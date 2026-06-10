@@ -1,6 +1,6 @@
 # ARCHITECTURE.md — TrafficAnalyzer 系统架构
 
-> 基于 commit `e69acee` 的真实代码分析。
+> 基于 commit `84c6bd6` 的真实代码分析。
 
 ## 系统总览
 
@@ -65,6 +65,12 @@ TrafficAnalyzer 是一个环形交叉路口交通分析系统。核心功能：�
 └─────────────────────┬───────────────────────────────────┘
                       ▼
 ┌─────────────────────────────────────────────────────────┐
+│             AutoLaneInferenceNode（轨迹驱动）             │
+│  自动发现车道中心线 + 各方向流量/排队/车头时距            │
+│  无需人工标注 — 从轨迹空间聚类自动推断                    │
+└─────────────────────┬───────────────────────────────────┘
+                      ▼
+┌─────────────────────────────────────────────────────────┐
 │             ConflictDetectionNode（默认关闭）             │
 │  机非冲突TTC检测 + 世界坐标位置输出                       │
 └─────────────────────┬───────────────────────────────────┘
@@ -77,12 +83,13 @@ TrafficAnalyzer 是一个环形交叉路口交通分析系统。核心功能：�
 ┌─────────────────────────────────────────────────────────┐
 │             KafkaProducerNode                            │
 │  statistics_{n} + track_complete_{n} + conflicts_{n}     │
-│  含方向流量/车道统计/车速/无人机位置/冲突计数             │
+│  含方向流量/车道统计/自动车道/车速/无人机位置/冲突计数   │
 └─────────────────────┬───────────────────────────────────┘
                       ▼
 ┌─────────────────────────────────────────────────────────┐
 │             ShowNode (supervision 库)                    │
-│  圆角边框+ID+道路多边形+车速标签+方向流量+轨迹尾迹+FPS    │
+│  圆角边框+ID+道路多边形+车速标签+方向流量+轨迹尾迹       │
+│  +自动车道中心线+FPS                                     │
 └─────────────────────┬───────────────────────────────────┘
                       ▼
 ┌──────────────────────────┐  ┌──────────────────────────┐
@@ -102,7 +109,7 @@ TrafficAnalyzer 是一个环形交叉路口交通分析系统。核心功能：�
 ### main_optimized.py — 三进程并行模式（唯一生产入口）
 
 - **进程 1**：VideoReader + DetectionTrackingNodes（CPU 读取 + GPU 推理）
-- **进程 2**：Homography + MotionCompensation + TrackerInfoUpdate + Speed + Direction + Lane + Trajectory + Conflict + CalcStatistics + KafkaProducer（CPU 密集）
+- **进程 2**：Homography + MotionCompensation + TrackerInfoUpdate + Speed + Direction + Lane + Trajectory + AutoLaneInference + Conflict + CalcStatistics + KafkaProducer（CPU 密集）
 - **进程 3**：ShowNode + VideoSaver + FlaskServer（渲染 + IO）
 - **队列**：maxsize=50，进程间通过 `multiprocessing.Queue` 传递 FrameElement
 - **健康检查**：下游进程通过 `get(timeout=10)` + `is_alive()` 检测上游崩溃并自动退出
@@ -114,7 +121,7 @@ TrafficAnalyzer 是一个环形交叉路口交通分析系统。核心功能：�
 
 ```
 Backend (KafkaProducerNode)
-  │ statistics_{n}:  {camera_id, cars, road_1..5, direction_flow, lane_stats, avg_speed_kmh, drone_position, ...}
+  │ statistics_{n}:  {camera_id, cars, road_1..5, direction_flow, lane_source, lanes[], avg_speed_kmh, drone_position, ...}
   │ track_complete_{n}: {track_id, turn_behavior, vehicle_class, trajectory_px, trajectory_world_m, ...}
   │ conflicts_{n}:   {motor_id, non_motor_id, distance_m, ttc_sec, severity, motor_position_m, ...}
   ▼

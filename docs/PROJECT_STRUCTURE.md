@@ -1,6 +1,6 @@
 # PROJECT_STRUCTURE.md — TrafficAnalyzer 项目结构
 
-> 基于 commit `e69acee` 的真实代码分析。
+> 基于 commit `84c6bd6` 的真实代码分析。
 
 ## 目录结构
 
@@ -12,7 +12,9 @@ TrafficAnalyzer/
 ├── export_dashboards.py           # Grafana 仪表盘导出脚本
 ├── fetch_dashboard.py             # Grafana 仪表盘获取脚本
 ├── update_dashboards.py           # Grafana 仪表盘翻译/更新脚本
-├── requirements.txt               # Python 依赖清单（7 个）
+├── requirements.txt               # Python 依赖清单（11 个）
+├── create_ppt.py                  # 项目汇报PPT自动生成（PPTX格式）
+├── create_ppt_v3.py               # PPT生成v3（简化版）
 ├── Dockerfile                     # GPU 容器镜像构建
 ├── docker-compose.yaml            # 完整微服务栈编排
 ├── dashboard_backup.json          # Grafana 仪表盘 JSON 备份
@@ -32,6 +34,7 @@ TrafficAnalyzer/
 │   ├── DirectionFlowNode.py       #   方向流量分类（左转/直行/右转/掉头）
 │   ├── LaneAnalysisNode.py        #   车道级分析（流量/排队/车头时距，数据驱动）
 │   ├── TrajectoryNode.py          #   轨迹转向分类 + 世界坐标轨迹输出
+│   ├── AutoLaneInferenceNode.py   #   自动车道推断（轨迹聚类→中心线→各方向指标，无需标注）
 │   ├── ConflictDetectionNode.py   #   机非冲突TTC检测（默认关闭）
 │   ├── CalcStatisticsNode.py      #   统计计算（车辆数 + 道路活跃度）
 │   ├── KafkaProducerNode.py       #   Kafka 多topic消息发送
@@ -52,6 +55,7 @@ TrafficAnalyzer/
 │   ├── motion_compensation.py     #   无人机运动补偿（GPS→ENU、速度矢量、补偿变换）
 │   ├── trajectory_classifier.py   #   转向行为分类（直行/左转/右转/掉头）
 │   ├── lane_geometry.py           #   车道多边形操作、排队长度计算
+│   ├── auto_lane_inference.py     #   自动车道推断（轨迹聚类、中心线拟合、标签生成）
 │   └── templates/
 │       └── index.html             #   Flask 视频流页面模板
 │
@@ -132,11 +136,11 @@ TrafficAnalyzer/
 
 | 类别 | 数量 | 说明 |
 |------|------|------|
-| Python 源码 | 38 | 核心业务逻辑（含8个新增节点/工具/测试） |
+| Python 源码 | 51 | 核心业务逻辑（含13个节点+工具+测试+PPT生成脚本） |
 | 配置文件 | 12 | YAML/JSON/CONF |
-| 文档 | 13 | README + 设计文档 + 架构文档 + 测试报告 |
+| 文档 | 22 | README + 设计文档 + 架构文档 + 测试报告 + POC规划 |
 | 基础设施 | 4 | Dockerfile + Compose + 服务配置 |
-| 平台 | 14 | FastAPI 单体应用（API/Kafka/Services/Models） |
+| 平台 | 32 | FastAPI 单体应用（API/Kafka/Services/Models + 遗留微服务） |
 | 工具脚本 | 4 | 标注/导出/获取/更新 |
 | 模型权重 | 2 | .pt 二进制文件 |
 | 测试数据 | 6+ | 视频 + SRT遥测 + 采集记录 |

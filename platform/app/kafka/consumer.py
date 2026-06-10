@@ -218,16 +218,18 @@ class KafkaConsumerService:
             )
 
         # Transform lane_stats dict → lanes array for frontend compatibility
-        lane_stats = data.get("lane_stats")
-        if lane_stats and isinstance(lane_stats, dict):
-            lanes_arr = []
-            for lid, v in lane_stats.items():
-                entry = {"lane_id": int(lid), "vehicle_count": v.get("count", 0), **v}
-                cnt = v.get("count", 0)
-                if cnt > 0:
-                    entry["headway_sec"] = round(60.0 / cnt, 1)
-                lanes_arr.append(entry)
-            data["lanes"] = lanes_arr
+        # Skip if KafkaProducerNode already sent unified 'lanes' array
+        if "lanes" not in data:
+            lane_stats = data.get("lane_stats")
+            if lane_stats and isinstance(lane_stats, dict):
+                lanes_arr = []
+                for lid, v in lane_stats.items():
+                    entry = {"lane_id": int(lid), "vehicle_count": v.get("count", 0), **v}
+                    cnt = v.get("count", 0)
+                    if cnt > 0:
+                        entry["headway_sec"] = round(60.0 / cnt, 1)
+                    lanes_arr.append(entry)
+                data["lanes"] = lanes_arr
 
         # T-102: 持久化 stats 到 InfluxDB
         if self._influx:

@@ -38,7 +38,7 @@ video_reader:
 
 detection_node:
   weight_pth: weights/uav_best.pt  # 模型 .pt 或 .engine (TensorRT) 文件的路径
-  classes_to_detect: [2,3,4,5,6,7,8,9]  # uav_best.pt 的全部交通工具类别 (排除行人和人)
+  classes_to_detect: [0,1,2,3,4,5,6,7,8,9]  # uav_best.pt 的全部交通工具类别 (排除行人和人)
   confidence: 0.10  # 检测器置信度阈值（值越大，检测到的目标越少）
   iou: 0.7  # NMS 阈值（值越大，匹配到的目标越多）
   imgsz: 640  # 推理时的图像缩放尺寸（默认为 640）
@@ -151,6 +151,19 @@ trajectory:
     left_turn: [30, 150]
     right_turn: [-150, -30]
     u_turn: [150, 180]
+
+auto_lane:
+  enabled: true                        # 启用自动车道推断（无需人工标注）
+  # 向下兼容：如果有车道标注数据(lane_polygons)，以标注数据为准，跳过自动推断
+  # 无标注数据时才启用自动推断（从轨迹空间聚类自动发现车道）
+  window_sec: 180                      # 轨迹缓冲窗口（秒），用于聚类
+  min_tracks_per_lane: 3               # 聚类最少轨迹数（低于则不成簇）
+  entry_exit_threshold_px: 120.0       # 入口/出口聚类距离阈值（像素）
+  centerline_samples: 20               # 中心线采样点数
+  queue_speed_threshold_kmh: 5.0       # 低于此速度视为排队
+  flow_window_sec: 300                 # 流量计算滑动窗口（秒）
+  min_track_points: 8                  # 轨迹最少位置点
+  recluster_interval_sec: 5.0          # 重新聚类间隔（秒）
 
 conflict_detection:
   enabled: false  # 需要模型微调加入person/bicycle后启用

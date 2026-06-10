@@ -227,6 +227,11 @@ class ShowNode:
             if lane_polygons:
                 self._draw_lane_polygons(frame_result, lane_polygons)
 
+        # 绘制自动推断的车道中心线和统计（仅当无人工标注时）
+        inferred_lanes = getattr(frame_element, "inferred_lanes", None)
+        if inferred_lanes and not lane_polygons:
+            self._draw_inferred_lanes(frame_result, inferred_lanes)
+
         # 处理显示统计信息的单独窗口
         if self.show_info_statistics:
             frame_result = self._draw_stats_panel(frame_result, frame_element)
@@ -244,14 +249,32 @@ class ShowNode:
 
     def _draw_detections(self, frame, frame_element):
         """使用 supervision 绘制纯检测结果（无跟踪）。"""
+        if not frame_element.detected_xyxy:
+            return frame
+
+        # 过滤退化框（宽/高 ≤ 0 或面积极小），避免 Kalman 预测产生 (0,0) 处幽灵框
+        # 导致 RoundBoxAnnotator 画成实心色块（#4×10 杂色方块的根因）
+        _MIN_BOX_AREA = 100  # 最小面积阈值（px²），真实车辆远大于此
+        valid = []
+        valid_cls = []
+        for i, box in enumerate(frame_element.detected_xyxy):
+            x1, y1, x2, y2 = box
+            if (x2 - x1) > 0 and (y2 - y1) > 0 and (x2 - x1) * (y2 - y1) >= _MIN_BOX_AREA:
+                valid.append(box)
+                if frame_element.detected_cls:
+                    valid_cls.append(frame_element.detected_cls[i])
+
+        if not valid:
+            return frame
+
         detections = self._build_detections(
-            frame_element.detected_xyxy,
-            cls_names=frame_element.detected_cls,
+            valid,
+            cls_names=valid_cls if valid_cls else None,
         )
         if detections is None:
             return frame
 
-        labels = list(frame_element.detected_cls) if frame_element.detected_cls else None
+        labels = valid_cls if valid_cls else None
 
         frame = self.sv_det_box_annotator.annotate(scene=frame, detections=detections)
         frame = self.sv_det_label_annotator.annotate(
@@ -264,16 +287,42 @@ class ShowNode:
         if not frame_element.tracked_xyxy:
             return frame
 
+        # 过滤退化框（宽/高 ≤ 0 或面积极小），避免 Kalman 预测产生 (0,0) 处幽灵框
+        # 导致 RoundBoxAnnotator 画成实心色块（左上角杂色方块的根因）
+        _MIN_BOX_AREA = 100  # 最小面积阈值（px²），真实车辆远大于此
+        valid_idx = []
+        for i, box in enumerate(frame_element.tracked_xyxy):
+            x1, y1, x2, y2 = box
+            if (x2 - x1) > 0 and (y2 - y1) > 0 and (x2 - x1) * (y2 - y1) >= _MIN_BOX_AREA:
+                valid_idx.append(i)
+
+        if not valid_idx:
+            return frame
+
+        valid_xyxy = [frame_element.tracked_xyxy[i] for i in valid_idx]
+        valid_cls = [frame_element.tracked_cls[i] for i in valid_idx] if frame_element.tracked_cls else None
+        valid_ids = [frame_element.id_list[i] for i in valid_idx] if frame_element.id_list else None
+
         detections = self._build_detections(
-            frame_element.tracked_xyxy,
-            cls_names=frame_element.tracked_cls,
-            tracker_ids=frame_element.id_list,
+            valid_xyxy,
+            cls_names=valid_cls,
+            tracker_ids=valid_ids,
         )
         if detections is None:
             return frame
 
-        # 构建标签（含车速）
-        labels = self._make_labels(frame_element)
+        # 构建标签（含车速）—— 仅针对有效框
+        labels = []
+        buffer_tracks = frame_element.buffer_tracks or {}
+        for i in valid_idx:
+            tid = frame_element.id_list[i]
+            cls_name = frame_element.tracked_cls[i] if frame_element.tracked_cls else ""
+            label = f"#{tid} {cls_name}"
+            if self.show_speed_labels and buffer_tracks:
+                track = buffer_tracks.get(int(tid))
+                if track and track.avg_speed_kmh > 0:
+                    label += f" {track.avg_speed_kmh:.0f}km/h"
+            labels.append(label)
 
         # 配置颜色方案
         palette, color_lookup = self._configure_tracking_colors(detections, frame_element)
@@ -471,3 +520,92 @@ class ShowNode:
                 fontFace=self.fontFace, fontScale=self.fontScale * 0.7,
                 thickness=1, color=(0, 0, 0),
             )
+
+    def _draw_inferred_lanes(self, frame_result, inferred_lanes):
+        """绘制自动推断的车道中心线和统计信息。
+
+        Args:
+            frame_result: 绘制的目标帧
+            inferred_lanes: {lane_id: InferredLane} 自动推断车道字典
+        """
+        # 方向颜色映射
+        dir_colors = {
+            "straight": (0, 230, 0),     # 亮绿
+            "left_turn": (0, 165, 255),   # 橙色
+            "right_turn": (255, 165, 0),  # 蓝橙
+            "u_turn": (200, 0, 200),      # 紫色
+            "unknown": (160, 160, 160),   # 灰色
+        }
+
+        y_stats = 110  # 统计面板起始Y（方向流量下方）
+        lane_idx = 0
+
+        for lane_id, lane in inferred_lanes.items():
+            color = dir_colors.get(lane.direction_class, (160, 160, 160))
+
+            # 1. 绘制中心线
+            if lane.centerline_px and len(lane.centerline_px) >= 2:
+                pts = np.array(lane.centerline_px, dtype=np.int32)
+                # 半透明粗线（底层）
+                overlay = frame_result.copy()
+                for i in range(len(pts) - 1):
+                    cv2.line(overlay, tuple(pts[i]), tuple(pts[i + 1]), color, 6)
+                cv2.addWeighted(overlay, 0.5, frame_result, 0.5, 0, frame_result)
+                # 细白线（上层，增加对比度）
+                for i in range(len(pts) - 1):
+                    cv2.line(frame_result, tuple(pts[i]), tuple(pts[i + 1]), (255, 255, 255), 1)
+
+                # 方向箭头（中心线中点）
+                mid = len(pts) // 2
+                if mid > 0:
+                    pt_start = tuple(pts[mid - 1])
+                    pt_end = tuple(pts[mid])
+                    cv2.arrowedLine(
+                        frame_result, pt_start, pt_end, color,
+                        thickness=3, tipLength=0.5,
+                    )
+
+            # 2. 入口/出口标记
+            if lane.entry_center_px:
+                ep = (int(lane.entry_center_px[0]), int(lane.entry_center_px[1]))
+                cv2.circle(frame_result, ep, 6, color, -1)
+                cv2.circle(frame_result, ep, 6, (255, 255, 255), 1)
+
+            if lane.exit_center_px:
+                xp = (int(lane.exit_center_px[0]), int(lane.exit_center_px[1]))
+                cv2.circle(frame_result, xp, 6, color, 2)
+                cv2.circle(frame_result, xp, 6, (255, 255, 255), 1)
+
+            # 3. 统计面板（画面左下角）
+            label_scale = self.fontScale * 0.6
+            label_thickness = 1
+
+            stats_text = (
+                f"{lane.label}: "
+                f"N={lane.count} "
+                f"V={lane.avg_speed_kmh:.0f}km/h "
+                f"Q={lane.stopped_count} "
+                f"F={lane.flow_per_min:.1f}/min"
+                if lane.flow_per_min is not None else
+                f"{lane.label}: N={lane.count} V={lane.avg_speed_kmh:.0f}km/h Q={lane.stopped_count}"
+            )
+            if lane.avg_headway_sec is not None:
+                stats_text += f" H={lane.avg_headway_sec:.1f}s"
+
+            (tw, th), _ = cv2.getTextSize(
+                stats_text, self.fontFace, label_scale, label_thickness
+            )
+            # 背景矩形
+            cv2.rectangle(
+                frame_result,
+                (5, y_stats + lane_idx * (th + 8) - 2),
+                (15 + tw, y_stats + lane_idx * (th + 8) + th + 4),
+                (0, 0, 0), -1,
+            )
+            cv2.putText(
+                frame_result, stats_text,
+                (8, y_stats + lane_idx * (th + 8) + th),
+                fontFace=self.fontFace, fontScale=label_scale,
+                thickness=label_thickness, color=color,
+            )
+            lane_idx += 1

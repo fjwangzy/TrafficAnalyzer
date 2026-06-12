@@ -31,6 +31,8 @@
   "queue_count": 2,
   "avg_speed_kmh": 26.5,
   "lane_stats": null,
+  "lane_source": "model",
+  "lanes": [],
   "conflict_count": 0,
   "drone_position": {
     "anchor_lat": 31.234567,
@@ -106,7 +108,8 @@ lon = anchor_lon + easting_m / (111320 × cos(radians(anchor_lat)))
 | `direction_flow` | dict \| null | 方向流量统计（始终输出） |
 | `queue_count` | int | 当前排队车辆数 |
 | `avg_speed_kmh` | float | 整体平均车速 |
-| `lane_stats` | dict \| null | 车道级统计（有标注时输出） |
+| `lane_stats` | dict \| null | 车道级统计（有标注或模型检测时输出） |
+| `lane_source` | string \| null | 车道数据来源：`"manual"` / `"model"` / `"auto"` / `null` |
 | `conflict_count` | int | 当前帧冲突事件数 |
 | `drone_position` | dict \| null | 无人机位置（有遥测时输出） |
 | `is_hovering` | bool | 是否悬停 |
@@ -522,6 +525,57 @@ Content-Type: application/json
 | GET | `/api/v1/system/kafka/topics` | Kafka topic 状态 |
 | GET | `/api/v1/system/kafka/consumers` | Kafka consumer group 状态 |
 | GET | `/api/v1/system/models` | YOLO 模型列表 |
+
+### 标定中心 `/api/v1/calibration`
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/v1/calibration/summary` | 标定参数摘要 |
+| GET | `/api/v1/calibration/records` | 标定参数记录 |
+| GET | `/api/v1/calibration/lane-tasks` | 车道标注任务列表 |
+| GET | `/api/v1/calibration/lane-annotations` | 已保存车道标注参数列表 |
+| GET | `/api/v1/calibration/lane-annotations/{intersection_id}` | 查询某路口可复用车道参数 |
+| POST | `/api/v1/calibration/lane-tasks/{task_id}/annotation` | 保存人工车道标注结果 |
+
+车道标注任务由 Kafka `stats` 消息触发：同一路口 `is_hovering=true` 且 `drone_position.easting_m/northing_m` 在 `lane_annotation_hover_radius_m` 半径内持续超过 `lane_annotation_hover_seconds`（默认 30 秒），并且该路口没有已保存人工车道参数时，平台生成一个 `pending` 任务。
+
+保存请求：
+
+```json
+{
+  "lanes": [
+    {
+      "lane_id": "L1",
+      "name": "直行车道",
+      "direction": "straight",
+      "polygon": [0, 0, 10, 0, 10, 20, 0, 20]
+    }
+  ],
+  "roads": {
+    "1": [0, 0, 10, 0, 10, 20, 0, 20]
+  }
+}
+```
+
+保存后平台会写入 `lane_annotation_db_path`，并导出管道可直接读取的扩展 JSON：
+
+```json
+{
+  "roads": {"1": [0, 0, 10, 0, 10, 20, 0, 20]},
+  "lanes": {
+    "L1": {
+      "name": "直行车道",
+      "direction": "straight",
+      "polygon": [0, 0, 10, 0, 10, 20, 0, 20]
+    }
+  },
+  "calibration": {"source": "manual_lane_annotation"}
+}
+```
+
+后续飞行启动检测管道时，将该导出文件作为 `roads_json` 即可复用人工车道标注；`VideoReader` 会读取 `lanes` 并让 `LaneDetectionNode` 标记为 `lane_source="manual"`。
+
+平台 `POST /api/v1/pipelines` 在调用方未显式指定自定义 `roads_json`（仍为默认 `configs/entry_exit_lanes.json`）时，会优先查找该 `intersection_id` 的已保存车道标注，命中后自动把 `roads_json` 替换为导出文件路径。
 
 ### 就绪检查 `/ready`
 

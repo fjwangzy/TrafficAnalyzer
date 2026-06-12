@@ -149,18 +149,46 @@ for key in roads_activity:
 ```
 - `road_N` 为 `null` 当 `timestamp < buffer_analytics_sec`（缓冲区未充满时）
 - `cars` 始终发送（不等待缓冲区）
-- `lane_source`: `"manual"` (有人工标注) | `"auto"` (自动推断) | `null` (无车道数据)
+- `lane_source`: `"manual"` (有人工标注) | `"model"` (YOLO分割模型检测) | `"auto"` (自动推断) | `null` (无车道数据)
 - `lanes`: 统一格式数组，前端直接读取，无需区分来源
 
 `send_to_kafka` 字段已在 FrameElement 中声明（TD-005 已修复），KafkaProducerNode 设置后由下游节点消费。
 
-### 6. 自动车道推断
+### 6. 模型车道检测（YOLO 分割）
+
+**实现文件**：`nodes/LaneDetectionNode.py`
+
+**目标**：当无人工标注车道数据时，使用 YOLO 分割模型从图像中检测车道标线和路面区域，生成稳定的车道多边形。与基于轨迹聚类的自动推断相比，模型检测的车道基于图像视觉特征，位置固定不随车流变化，统计更稳定可靠。
+
+**优先级链**：`人工标注 (manual) > 模型检测 (model) > 轨迹推断 (auto)`
+- 有人工标注（`lane_polygons` 已加载）→ 标记 `lane_source="manual"`，跳过模型
+- 无人工标注 → 运行 YOLO 分割模型 → 标记 `lane_source="model"`
+- 模型未检测到任何车道 → 回退到 `AutoLaneInferenceNode`（`lane_source="auto"`）
+
+**模型**：`weights/lane_detect.pt` — YOLO 分割模型，类别 `{0: 'lane', 1: 'pavement'}`
+
+**两种检测策略**：
+1. **pavement 类（路面区域）**：直接使用分割 mask 作为车道多边形
+2. **lane 类（车道标线）**：对 mask 做形态学膨胀（`buffer_pixels=50px`），将细线扩展为车道区域，再提取多边形
+
+**工作模式**：
+- `first_frame_only=True`（默认）：仅在首帧运行模型，后续帧复用结果。适合固定摄像头。
+- `first_frame_only=False`：每 `detect_interval` 帧运行一次。适合无人机/移动摄像头。
+
+**输出字段**：
+- `FrameElement.lane_polygons` — `{lane_id: shapely.Polygon}` 字典，供下游 `LaneAnalysisNode` 使用
+- `FrameElement.detected_lane_polygons` — 同上（独立字段，用于可视化区分）
+- `FrameElement.lane_source` — `"manual"` | `"model"` | `"auto"` | `None`
+
+**管道位置**：`DirectionFlowNode` → **`LaneDetectionNode`** → `LaneAnalysisNode`
+
+### 7. 自动车道推断
 
 **实现文件**：`nodes/AutoLaneInferenceNode.py` + `utils_local/auto_lane_inference.py`
 
 **目标**：完全移除对人工标注线的依赖，从车辆轨迹数据中自动推断车道中心线和交通指标。
 
-**向下兼容**：如果存在车道标注数据（`lane_polygons`），以标注数据为准（`LaneAnalysisNode` 输出 `lane_stats`），`AutoLaneInferenceNode` 自动跳过。无标注数据时才启用自动推断。
+**向下兼容**：如果存在车道标注数据（`lane_polygons`）或模型已检测到车道（`lane_source` 为 `"manual"` 或 `"model"`），`AutoLaneInferenceNode` 自动跳过。仅在无任何车道数据时才启用自动推断。
 
 **算法步骤**：
 
@@ -191,7 +219,7 @@ for key in roads_activity:
 
 **输出**：`FrameElement.inferred_lanes` — `{lane_id: InferredLane}` 字典
 
-### 7. 可视化渲染
+### 8. 可视化渲染
 
 **实现文件**：`nodes/ShowNode.py`（使用 supervision 库优化展示效果）
 
@@ -235,13 +263,16 @@ for key in roads_activity:
   → buffer_tracks 新增 ID 16,17
   → ID 3 首次进入道路 2 的多边形 → start_road=2
   → 清理超过 33 秒的旧轨迹
+帧 N 进入 LaneDetectionNode
+  → 无人工标注 → YOLO 分割模型检测车道标线 → 膨胀为车道多边形
+  → lane_source="model", lane_polygons={lane_1: Polygon, ...}
+帧 N 进入 LaneAnalysisNode
+  → lane_polygons 存在 → 车辆分配到车道 → 计算车道级流量/排队/车头时距
 帧 N 进入 CalcStatisticsNode
   → cars_amount = mean([15,14,16,...]) = 15
   → roads_activity = {1: 8, 2: 12, 3: 6, 4: 4, 5: 2} / 0.5min
 帧 N 进入 AutoLaneInferenceNode
-  → 收集完成的轨迹 ID 3,5 → 缓冲区达到 12 条
-  → 空间聚类发现 3 个车道: "东→西 直行"(4条) "南→东 左转"(4条) "西→东 直行"(4条)
-  → 匹配活跃轨迹到最近车道 → TrackElement.current_lane = "auto_1"
+  → lane_source="model" → 跳过（模型检测优先于轨迹推断）
 帧 N 进入 KafkaProducerNode
   → 距离上次发送 > 1 秒 → 发送 JSON 到 statistics_1 topic
 帧 N 进入 ShowNode

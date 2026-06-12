@@ -2,12 +2,27 @@
 import json
 import logging
 import os
-from fastapi import APIRouter, Request
+from typing import Any
+
+from fastapi import APIRouter, HTTPException, Request
+from pydantic import BaseModel, Field
 
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/calibration", tags=["calibration"])
+
+
+class LanePayload(BaseModel):
+    lane_id: str | None = None
+    name: str | None = None
+    direction: str | None = None
+    polygon: list[float] = Field(min_length=6)
+
+
+class SaveLaneAnnotationPayload(BaseModel):
+    lanes: list[LanePayload] = Field(min_length=1)
+    roads: dict[str, Any] | None = None
 
 
 def _load_calibration_db(path: str) -> dict:
@@ -19,6 +34,13 @@ def _load_calibration_db(path: str) -> dict:
     except Exception as e:
         logger.error(f"Failed to load calibration DB: {e}")
     return {}
+
+
+def _lane_store(request: Request):
+    store = getattr(request.app.state, "lane_annotation_store", None)
+    if store is None:
+        raise HTTPException(status_code=503, detail="lane annotation store unavailable")
+    return store
 
 
 @router.get("/summary")
@@ -88,3 +110,39 @@ async def get_coverage(intersection_id: str, request: Request):
                     })
 
     return coverage
+
+
+@router.get("/lane-tasks")
+async def list_lane_annotation_tasks(request: Request):
+    """List hover-created lane annotation tasks."""
+    return _lane_store(request).list_tasks()
+
+
+@router.get("/lane-annotations")
+async def list_lane_annotations(request: Request):
+    """List saved lane annotation parameters."""
+    return _lane_store(request).list_annotations()
+
+
+@router.get("/lane-annotations/{intersection_id}")
+async def get_lane_annotation(intersection_id: str, request: Request):
+    """Get reusable lane parameters for one intersection."""
+    annotation = _lane_store(request).get_annotation(intersection_id)
+    if annotation is None:
+        raise HTTPException(status_code=404, detail="lane annotation not found")
+    return annotation
+
+
+@router.post("/lane-tasks/{task_id}/annotation")
+async def save_lane_annotation(
+    task_id: str,
+    payload: SaveLaneAnnotationPayload,
+    request: Request,
+):
+    """Save a task's manual lane annotation as reusable pipeline parameters."""
+    try:
+        return _lane_store(request).save_annotation(task_id, payload.model_dump())
+    except KeyError:
+        raise HTTPException(status_code=404, detail="lane annotation task not found")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))

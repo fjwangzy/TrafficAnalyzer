@@ -57,6 +57,22 @@ def _get_pm(request: Request):
     return pm
 
 
+def _resolve_roads_json(request: Request, intersection_id: str, roads_json: str) -> str:
+    """Use saved lane annotation parameters when caller did not choose a file."""
+    if roads_json != "configs/entry_exit_lanes.json":
+        return roads_json
+
+    store = getattr(request.app.state, "lane_annotation_store", None)
+    if store is None:
+        return roads_json
+
+    annotation = store.get_annotation(intersection_id)
+    if not annotation:
+        return roads_json
+
+    return annotation.get("export_path") or roads_json
+
+
 # ── Endpoints ──
 
 
@@ -111,7 +127,7 @@ async def start_pipeline(body: PipelineCreateRequest, request: Request):
         drone_id=body.drone_id,
         intersection_id=body.intersection_id,
         video_src=body.video_src,
-        roads_json=body.roads_json,
+        roads_json=_resolve_roads_json(request, body.intersection_id, body.roads_json),
     )
     return pipeline.to_dict()
 

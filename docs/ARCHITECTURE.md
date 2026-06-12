@@ -55,6 +55,12 @@ TrafficAnalyzer 是一个环形交叉路口交通分析系统。核心功能：�
 └─────────────────────┬───────────────────────────────────┘
                       ▼
 ┌─────────────────────────────────────────────────────────┐
+│             LaneDetectionNode（模型驱动，可选）           │
+│  YOLO 分割模型检测车道标线/路面→稳定车道多边形           │
+│  优先级：人工标注 > 模型检测 > 轨迹推断                  │
+└─────────────────────┬───────────────────────────────────┘
+                      ▼
+┌─────────────────────────────────────────────────────────┐
 │             LaneAnalysisNode（数据驱动）                  │
 │  车道级流量/排队长度/车头时距（有标注时自动输出）          │
 └─────────────────────┬───────────────────────────────────┘
@@ -109,7 +115,7 @@ TrafficAnalyzer 是一个环形交叉路口交通分析系统。核心功能：�
 ### main_optimized.py — 三进程并行模式（唯一生产入口）
 
 - **进程 1**：VideoReader + DetectionTrackingNodes（CPU 读取 + GPU 推理）
-- **进程 2**：Homography + MotionCompensation + TrackerInfoUpdate + Speed + Direction + Lane + Trajectory + AutoLaneInference + Conflict + CalcStatistics + KafkaProducer（CPU 密集）
+- **进程 2**：Homography + MotionCompensation + TrackerInfoUpdate + Speed + Direction + LaneDetection + LaneAnalysis + Trajectory + AutoLaneInference + Conflict + CalcStatistics + KafkaProducer（CPU 密集）
 - **进程 3**：ShowNode + VideoSaver + FlaskServer（渲染 + IO）
 - **队列**：maxsize=50，进程间通过 `multiprocessing.Queue` 传递 FrameElement
 - **健康检查**：下游进程通过 `get(timeout=10)` + `is_alive()` 检测上游崩溃并自动退出

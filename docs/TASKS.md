@@ -161,6 +161,7 @@
 - [x] T-408: 方向分类 heading 精度修复（P0，窗口 n//2 + 位移阈值）
 - [x] T-409: 车道聚类合并阈值优化（P1，3.5x 阈值）
 - [x] T-410: U-turn 自引用标签修复（P2，OPPOSITE_CARDINAL + 自引用保护）
+- [x] T-411: YOLO 分割模型车道检测（LaneDetectionNode，manual > model > auto 优先级链）
 - [ ] T-405: utils_local/utils.py 单元测试
 - [ ] T-406: ByteTrack 核心单元测试
 
@@ -200,6 +201,8 @@
 - [x] **方向分类 heading 精度修复（T-408 / P0）**
 - [x] **车道聚类合并阈值优化（T-409 / P1）**
 - [x] **U-turn 自引用标签修复（T-410 / P2）**
+- [x] **YOLO 分割模型车道检测（LaneDetectionNode）**
+- [x] **车道检测集成到 main.py 和 main_optimized.py**
 
 ### 近期（1-2 周）
 - [ ] 清除 Kafka stale data（运行 `scripts/fix_kafka_and_restart.sh`）

@@ -11,6 +11,7 @@ from app.middleware.auth import AuthMiddleware
 from app.kafka.ws_manager import WSManager
 from app.kafka.consumer import KafkaConsumerService
 from app.services.alert_engine import AlertEngine
+from app.services.lane_annotation_store import LaneAnnotationStore
 from app.services.pipeline_manager import PipelineManager
 from app.utils.influx_query import InfluxQuery
 from app.api.v1 import intersections, alerts, system, trajectories, video, calibration, auth
@@ -35,6 +36,11 @@ async def lifespan(app: FastAPI):
     # ── Initialize components ──
     ws_manager = WSManager()
     alert_engine = AlertEngine(ws_manager, settings)
+    lane_annotation_store = LaneAnnotationStore(
+        db_path=settings.lane_annotation_db_path,
+        hover_seconds=settings.lane_annotation_hover_seconds,
+        hover_radius_m=settings.lane_annotation_hover_radius_m,
+    )
 
     # InfluxDB (optional — graceful fallback if unavailable)
     influx = None
@@ -59,6 +65,7 @@ async def lifespan(app: FastAPI):
             topics_pattern=settings.kafka_topics_pattern,
             ws_manager=ws_manager,
             alert_engine=alert_engine,
+            lane_annotation_store=lane_annotation_store,
             influx_client=influx,  # T-102: 注入 InfluxDB 客户端用于持久化
         )
         await kafka_service.start()
@@ -74,6 +81,7 @@ async def lifespan(app: FastAPI):
     # Store on app state
     app.state.ws_manager = ws_manager
     app.state.alert_engine = alert_engine
+    app.state.lane_annotation_store = lane_annotation_store
     app.state.influx = influx
     app.state.kafka_service = kafka_service
     app.state.pipeline_manager = pipeline_manager

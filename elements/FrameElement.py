@@ -64,6 +64,8 @@ class FrameElement:
         self.conflict_events: list[dict] | None = None  # 冲突事件列表
         self.completed_tracks: list[dict] | None = None  # 本帧完成的轨迹数据
         self.inferred_lanes: dict | None = None  # 自动推断的车道（AutoLaneInferenceNode输出）
+        self.lane_source: str | None = None       # 车道数据来源: "manual" | "model" | "auto" | None
+        self.detected_lane_polygons: dict | None = None  # 模型检测的车道多边形（LaneDetectionNode输出）
 
         # ── 新增：性能指标 ──
         self.inference_ms: float = 0.0  # YOLO推理耗时（毫秒）

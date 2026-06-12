@@ -9,7 +9,7 @@ main_stream_optimized_v2.py 的特性：
 
     进程 2 (proc_tracker_update_and_calc)
         Homography → MotionCompensation → TrackerInfoUpdate →
-        Speed → DirectionFlow → LaneAnalysis → Trajectory →
+        Speed → DirectionFlow → LaneDetection → LaneAnalysis → Trajectory →
         AutoLaneInference → ConflictDetection → CalcStatistics → KafkaProducer
         产出: 完整分析后的 FrameElement
 
@@ -44,17 +44,38 @@ from nodes.HomographyCalibrationNode import HomographyCalibrationNode
 from nodes.SpeedEstimationNode import SpeedEstimationNode
 from nodes.DirectionFlowNode import DirectionFlowNode
 from nodes.LaneAnalysisNode import LaneAnalysisNode
+from nodes.LaneDetectionNode import LaneDetectionNode
 from nodes.AutoLaneInferenceNode import AutoLaneInferenceNode
 from nodes.TrajectoryNode import TrajectoryNode
 from nodes.ConflictDetectionNode import ConflictDetectionNode
 from nodes.MotionCompensationNode import MotionCompensationNode
+from nodes.GeoJsonExportNode import GeoJsonExportNode
 from elements.VideoEndBreakElement import VideoEndBreakElement
 from utils_local.utils import check_and_set_env_var
+
+import logging
+import logging.config
+import yaml
 
 PRINT_PROFILE_INFO = False
 
 # 队列取数据超时(秒)：下游进程在 timeout 内未收到帧时检查上游是否存活
 _QUEUE_GET_TIMEOUT = 10
+
+
+def _setup_logging_in_subprocess():
+    """在子进程中初始化日志配置。
+
+    Hydra 的 dictConfig 仅在主进程生效，multiprocessing 子进程
+    不会继承 root logger 的 handlers，需要手动重新加载。
+    """
+    config_path = os.path.join(
+        os.path.dirname(__file__), "configs", "hydra", "job_logging", "custom.yaml"
+    )
+    if os.path.exists(config_path):
+        with open(config_path) as f:
+            cfg = yaml.safe_load(f)
+        logging.config.dictConfig(cfg)
 
 
 def _is_pid_alive(pid: int) -> bool:
@@ -74,6 +95,7 @@ def proc_frame_reader_and_detection(
     读取视频帧并执行 YOLO 推理，将带检测结果的 FrameElement 放入队列。
     队列满时阻塞等待（确保 MP4 不丢帧；RTSP 流由 reader 自适应帧率）。
     """
+    _setup_logging_in_subprocess()
     sleep_message = f"系统预热中.. sleep({time_sleep_start})"
     for _ in tqdm(range(time_sleep_start), desc=sleep_message):
         sleep(1)
@@ -106,16 +128,19 @@ def proc_tracker_update_and_calc(
 
     健康检查：通过 get(timeout) + _is_pid_alive(reader_pid) 检测读取进程崩溃。
     """
+    _setup_logging_in_subprocess()
     homography_node = HomographyCalibrationNode(config)
     motion_compensation_node = MotionCompensationNode(config)
     tracker_info_update_node = TrackerInfoUpdateNode(config)
     speed_node = SpeedEstimationNode(config)
     direction_flow_node = DirectionFlowNode(config)
+    lane_detection_node = LaneDetectionNode(config)
     lane_analysis_node = LaneAnalysisNode(config)
     trajectory_node = TrajectoryNode(config)
     auto_lane_node = AutoLaneInferenceNode(config)
     conflict_node = ConflictDetectionNode(config)
     calc_statistics_node = CalcStatisticsNode(config)
+    geojson_export_node = GeoJsonExportNode(config)
     send_info_kafka = config["pipeline"]["send_info_kafka"]
     if send_info_kafka:
         kafka_producer_node = KafkaProducerNode(config)
@@ -134,11 +159,13 @@ def proc_tracker_update_and_calc(
         frame_element = tracker_info_update_node.process(frame_element)
         frame_element = speed_node.process(frame_element)
         frame_element = direction_flow_node.process(frame_element)
+        frame_element = lane_detection_node.process(frame_element)
         frame_element = lane_analysis_node.process(frame_element)
         frame_element = trajectory_node.process(frame_element)
         frame_element = auto_lane_node.process(frame_element)
         frame_element = conflict_node.process(frame_element)
         frame_element = calc_statistics_node.process(frame_element)
+        frame_element = geojson_export_node.process(frame_element)
         if send_info_kafka:
             frame_element = kafka_producer_node.process(frame_element)
         ts2 = time()
@@ -159,6 +186,7 @@ def proc_show_node(queue_in: Queue, config: dict, tracker_pid: int):
 
     健康检查：通过 get(timeout) + _is_pid_alive(tracker_pid) 检测追踪进程崩溃。
     """
+    _setup_logging_in_subprocess()
     show_node = ShowNode(config)
     save_video = config["pipeline"]["save_video"]
     show_in_web = config["pipeline"]["show_in_web"]

@@ -247,14 +247,15 @@ class KafkaProducerNode:
                 data["avg_speed_kmh"] = round(sum(all_speeds) / len(all_speeds), 1) if all_speeds else 0
 
             # 扩展字段：车道级统计 — 向下兼容统一输出
-            # 优先级：人工标注 > 自动推断
+            # 优先级：人工标注 > 模型检测 > 自动推断
             lane_stats = getattr(frame_element, "lane_stats", None)
             inferred_lanes = getattr(frame_element, "inferred_lanes", None)
+            lane_source = getattr(frame_element, "lane_source", None)
             data["lane_stats"] = lane_stats  # 原始格式保留（向后兼容）
 
             if lane_stats:
-                # 来源：人工标注
-                data["lane_source"] = "manual"
+                # 来源：人工标注 或 模型检测（LaneAnalysisNode 统一输出）
+                data["lane_source"] = lane_source if lane_source else "manual"
                 data["lanes"] = [
                     {
                         "lane_id": lid,

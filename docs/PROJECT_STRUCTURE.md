@@ -33,6 +33,7 @@ TrafficAnalyzer/
 │   ├── SpeedEstimationNode.py     #   车速估计（km/h，减去无人机速度）
 │   ├── DirectionFlowNode.py       #   方向流量分类（左转/直行/右转/掉头）
 │   ├── LaneAnalysisNode.py        #   车道级分析（流量/排队/车头时距，数据驱动）
+│   ├── LaneDetectionNode.py       #   YOLO分割模型车道检测（标线/路面→稳定车道多边形）
 │   ├── TrajectoryNode.py          #   轨迹转向分类 + 世界坐标轨迹输出
 │   ├── AutoLaneInferenceNode.py   #   自动车道推断（轨迹聚类→中心线→各方向指标，无需标注）
 │   ├── ConflictDetectionNode.py   #   机非冲突TTC检测（默认关闭）
@@ -76,6 +77,7 @@ TrafficAnalyzer/
 │
 ├── weights/                       # 模型权重
 │   ├── uav_best.pt                #   自定义无人机视角 YOLO11 模型
+│   ├── lane_detect.pt             #   YOLO 分割模型（车道标线/路面检测）
 │   ├── yolov8m.pt                 #   YOLOv8 Medium 预训练模型（旧版，已弃用）
 │   └── YOLOv8_TensorRT_converter.ipynb  # TensorRT 转换工具（旧版）
 │
@@ -136,13 +138,13 @@ TrafficAnalyzer/
 
 | 类别 | 数量 | 说明 |
 |------|------|------|
-| Python 源码 | 51 | 核心业务逻辑（含13个节点+工具+测试+PPT生成脚本） |
+| Python 源码 | 52 | 核心业务逻辑（含14个节点+工具+测试+PPT生成脚本） |
 | 配置文件 | 12 | YAML/JSON/CONF |
 | 文档 | 22 | README + 设计文档 + 架构文档 + 测试报告 + POC规划 |
 | 基础设施 | 4 | Dockerfile + Compose + 服务配置 |
 | 平台 | 32 | FastAPI 单体应用（API/Kafka/Services/Models + 遗留微服务） |
 | 工具脚本 | 4 | 标注/导出/获取/更新 |
-| 模型权重 | 2 | .pt 二进制文件 |
+| 模型权重 | 3 | .pt 二进制文件（目标检测 + 车道分割） |
 | 测试数据 | 6+ | 视频 + SRT遥测 + 采集记录 |
 
 ## 核心依赖关系
@@ -191,7 +193,9 @@ platform/
 │   │
 │   ├── services/                    #   业务逻辑层
 │   │   ├── auth_service.py          #     用户认证（PyJWT + bcrypt）
-│   │   └── alert_engine.py          #     告警规则引擎
+│   │   ├── alert_engine.py          #     告警规则引擎
+│   │   ├── lane_annotation_store.py #     悬停生成车道标注任务 + 人工标注参数持久化
+│   │   └── pipeline_manager.py      #     检测管道生命周期管理
 │   │
 │   ├── models/                      #   数据模型
 │   │   ├── user.py                  #     User SQLAlchemy 模型
@@ -238,6 +242,5 @@ traffic-fly-console/
 │                                    #   /api/ → platform:8000
 │                                    #   /ws/  → platform:8000
 ├── Dockerfile                       # 前端容器镜像
-└── ...                              # Vue.js 源码
+└── src/features/calibration/         # React 标定中心（车道标注任务、画布、参数库）
 ```
-

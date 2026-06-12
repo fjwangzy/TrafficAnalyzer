@@ -224,8 +224,9 @@ class ShowNode:
         # 绘制车道多边形（数据驱动：有标注时叠加显示）
         if self.show_lane_polygons:
             lane_polygons = getattr(frame_element, "lane_polygons", None)
+            lane_source = getattr(frame_element, "lane_source", None)
             if lane_polygons:
-                self._draw_lane_polygons(frame_result, lane_polygons)
+                self._draw_lane_polygons(frame_result, lane_polygons, lane_source)
 
         # 绘制自动推断的车道中心线和统计（仅当无人工标注时）
         inferred_lanes = getattr(frame_element, "inferred_lanes", None)
@@ -488,9 +489,22 @@ class ShowNode:
             thickness=label_thickness, color=(255, 255, 255),
         )
 
-    def _draw_lane_polygons(self, frame_result, lane_polygons):
-        """绘制车道多边形（带 supervision 风格的标签背景）。"""
-        lane_color = (0, 200, 200)  # 青色
+    def _draw_lane_polygons(self, frame_result, lane_polygons, lane_source=None):
+        """绘制车道多边形（带 supervision 风格的标签背景）。
+
+        Args:
+            frame_result: 目标帧
+            lane_polygons: {lane_id: shapely.Polygon} 车道多边形字典
+            lane_source: 车道来源 ("manual" | "model" | None)
+        """
+        # 根据来源选择颜色和标签前缀
+        if lane_source == "model":
+            lane_color = (0, 230, 0)      # 亮绿色 — 模型检测
+            label_prefix = "M"
+        else:
+            lane_color = (0, 200, 200)    # 青色 — 人工标注
+            label_prefix = ""
+
         for lane_id, poly in lane_polygons.items():
             coords = np.array(poly.exterior.coords, dtype=np.int32)
             coords = coords.reshape((-1, 1, 2))
@@ -503,7 +517,7 @@ class ShowNode:
             # 车道 ID 标签 — 带半透明背景
             cx = int(np.mean(coords[:, 0, 0]))
             cy = int(np.mean(coords[:, 0, 1]))
-            lane_text = str(lane_id)
+            lane_text = f"{label_prefix}{lane_id}"
             (tw, th), _ = cv2.getTextSize(
                 lane_text, fontFace=self.fontFace,
                 fontScale=self.fontScale * 0.7, thickness=1,

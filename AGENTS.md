@@ -1,6 +1,6 @@
-# CLAUDE.md
+# AGENTS.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to Codex (Codex.ai/code) when working with code in this repository.
 **模型不支持图片**
 
 ## 项目文档索引
@@ -9,7 +9,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 | 文档 | 说明 |
 |------|------|
-| `docs/CLAUDE.md` | **Claude 长期协作规则**（开发规则、架构原则、禁止事项、模块边界） |
+| `docs/AGENTS.md` | **Codex 长期协作规则**（开发规则、架构原则、禁止事项、模块边界） |
 | `docs/ARCHITECTURE.md` | 系统架构（进程模型、管道设计、微服务数据路径） |
 | `docs/BUSINESS_LOGIC.md` | 核心业务逻辑（检测、跟踪、道路分配、统计计算） |
 | `docs/PROJECT_STRUCTURE.md` | 项目结构和文件说明 |

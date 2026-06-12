@@ -7,8 +7,13 @@ handlers:
     class: logging.StreamHandler
     formatter: simple
     stream: ext://sys.stdout
+  file:
+    class: logging.FileHandler
+    formatter: simple
+    filename: logs/app.log
+    encoding: utf-8
 root:
-  handlers: [console]
-  level: INFO
+  handlers: [console, file]
+  level: DEBUG
 
 disable_existing_loggers: false

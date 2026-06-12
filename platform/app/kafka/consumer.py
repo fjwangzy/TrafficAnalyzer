@@ -31,6 +31,7 @@ class KafkaConsumerService:
         topics_pattern: str,
         ws_manager: WSManager,
         alert_engine: Any = None,
+        lane_annotation_store: Any = None,
         influx_client: Any = None,
     ):
         self._bootstrap = bootstrap_servers
@@ -38,6 +39,7 @@ class KafkaConsumerService:
         self._topics_pattern = topics_pattern
         self._ws = ws_manager
         self._alert_engine = alert_engine
+        self._lane_annotation_store = lane_annotation_store
         self._influx = influx_client  # T-102: InfluxDB 写入客户端
         self._consumer: AIOKafkaConsumer | None = None
         self._task: asyncio.Task | None = None
@@ -216,6 +218,20 @@ class KafkaConsumerService:
                 drone_position=drone_pos,
                 is_hovering=data.get("is_hovering", False),
             )
+
+        if self._lane_annotation_store:
+            task = self._lane_annotation_store.observe_stats(intersection_id, data)
+            if task:
+                data["lane_annotation_task_id"] = task["task_id"]
+                await self._ws.broadcast(
+                    "calibration",
+                    {
+                        "channel": "calibration",
+                        "type": "lane_annotation_task",
+                        "data": task,
+                        "ts": time.time(),
+                    },
+                )
 
         # Transform lane_stats dict → lanes array for frontend compatibility
         # Skip if KafkaProducerNode already sent unified 'lanes' array

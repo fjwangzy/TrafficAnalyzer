@@ -76,9 +76,10 @@ class AutoLaneInferenceNode:
         if not self.enabled:
             return frame_element
 
-        # 向下兼容：如果有车道标注数据，以标注数据为准，跳过自动推断
+        # 向下兼容：如果有车道标注数据（人工或模型检测），跳过自动推断
         lane_polygons = getattr(frame_element, "lane_polygons", None)
-        if lane_polygons:
+        lane_source = getattr(frame_element, "lane_source", None)
+        if lane_polygons or lane_source in ("manual", "model"):
             return frame_element
 
         current_time = frame_element.timestamp

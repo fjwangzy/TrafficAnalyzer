@@ -58,6 +58,9 @@ class Settings(BaseSettings):
 
     # ── Calibration ──
     calibration_db_path: str = "/calibration/calibration_db.json"
+    lane_annotation_db_path: str = "/calibration/lane_annotation_db.json"
+    lane_annotation_hover_seconds: float = 30.0
+    lane_annotation_hover_radius_m: float = 1.5
 
 
 @lru_cache()

@@ -24,6 +24,14 @@ class PipelineCreateRequest(BaseModel):
         default="configs/entry_exit_lanes.json",
         description="Path to road polygon JSON (relative to project root)",
     )
+    telemetry_source: str | None = Field(
+        default=None,
+        description="Telemetry source override, e.g. srt or file",
+    )
+    telemetry_file_path: str | None = Field(
+        default=None,
+        description="Telemetry file path for offline replay",
+    )
 
 
 class PipelineResponse(BaseModel):
@@ -128,6 +136,8 @@ async def start_pipeline(body: PipelineCreateRequest, request: Request):
         intersection_id=body.intersection_id,
         video_src=body.video_src,
         roads_json=_resolve_roads_json(request, body.intersection_id, body.roads_json),
+        telemetry_source=body.telemetry_source,
+        telemetry_file_path=body.telemetry_file_path,
     )
     return pipeline.to_dict()
 

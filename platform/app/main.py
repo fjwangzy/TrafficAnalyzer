@@ -14,7 +14,7 @@ from app.services.alert_engine import AlertEngine
 from app.services.lane_annotation_store import LaneAnnotationStore
 from app.services.pipeline_manager import PipelineManager
 from app.utils.influx_query import InfluxQuery
-from app.api.v1 import intersections, alerts, system, trajectories, video, calibration, auth
+from app.api.v1 import intersections, alerts, system, trajectories, video, calibration, auth, users
 from app.api.v1.drones import router as drones_router
 from app.api.v1.drones import telemetry_router
 from app.api.v1.pipelines import router as pipelines_router
@@ -136,6 +136,7 @@ app.include_router(calibration.router, prefix="/api/v1")
 app.include_router(drones_router, prefix="/api/v1")
 app.include_router(telemetry_router, prefix="/api/v1")
 app.include_router(pipelines_router, prefix="/api/v1")
+app.include_router(users.router, prefix="/api/v1")
 
 
 @app.get("/")

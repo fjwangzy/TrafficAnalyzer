@@ -14,6 +14,6 @@ handlers:
     encoding: utf-8
 root:
   handlers: [console, file]
-  level: DEBUG
+  level: INFO
 
 disable_existing_loggers: false

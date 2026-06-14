@@ -1,8 +1,28 @@
 """System metrics API endpoints."""
+import os
+from pathlib import Path
+
 from fastapi import APIRouter, Request, Query
 
 
 router = APIRouter(prefix="/system", tags=["system"])
+
+
+def list_model_files(weights_dir: str | Path) -> list[dict]:
+    """Return model files present on disk."""
+    path = Path(weights_dir)
+    if not path.exists():
+        return []
+    models = []
+    for file_path in sorted(path.glob("*.pt")):
+        stat = file_path.stat()
+        models.append({
+            "name": file_path.name,
+            "size_bytes": stat.st_size,
+            "size_mb": round(stat.st_size / 1024 / 1024, 1),
+            "type": "custom" if "best" in file_path.name else "yolo",
+        })
+    return models
 
 
 @router.get("/health")
@@ -59,11 +79,14 @@ async def get_kafka_topics(request: Request):
     """Get Kafka topic statistics."""
     kafka = request.app.state.kafka_service
     if kafka:
+        latest = getattr(kafka, "latest_stats", {})
+        topics = []
+        for data in latest.values():
+            camera_id = str(data.get("camera_id", "")).replace("id_", "")
+            if camera_id:
+                topics.append({"name": f"statistics_{camera_id}", "partitions": 1, "tps": 0, "lag": 0})
         return {
-            "topics": [
-                {"name": topic, "partitions": 1, "tps": 0, "lag": 0}
-                for topic in ["statistics_1", "statistics_2"]
-            ],
+            "topics": topics,
             "consumer_group": kafka._group_id,
         }
     return {"topics": [], "consumer_group": "none"}
@@ -85,12 +108,7 @@ async def get_kafka_consumers(request: Request):
 @router.get("/models")
 async def list_models():
     """List available YOLO models."""
-    return {
-        "models": [
-            {"name": "yolo11n.pt", "size": "5.4 MB", "type": "nano", "active": True},
-            {"name": "yolo11s.pt", "size": "18.5 MB", "type": "small", "active": False},
-            {"name": "yolo11m.pt", "size": "38.2 MB", "type": "medium", "active": False},
-            {"name": "uav_best.pt", "size": "12.1 MB", "type": "custom", "active": False},
-        ],
-        "current": "yolo11n.pt",
-    }
+    project_root = Path(os.environ.get("PIPELINE_PROJECT_ROOT", Path.cwd().parent))
+    models = list_model_files(project_root / "weights")
+    current = models[0]["name"] if models else None
+    return {"models": models, "current": current}

@@ -62,6 +62,9 @@ class PipelineInstance:
     started_at: float = 0.0
     stopped_at: float = 0.0
     error_message: str = ""
+    stdout_tail: str = field(default="", repr=False)
+    stderr_tail: str = field(default="", repr=False)
+    io_tasks: list[asyncio.Task] = field(default_factory=list, repr=False)
 
     def to_dict(self) -> dict:
         return {
@@ -173,6 +176,8 @@ class PipelineManager:
         intersection_id: str,
         video_src: str,
         roads_json: str = "configs/entry_exit_lanes.json",
+        telemetry_source: str | None = None,
+        telemetry_file_path: str | None = None,
         kafka_bootstrap: str | None = None,
     ) -> PipelineInstance:
         """Start a new detection pipeline process.
@@ -182,6 +187,8 @@ class PipelineManager:
             intersection_id: The intersection to monitor.
             video_src: Video source — RTSP URL, file path, or camera index.
             roads_json: Path to the roads polygon JSON file.
+            telemetry_source: Optional telemetry source override.
+            telemetry_file_path: Optional telemetry file path override.
             kafka_bootstrap: Override Kafka bootstrap servers.
 
         Returns:
@@ -221,6 +228,13 @@ class PipelineManager:
         # Spawn the pipeline process
         try:
             cmd = ["python", "main_optimized.py", "pipeline.send_info_kafka=True"]
+            if telemetry_source:
+                cmd.extend([
+                    "telemetry.enabled=True",
+                    f"telemetry.source={telemetry_source}",
+                ])
+            if telemetry_file_path:
+                cmd.append(f"telemetry.file_path={telemetry_file_path}")
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
                 cwd=str(self._root),
@@ -229,6 +243,10 @@ class PipelineManager:
                 stderr=asyncio.subprocess.PIPE,
             )
             pipeline.process = proc
+            pipeline.io_tasks = [
+                asyncio.create_task(self._drain_stream(proc.stdout, pipeline, "stdout")),
+                asyncio.create_task(self._drain_stream(proc.stderr, pipeline, "stderr")),
+            ]
             pipeline.status = PipelineStatus.RUNNING
             pipeline.started_at = time.time()
             logger.info(
@@ -273,6 +291,8 @@ class PipelineManager:
                     await pipeline.process.wait()
             except ProcessLookupError:
                 pass  # Already dead
+            for task in pipeline.io_tasks:
+                task.cancel()
 
         pipeline.status = PipelineStatus.STOPPED
         pipeline.stopped_at = time.time()
@@ -300,6 +320,24 @@ class PipelineManager:
 
     # ── Internal ──
 
+    async def _drain_stream(self, stream: Any, pipeline: PipelineInstance, name: str) -> None:
+        """Drain child process output so verbose detector logs never block it."""
+        if stream is None:
+            return
+        tail_limit = 4000
+        try:
+            while True:
+                chunk = await stream.read(4096)
+                if not chunk:
+                    break
+                text = chunk.decode("utf-8", errors="replace")
+                if name == "stderr":
+                    pipeline.stderr_tail = (pipeline.stderr_tail + text)[-tail_limit:]
+                else:
+                    pipeline.stdout_tail = (pipeline.stdout_tail + text)[-tail_limit:]
+        except asyncio.CancelledError:
+            pass
+
     async def _monitor_loop(self) -> None:
         """Background task: poll pipeline processes for unexpected exits."""
         while True:
@@ -312,13 +350,7 @@ class PipelineManager:
                     continue
                 if proc.returncode is not None:
                     # Process exited unexpectedly — capture stderr for diagnostics
-                    stderr_msg = ""
-                    try:
-                        if proc.stderr:
-                            stderr_bytes = await proc.stderr.read()
-                            stderr_msg = stderr_bytes.decode("utf-8", errors="replace")[:500]
-                    except Exception:
-                        pass
+                    stderr_msg = pipeline.stderr_tail[-500:]
                     pipeline.status = PipelineStatus.ERROR
                     pipeline.stopped_at = time.time()
                     pipeline.error_message = (

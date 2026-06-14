@@ -241,6 +241,8 @@ traffic-fly-console/
 ├── nginx.conf                       # Nginx 反向代理配置
 │                                    #   /api/ → platform:8000
 │                                    #   /ws/  → platform:8000
+│                                    #   /camera_1..3 → 对应检测容器 MJPEG
 ├── Dockerfile                       # 前端容器镜像
-└── src/features/calibration/         # React 标定中心（车道标注任务、画布、参数库）
+├── README.md                        # Console 本地/Docker 启动与验证命令
+└── src/features/                    # 主导航业务页面（Dashboard/Monitoring/GIS/Drones/Reports/Admin/Users 等）
 ```

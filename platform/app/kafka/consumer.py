@@ -82,6 +82,7 @@ class KafkaConsumerService:
             value_deserializer=lambda v: json.loads(v.decode("utf-8")),
             request_timeout_ms=10000,
             retry_backoff_ms=500,
+            metadata_max_age_ms=5000,
             max_poll_interval_ms=300000,
         )
 

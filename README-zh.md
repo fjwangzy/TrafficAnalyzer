@@ -29,7 +29,7 @@ python main_optimized.py \
   pipeline.send_info_kafka=True \
   telemetry.enabled=true \
   telemetry.source=srt \
-  +telemetry.file_path=test_videos/inter_xqh/telemetry.srt
+  telemetry.file_path=test_videos/inter_xqh/telemetry.srt
 ```
 
 后台运行加 `nohup ... > /tmp/detector_xqh.log 2>&1 &`。

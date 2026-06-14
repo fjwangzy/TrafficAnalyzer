@@ -1,7 +1,11 @@
 import cv2
 import numpy as np
 import scipy
-import lap
+try:
+    import lap
+except ImportError:
+    lap = None
+    from scipy.optimize import linear_sum_assignment
 from scipy.spatial.distance import cdist
 
 from cython_bbox import bbox_overlaps as bbox_ious
@@ -40,7 +44,16 @@ def linear_assignment(cost_matrix, thresh):
     if cost_matrix.size == 0:
         return np.empty((0, 2), dtype=int), tuple(range(cost_matrix.shape[0])), tuple(range(cost_matrix.shape[1]))
     matches, unmatched_a, unmatched_b = [], [], []
-    cost, x, y = lap.lapjv(cost_matrix, extend_cost=True, cost_limit=thresh)
+    if lap is not None:
+        cost, x, y = lap.lapjv(cost_matrix, extend_cost=True, cost_limit=thresh)
+    else:
+        row_ind, col_ind = linear_sum_assignment(cost_matrix)
+        x = np.full(cost_matrix.shape[0], -1, dtype=np.int32)
+        y = np.full(cost_matrix.shape[1], -1, dtype=np.int32)
+        for row, col in zip(row_ind, col_ind):
+            if cost_matrix[row, col] <= thresh:
+                x[row] = col
+                y[col] = row
     for ix, mx in enumerate(x):
         if mx >= 0:
             matches.append([ix, mx])

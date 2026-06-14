@@ -33,6 +33,9 @@
   "lane_stats": null,
   "lane_source": "model",
   "lanes": [],
+  "road_polygons": {
+    "1": [1195, 361, 1297, 310, 1399, 315, 1350, 380]
+  },
   "conflict_count": 0,
   "drone_position": {
     "anchor_lat": 31.234567,
@@ -110,6 +113,7 @@ lon = anchor_lon + easting_m / (111320 × cos(radians(anchor_lat)))
 | `avg_speed_kmh` | float | 整体平均车速 |
 | `lane_stats` | dict \| null | 车道级统计（有标注或模型检测时输出） |
 | `lane_source` | string \| null | 车道数据来源：`"manual"` / `"model"` / `"auto"` / `null` |
+| `road_polygons` | dict | 当前检测配置中的道路多边形，供悬停生成标注任务后导出复用 |
 | `conflict_count` | int | 当前帧冲突事件数 |
 | `drone_position` | dict \| null | 无人机位置（有遥测时输出） |
 | `is_hovering` | bool | 是否悬停 |
@@ -282,7 +286,7 @@ Content-Type: application/json
 
 ### 基础 URL
 - 本地开发：`http://localhost:8000`
-- Docker Compose：`http://localhost:8000`（通过 nginx 代理：`http://localhost:8080/api/`）
+- Docker Compose：Platform API `http://localhost:8000`；Console `http://localhost:8080`（Console 内部通过 `/api/` 代理到 `platform:8000`）
 
 ### 健康检查端点（无需认证）
 
@@ -317,6 +321,7 @@ Content-Type: application/json
   "role": "viewer"
 }
 ```
+
 - 返回（201）：
 ```json
 {
@@ -357,6 +362,24 @@ Content-Type: application/json
   "role": "admin",
   "is_active": true
 }
+```
+
+### 用户只读端点（需要 JWT）
+
+#### `GET /api/v1/users`
+- 用途：Console 的 Admin / Users 页面展示真实平台用户，不返回密码哈希。
+- 返回：
+```json
+[
+  {
+    "id": 1,
+    "username": "admin",
+    "email": "admin@example.com",
+    "role": "admin",
+    "is_active": true,
+    "created_at": "2026-05-29T00:00:00"
+  }
+]
 ```
 
 ### 受保护端点（需 Bearer token）
@@ -533,11 +556,12 @@ Content-Type: application/json
 | GET | `/api/v1/calibration/summary` | 标定参数摘要 |
 | GET | `/api/v1/calibration/records` | 标定参数记录 |
 | GET | `/api/v1/calibration/lane-tasks` | 车道标注任务列表 |
+| GET | `/api/v1/calibration/lane-tasks/{task_id}/image` | 车道标注任务 JPEG 快照，供浏览器画布加载 |
 | GET | `/api/v1/calibration/lane-annotations` | 已保存车道标注参数列表 |
 | GET | `/api/v1/calibration/lane-annotations/{intersection_id}` | 查询某路口可复用车道参数 |
 | POST | `/api/v1/calibration/lane-tasks/{task_id}/annotation` | 保存人工车道标注结果 |
 
-车道标注任务由 Kafka `stats` 消息触发：同一路口 `is_hovering=true` 且 `drone_position.easting_m/northing_m` 在 `lane_annotation_hover_radius_m` 半径内持续超过 `lane_annotation_hover_seconds`（默认 30 秒），并且该路口没有已保存人工车道参数时，平台生成一个 `pending` 任务。
+车道标注任务由 Kafka `stats` 消息触发：同一路口 `is_hovering=true` 且 `drone_position.easting_m/northing_m` 在 `lane_annotation_hover_radius_m` 半径内持续超过 `lane_annotation_hover_seconds`（默认 30 秒），并且该路口没有已保存人工车道参数时，平台生成一个 `pending` 任务。悬停 stats 会携带压缩 JPEG 快照字段 `annotation_snapshot_jpeg` 以及 `annotation_snapshot_width/height`；平台收到后落盘为任务图片，并通过 `image_url` 返回给 console 车道标注画布。
 
 保存请求：
 

@@ -5,6 +5,7 @@ import os
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 
@@ -131,6 +132,15 @@ async def get_lane_annotation(intersection_id: str, request: Request):
     if annotation is None:
         raise HTTPException(status_code=404, detail="lane annotation not found")
     return annotation
+
+
+@router.get("/lane-tasks/{task_id}/image")
+async def get_lane_task_image(task_id: str, request: Request):
+    """Return the detector snapshot attached to a lane annotation task."""
+    image_path = _lane_store(request).get_task_image_path(task_id)
+    if image_path is None:
+        raise HTTPException(status_code=404, detail="lane annotation task image not found")
+    return FileResponse(image_path, media_type="image/jpeg")
 
 
 @router.post("/lane-tasks/{task_id}/annotation")

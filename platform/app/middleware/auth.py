@@ -23,6 +23,12 @@ PUBLIC_PATHS = [
 ]
 
 
+def _is_public_path(path: str) -> bool:
+    if any(path.startswith(prefix) for prefix in PUBLIC_PATHS):
+        return True
+    return path.startswith("/api/v1/calibration/lane-tasks/") and path.endswith("/image")
+
+
 class AuthMiddleware:
     """JWT authentication middleware — pure ASGI implementation.
 
@@ -47,7 +53,7 @@ class AuthMiddleware:
 
         # HTTP: check if path is public
         path = scope.get("path", "")
-        if any(path.startswith(prefix) for prefix in PUBLIC_PATHS):
+        if _is_public_path(path):
             await self.app(scope, receive, send)
             return
 

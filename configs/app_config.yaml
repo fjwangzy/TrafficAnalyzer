@@ -76,6 +76,8 @@ kafka_producer_node: #// 摄像头 id
   capacity_veh_per_min: 30.0    # 路口设计通行能力（辆/分钟）
   queue_threshold_m: 80.0       # 排队长度阈值（米）
   free_flow_speed_kmh: 40.0     # 自由流速度（km/h）
+  annotation_snapshot_width: 960 # 悬停生成标注任务时随stats发送的JPEG快照宽度
+  annotation_snapshot_jpeg_quality: 75 # 标注任务快照JPEG质量
 
 # ------------------------------------------------- TRAFFIC SITUATION AWARENESS --------------------------------------------------
 
@@ -118,7 +120,7 @@ telemetry:
   mqtt_topic: "drone/+/osd"
   buffer_size: 100           # 遥测缓冲区大小（条）
   sync_tolerance_sec: 0.05   # 帧↔遥测时间戳同步容忍窗口(秒)
-  # file_path: ""            # source="file"时的遥测文件路径
+  file_path: ""              # source="file/srt"时的遥测文件路径
   # time_offset_sec: 0.0     # source="file"时视频t=0对应的遥测相对时间偏移(秒)
 
 speed_estimation:
@@ -199,7 +201,7 @@ geojson_export:
 video_server_node:
   index_page: index.html
   host_ip: 0.0.0.0  # 服务绑定的IP地址（localhost 或 "0.0.0.0"）
-  port: 8100  # 服务绑定的端口
+  port: ${oc.decode:${oc.env:VIDEO_PORT,8100}}  # 服务绑定的端口
   template_folder: ../utils_local/templates  # 模板文件路径（存放 html 文件的地方）
   output_size: [800, 470]  # 在flask中显示的图像缩放尺寸
   target_fps: 15  # MJPEG流输出帧率上限（避免重复帧浪费带宽）

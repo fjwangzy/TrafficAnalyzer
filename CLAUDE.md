@@ -53,6 +53,36 @@ docker compose -f ./docker-compose.yaml -f ./docker-compose.test.yaml -p traffic
 ```
 
 
+## 快速启动：视频流检测器
+
+### 本地启动（无需 Kafka / Docker）
+
+```bash
+python main_optimized.py pipeline.send_info_kafka=False
+```
+
+启动后访问：
+- MJPEG 视频流：http://127.0.0.1:8100/video
+- Flask 主页：http://127.0.0.1:8100/
+
+### inter_xqh 视频 + SRT 遥测 + Kafka（推荐）
+
+```bash
+ROADS_JSON="configs/inter_xqh_lanes.json" \
+VIDEO_SRC="test_videos/inter_xqh/DJI_20260403142902_0001_V小清河北路与水屯路路口.mp4" \
+TOPIC_NAME="statistics_1" \
+CAMERA_ID=1 \
+KAFKA_BOOTSTRAP="localhost:9092" \
+python main_optimized.py \
+  pipeline.send_info_kafka=True \
+  telemetry.enabled=true \
+  telemetry.source=srt \
+  +telemetry.file_path=test_videos/inter_xqh/telemetry.srt
+```
+
+后台运行加 `nohup ... > /tmp/detector_xqh.log 2>&1 &`。
+
+
 ## Project Overview
 
 TrafficAnalyzer is a roundabout traffic analysis system that processes video (MP4 or RTSP streams) to detect vehicles, track them, compute per-road congestion statistics, and visualize results via Grafana dashboards. This is the `feature/influx` branch — a multi-camera production version using InfluxDB as the time-series database.

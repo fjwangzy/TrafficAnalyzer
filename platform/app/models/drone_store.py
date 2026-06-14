@@ -17,6 +17,8 @@ Both update functions are called by ``KafkaConsumerService`` in
 import math
 import time
 import logging
+from collections import deque
+from copy import deepcopy
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +39,11 @@ MISSIONS: dict[str, dict] = {}
 # ─── Intersection ↔ Drone mapping ───
 # T-206: 空初始化，通过 Pipeline API 动态绑定。
 _INTERSECTION_DRONE_MAP: dict[str, str] = {}
+
+
+# 每架无人机只保留最近一段遥测点，避免平台进程内存无界增长。
+_TELEMETRY_HISTORY_LIMIT = 500
+_TELEMETRY_HISTORY: dict[str, deque[dict]] = {}
 
 
 # ─── Telemetry Update Functions ───
@@ -67,8 +74,10 @@ def update_drone_telemetry(drone_id: str, telemetry: dict) -> None:
         logger.info(f"Auto-registered new drone: {drone_id}")
 
     drone = DRONES[drone_id]
-    drone["last_telemetry"] = telemetry
+    snapshot = deepcopy(telemetry)
+    drone["last_telemetry"] = snapshot
     drone["battery_pct"] = telemetry.get("battery_pct", drone.get("battery_pct", 100))
+    _append_telemetry_history(drone_id, snapshot)
 
     intersection_id = telemetry.get("intersection_id")
     if intersection_id:
@@ -132,6 +141,7 @@ def update_drone_from_stats(
     drone["last_telemetry"] = telem
     drone["current_intersection_id"] = intersection_id
     drone["status"] = "hovering" if is_hovering else "flying"
+    _append_telemetry_history(drone_id, telem)
 
 
 def get_drone_for_intersection(intersection_id: str) -> dict | None:
@@ -146,3 +156,26 @@ def assign_drone_to_intersection(drone_id: str, intersection_id: str) -> None:
     if drone_id in DRONES:
         DRONES[drone_id]["current_intersection_id"] = intersection_id
 
+
+def get_telemetry_history(drone_id: str, limit: int = 50) -> list[dict]:
+    """Return recorded telemetry points for a drone, oldest to newest."""
+    history = _TELEMETRY_HISTORY.get(drone_id)
+    if not history:
+        return []
+    safe_limit = max(0, min(limit, _TELEMETRY_HISTORY_LIMIT))
+    if safe_limit == 0:
+        return []
+    return [deepcopy(item) for item in list(history)[-safe_limit:]]
+
+
+def get_drone_trajectory(drone_id: str, limit: int = 200) -> list[dict]:
+    """Return trajectory-ready telemetry points for a drone."""
+    return get_telemetry_history(drone_id, limit=limit)
+
+
+def _append_telemetry_history(drone_id: str, telemetry: dict) -> None:
+    history = _TELEMETRY_HISTORY.setdefault(
+        drone_id,
+        deque(maxlen=_TELEMETRY_HISTORY_LIMIT),
+    )
+    history.append(deepcopy(telemetry))

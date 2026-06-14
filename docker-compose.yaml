@@ -345,6 +345,21 @@ services:
     networks:
       - prod_network
 
+  traffic-fly-console:
+    build:
+      context: ./traffic-fly-console
+      dockerfile: Dockerfile
+    container_name: traffic_fly_console
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      - platform
+    networks:
+      - prod_network
+
 networks:
   prod_network:
     driver: bridge

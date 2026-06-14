@@ -6,6 +6,7 @@ import logging
 import math
 import os
 import time
+import base64
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +26,7 @@ class LaneAnnotationStore:
         self.hover_seconds = hover_seconds
         self.hover_radius_m = hover_radius_m
         self.export_dir = self.db_path.parent / "lane_annotations"
+        self.image_dir = self.db_path.parent / "lane_task_images"
         self._hover_state: dict[str, dict[str, Any]] = {}
 
     def list_tasks(self) -> list[dict[str, Any]]:
@@ -51,6 +53,16 @@ class LaneAnnotationStore:
             if task.get("task_id") == task_id:
                 return task
         return None
+
+    def get_task_image_path(self, task_id: str) -> Path | None:
+        task = self.get_task(task_id)
+        if not task:
+            return None
+        image_path = task.get("image_path")
+        if not image_path:
+            return None
+        path = Path(image_path)
+        return path if path.exists() else None
 
     def observe_stats(self, intersection_id: str, data: dict[str, Any]) -> dict[str, Any] | None:
         if not data.get("is_hovering"):
@@ -119,10 +131,14 @@ class LaneAnnotationStore:
         db = self._load()
         for task in db.get("tasks", []):
             if task.get("intersection_id") == intersection_id and task.get("status") == "pending":
+                if not task.get("image_path"):
+                    self._attach_snapshot(task, data)
+                    self._write(db)
                 return task
 
+        task_id = f"lane-{intersection_id}-{int(now)}"
         task = {
-            "task_id": f"lane-{intersection_id}-{int(now)}",
+            "task_id": task_id,
             "intersection_id": intersection_id,
             "status": "pending",
             "created_at": now,
@@ -132,10 +148,32 @@ class LaneAnnotationStore:
             "roads": self._roads_from_stats(data),
             "lane_count": 0,
         }
+        self._attach_snapshot(task, data)
         db.setdefault("tasks", []).append(task)
         self._write(db)
         logger.info("Created lane annotation task %s", task["task_id"])
         return task
+
+    def _attach_snapshot(self, task: dict[str, Any], data: dict[str, Any]) -> None:
+        encoded = data.get("annotation_snapshot_jpeg")
+        if not encoded:
+            return
+
+        try:
+            image_bytes = base64.b64decode(encoded)
+        except Exception as exc:
+            logger.warning("Failed to decode annotation snapshot: %s", exc)
+            return
+
+        self.image_dir.mkdir(parents=True, exist_ok=True)
+        image_path = self.image_dir / f"{task['task_id']}.jpg"
+        with image_path.open("wb") as fh:
+            fh.write(image_bytes)
+
+        task["image_path"] = str(image_path)
+        task["image_url"] = f"/api/v1/calibration/lane-tasks/{task['task_id']}/image"
+        task["image_width"] = data.get("annotation_snapshot_width")
+        task["image_height"] = data.get("annotation_snapshot_height")
 
     def _load(self) -> dict[str, Any]:
         try:
@@ -204,5 +242,8 @@ class LaneAnnotationStore:
 
     @staticmethod
     def _roads_from_stats(data: dict[str, Any]) -> dict[str, Any]:
+        roads = data.get("road_polygons")
+        if isinstance(roads, dict):
+            return roads
         roads = data.get("roads")
         return roads if isinstance(roads, dict) else {}

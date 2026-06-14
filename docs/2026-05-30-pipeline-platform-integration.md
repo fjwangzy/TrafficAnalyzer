@@ -70,6 +70,11 @@ PipelineManager
     └── 返回所有管道实例状态
 ```
 
+运行约束：
+
+- `PipelineManager` 捕获检测子进程 stdout/stderr 时必须持续 drain，只保留尾部日志用于错误诊断；检测流会输出 Kafka/debug 日志和快照字段，若管道无人读取会阻塞子进程。
+- `KafkaConsumerService` 使用 regex 订阅 `(statistics|track_complete|conflicts|telemetry)_.*` 时，metadata 刷新周期应保持较短（当前 5 秒），否则平台启动后新建的动态 topic 可能延迟数分钟才被分配。
+
 #### 3.3 Drone Store 遥测更新
 
 ```python

@@ -9,9 +9,11 @@
 import logging
 import os
 import time
+import base64
 from queue import Queue, Full
 from threading import Thread
 
+import cv2
 from kafka import KafkaProducer
 from json import dumps
 
@@ -87,6 +89,12 @@ class KafkaProducerNode:
         # 自由流速度（km/h），用于计算低速因子
         self._free_flow_speed_kmh = config.get("kafka_producer_node", {}).get(
             "free_flow_speed_kmh", 40.0
+        )
+        self._snapshot_width = config.get("kafka_producer_node", {}).get(
+            "annotation_snapshot_width", 960
+        )
+        self._snapshot_jpeg_quality = config.get("kafka_producer_node", {}).get(
+            "annotation_snapshot_jpeg_quality", 75
         )
 
     def _send_loop(self):
@@ -183,6 +191,39 @@ class KafkaProducerNode:
 
         return round(vehicle_score + queue_score + speed_score, 1)
 
+    def _encode_annotation_snapshot(self, frame_element: FrameElement) -> dict | None:
+        """Return a compact JPEG snapshot for hover-created annotation tasks."""
+        frame = getattr(frame_element, "frame_result", None)
+        if frame is None:
+            frame = getattr(frame_element, "frame", None)
+        if frame is None:
+            return None
+
+        height, width = frame.shape[:2]
+        out_frame = frame
+        if width > self._snapshot_width:
+            scale = self._snapshot_width / width
+            out_frame = cv2.resize(
+                frame,
+                (self._snapshot_width, int(height * scale)),
+                interpolation=cv2.INTER_AREA,
+            )
+
+        ok, buf = cv2.imencode(
+            ".jpg",
+            out_frame,
+            [int(cv2.IMWRITE_JPEG_QUALITY), int(self._snapshot_jpeg_quality)],
+        )
+        if not ok:
+            return None
+
+        out_height, out_width = out_frame.shape[:2]
+        return {
+            "annotation_snapshot_jpeg": base64.b64encode(buf).decode("ascii"),
+            "annotation_snapshot_width": out_width,
+            "annotation_snapshot_height": out_height,
+        }
+
     @profile_time
     def process(self, frame_element: FrameElement):
         # 如果是VideoEndBreakElement而不是FrameElement则退出处理
@@ -221,6 +262,7 @@ class KafkaProducerNode:
                 "total_vehicles": cars_amount,
                 # T-201: 动态道路数组（替代 road_1..road_5）
                 "roads": roads_array,
+                "road_polygons": frame_element.roads_info,
                 # T-203: 多因子拥堵指数
                 "congestion_index": self._compute_congestion_index(
                     cars_amount, roads_activity, frame_element
@@ -316,6 +358,10 @@ class KafkaProducerNode:
                     "northing_m": round(float(drone_disp[1]), 2),
                 }
             data["is_hovering"] = getattr(frame_element, "is_hovering", False)
+            if data["is_hovering"]:
+                snapshot = self._encode_annotation_snapshot(frame_element)
+                if snapshot:
+                    data.update(snapshot)
 
             # T-101: 异步发送（替代同步 .get(timeout=1)）
             self._enqueue(self.topic_name, data)

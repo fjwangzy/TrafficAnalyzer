@@ -38,7 +38,6 @@ class KafkaProducerNode:
             # 增加重试和超时配置以提高可靠性
             retries=3,
             request_timeout_ms=5000,
-            delivery_timeout_ms=10000,
         )
 
         self.buffer_analytics_sec = (

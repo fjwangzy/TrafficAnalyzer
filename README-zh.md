@@ -17,6 +17,12 @@ python main_optimized.py pipeline.send_info_kafka=False
 - MJPEG 视频流：http://127.0.0.1:8100/video
 - Flask 主页：http://127.0.0.1:8100/
 
+## 开发环境全链路测试
+### 最小化环境依赖
+```bash
+docker-compose -f ./docker-compose.yaml  -f ./docker-compose.test.yaml  up zookeeper kafka influxdb postgres platform -d
+```
+
 ### inter_xqh 视频 + SRT 遥测 + Kafka（推荐）
 
 ```bash

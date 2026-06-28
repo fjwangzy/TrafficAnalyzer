@@ -146,6 +146,10 @@
 | T-408 | 方向分类 heading 精度修复 (P0) | ✅ | `trajectory_classifier.py` + `auto_lane_inference.py` — heading 窗口从固定5帧改为 n//2（平滑短轨迹噪声），最小位移阈值 10px |
 | T-409 | 车道聚类合并阈值优化 (P1) | ✅ | `AutoLaneInferenceNode.py` — merge 阈值从 entry_exit_threshold_px 提升到 3.5x（420px），减少平行车道碎片化 |
 | T-410 | U-turn 自引用标签修复 (P2) | ✅ | `auto_lane_inference.py` — 新增 OPPOSITE_CARDINAL 映射 + 自引用保护逻辑，消除"北→北 掉头"等不合理标签 |
+| T-412 | VisDrone motor/non_motor 分类与小目标阈值修复 | ✅ | `TrackerInfoUpdateNode.py` — 优先按模型类别名分类，修复 `yolo11l-visdrone.pt` 下 tricycle/bicycle 被按 COCO id 误归为 motor 的问题；`configs/app_config.yaml` — 使用 `imgsz=1280/confidence=0.05/ByteTrack 0.05+0.01` 保留航拍电动车/三轮车低分候选；`test_refactor_unit.py` 增加类别映射与机非冲突回归测试 |
+| T-413 | ShowNode 左上角幽灵框堆积修复 | ✅ | `ShowNode.py` — 绘制前裁剪/过滤异常 bbox，并仅显示道路 ROI 内或已分配道路的轨迹；`test_refactor_unit.py` 增加可视化过滤回归测试 |
+| T-414 | 无道路标注参数启动支持 | ✅ | `VideoReader.py` + `main_optimized.py` + `main.py` + `configs/app_config.yaml` — `ROADS_JSON` 为空时使用空道路集运行，不再自动注入默认道路标注 |
+| T-415 | 无道路标注模式左上角黑块堆积修复 | ✅ | `ShowNode.py` — 无道路标注时保留自动推断车道中心线/箭头，但关闭左上角车道统计黑底面板；`test_refactor_unit.py` 增加黑底像素回归测试 |
 
 ### 待完成
 
@@ -202,6 +206,9 @@
 - [x] **车道聚类合并阈值优化（T-409 / P1）**
 - [x] **U-turn 自引用标签修复（T-410 / P2）**
 - [x] **YOLO 分割模型车道检测（LaneDetectionNode）**
+- [x] **VisDrone motor/non_motor 分类与小目标阈值修复（T-412）**
+- [x] **ShowNode 左上角幽灵框堆积修复（T-413）**
+- [x] **无道路标注参数启动支持（T-414）**
 - [x] **车道检测集成到 main.py 和 main_optimized.py**
 
 ### 近期（1-2 周）
@@ -253,4 +260,3 @@
 在路口找 2-3 个特征点（路灯、标线端点），用 Google Earth 获取其经纬度
 在视频截图中标注这些点的像素坐标
 将经纬度转为相对锚点的 ENU 偏移填入 app_config.yaml 的 gcp.points
-

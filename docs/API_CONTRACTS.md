@@ -147,12 +147,13 @@ lon = anchor_lon + easting_m / (111320 × cos(radians(anchor_lat)))
 #### `GET /video`
 - 返回：`multipart/x-mixed-replace; boundary=frame` MJPEG 流
 - 每帧格式：JPEG 编码的 numpy 数组
-- 帧尺寸：由 `video_server_node.output_size` 控制（默认 `[800, 470]`）
+- 帧尺寸：由 `video_server_node.output_size` 控制（默认 `[1280, 720]`）
+- JPEG 质量：由 `video_server_node.jpeg_quality` 控制（默认 `92`）
 - 绑定地址：`0.0.0.0:8100`
 
 ### 技术细节
 - 使用 Flask 的 `Response` 生成器实现流式推送
-- 帧通过 `cv2.imencode('.jpg', frame)` 编码
+- 帧通过 `cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, jpeg_quality])` 编码
 - 服务器在守护线程中运行（`Thread(daemon=True)`）
 - 帧更新通过 `self._frame` 实例变量，无锁保护（可能出现撕裂）
 

@@ -65,14 +65,19 @@ class VideoReader:
             self.stream.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
             self.stream.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
 
-        # 从JSON文件读取数据（道路入口和出口坐标信息）
-        with open(config["roads_info"], "r") as file:
-            data_json = json.load(file)
-
         # 向后兼容：支持新格式（含roads/lanes/calibration键）和旧格式（扁平道路多边形）
         self.roads_info = {}
         self.lane_polygons: dict | None = None
         self.extended_config: dict | None = None
+
+        roads_info_path = config.get("roads_info")
+        if not roads_info_path:
+            logger.info("VideoReader: 未配置道路标注文件，使用空 roads_info 运行")
+            return
+
+        # 从JSON文件读取数据（道路入口和出口坐标信息）
+        with open(roads_info_path, "r") as file:
+            data_json = json.load(file)
 
         if "roads" in data_json or "lanes" in data_json or "calibration" in data_json:
             # 新格式：扩展JSON

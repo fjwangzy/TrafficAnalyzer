@@ -11,12 +11,35 @@ from utils_local.motion_compensation import pixel_to_world_compensated
 logger = logging.getLogger("buffer_tracks")
 
 # YOLO类别→车辆分类映射（基于COCO类别ID）
-MOTOR_CLASSES = {2, 3, 4, 5, 6, 7, 8, 9}  # car, motorcycle, airplane, bus, train, truck, boat, traffic light
-NON_MOTOR_CLASSES = {0, 1}  # person, bicycle
+MOTOR_CLASSES = {2, 3, 4, 5, 6, 7, 8, 9}  # Legacy COCO-style fallback.
+NON_MOTOR_CLASSES = {0, 1}  # Legacy COCO-style fallback.
+
+MOTOR_CLASS_NAMES = {
+    "car",
+    "van",
+    "truck",
+    "bus",
+    "motor",
+    "motorcycle",
+}
+NON_MOTOR_CLASS_NAMES = {
+    "pedestrian",
+    "person",
+    "people",
+    "bicycle",
+    "tricycle",
+    "awning-tricycle",
+}
 
 
-def classify_vehicle(yolo_class_id: int | None) -> str:
-    """根据YOLO检测类别ID分类为motor/non_motor/unknown。"""
+def classify_vehicle(yolo_class_id: int | None, yolo_class_name: str | None = None) -> str:
+    """根据YOLO检测类别名称/ID分类为motor/non_motor/unknown。"""
+    if yolo_class_name:
+        normalized = yolo_class_name.strip().lower().replace("_", "-")
+        if normalized in MOTOR_CLASS_NAMES:
+            return "motor"
+        if normalized in NON_MOTOR_CLASS_NAMES:
+            return "non_motor"
     if yolo_class_id is None:
         return "unknown"
     if yolo_class_id in MOTOR_CLASSES:
@@ -56,6 +79,7 @@ class TrackerInfoUpdateNode:
 
         id_list = frame_element.id_list
         tracked_cls_ids = getattr(frame_element, "tracked_cls_ids", None)
+        tracked_cls_names = getattr(frame_element, "tracked_cls", None)
 
         for i, id in enumerate(id_list):
             # 更新或创建新跟踪
@@ -68,7 +92,15 @@ class TrackerInfoUpdateNode:
                 # 设置YOLO原始类别和车辆分类
                 if tracked_cls_ids and i < len(tracked_cls_ids):
                     self.buffer_tracks[id].yolo_class_id = tracked_cls_ids[i]
-                    self.buffer_tracks[id].vehicle_class = classify_vehicle(tracked_cls_ids[i])
+                    class_name = (
+                        tracked_cls_names[i]
+                        if tracked_cls_names and i < len(tracked_cls_names)
+                        else None
+                    )
+                    self.buffer_tracks[id].vehicle_class = classify_vehicle(
+                        tracked_cls_ids[i],
+                        class_name,
+                    )
             else:
                 # 更新最后检测时间
                 self.buffer_tracks[id].update(frame_element.timestamp)

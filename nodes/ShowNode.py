@@ -60,29 +60,29 @@ class ShowNode:
         # ── supervision 标注器 ──────────────────────────────────────────────
         # 跟踪目标的圆角边框
         self.sv_box_annotator = sv.RoundBoxAnnotator(
-            thickness=3,
+            thickness=4,
             roundness=0.1,
         )
         # 跟踪标签（带圆角背景）
         self.sv_label_annotator = sv.LabelAnnotator(
             text_position=sv.Position.TOP_CENTER,
-            text_scale=0.8,
+            text_scale=1.0,
             text_thickness=2,
-            text_padding=8,
+            text_padding=10,
             border_radius=6,
         )
         # 轨迹尾迹标注器
         self.sv_trace_annotator = sv.TraceAnnotator(
-            thickness=2,
+            thickness=3,
             trace_length=30,
         )
         # 仅检测模式的标准边框
-        self.sv_det_box_annotator = sv.BoxAnnotator(thickness=2)
+        self.sv_det_box_annotator = sv.BoxAnnotator(thickness=3)
         self.sv_det_label_annotator = sv.LabelAnnotator(
             text_position=sv.Position.TOP_CENTER,
-            text_scale=0.7,
-            text_thickness=1,
-            text_padding=5,
+            text_scale=0.9,
+            text_thickness=2,
+            text_padding=8,
             border_radius=4,
         )
         # 道路半透明遮罩标注器
@@ -122,6 +122,43 @@ class ShowNode:
             tracker_id=tracker_id,
             data=data,
         )
+
+    @staticmethod
+    def _normalize_visible_box(box, frame_shape, min_area=100):
+        """Clip bbox to frame bounds and reject invalid or tiny boxes."""
+        if box is None or len(box) != 4:
+            return None
+
+        coords = np.asarray(box, dtype=np.float32)
+        if not np.isfinite(coords).all():
+            return None
+
+        h, w = frame_shape[:2]
+        x1, y1, x2, y2 = coords.tolist()
+        x1 = max(0, min(w - 1, int(round(x1))))
+        y1 = max(0, min(h - 1, int(round(y1))))
+        x2 = max(0, min(w - 1, int(round(x2))))
+        y2 = max(0, min(h - 1, int(round(y2))))
+
+        box_w = x2 - x1
+        box_h = y2 - y1
+        if box_w <= 0 or box_h <= 0 or box_w * box_h < min_area:
+            return None
+        return [x1, y1, x2, y2]
+
+    @staticmethod
+    def _box_center_in_roads(box, roads_info):
+        """Return True when bbox center falls inside any configured road polygon."""
+        if not roads_info:
+            return True
+
+        x1, y1, x2, y2 = box
+        center = ((x1 + x2) * 0.5, (y1 + y2) * 0.5)
+        for points in roads_info.values():
+            pts = np.asarray(points, dtype=np.float32).reshape((-1, 2))
+            if len(pts) >= 3 and cv2.pointPolygonTest(pts, center, False) >= 0:
+                return True
+        return False
 
     def _configure_tracking_colors(self, detections, frame_element):
         """配置跟踪着色的 palette 和 color_lookup。
@@ -231,7 +268,11 @@ class ShowNode:
         # 绘制自动推断的车道中心线和统计（仅当无人工标注时）
         inferred_lanes = getattr(frame_element, "inferred_lanes", None)
         if inferred_lanes and not lane_polygons:
-            self._draw_inferred_lanes(frame_result, inferred_lanes)
+            self._draw_inferred_lanes(
+                frame_result,
+                inferred_lanes,
+                show_stats=bool(frame_element.roads_info),
+            )
 
         # 处理显示统计信息的单独窗口
         if self.show_info_statistics:
@@ -253,17 +294,15 @@ class ShowNode:
         if not frame_element.detected_xyxy:
             return frame
 
-        # 过滤退化框（宽/高 ≤ 0 或面积极小），避免 Kalman 预测产生 (0,0) 处幽灵框
-        # 导致 RoundBoxAnnotator 画成实心色块（#4×10 杂色方块的根因）
-        _MIN_BOX_AREA = 100  # 最小面积阈值（px²），真实车辆远大于此
         valid = []
         valid_cls = []
         for i, box in enumerate(frame_element.detected_xyxy):
-            x1, y1, x2, y2 = box
-            if (x2 - x1) > 0 and (y2 - y1) > 0 and (x2 - x1) * (y2 - y1) >= _MIN_BOX_AREA:
-                valid.append(box)
-                if frame_element.detected_cls:
-                    valid_cls.append(frame_element.detected_cls[i])
+            normalized = self._normalize_visible_box(box, frame.shape)
+            if normalized is None:
+                continue
+            valid.append(normalized)
+            if frame_element.detected_cls:
+                valid_cls.append(frame_element.detected_cls[i])
 
         if not valid:
             return frame
@@ -288,19 +327,26 @@ class ShowNode:
         if not frame_element.tracked_xyxy:
             return frame
 
-        # 过滤退化框（宽/高 ≤ 0 或面积极小），避免 Kalman 预测产生 (0,0) 处幽灵框
-        # 导致 RoundBoxAnnotator 画成实心色块（左上角杂色方块的根因）
-        _MIN_BOX_AREA = 100  # 最小面积阈值（px²），真实车辆远大于此
         valid_idx = []
+        valid_xyxy = []
+        buffer_tracks = frame_element.buffer_tracks or {}
         for i, box in enumerate(frame_element.tracked_xyxy):
-            x1, y1, x2, y2 = box
-            if (x2 - x1) > 0 and (y2 - y1) > 0 and (x2 - x1) * (y2 - y1) >= _MIN_BOX_AREA:
-                valid_idx.append(i)
+            normalized = self._normalize_visible_box(box, frame.shape)
+            if normalized is None:
+                continue
+
+            track_id = frame_element.id_list[i] if frame_element.id_list and i < len(frame_element.id_list) else None
+            track = buffer_tracks.get(int(track_id)) if track_id is not None else None
+            is_assigned_to_road = track is not None and track.start_road is not None
+            if not is_assigned_to_road and not self._box_center_in_roads(normalized, frame_element.roads_info):
+                continue
+
+            valid_idx.append(i)
+            valid_xyxy.append(normalized)
 
         if not valid_idx:
             return frame
 
-        valid_xyxy = [frame_element.tracked_xyxy[i] for i in valid_idx]
         valid_cls = [frame_element.tracked_cls[i] for i in valid_idx] if frame_element.tracked_cls else None
         valid_ids = [frame_element.id_list[i] for i in valid_idx] if frame_element.id_list else None
 
@@ -314,7 +360,6 @@ class ShowNode:
 
         # 构建标签（含车速）—— 仅针对有效框
         labels = []
-        buffer_tracks = frame_element.buffer_tracks or {}
         for i in valid_idx:
             tid = frame_element.id_list[i]
             cls_name = frame_element.tracked_cls[i] if frame_element.tracked_cls else ""
@@ -535,12 +580,13 @@ class ShowNode:
                 thickness=1, color=(0, 0, 0),
             )
 
-    def _draw_inferred_lanes(self, frame_result, inferred_lanes):
+    def _draw_inferred_lanes(self, frame_result, inferred_lanes, show_stats=True):
         """绘制自动推断的车道中心线和统计信息。
 
         Args:
             frame_result: 绘制的目标帧
             inferred_lanes: {lane_id: InferredLane} 自动推断车道字典
+            show_stats: 是否绘制左上角车道统计文字面板
         """
         # 方向颜色映射
         dir_colors = {
@@ -590,7 +636,10 @@ class ShowNode:
                 cv2.circle(frame_result, xp, 6, color, 2)
                 cv2.circle(frame_result, xp, 6, (255, 255, 255), 1)
 
-            # 3. 统计面板（画面左下角）
+            if not show_stats:
+                continue
+
+            # 3. 统计面板（画面左上角）
             label_scale = self.fontScale * 0.6
             label_thickness = 1
 

@@ -10,18 +10,26 @@
 
 **流程**：
 1. 从 FrameElement 取出原始帧（BGR numpy 数组）
-2. 调用 `YOLO.predict(frame, imgsz=640, conf=0.10, classes=[2,3,4,5,6,7,8,9])`
+2. 调用 `YOLO.predict(frame, imgsz=1280, conf=0.05, classes=[0,1,2,3,4,5,6,7,8,9])`
 3. 提取检测框：`detected_conf`、`detected_cls`、`detected_xyxy`
-4. 将检测结果转换为 ByteTracker 格式 `[x1, y1, x2, y2, conf, class_id=2]`
+4. 将检测结果转换为 ByteTracker 格式 `[x1, y1, x2, y2, conf, class_id]`
 5. 调用 `BYTETracker.update(detections)` 进行多目标跟踪
 6. 提取跟踪结果：`tracked_xyxy`、`tracked_cls`、`tracked_conf`、`id_list`
 
 **关键细节**：
-- 所有可检测类别（car, bus, truck 等）在送入 ByteTracker 时统一标记为 class_id=2（car），因为 ByteTracker 不区分类别
-- 置信度阈值 0.10 较低，是为了捕获更多候选框供 ByteTracker 第二轮关联使用
+- VisDrone 全类别进入检测与跟踪，原始 `class_id` 保留到下游用于 motor/non_motor 分类。
+- 航拍小目标非机动车置信度较低，默认使用 `imgsz=1280`、`confidence=0.05` 保留电动车/三轮车候选；代价是 CPU 推理变慢且误检增多。
 - NMS IOU 阈值 0.7 较高，允许更多重叠框通过
 
-**模型**：`weights/uav_best.pt` — 自定义无人机视角 YOLO11 模型，检测 COCO 类别 2-9（各类交通工具，排除行人）
+**模型**：
+- `weights/uav_best.pt` — 自定义无人机视角 YOLO11 模型，检测交通工具类别。
+- `weights/yolo11l-visdrone.pt` — VisDrone 类别模型，类别为 `pedestrian/people/bicycle/car/van/truck/tricycle/awning-tricycle/bus/motor`。
+
+**motor/non_motor 分类**：
+- 优先按模型返回的类别名分类，避免不同权重复用相同 class id 时误判。
+- `car/van/truck/bus/motor/motorcycle` → `motor`
+- `pedestrian/person/people/bicycle/tricycle/awning-tricycle` → `non_motor`
+- 类别名缺失时，保留旧版 COCO-style class id 兜底逻辑。
 
 ### 2. 多目标跟踪（ByteTrack）
 
@@ -31,7 +39,7 @@
 ```
 输入：YOLO 检测结果 [bbox, score, class]
 
-Step 1: 按分数分为高分组（> first_track_thresh=0.5）和低分组（> second_track_thresh=0.1）
+Step 1: 按分数分为高分组（> first_track_thresh=0.05）和低分组（> second_track_thresh=0.01）
 
 Step 2: 第一轮关联（高分框）
   - 卡尔曼滤波预测已有轨迹新位置
@@ -50,6 +58,7 @@ Step 4: 处理未确认轨迹
 
 Step 5: 初始化新轨迹
   - 剩余未匹配的高分检测框初始化为新 STrack
+  - 当前实现还要求 `score >= first_track_thresh + second_track_thresh`，因此小目标阈值需联合调低，否则低分电动车/三轮车会有检测框但无法进入最终 tracked 输出。
 
 Step 6: 清理超时轨迹
   - lost 状态超过 max_time_lost 帧的轨迹标记为 Removed
@@ -233,12 +242,21 @@ for key in roads_activity:
 7. 方向流量统计叠加（S:/L:/R:/U: + Q:）
 8. 车道多边形叠加（带标签背景）
 9. 自动推断车道中心线 + 统计面板（入口/出口标记 + 方向箭头 + 各车道指标）
+
+**MJPEG 输出清晰度**：
+- `FlaskServerVideoNode` 默认输出 `[1280, 720]`，避免 4K 航拍画面被压缩到 800px 宽后目标和标签不可读。
+- JPEG 编码质量默认 `92`，标签框线和文字按 720p 输出加粗。
+
+**轨迹可视化过滤**：
+- `ShowNode` 在绘制前会裁剪 bbox 到画面范围，并过滤 NaN/Inf、完全越界、面积过小的框，避免异常 Kalman 预测框被画到左上角。
+- 跟踪模式只显示已分配道路或 bbox 中心落在道路 ROI 内的轨迹；低置信度小目标检测开启后，屋顶/树木/施工区域的误检轨迹不会继续堆积在画面边缘。
+- 当未配置道路标注文件时，`roads_info={}`，可视化保留有效跟踪框，但道路分配、道路流量统计和人工道路 ROI 过滤不可用；自动推断车道仍可绘制中心线/箭头，但不绘制左上角车道统计黑底面板，避免无道路模式下的 overlay 堆积。
 10. 统计面板（独立黑色窗口，拼接在主帧右侧）
 
 **颜色逻辑**（通过 `ColorPalette` + `ColorLookup` 管理）：
 - 如果 `show_track_id_different_colors=True`：使用 `sv.ColorPalette.DEFAULT`（21色循环）+ `ColorLookup.TRACK`，按 tracker_id 自动着色
 - 否则：构建自定义 `ColorPalette`（从 `colors_roads` BGR→RGB 转换）+ `np.ndarray` color_idx 数组，按 `start_road` 道路颜色着色
-- 如果车辆尚未分配到道路或已被清理：黑色框
+- 如果车辆尚未分配到道路：使用默认道路颜色索引显示，不再额外绘制黑色框
 
 **代码结构**：
 - `_draw_detections()` — 纯检测模式

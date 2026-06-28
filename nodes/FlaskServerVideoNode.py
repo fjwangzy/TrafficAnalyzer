@@ -34,12 +34,13 @@ class VideoServer(object):
         self.index_page = config_server["index_page"]
         self.output_size = config_server["output_size"]
         self.target_fps = config_server.get("target_fps", 15)  # MJPEG 输出帧率上限
+        self.jpeg_quality = int(config_server.get("jpeg_quality", 92))
 
         # 预编码JPEG：encode一次，多个客户端共享同一份bytes，避免重复编码
         init_jpeg = cv2.imencode(
             '.jpg',
             np.zeros(shape=(self.output_size[1], self.output_size[0], 3), dtype=np.uint8),
-            [cv2.IMWRITE_JPEG_QUALITY, 80],
+            [cv2.IMWRITE_JPEG_QUALITY, self.jpeg_quality],
         )[1]
         self._jpeg_bytes: bytes = init_jpeg.tobytes()
         self._frame_lock = Lock()
@@ -80,7 +81,7 @@ class VideoServer(object):
 
     def update_image(self, image: np.array):
         resized = cv2.resize(image, self.output_size)
-        ret, jpeg = cv2.imencode('.jpg', resized, [cv2.IMWRITE_JPEG_QUALITY, 80])
+        ret, jpeg = cv2.imencode('.jpg', resized, [cv2.IMWRITE_JPEG_QUALITY, self.jpeg_quality])
         with self._frame_lock:
             self._jpeg_bytes = jpeg.tobytes()
 
@@ -128,7 +129,8 @@ if __name__ == "__main__":
             "host_ip": "localhost",
             "port": 8100,
             "template_folder": "../utils_local/templates",
-            "output_size": [800, 470],
+            "output_size": [1280, 720],
+            "jpeg_quality": 92,
             "target_fps": 15,
         }
     }

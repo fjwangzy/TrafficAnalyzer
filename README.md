@@ -40,6 +40,14 @@ python main_optimized.py \
 VIDEO_SRC=test_videos/inter1.mp4 python main_optimized.py pipeline.send_info_kafka=False
 ```
 
+不传道路标注时，检测器会以空道路集运行：
+
+```bash
+VIDEO_SRC=test_videos/inter1.mp4 python main_optimized.py pipeline.send_info_kafka=False
+```
+
+此模式仍会输出检测/跟踪画面，但道路分配、道路流量统计和基于人工道路 ROI 的过滤不可用。
+
 ### 启用 Kafka 数据推送（完整管道）
 
 ```bash
@@ -51,7 +59,7 @@ python main_optimized.py
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
 | `VIDEO_SRC` | `test_videos/test_video.mp4` | 视频文件路径、RTSP URL 或摄像头索引 |
-| `ROADS_JSON` | `configs/entry_exit_lanes.json` | 道路多边形坐标 JSON 文件 |
+| `ROADS_JSON` | 空 | 可选道路多边形坐标 JSON 文件；为空时以无道路标注模式运行 |
 | `TOPIC_NAME` | `statistics_1` | Kafka 主题名 |
 | `CAMERA_ID` | `1` | 摄像头 ID |
 | `KAFKA_BOOTSTRAP` | `kafka:29092` | Kafka 地址（本地运行改为 `localhost:9092`）|

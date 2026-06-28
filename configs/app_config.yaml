@@ -34,20 +34,20 @@ general:
 video_reader:
   src: ${oc.env:VIDEO_SRC} # 待处理文件的路径，或摄像头编号（int），或 m3u8 / rtsp 流链接
   skip_secs: 0  # 每隔 <skip_secs> 秒读取一帧
-  roads_info: ${oc.env:ROADS_JSON} # 包含视频中道路坐标的 json 文件
+  roads_info: ${oc.env:ROADS_JSON,''} # 可选：包含视频中道路坐标的 json 文件；为空则不使用道路标注
 
 detection_node:
-  weight_pth: weights/uav_best.pt  # 模型 .pt 或 .engine (TensorRT) 文件的路径
-  classes_to_detect: [0,1,2,3,4,5,6,7,8,9]  # uav_best.pt 的全部交通工具类别 (排除行人和人)
-  confidence: 0.10  # 检测器置信度阈值（值越大，检测到的目标越少）
+  weight_pth: weights/yolo11l-visdrone.pt  # 模型 .pt 或 .engine (TensorRT) 文件的路径
+  classes_to_detect: [0,1,2,3,4,5,6,7,8,9]  # yolo11l-visdrone.pt: 0 pedestrian, 1 people, 2 bicycle, 3 car, 4 van, 5 truck, 6 tricycle, 7 awning-tricycle, 8 bus, 9 motor
+  confidence: 0.05  # 检测器置信度阈值；航拍小目标非机动车需保留低分候选
   iou: 0.7  # NMS 阈值（值越大，匹配到的目标越多）
-  imgsz: 640  # 推理时的图像缩放尺寸（默认为 640）
+  imgsz: 1280  # 航拍4K小目标推理尺寸；比640更容易保留电动车/三轮车
   device: auto  # 推理设备: "auto" 自动检测 (cuda>mps>cpu) | "cuda" | "mps" | "cpu"
 
 tracking_node:
   # 使用 ByteTrack (https://github.com/ifzhang/ByteTrack)
-  first_track_thresh: 0.5  # 初始化新轨迹的阈值
-  second_track_thresh: 0.10  # 维持现有轨迹的阈值
+  first_track_thresh: 0.05  # 初始化新轨迹的阈值；保留低置信度非机动车小目标
+  second_track_thresh: 0.01  # 维持已有轨迹的低分匹配阈值
   match_thresh: 0.95  # 值越大，相邻帧中检测框的最大允许距离（用于维持轨迹）越大
   track_buffer: 125  # 目标消失后轨迹保持存活的时间（以帧数为单位）
 
@@ -203,5 +203,6 @@ video_server_node:
   host_ip: 0.0.0.0  # 服务绑定的IP地址（localhost 或 "0.0.0.0"）
   port: ${oc.decode:${oc.env:VIDEO_PORT,8100}}  # 服务绑定的端口
   template_folder: ../utils_local/templates  # 模板文件路径（存放 html 文件的地方）
-  output_size: [800, 470]  # 在flask中显示的图像缩放尺寸
+  output_size: [1280, 720]  # 在Flask中显示的图像缩放尺寸；提高到720p保证标签可读
+  jpeg_quality: 92  # MJPEG JPEG质量；值越大画面越清晰、带宽越高
   target_fps: 15  # MJPEG流输出帧率上限（避免重复帧浪费带宽）

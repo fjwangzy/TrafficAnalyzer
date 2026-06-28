@@ -80,7 +80,6 @@ def main(config) -> None:
 if __name__ == "__main__":
     # 检查并设置环境变量（如果不存在）
     check_and_set_env_var("VIDEO_SRC", "test_videos/test_video.mp4")
-    check_and_set_env_var("ROADS_JSON", "configs/entry_exit_lanes.json")
     check_and_set_env_var("TOPIC_NAME", "statistics_1")
     check_and_set_env_var("CAMERA_ID", 1)
     main()

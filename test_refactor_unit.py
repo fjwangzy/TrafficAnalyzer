@@ -224,7 +224,9 @@ print("\n" + "="*60)
 print("Test 4: T-204 TrackerInfoUpdateNode 清理逻辑")
 print("="*60)
 
-from nodes.TrackerInfoUpdateNode import TrackerInfoUpdateNode
+from nodes.TrackerInfoUpdateNode import TrackerInfoUpdateNode, classify_vehicle
+from nodes.ConflictDetectionNode import ConflictDetectionNode
+from nodes.ShowNode import ShowNode
 
 tracker_config = {
     "general": {
@@ -296,6 +298,210 @@ results.check(
     "t=10 时 track_3 保留（年龄=3 < 阈值=8）",
     3 in tracker_node.buffer_tracks,
     f"track_3 age=3s < 8s"
+)
+
+
+# ============================================================
+# Test 5: VisDrone motor/non_motor 类别映射
+# ============================================================
+print("\n" + "="*60)
+print("Test 5: VisDrone motor/non_motor 类别映射")
+print("="*60)
+
+results.check(
+    "VisDrone bicycle 归类为 non_motor",
+    classify_vehicle(2, "bicycle") == "non_motor",
+    f"class={classify_vehicle(2, 'bicycle')}"
+)
+
+results.check(
+    "VisDrone tricycle 归类为 non_motor",
+    classify_vehicle(6, "tricycle") == "non_motor",
+    f"class={classify_vehicle(6, 'tricycle')}"
+)
+
+results.check(
+    "VisDrone awning-tricycle 归类为 non_motor",
+    classify_vehicle(7, "awning-tricycle") == "non_motor",
+    f"class={classify_vehicle(7, 'awning-tricycle')}"
+)
+
+results.check(
+    "VisDrone car 归类为 motor",
+    classify_vehicle(3, "car") == "motor",
+    f"class={classify_vehicle(3, 'car')}"
+)
+
+results.check(
+    "COCO motorcycle id 3 保持 motor",
+    classify_vehicle(3) == "motor",
+    f"class={classify_vehicle(3)}"
+)
+
+
+# ============================================================
+# Test 6: 机非冲突检测
+# ============================================================
+print("\n" + "="*60)
+print("Test 6: 机非冲突检测")
+print("="*60)
+
+conflict_config = {
+    "conflict_detection": {
+        "enabled": True,
+        "proximity_threshold_m": 3.0,
+        "ttc_threshold_sec": 2.0,
+        "severity_levels": {
+            "critical": {"ttc": 1.0, "distance_m": 1.5},
+            "warning": {"ttc": 2.0, "distance_m": 3.0},
+            "info": {"ttc": 3.0, "distance_m": 5.0},
+        },
+    },
+}
+
+fe_conflict = FrameElement("test", frame, 10.0, 300, roads_info)
+fe_conflict.id_list = [101, 202]
+fe_conflict.tracked_xyxy = [[0, 0, 2, 2], [2, 0, 4, 2]]
+fe_conflict.homography_matrix = np.eye(3)
+fe_conflict.drone_displacement_m = np.array([0.0, 0.0])
+fe_conflict.world_anchor_lat_lon = [36.702909, 117.022330]
+
+motor_track = TrackElement(id=101, timestamp_first=0.0)
+motor_track.vehicle_class = "motor"
+motor_track.avg_speed_kmh = 10.0
+non_motor_track = TrackElement(id=202, timestamp_first=0.0)
+non_motor_track.vehicle_class = "non_motor"
+non_motor_track.avg_speed_kmh = 5.0
+fe_conflict.buffer_tracks = {
+    101: motor_track,
+    202: non_motor_track,
+}
+
+fe_conflict_out = ConflictDetectionNode(conflict_config).process(fe_conflict)
+events = fe_conflict_out.conflict_events
+
+results.check(
+    "近距离 motor/non_motor 产生冲突事件",
+    len(events) == 1,
+    f"events={events}"
+)
+
+if events:
+    results.check(
+        "冲突事件包含 motor/non_motor id",
+        events[0]["motor_id"] == 101 and events[0]["non_motor_id"] == 202,
+        f"event={events[0]}"
+    )
+    results.check(
+        "冲突严重级别为 critical",
+        events[0]["severity"] == "critical",
+        f"severity={events[0]['severity']}"
+    )
+    results.check(
+        "冲突事件输出世界坐标",
+        "motor_position_m" in events[0] and "non_motor_position_m" in events[0],
+        f"event={events[0]}"
+    )
+
+
+# ============================================================
+# Test 7: ShowNode 可视化过滤左上角幽灵框
+# ============================================================
+print("\n" + "="*60)
+print("Test 7: ShowNode 可视化过滤左上角幽灵框")
+print("="*60)
+
+visible_shape = (100, 100, 3)
+road_roi = {"1": [20, 20, 80, 20, 80, 80, 20, 80]}
+
+results.check(
+    "越界框裁剪后仍可见",
+    ShowNode._normalize_visible_box([-5, 30, 30, 60], visible_shape) == [0, 30, 30, 60],
+    f"box={ShowNode._normalize_visible_box([-5, 30, 30, 60], visible_shape)}"
+)
+
+results.check(
+    "完全在画面外的框被过滤",
+    ShowNode._normalize_visible_box([-50, -50, -10, -10], visible_shape) is None,
+    f"box={ShowNode._normalize_visible_box([-50, -50, -10, -10], visible_shape)}"
+)
+
+results.check(
+    "NaN框被过滤",
+    ShowNode._normalize_visible_box([np.nan, 0, 20, 20], visible_shape) is None,
+    f"box={ShowNode._normalize_visible_box([np.nan, 0, 20, 20], visible_shape)}"
+)
+
+results.check(
+    "ROI 内轨迹框允许显示",
+    ShowNode._box_center_in_roads([30, 30, 50, 50], road_roi),
+    "center=(40,40)"
+)
+
+results.check(
+    "ROI 外轨迹框过滤，避免左上角堆积",
+    not ShowNode._box_center_in_roads([0, 0, 15, 15], road_roi),
+    "center=(7.5,7.5)"
+)
+
+
+# ============================================================
+# Test 8: 无道路标注模式不绘制左上角车道统计黑块
+# ============================================================
+print("\n" + "="*60)
+print("Test 8: 无道路标注模式不绘制左上角车道统计黑块")
+print("="*60)
+
+show_config_no_roads = {
+    "general": {
+        "colors_of_roads": {"1": [0, 255, 0]},
+        "buffer_analytics": 0.1,
+        "min_time_life_track": 1,
+    },
+    "show_node": {
+        "scale": 1.0,
+        "fps_counter_N_frames_stat": 15,
+        "draw_fps_info": False,
+        "show_roi": True,
+        "overlay_transparent_mask": False,
+        "imshow": False,
+        "show_only_yolo_detections": False,
+        "show_track_id_different_colors": False,
+        "show_info_statistics": False,
+        "show_trace_trails": False,
+    },
+}
+
+
+class DummyInferredLane:
+    def __init__(self):
+        self.direction_class = "straight"
+        self.centerline_px = []
+        self.entry_center_px = None
+        self.exit_center_px = None
+        self.label = "lane-1"
+        self.count = 3
+        self.avg_speed_kmh = 12.0
+        self.stopped_count = 0
+        self.flow_per_min = 2.5
+        self.avg_headway_sec = None
+
+
+white_frame = np.full((220, 420, 3), 255, dtype=np.uint8)
+fe_no_roads_overlay = FrameElement("test", white_frame, 1.0, 1, {})
+fe_no_roads_overlay.tracked_xyxy = []
+fe_no_roads_overlay.id_list = []
+fe_no_roads_overlay.inferred_lanes = {1: DummyInferredLane()}
+
+show_no_roads = ShowNode(show_config_no_roads)
+show_out = show_no_roads.process(fe_no_roads_overlay)
+left_overlay_band = show_out.frame_result[100:150, 0:360]
+black_pixels = np.count_nonzero(np.all(left_overlay_band == [0, 0, 0], axis=2))
+
+results.check(
+    "无道路标注时不绘制自动车道统计黑底块",
+    black_pixels == 0,
+    f"black_pixels={black_pixels}"
 )
 
 

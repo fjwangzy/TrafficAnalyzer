@@ -68,7 +68,6 @@ python main_optimized.py pipeline.send_info_kafka=False
 ### inter_xqh 视频 + SRT 遥测 + Kafka（推荐）
 
 ```bash
-ROADS_JSON="configs/inter_xqh_lanes.json" \
 VIDEO_SRC="test_videos/inter_xqh/DJI_20260403142902_0001_V小清河北路与水屯路路口.mp4" \
 TOPIC_NAME="statistics_1" \
 CAMERA_ID=1 \

@@ -59,6 +59,7 @@ show_node:
   show_roi: True  # 是否显示相邻道路的区域
   overlay_transparent_mask: False # 当 show_roi=True 时是否填充区域（慢速操作）
   show_only_yolo_detections: False  # 是否仅显示检测结果，而不显示跟踪和其他逻辑处理结果
+  show_class_different_colors: True  # 是否按目标类别使用不同颜色绘制框、标签和轨迹
   show_track_id_different_colors: False  # 是否根据轨迹ID显示框颜色，而非根据对象来源逻辑
   show_info_statistics: False  # 是否在画面右侧单独窗口中输出统计信息
   show_trace_trails: True  # 是否显示车辆运动轨迹尾迹（supervision TraceAnnotator）

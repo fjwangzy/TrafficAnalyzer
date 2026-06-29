@@ -221,18 +221,22 @@ class KafkaConsumerService:
             )
 
         if self._lane_annotation_store:
-            task = self._lane_annotation_store.observe_stats(intersection_id, data)
-            if task:
-                data["lane_annotation_task_id"] = task["task_id"]
-                await self._ws.broadcast(
-                    "calibration",
-                    {
-                        "channel": "calibration",
-                        "type": "lane_annotation_task",
-                        "data": task,
-                        "ts": time.time(),
-                    },
-                )
+            try:
+                task = self._lane_annotation_store.observe_stats(intersection_id, data)
+            except Exception as e:
+                logger.warning("Lane annotation observe_stats failed for %s: %s", intersection_id, e)
+            else:
+                if task:
+                    data["lane_annotation_task_id"] = task["task_id"]
+                    await self._ws.broadcast(
+                        "calibration",
+                        {
+                            "channel": "calibration",
+                            "type": "lane_annotation_task",
+                            "data": task,
+                            "ts": time.time(),
+                        },
+                    )
 
         # Transform lane_stats dict → lanes array for frontend compatibility
         # Skip if KafkaProducerNode already sent unified 'lanes' array

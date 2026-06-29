@@ -10,6 +10,48 @@ from elements.FrameElement import FrameElement
 class ShowNode:
     """负责结果可视化的模块 — 使用 supervision 库优化展示效果"""
 
+    CLASS_COLOR_KEYS = [
+        "pedestrian",
+        "bicycle",
+        "car",
+        "van",
+        "truck",
+        "tricycle",
+        "awning-tricycle",
+        "bus",
+        "motor",
+        "unknown",
+    ]
+    CLASS_COLOR_HEX = [
+        "#00D4FF",  # pedestrian / people
+        "#3B82F6",  # bicycle
+        "#22C55E",  # car
+        "#F59E0B",  # van
+        "#EF4444",  # truck
+        "#A855F7",  # tricycle
+        "#EC4899",  # awning-tricycle
+        "#14B8A6",  # bus
+        "#F97316",  # motor
+        "#94A3B8",  # unknown
+    ]
+    CLASS_ALIASES = {
+        "person": "pedestrian",
+        "people": "pedestrian",
+        "pedestrian": "pedestrian",
+        "bicycle": "bicycle",
+        "bike": "bicycle",
+        "car": "car",
+        "van": "van",
+        "truck": "truck",
+        "tricycle": "tricycle",
+        "awning-tricycle": "awning-tricycle",
+        "awning_tricycle": "awning-tricycle",
+        "bus": "bus",
+        "motor": "motor",
+        "motorcycle": "motor",
+        "motorbike": "motor",
+    }
+
     def __init__(self, config) -> None:
         data_colors = config["general"]["colors_of_roads"]
         self.colors_roads = {int(key): tuple(value) for key, value in data_colors.items()}
@@ -27,6 +69,7 @@ class ShowNode:
         self.imshow = config_show_node["imshow"]
         self.show_only_yolo_detections = config_show_node["show_only_yolo_detections"]
         self.show_track_id_different_colors = config_show_node["show_track_id_different_colors"]
+        self.show_class_different_colors = config_show_node.get("show_class_different_colors", True)
         self.show_info_statistics = config_show_node["show_info_statistics"]
 
         self.show_number_of_road = True  # 显示道路编号
@@ -100,6 +143,11 @@ class ShowNode:
             if road_hex_colors
             else sv.ColorPalette.DEFAULT
         )
+        self.class_palette = sv.ColorPalette.from_hex(self.CLASS_COLOR_HEX)
+        self.class_color_idx = {
+            class_name: idx
+            for idx, class_name in enumerate(self.CLASS_COLOR_KEYS)
+        }
 
     # ── supervision 辅助方法 ───────────────────────────────────────────────
 
@@ -160,13 +208,35 @@ class ShowNode:
                 return True
         return False
 
+    @classmethod
+    def _normalize_class_name(cls, class_name):
+        """Normalize model class labels before visual color lookup."""
+        if class_name is None:
+            return "unknown"
+        key = str(class_name).strip().lower().replace(" ", "-")
+        return cls.CLASS_ALIASES.get(key, "unknown")
+
+    def _class_color_indices(self, cls_names):
+        """Map class labels to stable palette indices."""
+        unknown_idx = self.class_color_idx["unknown"]
+        names = [] if cls_names is None else cls_names
+        return np.array(
+            [
+                self.class_color_idx.get(self._normalize_class_name(cls_name), unknown_idx)
+                for cls_name in names
+            ],
+            dtype=int,
+        )
+
     def _configure_tracking_colors(self, detections, frame_element):
         """配置跟踪着色的 palette 和 color_lookup。
 
         Returns:
             (palette, color_lookup) — 供 annotator.annotate() 前设置
         """
-        if self.show_track_id_different_colors:
+        if self.show_class_different_colors and "class_name" in detections.data:
+            return self.class_palette, self._class_color_indices(detections.data["class_name"])
+        elif self.show_track_id_different_colors:
             # 使用默认 21 色调色板，按 tracker_id 自动循环着色
             return sv.ColorPalette.DEFAULT, sv.ColorLookup.TRACK
         else:
@@ -315,6 +385,13 @@ class ShowNode:
             return frame
 
         labels = valid_cls if valid_cls else None
+
+        if self.show_class_different_colors and valid_cls:
+            color_idx = self._class_color_indices(valid_cls)
+            self.sv_det_box_annotator.color = self.class_palette
+            self.sv_det_box_annotator.color_lookup = color_idx
+            self.sv_det_label_annotator.color = self.class_palette
+            self.sv_det_label_annotator.color_lookup = color_idx
 
         frame = self.sv_det_box_annotator.annotate(scene=frame, detections=detections)
         frame = self.sv_det_label_annotator.annotate(

@@ -254,8 +254,9 @@ for key in roads_activity:
 10. 统计面板（独立黑色窗口，拼接在主帧右侧）
 
 **颜色逻辑**（通过 `ColorPalette` + `ColorLookup` 管理）：
-- 如果 `show_track_id_different_colors=True`：使用 `sv.ColorPalette.DEFAULT`（21色循环）+ `ColorLookup.TRACK`，按 tracker_id 自动着色
-- 否则：构建自定义 `ColorPalette`（从 `colors_roads` BGR→RGB 转换）+ `np.ndarray` color_idx 数组，按 `start_road` 道路颜色着色
+- 默认 `show_class_different_colors=True`：按目标类别固定着色，`pedestrian/people`、`bicycle`、`car`、`van`、`truck`、`tricycle`、`awning-tricycle`、`bus`、`motor/motorcycle` 使用不同颜色；框、标签背景、轨迹尾迹保持同色。
+- 如果关闭类别色且 `show_track_id_different_colors=True`：使用 `sv.ColorPalette.DEFAULT`（21色循环）+ `ColorLookup.TRACK`，按 tracker_id 自动着色
+- 如果关闭类别色和 track id 色：构建自定义 `ColorPalette`（从 `colors_roads` BGR→RGB 转换）+ `np.ndarray` color_idx 数组，按 `start_road` 道路颜色着色
 - 如果车辆尚未分配到道路：使用默认道路颜色索引显示，不再额外绘制黑色框
 
 **代码结构**：
@@ -269,6 +270,7 @@ for key in roads_activity:
 - `_draw_stats_panel()` — 统计信息面板
 - `_build_detections()` — 从列表构建 `sv.Detections` 对象
 - `_configure_tracking_colors()` — 配置颜色方案
+- `_class_color_indices()` — 将类别名归一化为稳定调色板索引
 
 ## 统计数据的完整生命周期
 

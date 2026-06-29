@@ -26,7 +26,7 @@ docker-compose -f ./docker-compose.yaml  -f ./docker-compose.test.yaml  up zooke
 ### inter_xqh 视频 + SRT 遥测 + Kafka（推荐）
 
 ```bash
-ROADS_JSON="configs/inter_xqh_lanes.json" \
+# ROADS_JSON="configs/inter_xqh_lanes.json" \
 VIDEO_SRC="test_videos/inter_xqh/DJI_20260403142902_0001_V小清河北路与水屯路路口.mp4" \
 TOPIC_NAME="statistics_1" \
 CAMERA_ID=1 \
@@ -75,7 +75,7 @@ pkill -f main_optimized.py
 克隆仓库：
 
 ```
-git clone https://github.com/Koldim2001/TrafficAnalyzer.git
+git clone 
 ```
 
 之后，需要在项目主目录下创建一个环境变量文件，这些变量将被注入到Grafana和Influx的容器中。请创建 `.env` 文件并填入以下类似内容（包含服务的登录名和密码）：
@@ -94,11 +94,6 @@ KAFKA_PASSWORD=traffic-secret
 ```
 docker compose -p traffic_analyzer up -d --build
 ```
-
-启动后，要访问Grafana仪表盘，请点击此[链接](http://localhost:3111/d/edycr94pt2mm8b/dashboard-trafficanalyzer-1-camera-influx?orgId=1&refresh=5s)。输入用户名 `admin` 和密码 `admin`。
-每个摄像头都有自己独立的仪表盘，可以通过按钮切换：
-
-![grafana](https://github.com/user-attachments/assets/c0c6d602-2026-460f-9c48-64180e87ca8e)
 
 在Docker Compose中，每个新摄像头都作为 traffic_analyzer_camera_{n} 后端服务的一个额外实例添加，只需通过服务的环境变量指定不同的 `src` 和配置即可。
 
@@ -191,22 +186,6 @@ __显示车辆跟踪结果的演示模式示例__（每个ID以其独特的颜�
 ![交通跟踪](content_for_readme/traffic_tracking.gif)
 
 ---
-
-## 现有代码版本：
-
-项目中特意包含了多个分支，实现了大规模计算机视觉项目开发的不同阶段。
-
-例如，在 [**main**](https://github.com/Koldim2001/TrafficAnalyzer/tree/main) 分支中，Docker Compose可以启动辅助服务（用于可视化的Grafana和PostgreSQL数据库）。但是，实现后端的主代码需要使用计算机上已有的Python在本地运行。此代码版本的教程 - [YouTube](https://www.youtube.com/watch?v=u9EtqHz4Vqc)
-
-项目的进一步发展在于实现包含所有服务（包括后端本身）的完整Docker Compose。此版本可在 [**prod_docker_version**](https://github.com/Koldim2001/TrafficAnalyzer/tree/prod_docker_version) 分支中找到。此分支的代码非常容易启动，除了Docker之外，计算机上不需要任何其他东西。项目只需一条命令即可启动：`docker compose -p traffic_analyzer up -d --build`。此代码版本的教程 - [YouTube](https://www.youtube.com/watch?v=jU6Y2GRh2Zs)
-
-项目发展的下一阶段是出现了 [**multicamera**](https://github.com/Koldim2001/TrafficAnalyzer/tree/multicamera) 分支。它实现了与prod_docker_version分支相同的功能，但现在可以方便地将项目扩展到大量摄像头。为此，只需在docker-compose文件中添加新的后端容器，并指定新视频资源的路径即可。同时，所有处理（包括网络推理本身）都将在后端容器内部本机执行。每个新摄像头都会自动启动一个新的YOLO网络实例，用于执行车辆检测。此代码版本的教程 - [YouTube](https://www.youtube.com/watch?v=jU6Y2GRh2Zs)
-
-另一个进一步发展的选项是出现了 [**feature/triton**](https://github.com/Koldim2001/TrafficAnalyzer/tree/feature/triton) 分支。这本质上是相同的multicamera分支，但现在所有后端容器不再内部执行网络推理，而是通过gRPC向一个名为Triton Inference Server的附加服务发送请求。这样可以在不显著增加负载的情况下扩展项目（尽管由于现在需要向服务发送请求并接收响应，FPS值会稍低）。但是现在只有一个容器与显卡交互，后端实例不需要GPU即可工作。
-
-另一个进一步发展的选项是出现了 [**feature/influx**](https://github.com/Koldim2001/TrafficAnalyzer/tree/feature/influx) 分支。
-**这正是您当前所在的分支。**
-这本质上是相同的multicamera分支，但现在数据库已从PostgreSQL更改为时间序列数据库InfluxDB。该数据库更适用于处理从后端发送的流数据。同时，使用Telegraf服务进行写入InfluxDB，该服务读取消息代理Kafka的主题（后端将数据发送到该主题）并自动将数据保存到InfluxDB。此代码版本的教程 - [YouTube]()
 
 Git项目的分支结构如下：
 

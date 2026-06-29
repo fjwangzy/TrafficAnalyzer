@@ -14,10 +14,13 @@ from queue import Queue, Full
 from threading import Thread
 
 import cv2
+import numpy as np
 from kafka import KafkaProducer
 from json import dumps
 
 from utils_local.utils import profile_time
+from utils_local.homography import is_valid_homography, undistort_points
+from utils_local.motion_compensation import pixel_to_world_compensated
 from elements.VideoEndBreakElement import VideoEndBreakElement
 from elements.FrameElement import FrameElement
 
@@ -94,6 +97,9 @@ class KafkaProducerNode:
         )
         self._snapshot_jpeg_quality = config.get("kafka_producer_node", {}).get(
             "annotation_snapshot_jpeg_quality", 75
+        )
+        self._active_trajectory_tail_points = int(
+            config.get("kafka_producer_node", {}).get("active_trajectory_tail_points", 30)
         )
 
     def _send_loop(self):
@@ -223,6 +229,83 @@ class KafkaProducerNode:
             "annotation_snapshot_height": out_height,
         }
 
+    def _build_active_trajectories(self, frame_element: FrameElement) -> list[dict]:
+        """Serialize active track trajectories for real-time BEV rendering.
+
+        Completed tracks are still published on track_complete_*; this snapshot
+        lets the platform draw in-progress trajectories at the same cadence as
+        the left-side detection stream.
+        """
+        buffer_tracks = getattr(frame_element, "buffer_tracks", None) or {}
+        if not buffer_tracks:
+            return []
+
+        H = getattr(frame_element, "homography_matrix", None)
+        drone_disp = getattr(frame_element, "drone_displacement_m", None)
+        can_convert_world = is_valid_homography(H) and drone_disp is not None
+
+        dist_coeffs = getattr(frame_element, "dist_coeffs", None)
+        cam_intrinsics = getattr(frame_element, "camera_intrinsics", None)
+        img_size = (
+            (frame_element.frame.shape[1], frame_element.frame.shape[0])
+            if dist_coeffs is not None and frame_element.frame is not None
+            else None
+        )
+        world_anchor = getattr(frame_element, "world_anchor_lat_lon", None)
+
+        active = []
+        for track_id, track in sorted(buffer_tracks.items(), key=lambda item: item[0]):
+            trajectory_px = getattr(track, "trajectory_points", None) or []
+            if not trajectory_px:
+                continue
+
+            tail_points = max(getattr(self, "_active_trajectory_tail_points", 30), 1)
+            total_points = len(trajectory_px)
+            tail_start = max(total_points - tail_points, 0)
+            trajectory_tail_px = trajectory_px[tail_start:]
+
+            px_points = [
+                [round(float(x), 2), round(float(y), 2)]
+                for x, y in trajectory_tail_px
+            ]
+            item = {
+                "track_id": track.id,
+                "vehicle_class": track.vehicle_class,
+                "yolo_class_id": track.yolo_class_id,
+                "direction_class": track.direction_class,
+                "turn_behavior": track.turn_behavior,
+                "duration_sec": round(track.timestamp_last - track.timestamp_first, 2),
+                "avg_speed_kmh": round(track.avg_speed_kmh, 1),
+                "max_speed_kmh": round(track.max_speed_kmh, 1),
+                "trajectory_px": px_points,
+                "trajectory_point_count": total_points,
+                "trajectory_tail_start": tail_start,
+                "is_trajectory_tail": tail_start > 0,
+                "timestamp_first": track.timestamp_first,
+                "timestamp_last": track.timestamp_last,
+            }
+
+            if can_convert_world:
+                pts_px = np.array(trajectory_tail_px, dtype=np.float64)
+                if dist_coeffs and cam_intrinsics and img_size:
+                    pts_px = undistort_points(pts_px, cam_intrinsics, img_size, dist_coeffs)
+                pts_world = pixel_to_world_compensated(pts_px, H, drone_disp)
+                world_points = [
+                    [round(float(x), 2), round(float(y), 2)]
+                    for x, y in pts_world
+                ]
+                item["trajectory_world_m"] = world_points
+                item["current_point_m"] = world_points[-1]
+                if world_anchor:
+                    item["world_anchor_lat_lon"] = [
+                        round(world_anchor[0], 6),
+                        round(world_anchor[1], 6),
+                    ]
+
+            active.append(item)
+
+        return active
+
     @profile_time
     def process(self, frame_element: FrameElement):
         # 如果是VideoEndBreakElement而不是FrameElement则退出处理
@@ -259,6 +342,7 @@ class KafkaProducerNode:
                 "inference_ms": getattr(frame_element, "inference_ms", 0),
                 "active_tracks": len(frame_element.id_list),
                 "total_vehicles": cars_amount,
+                "active_trajectories": self._build_active_trajectories(frame_element),
                 # T-201: 动态道路数组（替代 road_1..road_5）
                 "roads": roads_array,
                 "road_polygons": frame_element.roads_info,

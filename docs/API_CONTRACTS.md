@@ -16,6 +16,25 @@
   "cars": 12,
   "msg_type": "stats",
   "intersection_id": "INT_camera_1",
+  "active_tracks": 12,
+  "active_trajectories": [
+    {
+      "track_id": 142,
+      "vehicle_class": "motor",
+      "yolo_class_id": 3,
+      "direction_class": "straight",
+      "turn_behavior": null,
+      "duration_sec": 3.2,
+      "avg_speed_kmh": 18.4,
+      "max_speed_kmh": 27.6,
+      "trajectory_px": [[100,200], [105,210]],
+      "trajectory_world_m": [[12.3, -5.2], [12.8, -4.9]],
+      "current_point_m": [12.8, -4.9],
+      "world_anchor_lat_lon": [31.234567, 121.456789],
+      "timestamp_first": 120.5,
+      "timestamp_last": 123.7
+    }
+  ],
   "road_1": 4.2,
   "road_2": 3.8,
   "road_3": null,
@@ -105,6 +124,8 @@ lon = anchor_lon + easting_m / (111320 × cos(radians(anchor_lat)))
 |------|------|------|
 | `camera_id` | string | 格式 `id_{N}`，N 为摄像头编号 |
 | `cars` | int | 当前帧滑动窗口平均车辆数 |
+| `active_tracks` | int | 当前帧活跃跟踪目标数 |
+| `active_trajectories` | array | 当前活跃轨迹轻量快照，用于平台 BEV 与检测画面同频实时投放；每项包含最近尾部 `trajectory_px`、`trajectory_point_count`、`trajectory_tail_start`、`is_trajectory_tail`，有有效单应性/运动补偿时包含尾部 `trajectory_world_m`、`current_point_m`、`world_anchor_lat_lon` |
 | `road_1` ~ `road_5` | float \| null | 每条道路的车辆活跃度（辆/分钟） |
 | `msg_type` | string | 消息类型标识（"stats"） |
 | `intersection_id` | string | 路口标识（`INT_camera_{N}`） |
@@ -121,6 +142,12 @@ lon = anchor_lon + easting_m / (111320 × cos(radians(anchor_lat)))
 ### 发送频率
 - 由 `kafka_producer_node.how_often_sec` 控制（默认 1 秒）
 - 第一帧始终发送
+- `active_trajectories` 随统计消息发送，是活跃轨迹的当前尾部快照，避免长时间运行时 Kafka 单条消息无限增长；console 按 `track_id` 累积尾部点列用于 BEV 显示和 GeoJSON 导出，车辆离场/超出分析窗口后的完整轨迹仍通过 `track_complete_{n}` 发送。
+
+### BEV GeoJSON 导出
+- Console BEV 视图导出时会合并三类轨迹：当前活跃轨迹快照、当前会话已完成轨迹、历史 API 查询轨迹。
+- 展示层可限制绘制数量以保持流畅，但导出使用当前会话缓存的全量轨迹数据，不受 BEV 显示上限裁剪。
+- GeoJSON `properties` 会保留 `trajectory_world_m`、`trajectory_px`、`track_id`、车辆类型、速度、时间戳、转向行为等原始字段，便于离线复盘。
 
 ### 生产者
 - 文件：`nodes/KafkaProducerNode.py`

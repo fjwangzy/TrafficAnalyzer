@@ -392,21 +392,21 @@ delta = exit_heading - entry_heading  # 方向变化角度（归一化到 -180°
 - 使用世界坐标系航向（无人机低速时）或像素空间航向（无人机高速时）
 - 短轨迹归入 "unknown" 避免误分类
 
-### 3.6 冲突检测：TTC + 距离双因子
+### 3.6 冲突检测：未来轨迹碰撞预测
 
 **算法**：
 
 ```
 对于每对 (机动车, 非机动车):
   1. 像素坐标 → 世界坐标（通过 H 矩阵）
-  2. 计算距离 dist_m
-  3. IF dist_m > 3.0m → 跳过（非冲突）
-  4. 计算 TTC = dist_m / vehicle_speed_ms
-  5. 严重度分级:
-     critical: TTC < 1.0s OR dist < 1.5m → P1 告警
-     warning:  TTC < 2.0s OR dist < 3.0m → P2 告警
-     info:     TTC < 3.0s OR dist < 5.0m → P3 告警
-  6. 配对冷却 5s（避免同一对重复告警）
+  2. 读取双方世界坐标速度向量 velocity_ms
+  3. 在 prediction_horizon_sec=5.0 秒内按 sample_interval_sec 采样未来位置
+  4. 当同一预测时刻双方距离 <= collision_radius_m 时生成候选事件
+  5. 当前距离较近但未来不碰撞时不上报
+  6. 严重度分级:
+     critical: 0-3 秒内进入碰撞半径 → P1 告警
+     warning:  3-5 秒内进入碰撞半径 → P2 告警
+  7. 配对 confirmed 去重（避免同一对重复告警）
 ```
 
 **前提条件**：需要单应性标定（无 H 矩阵时自动跳过，避免误报）。
@@ -752,7 +752,7 @@ docker-compose.yaml:
    ├── 方向流量统计（DirectionFlowNode）
    ├── 车道级分析（LaneAnalysisNode，数据驱动）
    ├── 轨迹还原（TrajectoryNode）
-   ├── 冲突检测（ConflictDetectionNode，默认关闭）
+   ├── 冲突检测（ConflictDetectionNode，默认启用）
    ├── SRT遥测解析（逐帧精确同步）
    └── 端到端测试（49/49 PASS）
 

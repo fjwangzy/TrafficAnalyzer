@@ -76,6 +76,8 @@ async def lifespan(app: FastAPI):
     # Pipeline manager (always available — manages detection pipeline processes)
     pipeline_manager = PipelineManager(
         kafka_bootstrap=settings.kafka_bootstrap,
+        pipeline_python=settings.pipeline_python,
+        frame_stride=settings.pipeline_frame_stride,
     )
 
     # Store on app state

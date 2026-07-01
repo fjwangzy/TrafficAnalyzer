@@ -72,13 +72,14 @@ VIDEO_SRC="test_videos/inter_xqh/DJI_20260403142902_0001_V小清河北路与水�
 TOPIC_NAME="statistics_1" \
 CAMERA_ID=1 \
 KAFKA_BOOTSTRAP="localhost:9092" \
+VIDEO_PORT=8100 \
+FRAME_STRIDE=3 \
 python main_optimized.py \
   pipeline.send_info_kafka=True \
   telemetry.enabled=true \
   telemetry.source=srt \
-  +telemetry.file_path=test_videos/inter_xqh/telemetry.srt
+  telemetry.file_path=test_videos/inter_xqh/telemetry.srt
 ```
-
 后台运行加 `nohup ... > /tmp/detector_xqh.log 2>&1 &`。
 
 

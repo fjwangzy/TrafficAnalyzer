@@ -129,6 +129,22 @@ results.check(
     f"noisy speed={track_noisy_out.speed_kmh:.1f}, expected ~{expected_speed*3.6:.1f}"
 )
 
+track_world = TrackElement(id=3, timestamp_first=0.0)
+for i in range(5):
+    track_world.position_history.append((10 + i * 2, 50, float(i)))
+
+fe_world = FrameElement("test", frame, 4.0, 4, roads_info)
+fe_world.buffer_tracks = {3: track_world}
+fe_world.homography_matrix = np.eye(3)
+fe_world_out = speed_node.process(fe_world)
+velocity_ms = fe_world_out.buffer_tracks[3].velocity_ms
+
+results.check(
+    "标定场景输出世界速度向量",
+    velocity_ms is not None and np.allclose(velocity_ms, np.array([2.0, 0.0]), atol=0.05),
+    f"velocity_ms={velocity_ms}"
+)
+
 
 # ============================================================
 # Test 2: T-201 动态道路数
@@ -308,34 +324,91 @@ print("\n" + "="*60)
 print("Test 5: VisDrone motor/non_motor 类别映射")
 print("="*60)
 
+classification_cfg = {
+    "non_motor_class_names": [
+        "pedestrian",
+        "person",
+        "people",
+        "bicycle",
+        "tricycle",
+        "awning-tricycle",
+        "motor",
+        "motorcycle",
+        "motorbike",
+        "e-bike",
+        "electric-bike",
+        "electric-bicycle",
+        "ebike",
+        "scooter",
+        "electric-scooter",
+    ],
+    "non_motor_class_ids": [0, 1, 2, 6, 7, 9],
+}
+
 results.check(
     "VisDrone bicycle 归类为 non_motor",
-    classify_vehicle(2, "bicycle") == "non_motor",
-    f"class={classify_vehicle(2, 'bicycle')}"
+    classify_vehicle(2, "bicycle", classification_cfg) == "non_motor",
+    f"class={classify_vehicle(2, 'bicycle', classification_cfg)}"
 )
 
 results.check(
     "VisDrone tricycle 归类为 non_motor",
-    classify_vehicle(6, "tricycle") == "non_motor",
-    f"class={classify_vehicle(6, 'tricycle')}"
+    classify_vehicle(6, "tricycle", classification_cfg) == "non_motor",
+    f"class={classify_vehicle(6, 'tricycle', classification_cfg)}"
 )
 
 results.check(
     "VisDrone awning-tricycle 归类为 non_motor",
-    classify_vehicle(7, "awning-tricycle") == "non_motor",
-    f"class={classify_vehicle(7, 'awning-tricycle')}"
+    classify_vehicle(7, "awning-tricycle", classification_cfg) == "non_motor",
+    f"class={classify_vehicle(7, 'awning-tricycle', classification_cfg)}"
 )
 
 results.check(
     "VisDrone car 归类为 motor",
-    classify_vehicle(3, "car") == "motor",
-    f"class={classify_vehicle(3, 'car')}"
+    classify_vehicle(3, "car", classification_cfg) == "motor",
+    f"class={classify_vehicle(3, 'car', classification_cfg)}"
 )
 
 results.check(
-    "COCO motorcycle id 3 保持 motor",
-    classify_vehicle(3) == "motor",
-    f"class={classify_vehicle(3)}"
+    "motor 类别名按配置归类为 non_motor",
+    classify_vehicle(9, "motor", classification_cfg) == "non_motor",
+    f"class={classify_vehicle(9, 'motor', classification_cfg)}"
+)
+
+results.check(
+    "motorcycle 类别名按配置归类为 non_motor",
+    classify_vehicle(3, "motorcycle", classification_cfg) == "non_motor",
+    f"class={classify_vehicle(3, 'motorcycle', classification_cfg)}"
+)
+
+results.check(
+    "motorbike 类别名按配置归类为 non_motor",
+    classify_vehicle(3, "motorbike", classification_cfg) == "non_motor",
+    f"class={classify_vehicle(3, 'motorbike', classification_cfg)}"
+)
+
+results.check(
+    "electric-bike 类别名按配置归类为 non_motor",
+    classify_vehicle(3, "electric-bike", classification_cfg) == "non_motor",
+    f"class={classify_vehicle(3, 'electric-bike', classification_cfg)}"
+)
+
+results.check(
+    "未配置类别名默认归类为 motor",
+    classify_vehicle(42, "unknown-new-class", classification_cfg) == "motor",
+    f"class={classify_vehicle(42, 'unknown-new-class', classification_cfg)}"
+)
+
+results.check(
+    "无类别名时按非机动车 ID 兜底",
+    classify_vehicle(9, None, classification_cfg) == "non_motor",
+    f"class={classify_vehicle(9, None, classification_cfg)}"
+)
+
+results.check(
+    "完全缺失类别信息保持 unknown",
+    classify_vehicle(None, None, classification_cfg) == "unknown",
+    f"class={classify_vehicle(None, None, classification_cfg)}"
 )
 
 
@@ -349,59 +422,266 @@ print("="*60)
 conflict_config = {
     "conflict_detection": {
         "enabled": True,
-        "proximity_threshold_m": 3.0,
-        "ttc_threshold_sec": 2.0,
-        "severity_levels": {
-            "critical": {"ttc": 1.0, "distance_m": 1.5},
-            "warning": {"ttc": 2.0, "distance_m": 3.0},
-            "info": {"ttc": 3.0, "distance_m": 5.0},
-        },
+        "prediction_horizon_sec": 5.0,
+        "critical_horizon_sec": 3.0,
+        "sample_interval_sec": 0.1,
+        "collision_radius_m": 2.0,
+        "arrival_time_tolerance_sec": 1.0,
+        "relative_speed_min_ms": 0.5,
     },
 }
 
-fe_conflict = FrameElement("test", frame, 10.0, 300, roads_info)
-fe_conflict.id_list = [101, 202]
-fe_conflict.tracked_xyxy = [[0, 0, 2, 2], [2, 0, 4, 2]]
-fe_conflict.homography_matrix = np.eye(3)
-fe_conflict.drone_displacement_m = np.array([0.0, 0.0])
-fe_conflict.world_anchor_lat_lon = [36.702909, 117.022330]
+fe_near_diverging = FrameElement("test", frame, 10.0, 300, roads_info)
+fe_near_diverging.id_list = [101, 202]
+fe_near_diverging.tracked_xyxy = [[0, 0, 2, 2], [2.6, 0, 4.6, 2]]
+fe_near_diverging.homography_matrix = np.eye(3)
 
 motor_track = TrackElement(id=101, timestamp_first=0.0)
 motor_track.vehicle_class = "motor"
 motor_track.avg_speed_kmh = 10.0
+motor_track.velocity_ms = np.array([1.0, 0.0])
 non_motor_track = TrackElement(id=202, timestamp_first=0.0)
 non_motor_track.vehicle_class = "non_motor"
 non_motor_track.avg_speed_kmh = 5.0
-fe_conflict.buffer_tracks = {
+non_motor_track.velocity_ms = np.array([1.0, 0.0])
+fe_near_diverging.buffer_tracks = {
     101: motor_track,
     202: non_motor_track,
 }
 
-fe_conflict_out = ConflictDetectionNode(conflict_config).process(fe_conflict)
-events = fe_conflict_out.conflict_events
+near_diverging_events = ConflictDetectionNode(conflict_config).process(fe_near_diverging).conflict_events
 
 results.check(
-    "近距离 motor/non_motor 产生冲突事件",
-    len(events) == 1,
-    f"events={events}"
+    "近距离但未来轨迹不碰撞时不产生冲突事件",
+    len(near_diverging_events) == 0,
+    f"events={near_diverging_events}"
 )
 
-if events:
+fe_critical = FrameElement("test", frame, 20.0, 600, roads_info)
+fe_critical.id_list = [303, 404]
+fe_critical.tracked_xyxy = [[0, 0, 2, 2], [10, 0, 12, 2]]
+fe_critical.homography_matrix = np.eye(3)
+fe_critical.drone_displacement_m = np.array([0.0, 0.0])
+fe_critical.world_anchor_lat_lon = [36.702909, 117.022330]
+
+critical_motor = TrackElement(id=303, timestamp_first=0.0)
+critical_motor.vehicle_class = "motor"
+critical_motor.avg_speed_kmh = 14.4
+critical_motor.velocity_ms = np.array([4.0, 0.0])
+critical_non_motor = TrackElement(id=404, timestamp_first=0.0)
+critical_non_motor.vehicle_class = "non_motor"
+critical_non_motor.avg_speed_kmh = 0.0
+critical_non_motor.velocity_ms = np.array([0.0, 0.0])
+fe_critical.buffer_tracks = {
+    303: critical_motor,
+    404: critical_non_motor,
+}
+
+critical_events = ConflictDetectionNode(conflict_config).process(fe_critical).conflict_events
+results.check(
+    "0-3秒未来轨迹碰撞产生 critical 冲突事件",
+    len(critical_events) == 1,
+    f"events={critical_events}"
+)
+
+if critical_events:
     results.check(
         "冲突事件包含 motor/non_motor id",
-        events[0]["motor_id"] == 101 and events[0]["non_motor_id"] == 202,
-        f"event={events[0]}"
+        critical_events[0]["motor_id"] == 303 and critical_events[0]["non_motor_id"] == 404,
+        f"event={critical_events[0]}"
     )
     results.check(
         "冲突严重级别为 critical",
-        events[0]["severity"] == "critical",
-        f"severity={events[0]['severity']}"
+        critical_events[0]["severity"] == "critical",
+        f"severity={critical_events[0]['severity']}"
+    )
+    results.check(
+        "冲突事件输出预测碰撞TTC",
+        abs(critical_events[0]["ttc_sec"] - 2.0) < 0.11,
+        f"event={critical_events[0]}"
     )
     results.check(
         "冲突事件输出世界坐标",
-        "motor_position_m" in events[0] and "non_motor_position_m" in events[0],
-        f"event={events[0]}"
+        "motor_position_m" in critical_events[0] and "non_motor_position_m" in critical_events[0],
+        f"event={critical_events[0]}"
     )
+
+fe_warning = FrameElement("test", frame, 22.0, 660, roads_info)
+fe_warning.id_list = [505, 606]
+fe_warning.tracked_xyxy = [[0, 0, 2, 2], [16, 0, 18, 2]]
+fe_warning.homography_matrix = np.eye(3)
+warning_motor = TrackElement(id=505, timestamp_first=0.0)
+warning_motor.vehicle_class = "motor"
+warning_motor.avg_speed_kmh = 14.4
+warning_motor.velocity_ms = np.array([4.0, 0.0])
+warning_non_motor = TrackElement(id=606, timestamp_first=0.0)
+warning_non_motor.vehicle_class = "non_motor"
+warning_non_motor.avg_speed_kmh = 0.0
+warning_non_motor.velocity_ms = np.array([0.0, 0.0])
+fe_warning.buffer_tracks = {
+    505: warning_motor,
+    606: warning_non_motor,
+}
+warning_events = ConflictDetectionNode(conflict_config).process(fe_warning).conflict_events
+results.check(
+    "3-5秒未来轨迹碰撞产生 warning 冲突事件",
+    len(warning_events) == 1 and warning_events[0]["severity"] == "warning",
+    f"events={warning_events}"
+)
+
+conflict_node_once_per_pair = ConflictDetectionNode(conflict_config)
+first_pair_frame = FrameElement("test", frame, 50.0, 1500, roads_info)
+first_pair_frame.id_list = [701, 702]
+first_pair_frame.tracked_xyxy = [[0, 0, 2, 2], [10, 0, 12, 2]]
+first_pair_frame.homography_matrix = np.eye(3)
+pair_motor = TrackElement(id=701, timestamp_first=0.0)
+pair_motor.vehicle_class = "motor"
+pair_motor.avg_speed_kmh = 14.4
+pair_motor.velocity_ms = np.array([4.0, 0.0])
+pair_non_motor = TrackElement(id=702, timestamp_first=0.0)
+pair_non_motor.vehicle_class = "non_motor"
+pair_non_motor.avg_speed_kmh = 0.0
+pair_non_motor.velocity_ms = np.array([0.0, 0.0])
+first_pair_frame.buffer_tracks = {701: pair_motor, 702: pair_non_motor}
+first_pair_events = conflict_node_once_per_pair.process(first_pair_frame).conflict_events
+
+second_pair_frame = FrameElement("test", frame, 56.0, 1680, roads_info)
+second_pair_frame.id_list = [701, 702]
+second_pair_frame.tracked_xyxy = [[0, 0, 2, 2], [10, 0, 12, 2]]
+second_pair_frame.homography_matrix = np.eye(3)
+second_pair_frame.buffer_tracks = first_pair_frame.buffer_tracks
+second_pair_events = conflict_node_once_per_pair.process(second_pair_frame).conflict_events
+
+results.check(
+    "motor/non_motor 轨迹对首次跨过冲突临界点后不重复上报",
+    len(first_pair_events) == 1 and len(second_pair_events) == 0,
+    f"first={first_pair_events}, second={second_pair_events}"
+)
+
+conflict_node_upgrade_pair = ConflictDetectionNode(conflict_config)
+warning_pair_frame = FrameElement("test", frame, 60.0, 1800, roads_info)
+warning_pair_frame.id_list = [801, 802]
+warning_pair_frame.tracked_xyxy = [[0, 0, 2, 2], [16, 0, 18, 2]]
+warning_pair_frame.homography_matrix = np.eye(3)
+upgrade_motor = TrackElement(id=801, timestamp_first=0.0)
+upgrade_motor.vehicle_class = "motor"
+upgrade_motor.avg_speed_kmh = 14.4
+upgrade_motor.velocity_ms = np.array([4.0, 0.0])
+upgrade_non_motor = TrackElement(id=802, timestamp_first=0.0)
+upgrade_non_motor.vehicle_class = "non_motor"
+upgrade_non_motor.avg_speed_kmh = 0.0
+upgrade_non_motor.velocity_ms = np.array([0.0, 0.0])
+warning_pair_frame.buffer_tracks = {801: upgrade_motor, 802: upgrade_non_motor}
+warning_pair_events = conflict_node_upgrade_pair.process(warning_pair_frame).conflict_events
+
+critical_pair_frame = FrameElement("test", frame, 61.0, 1830, roads_info)
+critical_pair_frame.id_list = [801, 802]
+critical_pair_frame.tracked_xyxy = [[0, 0, 2, 2], [10, 0, 12, 2]]
+critical_pair_frame.homography_matrix = np.eye(3)
+critical_pair_frame.buffer_tracks = warning_pair_frame.buffer_tracks
+critical_pair_events = conflict_node_upgrade_pair.process(critical_pair_frame).conflict_events
+
+results.check(
+    "同一轨迹对从 warning 进入 critical 时再次上报升级事件",
+    (
+        len(warning_pair_events) == 1
+        and warning_pair_events[0]["severity"] == "warning"
+        and len(critical_pair_events) == 1
+        and critical_pair_events[0]["severity"] == "critical"
+    ),
+    f"warning={warning_pair_events}, critical={critical_pair_events}"
+)
+
+fe_intersection_arrival = FrameElement("test", frame, 62.0, 1860, roads_info)
+fe_intersection_arrival.id_list = [901, 902]
+fe_intersection_arrival.tracked_xyxy = [[-1, -1, 1, 1], [19, -31, 21, -29]]
+fe_intersection_arrival.homography_matrix = np.eye(3)
+intersection_motor = TrackElement(id=901, timestamp_first=0.0)
+intersection_motor.vehicle_class = "motor"
+intersection_motor.avg_speed_kmh = 36.0
+intersection_motor.velocity_ms = np.array([10.0, 0.0])
+intersection_non_motor = TrackElement(id=902, timestamp_first=0.0)
+intersection_non_motor.vehicle_class = "non_motor"
+intersection_non_motor.avg_speed_kmh = 36.0
+intersection_non_motor.velocity_ms = np.array([0.0, 10.0])
+fe_intersection_arrival.buffer_tracks = {
+    901: intersection_motor,
+    902: intersection_non_motor,
+}
+
+intersection_arrival_events = (
+    ConflictDetectionNode(conflict_config)
+    .process(fe_intersection_arrival)
+    .conflict_events
+)
+results.check(
+    "交叉路口路径交点到达时间差在阈值内时产生冲突事件",
+    (
+        len(intersection_arrival_events) == 1
+        and abs(intersection_arrival_events[0]["arrival_time_delta_sec"] - 1.0) < 0.11
+    ),
+    f"events={intersection_arrival_events}"
+)
+
+fe_false_ttc = FrameElement("test", frame, 21.0, 630, roads_info)
+fe_false_ttc.id_list = [305, 406]
+fe_false_ttc.tracked_xyxy = [[0, 0, 2, 2], [12, 0, 14, 2]]
+fe_false_ttc.homography_matrix = np.eye(3)
+parallel_motor_track = TrackElement(id=305, timestamp_first=0.0)
+parallel_motor_track.vehicle_class = "motor"
+parallel_motor_track.avg_speed_kmh = 36.0
+parallel_motor_track.velocity_ms = np.array([0.0, 10.0])
+stationary_non_motor_track = TrackElement(id=406, timestamp_first=0.0)
+stationary_non_motor_track.vehicle_class = "non_motor"
+stationary_non_motor_track.avg_speed_kmh = 0.0
+stationary_non_motor_track.velocity_ms = np.array([0.0, 0.0])
+fe_false_ttc.buffer_tracks = {
+    305: parallel_motor_track,
+    406: stationary_non_motor_track,
+}
+
+false_ttc_events = ConflictDetectionNode(conflict_config).process(fe_false_ttc).conflict_events
+results.check(
+    "未来最近点不进入碰撞半径时不产生冲突事件",
+    len(false_ttc_events) == 0,
+    f"events={false_ttc_events}"
+)
+
+fe_motor_only = FrameElement("test", frame, 30.0, 900, roads_info)
+fe_motor_only.id_list = [501, 502]
+fe_motor_only.tracked_xyxy = [[0, 0, 2, 2], [1, 0, 3, 2]]
+fe_motor_only.homography_matrix = np.eye(3)
+motor_a = TrackElement(id=501, timestamp_first=0.0)
+motor_a.vehicle_class = "motor"
+motor_a.avg_speed_kmh = 10.0
+motor_b = TrackElement(id=502, timestamp_first=0.0)
+motor_b.vehicle_class = "motor"
+motor_b.avg_speed_kmh = 10.0
+fe_motor_only.buffer_tracks = {501: motor_a, 502: motor_b}
+motor_only_events = ConflictDetectionNode(conflict_config).process(fe_motor_only).conflict_events
+results.check(
+    "两个 motor 不产生机非冲突事件",
+    len(motor_only_events) == 0,
+    f"events={motor_only_events}"
+)
+
+fe_non_motor_only = FrameElement("test", frame, 40.0, 1200, roads_info)
+fe_non_motor_only.id_list = [601, 602]
+fe_non_motor_only.tracked_xyxy = [[0, 0, 2, 2], [1, 0, 3, 2]]
+fe_non_motor_only.homography_matrix = np.eye(3)
+non_motor_a = TrackElement(id=601, timestamp_first=0.0)
+non_motor_a.vehicle_class = "non_motor"
+non_motor_a.avg_speed_kmh = 10.0
+non_motor_b = TrackElement(id=602, timestamp_first=0.0)
+non_motor_b.vehicle_class = "non_motor"
+non_motor_b.avg_speed_kmh = 10.0
+fe_non_motor_only.buffer_tracks = {601: non_motor_a, 602: non_motor_b}
+non_motor_only_events = ConflictDetectionNode(conflict_config).process(fe_non_motor_only).conflict_events
+results.check(
+    "两个 non_motor 不产生机非冲突事件",
+    len(non_motor_only_events) == 0,
+    f"events={non_motor_only_events}"
+)
 
 
 # ============================================================

@@ -108,6 +108,8 @@ class PipelineManager:
         self,
         project_root: str | Path | None = None,
         kafka_bootstrap: str = "kafka:9092",
+        pipeline_python: str | None = None,
+        frame_stride: int | None = None,
     ):
         # Priority: explicit arg > PIPELINE_PROJECT_ROOT env var > fallback
         env_root = os.environ.get("PIPELINE_PROJECT_ROOT")
@@ -118,6 +120,8 @@ class PipelineManager:
         else:
             self._root = _PROJECT_ROOT
         self._kafka_bootstrap = kafka_bootstrap
+        self._pipeline_python = pipeline_python or os.environ.get("PIPELINE_PYTHON") or "python"
+        self._frame_stride = frame_stride
         self._pipelines: dict[str, PipelineInstance] = {}
         self._next_camera_id = 10  # start from 10 to avoid collision with static cameras
         self._next_video_port = 8101  # 8100 reserved for manually-started pipelines
@@ -216,18 +220,20 @@ class PipelineManager:
         env = {
             **os.environ,
             "VIDEO_SRC": video_src,
-            "ROADS_JSON": str(self._root / roads_json),
+            "ROADS_JSON": str(self._root / roads_json) if roads_json else "",
             "TOPIC_NAME": topic_name,
             "CAMERA_ID": str(camera_id),
             "INTERSECTION_ID": intersection_id,  # pass real intersection ID (e.g. INT_camera_1)
             "VIDEO_PORT": str(video_port),  # unique MJPEG port per pipeline
         }
+        if self._frame_stride is not None:
+            env["FRAME_STRIDE"] = str(self._frame_stride)
         if kafka_bootstrap:
             env["KAFKA_BOOTSTRAP"] = kafka_bootstrap
 
         # Spawn the pipeline process
         try:
-            cmd = ["python", "main_optimized.py", "pipeline.send_info_kafka=True"]
+            cmd = [self._pipeline_python, "main_optimized.py", "pipeline.send_info_kafka=True"]
             if telemetry_source:
                 cmd.extend([
                     "telemetry.enabled=True",
@@ -241,6 +247,7 @@ class PipelineManager:
                 env=env,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                start_new_session=True,
             )
             pipeline.process = proc
             pipeline.io_tasks = [
@@ -282,12 +289,18 @@ class PipelineManager:
         if pipeline.process and pipeline.process.returncode is None:
             logger.info(f"Stopping pipeline {pipeline_id} (PID={pipeline.process.pid})")
             try:
-                pipeline.process.terminate()
+                try:
+                    os.killpg(pipeline.process.pid, signal.SIGTERM)
+                except ProcessLookupError:
+                    pipeline.process.terminate()
                 try:
                     await asyncio.wait_for(pipeline.process.wait(), timeout=10)
                 except asyncio.TimeoutError:
                     logger.warning(f"Pipeline {pipeline_id} did not exit, sending SIGKILL")
-                    pipeline.process.kill()
+                    try:
+                        os.killpg(pipeline.process.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pipeline.process.kill()
                     await pipeline.process.wait()
             except ProcessLookupError:
                 pass  # Already dead
@@ -349,6 +362,10 @@ class PipelineManager:
                 if proc is None:
                     continue
                 if proc.returncode is not None:
+                    try:
+                        os.killpg(proc.pid, signal.SIGTERM)
+                    except ProcessLookupError:
+                        pass
                     # Process exited unexpectedly — capture stderr for diagnostics
                     stderr_msg = pipeline.stderr_tail[-500:]
                     pipeline.status = PipelineStatus.ERROR

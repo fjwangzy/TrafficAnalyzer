@@ -31,6 +31,7 @@ VIDEO_SRC="test_videos/inter_xqh/DJI_20260403142902_0001_V小清河北路与水�
 TOPIC_NAME="statistics_1" \
 CAMERA_ID=1 \
 KAFKA_BOOTSTRAP="localhost:9092" \
+FRAME_STRIDE=3 \
 python main_optimized.py \
   pipeline.send_info_kafka=True \
   telemetry.enabled=true \

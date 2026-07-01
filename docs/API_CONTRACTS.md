@@ -101,11 +101,16 @@
   "non_motor_position_m": [12.8, -4.9],
   "distance_m": 2.3,
   "ttc_sec": 1.5,
+  "arrival_time_delta_sec": 0.0,
+  "motor_arrival_ttc_sec": 1.5,
+  "non_motor_arrival_ttc_sec": 1.5,
   "severity": "warning",
   "motor_speed_kmh": 25.0,
   "world_anchor_lat_lon": [31.234567, 121.456789]
 }
 ```
+
+冲突检测默认启用（`conflict_detection.enabled: true`），但无有效单应性矩阵或双方世界坐标速度向量时会自动跳过，避免像素距离误报。`ttc_sec` 基于 motor/non_motor 当前世界坐标速度向量做未来 `0-5s` 轨迹预测；双方未来位置在同一预测时刻进入 `collision_radius_m`（默认 `2.0m`），或双方预测路径存在空间交点且到达时间差不超过 `arrival_time_tolerance_sec`（默认 `1.0s`）时触发。只有未来轨迹碰撞才会上报 `conflict`。`distance_m` 表示预测冲突时刻的双方距离，路径交点场景为 `0.0`；`motor_position_m` / `non_motor_position_m` 表示预测冲突点附近的双方未来世界坐标。`motor_arrival_ttc_sec` / `non_motor_arrival_ttc_sec` 表示双方到达冲突点的预测时间。`motor_id` / `non_motor_id` 轨迹对同级别事件不重复上报，但允许从 `warning` 升级为 `critical` 再次上报，直到轨迹清理后释放状态。Platform Kafka consumer 的实时冲突缓存和 WebSocket 推送同样按 `motor_id` / `non_motor_id` upsert，同级重复消息会被丢弃，升级消息会替换原事件并重新推送。机非分类由 `vehicle_classification.non_motor_class_names` / `non_motor_class_ids` 配置非机动车集合；未配置的已知检测类别按机动车处理。摩托车、电动车相关类别默认归入非机动车。
 
 ### 世界坐标说明
 
@@ -513,7 +518,7 @@ Content-Type: application/json
 | POST | `/api/v1/pipelines` | 启动新管道（201 Created） |
 | GET | `/api/v1/pipelines/{id}` | 获取管道详情 |
 | GET | `/api/v1/pipelines/{id}/status` | 获取管道健康状态 |
-| DELETE | `/api/v1/pipelines/{id}` | 停止管道（SIGTERM → 10s → SIGKILL） |
+| DELETE | `/api/v1/pipelines/{id}` | 停止管道（进程组 SIGTERM → 10s → SIGKILL） |
 
 #### 启动管道请求体
 ```json
@@ -521,9 +526,20 @@ Content-Type: application/json
   "drone_id": "drone_001",
   "intersection_id": "INT_camera_1",
   "video_src": "rtsp://192.168.1.100:554/stream",
-  "roads_json": "configs/entry_exit_lanes.json"
+  "roads_json": "configs/entry_exit_lanes.json",
+  "telemetry_source": "srt",
+  "telemetry_file_path": "test_videos/inter_xqh/telemetry.srt"
 }
 ```
+
+`roads_json` 可传空字符串，平台会把子进程 `ROADS_JSON` 置空，检测管道按无道路标注模式运行。未显式传自定义道路文件且仍为默认 `configs/entry_exit_lanes.json` 时，平台会优先查找该路口已保存的人工车道标注导出文件。
+
+本地开发可通过环境变量控制平台启动的检测器子进程：
+- `PIPELINE_PYTHON`：检测器 Python 解释器，例如 `/Users/yaoyao/miniconda3/envs/py312/bin/python`
+- `PIPELINE_FRAME_STRIDE`：写入检测器 `FRAME_STRIDE` 环境变量，例如 `3`
+- `KAFKA_BOOTSTRAP`：检测器和平台 Kafka 地址，例如 `localhost:9092`
+
+平台会为每条检测管道创建独立进程组；停止管道时终止整个进程组，避免 `main_optimized.py` 的 multiprocessing worker 被父进程遗留后继续向 Kafka 写数据。
 
 #### 管道响应体
 ```json
@@ -535,6 +551,7 @@ Content-Type: application/json
   "roads_json": "configs/entry_exit_lanes.json",
   "topic_name": "statistics_10",
   "camera_id": 10,
+  "video_port": 8101,
   "status": "running",
   "started_at": 1234567890.123,
   "stopped_at": 0,
@@ -654,6 +671,7 @@ Content-Type: application/json
 
 ### `conflict` 消息
 通过 `intersection:{id}` 频道推送，与 Kafka conflicts topic 格式一致。
+- Monitoring 页面会保留并显示最近 20 个实时冲突 pair；同一 `motor_id` / `non_motor_id` 的重复消息会合并为一条事件行。点击事件行会在 BEV 上叠加 motor/non_motor 短时回放层，回放控制状态与实时 `active_trajectories` 投放解耦。
 - severity="critical" → AlertEngine 创建 P1 告警
 - severity="warning" → AlertEngine 创建 P2 告警
 

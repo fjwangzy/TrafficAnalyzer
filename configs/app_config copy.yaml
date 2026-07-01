@@ -34,6 +34,7 @@ general:
 video_reader:
   src: ${oc.env:VIDEO_SRC} # путь до файла обработки или номер камеры (int) или ссылки на m3u8 / rtsp поток
   skip_secs : 0  # считываем кадры раз в <skip_secs> секунд
+  frame_stride: ${oc.decode:${oc.env:FRAME_STRIDE,1}} # обрабатывать каждый N-й кадр; 10~12 помогает восстановить нормальную скорость движения при низком FPS
   roads_info: ${oc.env:ROADS_JSON} # json файл с координатами дорог на видео
 
 
@@ -51,6 +52,27 @@ tracking_node:
   second_track_thresh: 0.10  # Пороговое значение для поддержания трека
   match_thresh: 0.95  # Чем больше значение, тем больше может быть расстояние между соседними обнаруженими чтобы держать трек
   track_buffer: 125  # Время жизни трека после исчезновения из поля зрения (измеряется в числе кадров)
+
+vehicle_classification:
+  # Настраиваются только non-motor классы; всё остальное с известным классом считается motor.
+  # Motor/motorcycle/e-bike в этой модели объединяются в non_motor.
+  non_motor_class_names:
+    - pedestrian
+    - person
+    - people
+    - bicycle
+    - tricycle
+    - awning-tricycle
+    - motor
+    - motorcycle
+    - motorbike
+    - e-bike
+    - electric-bike
+    - electric-bicycle
+    - ebike
+    - scooter
+    - electric-scooter
+  non_motor_class_ids: [0, 1, 2, 6, 7, 9]
 
 
 show_node:
@@ -146,13 +168,13 @@ auto_lane:
   recluster_interval_sec: 5.0          # Интервал reclustering (секунды)
 
 conflict_detection:
-  enabled: false
-  proximity_threshold_m: 3.0
-  ttc_threshold_sec: 2.0
-  severity_levels:
-    critical: {ttc: 1.0, distance_m: 1.5}
-    warning: {ttc: 2.0, distance_m: 3.0}
-    info: {ttc: 3.0, distance_m: 5.0}
+  enabled: true
+  prediction_horizon_sec: 5.0
+  critical_horizon_sec: 3.0
+  sample_interval_sec: 0.2
+  collision_radius_m: 2.0
+  arrival_time_tolerance_sec: 1.0
+  relative_speed_min_ms: 0.5
 
 
 video_server_node: 

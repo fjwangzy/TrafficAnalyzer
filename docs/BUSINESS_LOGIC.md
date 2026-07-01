@@ -4,6 +4,15 @@
 
 ## 核心业务流程
 
+### 0. 视频读取与跳帧
+
+**实现文件**：`nodes/VideoReader.py`
+
+`VideoReader` 从 MP4、RTSP 或摄像头读取原始帧，并按视频时间戳注入遥测数据。为兼顾离线全帧分析和实时预览速度，提供两类抽帧参数：
+
+- `video_reader.skip_secs`：按视频时间间隔抽帧，例如 `0.5` 表示相邻处理帧至少间隔 0.5 秒。
+- `video_reader.frame_stride`：按原始帧号抽帧，例如 `12` 表示每 12 帧处理 1 帧；`FrameElement.frame_num` 保留原始帧号，`timestamp` 仍来自视频时间轴。低 FPS 本机实时预览时可通过 `FRAME_STRIDE=10~12` 让画面中的车辆运动速度接近正常，只是运动会更跳跃。
+
 ### 1. 车辆检测
 
 **实现文件**：`nodes/DetectionTrackingNodes.py`
@@ -26,10 +35,11 @@
 - `weights/yolo11l-visdrone.pt` — VisDrone 类别模型，类别为 `pedestrian/people/bicycle/car/van/truck/tricycle/awning-tricycle/bus/motor`。
 
 **motor/non_motor 分类**：
-- 优先按模型返回的类别名分类，避免不同权重复用相同 class id 时误判。
-- `car/van/truck/bus/motor/motorcycle` → `motor`
-- `pedestrian/person/people/bicycle/tricycle/awning-tricycle` → `non_motor`
-- 类别名缺失时，保留旧版 COCO-style class id 兜底逻辑。
+- 由 `vehicle_classification` 配置驱动，只维护非机动车类别集合。
+- 优先按模型返回的类别名匹配 `non_motor_class_names`，类别名缺失时按 `non_motor_class_ids` 兜底。
+- 未命中的已知类别默认归类为 `motor`；完全缺失类别名和类别 ID 时保持 `unknown`。
+- 由于摩托车和电动车无法稳定区分，`motor/motorcycle/motorbike/e-bike/electric-bike/electric-bicycle/ebike/scooter/electric-scooter` 默认归类为 `non_motor`。
+- 当前 VisDrone 默认非机动车 ID 为 `[0, 1, 2, 6, 7, 9]`，覆盖 `pedestrian/people/bicycle/tricycle/awning-tricycle/motor`。
 
 ### 2. 多目标跟踪（ByteTrack）
 
@@ -271,6 +281,25 @@ for key in roads_activity:
 - `_build_detections()` — 从列表构建 `sv.Detections` 对象
 - `_configure_tracking_colors()` — 配置颜色方案
 - `_class_color_indices()` — 将类别名归一化为稳定调色板索引
+
+### 9. 机非冲突未来轨迹预测
+
+**实现文件**：`nodes/ConflictDetectionNode.py`
+
+冲突检测默认启用，但要求存在有效单应性矩阵；无米级世界坐标时自动跳过，避免像素距离误报。节点只比较 `motor` 与 `non_motor` 轨迹，两个机动车或两个非机动车不会生成机非冲突。
+
+冲突定义为未来轨迹碰撞预测，而不是当前距离临界值。节点使用双方当前世界坐标速度向量，在 `0-5s` 预测窗口内做两类判断：
+
+```
+motor_future(t) = motor_pos + motor_velocity * t
+non_motor_future(t) = non_motor_pos + non_motor_velocity * t
+d(t) = |motor_future(t) - non_motor_future(t)|
+```
+
+1. 同刻碰撞半径：双方未来位置在同一预测时刻进入 `collision_radius_m`（默认 `2.0m`）。
+2. 路径交叉点：两条恒速预测轨迹在未来窗口内存在空间交点，且双方到达该交点的时间差不超过 `arrival_time_tolerance_sec`（默认 `1.0s`）。
+
+当前距离较近但未来轨迹不会碰撞时不上报。`ttc_sec` 表示预测冲突时间；路径交叉点场景下同时输出 `motor_arrival_ttc_sec` / `non_motor_arrival_ttc_sec` 和 `arrival_time_delta_sec`。`0-3s` 预测碰撞标记为 `critical`，`3-5s` 标记为 `warning`。`motor_id` / `non_motor_id` 轨迹对同级别事件不重复上报，但允许从 `warning` 升级为 `critical` 再次上报；直到任一轨迹从 `buffer_tracks` 清理后释放状态。
 
 ## 统计数据的完整生命周期
 

@@ -10,43 +10,56 @@ from utils_local.motion_compensation import pixel_to_world_compensated
 
 logger = logging.getLogger("buffer_tracks")
 
-# YOLO类别→车辆分类映射（基于COCO类别ID）
-MOTOR_CLASSES = {2, 3, 4, 5, 6, 7, 8, 9}  # Legacy COCO-style fallback.
-NON_MOTOR_CLASSES = {0, 1}  # Legacy COCO-style fallback.
-
-MOTOR_CLASS_NAMES = {
-    "car",
-    "van",
-    "truck",
-    "bus",
-    "motor",
-    "motorcycle",
-}
-NON_MOTOR_CLASS_NAMES = {
+DEFAULT_NON_MOTOR_CLASS_NAMES = {
     "pedestrian",
     "person",
     "people",
     "bicycle",
     "tricycle",
     "awning-tricycle",
+    "motor",
+    "motorcycle",
+    "motorbike",
+    "e-bike",
+    "electric-bike",
+    "electric-bicycle",
+    "ebike",
+    "scooter",
+    "electric-scooter",
 }
+DEFAULT_NON_MOTOR_CLASS_IDS = {0, 1, 2, 6, 7, 9}
 
 
-def classify_vehicle(yolo_class_id: int | None, yolo_class_name: str | None = None) -> str:
-    """根据YOLO检测类别名称/ID分类为motor/non_motor/unknown。"""
+def _normalize_class_name(name: str) -> str:
+    return name.strip().lower().replace("_", "-")
+
+
+def _configured_non_motor_sets(classification_cfg: dict | None = None) -> tuple[set[str], set[int]]:
+    cfg = classification_cfg or {}
+    class_names = cfg.get("non_motor_class_names", DEFAULT_NON_MOTOR_CLASS_NAMES)
+    class_ids = cfg.get("non_motor_class_ids", DEFAULT_NON_MOTOR_CLASS_IDS)
+    non_motor_names = {_normalize_class_name(str(name)) for name in class_names}
+    non_motor_ids = {int(class_id) for class_id in class_ids}
+    return non_motor_names, non_motor_ids
+
+
+def classify_vehicle(
+    yolo_class_id: int | None,
+    yolo_class_name: str | None = None,
+    classification_cfg: dict | None = None,
+) -> str:
+    """根据配置的非机动车类别分类；未配置但有类别信息时默认机动车。"""
+    non_motor_names, non_motor_ids = _configured_non_motor_sets(classification_cfg)
     if yolo_class_name:
-        normalized = yolo_class_name.strip().lower().replace("_", "-")
-        if normalized in MOTOR_CLASS_NAMES:
-            return "motor"
-        if normalized in NON_MOTOR_CLASS_NAMES:
+        normalized = _normalize_class_name(yolo_class_name)
+        if normalized in non_motor_names:
             return "non_motor"
+        return "motor"
     if yolo_class_id is None:
         return "unknown"
-    if yolo_class_id in MOTOR_CLASSES:
-        return "motor"
-    if yolo_class_id in NON_MOTOR_CLASSES:
+    if yolo_class_id in non_motor_ids:
         return "non_motor"
-    return "unknown"
+    return "motor"
 
 
 class TrackerInfoUpdateNode:
@@ -67,6 +80,7 @@ class TrackerInfoUpdateNode:
         trajectory_cfg = config.get("trajectory", {})
         self.min_track_duration = trajectory_cfg.get("min_track_duration_sec", 2.0)
         self.min_trajectory_points = 5
+        self.vehicle_classification_cfg = config.get("vehicle_classification", {})
 
     @profile_time
     def process(self, frame_element: FrameElement) -> FrameElement:
@@ -100,6 +114,7 @@ class TrackerInfoUpdateNode:
                     self.buffer_tracks[id].vehicle_class = classify_vehicle(
                         tracked_cls_ids[i],
                         class_name,
+                        self.vehicle_classification_cfg,
                     )
             else:
                 # 更新最后检测时间

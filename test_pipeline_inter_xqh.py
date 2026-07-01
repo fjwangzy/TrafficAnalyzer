@@ -17,7 +17,7 @@ import numpy as np
 
 # 设置环境变量
 os.environ["VIDEO_SRC"] = "test_videos/inter_xqh/DJI_20260403142902_0001_V小清河北路与水屯路路口.mp4"
-os.environ["ROADS_JSON"] = "configs/entry_exit_lanes.json"
+os.environ["ROADS_JSON"] = ""
 os.environ["TOPIC_NAME"] = "statistics_1"
 os.environ["CAMERA_ID"] = "1"
 
@@ -118,14 +118,13 @@ def build_test_config():
             },
         },
         "conflict_detection": {
-            "enabled": False,
-            "proximity_threshold_m": 3.0,
-            "ttc_threshold_sec": 2.0,
-            "severity_levels": {
-                "critical": {"ttc": 1.0, "distance_m": 1.5},
-                "warning": {"ttc": 2.0, "distance_m": 3.0},
-                "info": {"ttc": 3.0, "distance_m": 5.0},
-            },
+            "enabled": True,
+            "prediction_horizon_sec": 5.0,
+            "critical_horizon_sec": 3.0,
+            "sample_interval_sec": 0.2,
+            "collision_radius_m": 2.0,
+            "arrival_time_tolerance_sec": 1.0,
+            "relative_speed_min_ms": 0.5,
         },
         "show_node": {
             "scale": 0.6,
@@ -536,6 +535,7 @@ def main():
         trajectory_node = TrajectoryNode(config)
         conflict_node = ConflictDetectionNode(config)
         calc_node = CalcStatisticsNode(config)
+        results.check("ConflictDetectionNode启用", conflict_node.enabled is True)
 
         vr2 = VideoReader(config["video_reader"], config["telemetry"])
         max_frames = 100
@@ -546,6 +546,7 @@ def main():
         h_matrix_count = 0
         motion_comp_count = 0
         completed_tracks_total = 0
+        conflict_events_total = 0
 
         t0 = time.time()
 
@@ -594,6 +595,8 @@ def main():
 
             # Conflict Detection
             fe = conflict_node.process(fe)
+            if fe.conflict_events:
+                conflict_events_total += len(fe.conflict_events)
 
             # Calc Statistics
             fe = calc_node.process(fe)
@@ -606,6 +609,7 @@ def main():
                 print(f"  帧 {frame_count2}/{max_frames}: "
                       f"detections={len(fe.tracked_xyxy) if fe.tracked_xyxy else 0}, "
                       f"tracks={tracks}, "
+                      f"conflicts={len(fe.conflict_events) if fe.conflict_events else 0}, "
                       f"telemetry={'Y' if fe.telemetry else 'N'}, "
                       f"H={'Y' if fe.homography_matrix is not None else 'N'}, "
                       f"disp={'Y' if fe.drone_displacement_m is not None else 'N'}, "
@@ -627,6 +631,7 @@ def main():
         print(f"  H矩阵有效帧数: {h_matrix_count}/{frame_count2}")
         print(f"  运动补偿有效帧数: {motion_comp_count}/{frame_count2}")
         print(f"  完成轨迹数: {completed_tracks_total}")
+        print(f"  机非冲突事件数: {conflict_events_total}")
 
         results.check("检测+跟踪工作正常", detection_count > 0,
                       f"{detection_count}/{frame_count2} frames with detections")

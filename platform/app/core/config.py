@@ -56,6 +56,8 @@ class Settings(BaseSettings):
     # ── Video ──
     hls_output_dir: str = "/hls"
     pipeline_video_base: str = "http://traffic_analyzer_camera_1:8100/video"
+    pipeline_python: str = "python"
+    pipeline_frame_stride: int | None = None
 
     # ── Calibration ──
     calibration_db_path: str = "/calibration/calibration_db.json"

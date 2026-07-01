@@ -150,10 +150,15 @@
 | T-413 | ShowNode 左上角幽灵框堆积修复 | ✅ | `ShowNode.py` — 绘制前裁剪/过滤异常 bbox，并仅显示道路 ROI 内或已分配道路的轨迹；`test_refactor_unit.py` 增加可视化过滤回归测试 |
 | T-414 | 无道路标注参数启动支持 | ✅ | `VideoReader.py` + `main_optimized.py` + `main.py` + `configs/app_config.yaml` — `ROADS_JSON` 为空时使用空道路集运行，不再自动注入默认道路标注 |
 | T-415 | 无道路标注模式左上角黑块堆积修复 | ✅ | `ShowNode.py` — 无道路标注时保留自动推断车道中心线/箭头，但关闭左上角车道统计黑底面板；`test_refactor_unit.py` 增加黑底像素回归测试 |
+| T-416 | 机非分类配置化 + 监控冲突事件列表 | ✅ | `TrackerInfoUpdateNode.py` — 非机动车类别提取到 `vehicle_classification`，未配置类别默认机动车，摩托车/电动车归为非机动车；`ConflictDetectionNode.py` — 默认启用并支持 TTC 阈值触发；`traffic-fly-console/src/features/monitoring/index.tsx` — 监控页显示最近 20 条冲突事件 |
+| T-417 | 页面发起 inter_xqh 全流程验证 | ✅ | `traffic-fly-console/src/features/video/index.tsx` — 视频分析页默认使用真实 inter_xqh 视频+SRT、动态匹配 PipelineManager 返回的 `camera_id`，MJPEG 加载失败后自动重试；`platform/app/services/pipeline_manager.py` — 支持 `PIPELINE_PYTHON`/`PIPELINE_FRAME_STRIDE`，空 `ROADS_JSON` 透传无道路标注模式，并用进程组停止检测器；已从页面启动并验证 Kafka → Platform WebSocket → 页面冲突列表 → InfluxDB 写入 |
+| T-418 | 监控页冲突事件 BEV 回放 | ✅ | `traffic-fly-console/src/features/monitoring/` — 冲突事件列表可点击，BEV 叠加 motor/non_motor 回放层，支持播放/暂停/重放、倍速、3s/6s/10s 窗口和轨迹不足降级；回放动画状态已与实时轨迹刷新解耦，连续点击事件行会强制从头回放；列表按 motor/non_motor pair 合并重复消息；`platform/app/kafka/consumer.py` — Platform WebSocket 推送前也按 pair upsert，同级重复冲突不再广播，warning 可升级 critical |
+| T-419 | TTC 冲突误报优化 | ✅ | `SpeedEstimationNode.py` — 输出世界坐标速度向量；`ConflictDetectionNode.py` — 曾改为相对运动最近点（CPA）算法，后续由 T-420 替代为未来轨迹预测口径；`test_refactor_unit.py` 增加冲突检测回归测试 |
+| T-420 | 机非冲突未来轨迹预测口径修正 | ✅ | `ConflictDetectionNode.py` — 移除当前近距离触发，改为 `0-5s` 未来轨迹采样预测，并支持交叉路口路径交点到达时间差判断；同级 pair 不重复上报，`warning` 可升级 `critical`；`configs/app_config.yaml` — 新增 `prediction_horizon_sec` / `critical_horizon_sec` / `sample_interval_sec` / `arrival_time_tolerance_sec`；`test_refactor_unit.py` — 覆盖近距离不碰撞不上报、0-3s critical、3-5s warning、pair 去重、warning→critical 升级、交叉点到达时间差；`test_pipeline_inter_xqh.py` — 无道路标注 xqh 前100帧真实 YOLO+SRT 验证，冲突节点启用且检测到 3 个机非冲突事件 |
 
 ### 待完成
 
-- [ ] T-105: Kafka 端到端验证（需启动完整环境）
+- [x] T-105: Kafka 端到端验证（页面启动 `statistics_11/conflicts_11`，Platform WebSocket 收到 stats/conflict）
 - [ ] T-106: MJPEG 视频流验证（需启动完整环境）
 - [ ] T-301: Drones 页面对接 telemetry WebSocket
 - [ ] T-302: GIS 轨迹回放
@@ -210,11 +215,12 @@
 - [x] **ShowNode 左上角幽灵框堆积修复（T-413）**
 - [x] **无道路标注参数启动支持（T-414）**
 - [x] **车道检测集成到 main.py 和 main_optimized.py**
+- [x] **页面发起 inter_xqh 全流程验证（T-417）**
 
 ### 近期（1-2 周）
 - [ ] 清除 Kafka stale data（运行 `scripts/fix_kafka_and_restart.sh`）
-- [ ] 验证 Kafka → Platform → InfluxDB 全链路数据流（T-105）
-- [ ] 验证 MJPEG 视频流（管道 + Flask → nginx → Monitor 页面）（T-106）
+- [x] 验证 Kafka → Platform → InfluxDB 全链路数据流（T-105）
+- [ ] 验证生产 Nginx MJPEG 路由（T-106；本次已验证 Vite `/camera_11` 页面展示和检测器 `8102/video`）
 - [ ] 优化 inter_xqh 道路多边形（精确标注道路区域）
 - [ ] 修复 TD-009：export_dashboards.py 路径问题
 - [ ] 为 `utils_local/utils.py` 添加单元测试（T-405）
@@ -240,7 +246,7 @@
 - [ ] 多无人机任务调度
 - [ ] VLM 语义分析旁路
 - [ ] 模型微调：uav_best.pt 增加 person + bicycle
-- [ ] 冲突检测启用 + 精度验证
+- [x] 冲突检测默认启用 + 监控页实时冲突事件列表
 
 ---
 

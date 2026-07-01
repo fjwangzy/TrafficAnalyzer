@@ -36,7 +36,7 @@ TrafficAnalyzer/
 │   ├── LaneDetectionNode.py       #   YOLO分割模型车道检测（标线/路面→稳定车道多边形）
 │   ├── TrajectoryNode.py          #   轨迹转向分类 + 世界坐标轨迹输出
 │   ├── AutoLaneInferenceNode.py   #   自动车道推断（轨迹聚类→中心线→各方向指标，无需标注）
-│   ├── ConflictDetectionNode.py   #   机非冲突TTC检测（默认关闭）
+│   ├── ConflictDetectionNode.py   #   机非未来轨迹碰撞预测（默认启用）
 │   ├── CalcStatisticsNode.py      #   统计计算（车辆数 + 道路活跃度）
 │   ├── KafkaProducerNode.py       #   Kafka 多topic消息发送
 │   ├── ShowNode.py                #   supervision 可视化渲染（圆角边框/标签/轨迹尾迹/道路遮罩/统计面板）

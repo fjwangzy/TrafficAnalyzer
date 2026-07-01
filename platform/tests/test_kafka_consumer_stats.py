@@ -42,3 +42,62 @@ class KafkaConsumerStatsTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(message["type"], "stats")
         self.assertEqual(message["data"]["active_trajectories"][0]["track_id"], 7)
         self.assertEqual(message["data"]["lanes"][0]["vehicle_count"], 2)
+
+    async def test_conflict_events_are_upserted_by_motor_non_motor_pair(self):
+        ws = _RecordingWS()
+        service = KafkaConsumerService(
+            bootstrap_servers="localhost:9092",
+            group_id="test",
+            topics_pattern="conflicts_.*",
+            ws_manager=ws,
+        )
+
+        first = {
+            "msg_type": "conflict",
+            "motor_id": 96,
+            "non_motor_id": 88,
+            "severity": "critical",
+            "ttc_sec": 2.6,
+            "distance_m": 1.8,
+        }
+        duplicate = {**first, "ttc_sec": 2.5}
+
+        await service._handle_conflict(first, "INT_camera_1")
+        await service._handle_conflict(duplicate, "INT_camera_1")
+
+        self.assertEqual(len(service._latest_conflicts["INT_camera_1"]), 1)
+        self.assertEqual(service._latest_conflicts["INT_camera_1"][0]["ttc_sec"], 2.6)
+        self.assertEqual(len(ws.messages), 1)
+
+    async def test_conflict_events_allow_warning_to_critical_upgrade(self):
+        ws = _RecordingWS()
+        service = KafkaConsumerService(
+            bootstrap_servers="localhost:9092",
+            group_id="test",
+            topics_pattern="conflicts_.*",
+            ws_manager=ws,
+        )
+
+        warning = {
+            "msg_type": "conflict",
+            "motor_id": 96,
+            "non_motor_id": 88,
+            "severity": "warning",
+            "ttc_sec": 3.5,
+            "distance_m": 1.9,
+        }
+        critical = {
+            **warning,
+            "severity": "critical",
+            "ttc_sec": 2.6,
+            "distance_m": 1.8,
+        }
+
+        await service._handle_conflict(warning, "INT_camera_1")
+        await service._handle_conflict(critical, "INT_camera_1")
+
+        stored = service._latest_conflicts["INT_camera_1"]
+        self.assertEqual(len(stored), 1)
+        self.assertEqual(stored[0]["severity"], "critical")
+        self.assertEqual(stored[0]["ttc_sec"], 2.6)
+        self.assertEqual(len(ws.messages), 2)

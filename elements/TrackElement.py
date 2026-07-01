@@ -15,6 +15,7 @@ class TrackElement:
 
         # ── 新增：速度 ──
         self.position_history: list[tuple[float, float, float]] = []  # [(cx, cy, timestamp)] 最近N帧
+        self.velocity_ms = None  # np.ndarray[easting,northing]，世界坐标速度向量（m/s）
         self.speed_kmh: float = 0.0  # 当前瞬时车速
         self.avg_speed_kmh: float = 0.0  # EMA平滑车速
         self.max_speed_kmh: float = 0.0  # 轨迹内最大车速

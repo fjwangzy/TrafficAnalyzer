@@ -1006,11 +1006,19 @@ class ConflictDetectionNode:
 
                 pts = pixel_to_world(np.array([motor["center_px"], non_motor["center_px"]]), H)
                 dist_m = np.linalg.norm(pts[0] - pts[1])
-                if dist_m > self.proximity_threshold_m:
-                    continue
 
-                speed_ms = motor["speed_kmh"] / 3.6
-                ttc = dist_m / speed_ms if speed_ms > 0.5 else None
+                relative_pos = pts[1] - pts[0]
+                relative_vel = non_motor["velocity_ms"] - motor["velocity_ms"]
+                relative_speed_sq = np.dot(relative_vel, relative_vel)
+                ttc = None
+                if relative_speed_sq >= self.relative_speed_min_ms ** 2:
+                    t_cpa = -np.dot(relative_pos, relative_vel) / relative_speed_sq
+                    d_cpa = np.linalg.norm(relative_pos + relative_vel * t_cpa)
+                    if 0 < t_cpa <= self.ttc_threshold_sec and d_cpa <= self.collision_radius_m:
+                        ttc = t_cpa
+
+                if dist_m > self.proximity_threshold_m and ttc is None:
+                    continue
 
                 severity = self._classify_severity(dist_m, ttc)
                 if severity:

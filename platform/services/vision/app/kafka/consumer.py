@@ -317,11 +317,10 @@ class KafkaConsumerService:
 
         T-102: 新增 InfluxDB 持久化。
         """
-        # Keep ring buffer of recent conflicts per intersection
-        buf = self._latest_conflicts.setdefault(intersection_id, [])
-        buf.append(data)
-        if len(buf) > 20:
-            buf.pop(0)
+        # Keep one visible event per motor/non_motor pair. Duplicate same-severity
+        # messages are dropped; a warning can still upgrade to critical.
+        if not self._upsert_latest_conflict(data, intersection_id):
+            return
 
         # T-102: 写入 InfluxDB conflict_events measurement
         if self._influx:
@@ -369,6 +368,41 @@ class KafkaConsumerService:
                 ),
                 track_ids=[motor_id, non_motor_id],
             )
+
+    @staticmethod
+    def _conflict_pair_key(data: dict) -> tuple[str, str] | None:
+        motor_id = data.get("motor_id")
+        non_motor_id = data.get("non_motor_id")
+        if motor_id is None or non_motor_id is None:
+            return None
+        return str(motor_id), str(non_motor_id)
+
+    @staticmethod
+    def _conflict_severity_rank(data: dict) -> int:
+        return {"warning": 1, "critical": 2}.get(str(data.get("severity")), 0)
+
+    def _upsert_latest_conflict(self, data: dict, intersection_id: str) -> bool:
+        """Return True when this conflict should be broadcast/persisted."""
+        buf = self._latest_conflicts.setdefault(intersection_id, [])
+        pair_key = self._conflict_pair_key(data)
+        if pair_key is None:
+            buf.append(data)
+            if len(buf) > 20:
+                buf.pop(0)
+            return True
+
+        for idx, existing in enumerate(buf):
+            if self._conflict_pair_key(existing) != pair_key:
+                continue
+            if self._conflict_severity_rank(data) <= self._conflict_severity_rank(existing):
+                return False
+            buf[idx] = data
+            return True
+
+        buf.append(data)
+        if len(buf) > 20:
+            buf.pop(0)
+        return True
 
     async def _handle_telemetry(self, data: dict):
         """Handle drone telemetry update from the pipeline."""

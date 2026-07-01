@@ -48,11 +48,11 @@
 | HomographyCalibrationNode | ✅ 完整 | 100% | auto/telemetry/reference_points 三模式 |
 | MotionCompensationNode | ✅ 完整 | 95% | GPS锚定 + 速度矢量 + 悬停检测；gimbal_yaw_delta 归一化 |
 | TrackerInfoUpdateNode | ✅ 完整 | 90% | 轨迹发射、车辆分类正常；TD-008 排序问题未修 |
-| SpeedEstimationNode | ✅ 完整 | 90% | EMA平滑 + 运动补偿；仅用首尾点计算位移（噪声敏感） |
+| SpeedEstimationNode | ✅ 完整 | 95% | 线性回归速度估计 + 世界速度向量 + EMA平滑 + 运动补偿 |
 | DirectionFlowNode | ✅ 完整 | 100% | 零标注方向分类 + 排队检测 + 车头时距 |
 | LaneAnalysisNode | ✅ 完整 | 95% | 数据驱动设计（无开关），降级优雅 |
 | TrajectoryNode | ✅ 完整 | 85% | 转向行为分类 + 世界坐标；TD-016 精度限制 |
-| ConflictDetectionNode | ✅ 完整 | 100% | TTC + 距离双因子 + 冷却机制；默认关闭 |
+| ConflictDetectionNode | ✅ 完整 | 100% | 相对运动TTC + 距离双因子 + 冷却机制；默认启用 |
 | CalcStatisticsNode | ⚠️ 部分 | 70% | **道路数硬编码 5 条；congestion_index 实现不完整** |
 | KafkaProducerNode | ⚠️ 部分 | 75% | **road_1~5 硬编码；缺少 telemetry topic；Kafka 超时阻塞** |
 | ShowNode | ✅ 完整 | 95% | 352行（偏大但功能完整），TD-006 建议拆分 |
@@ -170,15 +170,10 @@
   congestion_index = vehicle_factor + queue_factor + speed_factor
   ```
 
-#### S-003: SpeedEstimationNode 仅用首尾点计算速度（噪声敏感）
+#### S-003: SpeedEstimationNode 速度估计噪声敏感（已修复）
 
 - **位置**：`SpeedEstimationNode.py:57-58`
-- **当前**：`p_old = position_history[0]`, `p_new = position_history[-1]`，仅两点求位移
-- **问题**：bbox 中心抖动（±2px）在 15 帧窗口内可能引入 ±5km/h 噪声
-- **改进方案**：
-  - **方案 A**：线性回归拟合 position_history → 取斜率作为速度（鲁棒性最佳）
-  - **方案 B**：中位数滤波 → 取中间 60% 帧的位移
-  - **方案 C**：加权平均（近帧权重高，远帧权重低）
+- **状态**：已采用线性回归拟合 `position_history`，并输出世界坐标速度向量 `velocity_ms` 供相对运动 TTC 使用。
 
 #### S-004: 遥测坐标帧 vs H矩阵帧的时间错位
 

@@ -98,13 +98,15 @@ class SpeedEstimationNode:
                     true_vel = apparent_vel - drone_vel
                     speed_ms = float(np.linalg.norm(true_vel))
                 else:
-                    speed_ms = float(np.linalg.norm(apparent_vel))
+                    true_vel = apparent_vel
+                    speed_ms = float(np.linalg.norm(true_vel))
 
+                track.velocity_ms = true_vel
                 track.speed_kmh = speed_ms * 3.6
 
                 # 更新heading_angle（世界坐标系方向）
                 if speed_ms > 0.5:
-                    track.heading_angle = math.degrees(math.atan2(slope_n, slope_e))
+                    track.heading_angle = math.degrees(math.atan2(true_vel[1], true_vel[0]))
             else:
                 # 像素空间线性回归回退（无标定）
                 t_centered = t_arr - t_arr[0]
@@ -119,6 +121,7 @@ class SpeedEstimationNode:
 
                 if abs(slope_x) > 0.5 or abs(slope_y) > 0.5:
                     track.heading_angle = math.degrees(math.atan2(slope_y, slope_x))
+                track.velocity_ms = None
 
             # EMA平滑
             track.avg_speed_kmh = alpha * track.speed_kmh + (1 - alpha) * track.avg_speed_kmh

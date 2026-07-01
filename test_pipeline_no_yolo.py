@@ -14,7 +14,7 @@ import logging
 import numpy as np
 
 os.environ["VIDEO_SRC"] = "test_videos/inter_xqh/DJI_20260403142902_0001_V小清河北路与水屯路路口.mp4"
-os.environ["ROADS_JSON"] = "configs/entry_exit_lanes.json"
+os.environ["ROADS_JSON"] = ""
 os.environ["TOPIC_NAME"] = "statistics_1"
 os.environ["CAMERA_ID"] = "1"
 
@@ -317,13 +317,12 @@ def main():
         },
         "conflict_detection": {
             "enabled": True,
-            "proximity_threshold_m": 3.0,
-            "ttc_threshold_sec": 2.0,
-            "severity_levels": {
-                "critical": {"ttc": 1.0, "distance_m": 1.5},
-                "warning": {"ttc": 2.0, "distance_m": 3.0},
-                "info": {"ttc": 3.0, "distance_m": 5.0},
-            },
+            "prediction_horizon_sec": 5.0,
+            "critical_horizon_sec": 3.0,
+            "sample_interval_sec": 0.2,
+            "collision_radius_m": 2.0,
+            "arrival_time_tolerance_sec": 1.0,
+            "relative_speed_min_ms": 0.5,
         },
         "kafka_producer_node": {
             "bootstrap_servers": "kafka:29092",

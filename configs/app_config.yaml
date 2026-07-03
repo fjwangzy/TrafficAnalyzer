@@ -34,15 +34,15 @@ general:
 video_reader:
   src: ${oc.env:VIDEO_SRC} # 待处理文件的路径，或摄像头编号（int），或 m3u8 / rtsp 流链接
   skip_secs: 0  # 每隔 <skip_secs> 秒读取一帧
-  frame_stride: ${oc.decode:${oc.env:FRAME_STRIDE,1}} # 每 N 帧处理 1 帧；低FPS实时预览可设 10~12 恢复正常行驶速度
+  frame_stride: ${oc.decode:${oc.env:FRAME_STRIDE,5}} # 每 N 帧处理 1 帧；低FPS实时预览可设 10~12 恢复正常行驶速度
   roads_info: ${oc.env:ROADS_JSON,''} # 可选：包含视频中道路坐标的 json 文件；为空则不使用道路标注
 
 detection_node:
   weight_pth: weights/yolo11l-visdrone.pt  # 模型 .pt 或 .engine (TensorRT) 文件的路径
   classes_to_detect: [0,1,2,3,4,5,6,7,8,9]  # yolo11l-visdrone.pt: 0 pedestrian, 1 people, 2 bicycle, 3 car, 4 van, 5 truck, 6 tricycle, 7 awning-tricycle, 8 bus, 9 motor
   confidence: 0.05  # 检测器置信度阈值；航拍小目标非机动车需保留低分候选
-  iou: 0.7  # NMS 阈值（值越大，匹配到的目标越多）
-  imgsz: 1280  # 航拍4K小目标推理尺寸；比640更容易保留电动车/三轮车
+  iou: 0.4  # NMS 阈值（值越大，匹配到的目标越多）
+  imgsz: 960  # 航拍4K小目标推理尺寸；比640更容易保留电动车/三轮车
   device: auto  # 推理设备: "auto" 自动检测 (cuda>mps>cpu) | "cuda" | "mps" | "cpu"
 
 tracking_node:
@@ -50,7 +50,7 @@ tracking_node:
   first_track_thresh: 0.05  # 初始化新轨迹的阈值；保留低置信度非机动车小目标
   second_track_thresh: 0.01  # 维持已有轨迹的低分匹配阈值
   match_thresh: 0.95  # 值越大，相邻帧中检测框的最大允许距离（用于维持轨迹）越大
-  track_buffer: 125  # 目标消失后轨迹保持存活的时间（以帧数为单位）
+  track_buffer: 50  # 目标消失后轨迹保持存活的时间（以帧数为单位）
 
 vehicle_classification:
   # 只配置非机动车类别；未命中的检测类别默认按机动车处理。

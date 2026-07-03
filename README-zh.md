@@ -39,6 +39,15 @@ python main_optimized.py \
   telemetry.file_path=test_videos/inter_xqh/telemetry.srt
 ```
 
+```powershell
+$env:VIDEO_SRC = "test_videos/inter_xqh/DJI_20260403142902_0001_V小清河北路与水屯路路口.mp4"
+$env:TOPIC_NAME = "statistics_1"
+$env:CAMERA_ID = "1"
+$env:KAFKA_BOOTSTRAP = "localhost:9092"
+$env:FRAME_STRIDE = "5"
+python main_optimized.py pipeline.send_info_kafka=True telemetry.enabled=true telemetry.source=srt telemetry.file_path=test_videos/inter_xqh/telemetry.srt
+```
+
 后台运行加 `nohup ... > /tmp/detector_xqh.log 2>&1 &`。
 
 ### 自定义视频源

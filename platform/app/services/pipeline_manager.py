@@ -233,7 +233,12 @@ class PipelineManager:
 
         # Spawn the pipeline process
         try:
-            cmd = [self._pipeline_python, "main_optimized.py", "pipeline.send_info_kafka=True"]
+            cmd = [
+                self._pipeline_python,
+                "main_optimized.py",
+                "pipeline.send_info_kafka=True",
+                "hydra/job_logging=disabled",
+            ]
             if telemetry_source:
                 cmd.extend([
                     "telemetry.enabled=True",
@@ -366,16 +371,25 @@ class PipelineManager:
                         os.killpg(proc.pid, signal.SIGTERM)
                     except ProcessLookupError:
                         pass
-                    # Process exited unexpectedly — capture stderr for diagnostics
-                    stderr_msg = pipeline.stderr_tail[-500:]
-                    pipeline.status = PipelineStatus.ERROR
-                    pipeline.stopped_at = time.time()
-                    pipeline.error_message = (
-                        f"Process exited with code {proc.returncode}"
-                        + (f": {stderr_msg}" if stderr_msg else "")
-                    )
-                    logger.warning(
-                        f"Pipeline {pipeline.pipeline_id} exited unexpectedly "
-                        f"(code={proc.returncode})"
-                        + (f" stderr: {stderr_msg}" if stderr_msg else "")
-                    )
+                    self._handle_process_exit(pipeline, proc.returncode)
+
+    def _handle_process_exit(self, pipeline: PipelineInstance, return_code: int) -> None:
+        """Reflect a child process exit in pipeline state."""
+        pipeline.stopped_at = time.time()
+        if return_code == 0:
+            pipeline.status = PipelineStatus.STOPPED
+            pipeline.error_message = ""
+            logger.info(f"Pipeline {pipeline.pipeline_id} completed normally")
+            return
+
+        stderr_msg = pipeline.stderr_tail[-500:]
+        pipeline.status = PipelineStatus.ERROR
+        pipeline.error_message = (
+            f"Process exited with code {return_code}"
+            + (f": {stderr_msg}" if stderr_msg else "")
+        )
+        logger.warning(
+            f"Pipeline {pipeline.pipeline_id} exited unexpectedly "
+            f"(code={return_code})"
+            + (f" stderr: {stderr_msg}" if stderr_msg else "")
+        )

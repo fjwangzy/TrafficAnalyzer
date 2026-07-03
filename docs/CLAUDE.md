@@ -164,9 +164,10 @@ platform/app/ ← 单体 Web 平台，独立模块
 
 - InfluxDB 使用 1.8 版本（InfluxQL 查询语言，不是 Flux）
 - 数据库名：`influx`
-- measurement 命名：`camera_{n}`（由 Telegraf 的 `name_override` 控制）
-- 保留策略：30 天自动删除
-- **禁止直接从 Python 代码写入 InfluxDB** — 必须通过 Kafka → Telegraf 路径
+- Grafana 兼容统计链路 measurement 命名：`camera_{n}`（由 Telegraf 的 `name_override` 控制）
+- 平台复盘链路 measurement 命名：`intersection_stats`、`track_events`、`conflict_events`（由 Platform Kafka consumer 直写，见 ADR-014）
+- 保留策略：统计默认 30 天；轨迹/冲突按平台查询和部署策略保留
+- 写入路径：`statistics_*` 同时保留 Kafka → Telegraf → `camera_{n}` 和 Platform consumer → `intersection_stats`；`track_complete_*` / `conflicts_*` 由 Platform consumer 写入 `track_events` / `conflict_events`
 
 ## 重构规范
 

@@ -12,7 +12,10 @@ from collections import deque
 from datetime import datetime, timezone
 from typing import Any
 
+from sqlalchemy import select
+
 from app.kafka.ws_manager import WSManager
+from app.models.alert import AlertRecord
 
 logger = logging.getLogger(__name__)
 
@@ -69,13 +72,111 @@ class Alert:
         self.acknowledged_by = user
         self.acknowledged_at = datetime.now(timezone.utc).isoformat()
 
+    @classmethod
+    def from_dict(cls, data: dict) -> "Alert":
+        alert = cls(
+            intersection_id=data["intersection_id"],
+            alert_type=data["alert_type"],
+            severity=data["severity"],
+            title=data["title"],
+            description=data.get("description"),
+            track_ids=data.get("track_ids") or [],
+        )
+        alert.id = data["id"]
+        alert.status = data.get("status", "open")
+        alert.timestamp = data.get("timestamp") or alert.timestamp
+        alert.snapshot_url = data.get("snapshot_url")
+        alert.video_clip_url = data.get("video_clip_url")
+        alert.vlm_summary = data.get("vlm_summary")
+        alert.acknowledged_by = data.get("acknowledged_by")
+        alert.acknowledged_at = data.get("acknowledged_at")
+        alert.push_logs = data.get("push_logs") or []
+        return alert
+
+
+class SqlAlertStore:
+    """SQLAlchemy-backed alert store."""
+
+    def __init__(self, session_maker):
+        self._session_maker = session_maker
+
+    async def list_alerts(self) -> list[dict]:
+        async with self._session_maker() as session:
+            result = await session.execute(select(AlertRecord))
+            records = result.scalars().all()
+            return [self._record_to_dict(record) for record in records]
+
+    async def save_alert(self, alert: dict):
+        async with self._session_maker() as session:
+            session.add(self._dict_to_record(alert))
+            await session.commit()
+
+    async def update_alert(self, alert: dict):
+        async with self._session_maker() as session:
+            record = await session.get(AlertRecord, alert["id"])
+            if record is None:
+                session.add(self._dict_to_record(alert))
+            else:
+                self._apply_dict(record, alert)
+            await session.commit()
+
+    @staticmethod
+    def _dict_to_record(alert: dict) -> AlertRecord:
+        record = AlertRecord(id=alert["id"])
+        SqlAlertStore._apply_dict(record, alert)
+        return record
+
+    @staticmethod
+    def _apply_dict(record: AlertRecord, alert: dict) -> None:
+        record.intersection_id = alert["intersection_id"]
+        record.alert_type = alert["alert_type"]
+        record.severity = alert["severity"]
+        record.title = alert["title"]
+        record.description = alert.get("description")
+        record.status = alert.get("status", "open")
+        record.timestamp = alert["timestamp"]
+        record.track_ids = alert.get("track_ids") or []
+        record.snapshot_url = alert.get("snapshot_url")
+        record.video_clip_url = alert.get("video_clip_url")
+        record.vlm_summary = alert.get("vlm_summary")
+        record.acknowledged_by = alert.get("acknowledged_by")
+        record.acknowledged_at = alert.get("acknowledged_at")
+        record.push_logs = alert.get("push_logs") or []
+        record.updated_at = datetime.now(timezone.utc)
+
+    @staticmethod
+    def _record_to_dict(record: AlertRecord) -> dict:
+        return {
+            "id": record.id,
+            "intersection_id": record.intersection_id,
+            "alert_type": record.alert_type,
+            "severity": record.severity,
+            "title": record.title,
+            "description": record.description,
+            "status": record.status,
+            "timestamp": record.timestamp,
+            "track_ids": record.track_ids or [],
+            "snapshot_url": record.snapshot_url,
+            "video_clip_url": record.video_clip_url,
+            "vlm_summary": record.vlm_summary,
+            "acknowledged_by": record.acknowledged_by,
+            "acknowledged_at": record.acknowledged_at,
+            "push_logs": record.push_logs or [],
+        }
+
 
 class AlertEngine:
     """Rule-based and VLM-based alert engine."""
 
-    def __init__(self, ws_manager: WSManager, settings: Any = None):
+    def __init__(
+        self,
+        ws_manager: WSManager,
+        settings: Any = None,
+        alert_store: Any = None,
+    ):
         self._ws = ws_manager
         self._alerts: dict[str, Alert] = {}  # alert_id → Alert
+        self._alert_store = alert_store
         self._consecutive_congestion: dict[str, int] = {}  # intersection_id → count
 
         # Thresholds
@@ -96,6 +197,20 @@ class AlertEngine:
     @property
     def alerts(self) -> dict[str, Alert]:
         return self._alerts
+
+    async def load_persisted_alerts(self):
+        """Load persisted alerts into the in-memory query cache."""
+        if not self._alert_store:
+            return
+        try:
+            records = await self._alert_store.list_alerts()
+        except Exception as e:
+            logger.warning("Alert persistence load failed; using memory cache only: %s", e)
+            return
+        self._alerts = {
+            record["id"]: Alert.from_dict(record)
+            for record in records
+        }
 
     def get_alerts_list(
         self,
@@ -118,13 +233,31 @@ class AlertEngine:
         alert = self._alerts.get(alert_id)
         return alert.to_dict() if alert else None
 
-    def acknowledge_alert(self, alert_id: str, user: str = "admin") -> dict | None:
+    async def acknowledge_alert(self, alert_id: str, user: str = "admin") -> dict | None:
         """Acknowledge an alert."""
         alert = self._alerts.get(alert_id)
         if alert:
             alert.acknowledge(user)
-            return alert.to_dict()
+            payload = alert.to_dict()
+            await self._update_persisted_alert(payload)
+            return payload
         return None
+
+    async def _save_persisted_alert(self, payload: dict):
+        if not self._alert_store:
+            return
+        try:
+            await self._alert_store.save_alert(payload)
+        except Exception as e:
+            logger.warning("Alert persistence save failed; continuing in memory: %s", e)
+
+    async def _update_persisted_alert(self, payload: dict):
+        if not self._alert_store:
+            return
+        try:
+            await self._alert_store.update_alert(payload)
+        except Exception as e:
+            logger.warning("Alert persistence update failed; continuing in memory: %s", e)
 
     async def check_stats(self, intersection_id: str, data: dict):
         """Check stats data against alert rules."""
@@ -286,6 +419,8 @@ class AlertEngine:
             track_ids=track_ids,
         )
         self._alerts[alert.id] = alert
+        payload = alert.to_dict()
+        await self._save_persisted_alert(payload)
 
         logger.info(f"Alert created: [{severity}] {title} @ {intersection_id}")
 
@@ -293,7 +428,7 @@ class AlertEngine:
         ws_msg = {
             "channel": "alerts",
             "type": "alert_new",
-            "data": alert.to_dict(),
+            "data": payload,
             "ts": time.time(),
         }
         await self._ws.broadcast("alerts", ws_msg)

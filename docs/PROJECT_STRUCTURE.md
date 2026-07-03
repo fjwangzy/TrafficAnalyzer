@@ -91,6 +91,8 @@ TrafficAnalyzer/
 │   │   └── nginx.conf             #   Nginx 视频流反向代理
 │   └── grafana/
 │       └── provisioning/
+│           ├── datasources/
+│           │   └── datasource.yaml # Grafana InfluxDB/PostgreSQL 数据源配置
 │           └── dashboards/
 │               ├── dashboard.yaml #   Grafana provisioning 配置
 │               ├── camera-1.json  #   摄像头 1 仪表盘

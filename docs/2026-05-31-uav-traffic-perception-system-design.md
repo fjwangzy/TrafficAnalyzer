@@ -754,7 +754,7 @@ docker-compose.yaml:
    ├── 轨迹还原（TrajectoryNode）
    ├── 冲突检测（ConflictDetectionNode，默认启用）
    ├── SRT遥测解析（逐帧精确同步）
-   └── 端到端测试（49/49 PASS）
+   └── 端到端测试（2026-07-02: 56 PASS / 0 FAIL / 0 WARN）
 
 ✅ Phase 2: 平台整合（已完成）
    ├── Kafka topic pattern 扩展（4类消息）
@@ -779,7 +779,7 @@ docker-compose.yaml:
 验收标准:
    - 平台可启动管道 → 实时显示视频流 + 统计指标
    - 无人机遥测实时更新 → 地图显示位置
-   - 49/49 管道测试 PASS
+   - 56 PASS / 0 FAIL / 0 WARN 管道测试 PASS
 ```
 
 ### 7.3 中期里程碑（1-2 月）
@@ -982,7 +982,7 @@ Docker Compose           →      K8s 编排                 →    边缘-云�
 
 | 测试类型 | 脚本 | 覆盖范围 | 状态 |
 |----------|------|----------|------|
-| 管道E2E（含YOLO） | `test_pipeline_inter_xqh.py` | 49项检查 | ✅ 49/49 PASS |
+| 管道E2E（含YOLO） | `test_pipeline_inter_xqh.py` | 56项检查 | ✅ 56 PASS / 0 FAIL / 0 WARN |
 | 管道E2E（无YOLO） | `test_pipeline_no_yolo.py` | CI无GPU场景 | ✅ PASS |
 | 平台集成 | `test_e2e_inter_xqh.py` | API + WebSocket | ✅ PASS |
 | MPS流媒体 | `test_e2e_mps_streaming.py` | Apple Silicon | ✅ PASS |

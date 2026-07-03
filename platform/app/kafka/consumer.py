@@ -105,6 +105,13 @@ class KafkaConsumerService:
             except Exception:
                 pass
             return None
+        except Exception as e:
+            logger.warning(f"Kafka consumer start failed (broker may be unavailable): {e}")
+            try:
+                await consumer.stop()
+            except Exception:
+                pass
+            return None
 
     async def stop(self):
         """Stop the Kafka consumer."""
@@ -117,6 +124,7 @@ class KafkaConsumerService:
                 pass
         if self._consumer:
             await self._consumer.stop()
+            self._consumer = None
         logger.info("Kafka consumer stopped")
 
     # ── T-403: 指数退避重连 ──

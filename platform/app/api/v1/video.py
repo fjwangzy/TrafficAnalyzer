@@ -2,8 +2,9 @@
 import asyncio
 import logging
 import os
+import httpx
 from fastapi import APIRouter, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 
@@ -19,6 +20,47 @@ _STREAMS: dict[str, dict] = {}
 async def list_streams():
     """List active video streams."""
     return list(_STREAMS.values())
+
+
+async def _proxy_mjpeg_stream(source_url: str):
+    """Stream MJPEG bytes from a detector process reachable inside Platform."""
+    timeout = httpx.Timeout(connect=2.0, read=None, write=5.0, pool=5.0)
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        async with client.stream("GET", source_url) as response:
+            response.raise_for_status()
+            async for chunk in response.aiter_bytes():
+                if chunk:
+                    yield chunk
+
+
+@router.get("/camera/{camera_id}")
+async def proxy_camera_stream(camera_id: int, request: Request):
+    """Proxy a running PipelineManager MJPEG stream by camera ID.
+
+    The detector subprocess runs inside the Platform container and binds its
+    MJPEG server to an internal localhost port. Browser/dev-server clients
+    cannot reach that port directly, so Platform performs the container-local
+    hop and exposes a stable HTTP endpoint.
+    """
+    pm = getattr(request.app.state, "pipeline_manager", None)
+    if pm is None:
+        return JSONResponse({"error": "pipeline_manager_unavailable"}, status_code=503)
+
+    pipeline = next(
+        (
+            item for item in pm.list_pipelines()
+            if item["camera_id"] == camera_id and item["status"] == "running"
+        ),
+        None,
+    )
+    if pipeline is None:
+        return JSONResponse({"error": "camera_not_running", "camera_id": camera_id}, status_code=404)
+
+    source_url = f"http://127.0.0.1:{pipeline['video_port']}/video"
+    return StreamingResponse(
+        _proxy_mjpeg_stream(source_url),
+        media_type="multipart/x-mixed-replace; boundary=frame",
+    )
 
 
 @router.post("/streams/{stream_id}/start")

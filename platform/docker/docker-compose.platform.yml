@@ -95,7 +95,7 @@ services:
       # Kafka
       KAFKA_BOOTSTRAP: kafka:9092
       KAFKA_CONSUMER_GROUP: vision-service
-      KAFKA_TOPICS_PATTERN: "(statistics|track_complete|conflicts|telemetry)_.*"
+      KAFKA_TOPICS_PATTERN: "((statistics|track_complete|conflicts|telemetry)_.*|system_metrics)"
 
       # InfluxDB
       INFLUX_HOST: influxdb

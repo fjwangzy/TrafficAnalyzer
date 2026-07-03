@@ -10,11 +10,10 @@ logger = logging.getLogger(__name__)
 
 
 class ConflictDetectionNode:
-    """机非冲突检测节点：基于未来轨迹预测检测机动车与非机动车冲突。
+    """机非冲突检测节点：基于 near-miss 证据漏斗检测机非冲突。
 
     需要单应性标定才能准确计算米级距离。无标定时跳过（避免误报）。
-    双方在预测窗口内同刻进入碰撞半径，或路径交点到达时间差满足阈值时生成事件；
-    当前距离较近但未来不碰撞时不再作为 conflict 上报。
+    先生成未来交汇候选，再要求疑似右转/左转专项场景和 TTC/PET 或避险行为证据。
     """
 
     def __init__(self, config: dict) -> None:
@@ -22,10 +21,28 @@ class ConflictDetectionNode:
         self.enabled = cfg.get("enabled", True)
         self.prediction_horizon_sec = cfg.get("prediction_horizon_sec", 5.0)
         self.critical_horizon_sec = cfg.get("critical_horizon_sec", 3.0)
+        self.hard_ttc_sec = cfg.get("hard_ttc_sec", 1.5)
+        self.hard_pet_sec = cfg.get("hard_pet_sec", 1.0)
         self.sample_interval_sec = cfg.get("sample_interval_sec", 0.2)
         self.collision_radius_m = cfg.get("collision_radius_m", 2.0)
+        self.enable_same_time_cpa = cfg.get("enable_same_time_cpa", False)
+        self.same_time_collision_radius_m = cfg.get(
+            "same_time_collision_radius_m",
+            min(self.collision_radius_m, 0.8),
+        )
         self.arrival_time_tolerance_sec = cfg.get("arrival_time_tolerance_sec", 1.0)
         self.relative_speed_min_ms = cfg.get("relative_speed_min_ms", 0.5)
+        self.min_history_points = cfg.get("min_history_points", 4)
+        self.min_conflict_angle_deg = cfg.get("min_conflict_angle_deg", 30.0)
+        self.max_conflict_angle_deg = cfg.get("max_conflict_angle_deg", 150.0)
+        self.turn_angle_threshold_deg = cfg.get("turn_angle_threshold_deg", 45.0)
+        self.min_turn_leg_m = cfg.get("min_turn_leg_m", 2.0)
+        self.straight_angle_threshold_deg = cfg.get("straight_angle_threshold_deg", 25.0)
+        self.hard_deceleration_ms2 = cfg.get("hard_deceleration_ms2", -3.0)
+        self.hard_heading_change_deg = cfg.get("hard_heading_change_deg", 60.0)
+        self.stop_speed_ms = cfg.get("stop_speed_ms", 1.0)
+        self.moving_speed_ms = cfg.get("moving_speed_ms", 2.0)
+        self.min_segment_speed_ms = cfg.get("min_segment_speed_ms", 0.2)
         self._reported_pair_severity: dict[tuple, str] = {}
         self._severity_rank = {"warning": 1, "critical": 2}
 
@@ -53,12 +70,18 @@ class ConflictDetectionNode:
             bbox = frame_element.tracked_xyxy[i]
             cx = (bbox[0] + bbox[2]) / 2.0
             cy = (bbox[1] + bbox[3]) / 2.0
+            motion_profile = self._motion_profile(track, H)
+            velocity_ms = self._prediction_velocity_ms(
+                self._velocity_ms(track),
+                motion_profile,
+            )
             entry = {
                 "track_id": track_id,
                 "center_px": (cx, cy),
                 "speed_kmh": track.avg_speed_kmh,
-                "velocity_ms": self._velocity_ms(track),
+                "velocity_ms": velocity_ms,
                 "vehicle_class": track.vehicle_class,
+                "motion_profile": motion_profile,
             }
             if track.vehicle_class == "motor":
                 motor_tracks.append(entry)
@@ -95,17 +118,39 @@ class ConflictDetectionNode:
                 if prediction is None:
                     continue
 
-                severity = self._classify_severity(prediction["ttc_sec"])
+                scene = self._classify_scene(
+                    motor["motion_profile"],
+                    non_motor["motion_profile"],
+                    prediction,
+                )
+                if scene is None:
+                    continue
+
+                evidence = self._collect_evidence(
+                    prediction,
+                    motor["motion_profile"],
+                    non_motor["motion_profile"],
+                )
+                if not evidence:
+                    continue
+
+                severity = self._classify_severity(prediction, evidence)
                 if severity and self._should_emit_pair(pair_key, severity):
                     event = {
                         "motor_id": motor["track_id"],
                         "non_motor_id": non_motor["track_id"],
+                        "prediction_type": prediction["prediction_type"],
                         "distance_m": round(prediction["distance_m"], 2),
                         "ttc_sec": round(prediction["ttc_sec"], 2),
+                        "pet_sec": round(prediction["pet_sec"], 2),
                         "arrival_time_delta_sec": round(
                             prediction["arrival_time_delta_sec"], 2
                         ),
                         "severity": severity,
+                        "conflict_scene": scene,
+                        "conflict_angle_deg": round(prediction["conflict_angle_deg"], 1),
+                        "evidence": evidence,
+                        "risk_score": self._risk_score(prediction, evidence),
                         "motor_speed_kmh": round(motor["speed_kmh"], 1),
                     }
                     if "motor_arrival_ttc_sec" in prediction:
@@ -152,6 +197,125 @@ class ConflictDetectionNode:
             return None
         return arr
 
+    def _prediction_velocity_ms(
+        self,
+        track_velocity_ms: np.ndarray | None,
+        motion_profile: dict | None,
+    ) -> np.ndarray | None:
+        """有历史轨迹时，用最近轨迹方向预测；速度大小沿用测速节点。"""
+        if motion_profile is None:
+            return track_velocity_ms
+
+        recent_velocity = motion_profile.get("recent_velocity_ms")
+        if recent_velocity is None:
+            return track_velocity_ms
+
+        recent_velocity = np.asarray(recent_velocity, dtype=np.float64)
+        recent_speed = float(np.linalg.norm(recent_velocity))
+        if recent_velocity.shape != (2,) or recent_speed < self.relative_speed_min_ms:
+            return track_velocity_ms
+
+        speed = None
+        if track_velocity_ms is not None:
+            track_speed = float(np.linalg.norm(track_velocity_ms))
+            if track_speed >= self.relative_speed_min_ms:
+                speed = track_speed
+        if speed is None:
+            speed = recent_speed
+
+        return recent_velocity / recent_speed * speed
+
+    def _motion_profile(self, track, H) -> dict | None:
+        history = getattr(track, "position_history", None) or []
+        if len(history) < self.min_history_points:
+            return None
+
+        clean_history = [
+            (float(x), float(y), float(t))
+            for x, y, t in history
+            if np.isfinite(x) and np.isfinite(y) and np.isfinite(t)
+        ]
+        if len(clean_history) < self.min_history_points:
+            return None
+
+        pts_px = np.array([(x, y) for x, y, _ in clean_history], dtype=np.float64)
+        times = np.array([t for _, _, t in clean_history], dtype=np.float64)
+        if np.any(np.diff(times) <= 0):
+            return None
+
+        pts_world = pixel_to_world(pts_px, H)
+        deltas = np.diff(pts_world, axis=0)
+        dt = np.diff(times)
+        segment_velocities = deltas / dt[:, None]
+        segment_speeds = np.linalg.norm(segment_velocities, axis=1)
+
+        moving = segment_speeds >= self.min_segment_speed_ms
+        if not np.any(moving):
+            return None
+
+        headings = np.full(segment_speeds.shape, np.nan, dtype=np.float64)
+        headings[moving] = np.degrees(
+            np.arctan2(segment_velocities[moving, 1], segment_velocities[moving, 0])
+        )
+        valid_headings = headings[np.isfinite(headings)]
+        if valid_headings.size < 2:
+            return None
+
+        turn_angle = self._normalize_angle_deg(valid_headings[-1] - valid_headings[0])
+        path_delta = pts_world[-1] - pts_world[0]
+        first_heading_rad = np.radians(valid_headings[0])
+        last_heading_rad = np.radians(valid_headings[-1])
+        first_dir = np.array([np.cos(first_heading_rad), np.sin(first_heading_rad)])
+        last_dir = np.array([np.cos(last_heading_rad), np.sin(last_heading_rad)])
+        turn_leg_min = min(
+            abs(float(np.dot(path_delta, first_dir))),
+            abs(float(np.dot(path_delta, last_dir))),
+        )
+        heading_steps = np.array(
+            [
+                self._normalize_angle_deg(valid_headings[i] - valid_headings[i - 1])
+                for i in range(1, valid_headings.size)
+            ],
+            dtype=np.float64,
+        )
+        max_heading_change = (
+            float(np.max(np.abs(heading_steps))) if heading_steps.size else 0.0
+        )
+
+        acceleration = np.array([], dtype=np.float64)
+        if segment_speeds.size >= 2:
+            speed_dt = np.diff((times[:-1] + times[1:]) / 2.0)
+            valid_dt = speed_dt > 0
+            if np.any(valid_dt):
+                acceleration = np.diff(segment_speeds)[valid_dt] / speed_dt[valid_dt]
+        min_acceleration = (
+            float(np.min(acceleration)) if acceleration.size else 0.0
+        )
+
+        recent_velocity = segment_velocities[moving][-1]
+        current_velocity = self._prediction_velocity_ms(
+            self._velocity_ms(track),
+            {"recent_velocity_ms": recent_velocity},
+        )
+        if current_velocity is None:
+            current_velocity = recent_velocity
+        current_speed = float(np.linalg.norm(current_velocity))
+        is_stopped = (
+            current_speed <= self.stop_speed_ms
+            and float(np.max(segment_speeds)) >= self.moving_speed_ms
+        )
+
+        return {
+            "turn_angle_deg": float(turn_angle),
+            "turn_leg_min_m": turn_leg_min,
+            "max_heading_change_deg": max_heading_change,
+            "min_acceleration_ms2": min_acceleration,
+            "current_speed_ms": current_speed,
+            "recent_velocity_ms": recent_velocity,
+            "is_stopped": is_stopped,
+            "is_straight": abs(turn_angle) <= self.straight_angle_threshold_deg,
+        }
+
     def _predict_collision(
         self,
         motor_pos_m: np.ndarray,
@@ -160,6 +324,13 @@ class ConflictDetectionNode:
         non_motor_velocity_ms: np.ndarray | None,
     ) -> dict | None:
         if motor_velocity_ms is None or non_motor_velocity_ms is None:
+            return None
+
+        conflict_angle = self._conflict_angle_deg(
+            motor_velocity_ms,
+            non_motor_velocity_ms,
+        )
+        if conflict_angle is None or not self._is_valid_conflict_angle(conflict_angle):
             return None
 
         relative_vel = non_motor_velocity_ms - motor_velocity_ms
@@ -172,20 +343,23 @@ class ConflictDetectionNode:
 
         candidates = []
 
-        same_time = self._predict_same_time_collision(
-            motor_pos_m,
-            non_motor_pos_m,
-            motor_velocity_ms,
-            non_motor_velocity_ms,
-        )
-        if same_time is not None:
-            candidates.append(same_time)
+        if self.enable_same_time_cpa:
+            same_time = self._predict_same_time_collision(
+                motor_pos_m,
+                non_motor_pos_m,
+                motor_velocity_ms,
+                non_motor_velocity_ms,
+                conflict_angle,
+            )
+            if same_time is not None:
+                candidates.append(same_time)
 
         path_intersection = self._predict_path_intersection_collision(
             motor_pos_m,
             non_motor_pos_m,
             motor_velocity_ms,
             non_motor_velocity_ms,
+            conflict_angle,
         )
         if path_intersection is not None:
             candidates.append(path_intersection)
@@ -201,36 +375,37 @@ class ConflictDetectionNode:
         non_motor_pos_m: np.ndarray,
         motor_velocity_ms: np.ndarray,
         non_motor_velocity_ms: np.ndarray,
+        conflict_angle_deg: float,
     ) -> dict | None:
-        """双方在同一预测时刻进入碰撞半径。"""
+        """双方在同一预测时刻进入实际碰撞半径。"""
 
-        times = np.arange(
-            self.sample_interval_sec,
-            self.prediction_horizon_sec + self.sample_interval_sec / 2.0,
-            self.sample_interval_sec,
-            dtype=np.float64,
-        )
-        if times.size == 0:
+        relative_position = non_motor_pos_m - motor_pos_m
+        relative_velocity = non_motor_velocity_ms - motor_velocity_ms
+        relative_speed_sq = float(np.dot(relative_velocity, relative_velocity))
+        if relative_speed_sq <= 1e-9:
             return None
 
-        motor_future = motor_pos_m[None, :] + times[:, None] * motor_velocity_ms[None, :]
-        non_motor_future = (
-            non_motor_pos_m[None, :] + times[:, None] * non_motor_velocity_ms[None, :]
-        )
-        distances = np.linalg.norm(motor_future - non_motor_future, axis=1)
-        hit_indices = np.flatnonzero(distances <= self.collision_radius_m)
-        if hit_indices.size == 0:
+        closest_time = -float(np.dot(relative_position, relative_velocity)) / relative_speed_sq
+        if closest_time <= 0 or closest_time > self.prediction_horizon_sec:
             return None
 
-        idx = int(hit_indices[0])
+        motor_future = motor_pos_m + closest_time * motor_velocity_ms
+        non_motor_future = non_motor_pos_m + closest_time * non_motor_velocity_ms
+        distance = float(np.linalg.norm(motor_future - non_motor_future))
+        if distance > self.same_time_collision_radius_m:
+            return None
+
         return {
-            "ttc_sec": float(times[idx]),
-            "distance_m": float(distances[idx]),
+            "prediction_type": "same_time_cpa",
+            "ttc_sec": closest_time,
+            "distance_m": distance,
+            "pet_sec": 0.0,
             "arrival_time_delta_sec": 0.0,
-            "motor_position_m": motor_future[idx],
-            "non_motor_position_m": non_motor_future[idx],
-            "motor_arrival_ttc_sec": float(times[idx]),
-            "non_motor_arrival_ttc_sec": float(times[idx]),
+            "conflict_angle_deg": conflict_angle_deg,
+            "motor_position_m": motor_future,
+            "non_motor_position_m": non_motor_future,
+            "motor_arrival_ttc_sec": closest_time,
+            "non_motor_arrival_ttc_sec": closest_time,
         }
 
     def _predict_path_intersection_collision(
@@ -239,6 +414,7 @@ class ConflictDetectionNode:
         non_motor_pos_m: np.ndarray,
         motor_velocity_ms: np.ndarray,
         non_motor_velocity_ms: np.ndarray,
+        conflict_angle_deg: float,
     ) -> dict | None:
         """交叉路口路径交点到达时间检测。
 
@@ -279,21 +455,187 @@ class ConflictDetectionNode:
             return None
 
         conflict_point = motor_pos_m + motor_ttc * motor_velocity_ms
+        min_same_time_distance = self._closest_same_time_distance_m(
+            motor_pos_m,
+            non_motor_pos_m,
+            motor_velocity_ms,
+            non_motor_velocity_ms,
+            min(motor_ttc, non_motor_ttc),
+            max(motor_ttc, non_motor_ttc),
+        )
+        if min_same_time_distance > self.same_time_collision_radius_m:
+            return None
+
         return {
+            "prediction_type": "path_intersection",
             "ttc_sec": max(motor_ttc, non_motor_ttc),
             "distance_m": 0.0,
+            "pet_sec": arrival_delta,
             "arrival_time_delta_sec": arrival_delta,
+            "conflict_angle_deg": conflict_angle_deg,
             "motor_position_m": conflict_point,
             "non_motor_position_m": conflict_point,
             "motor_arrival_ttc_sec": motor_ttc,
             "non_motor_arrival_ttc_sec": non_motor_ttc,
+            "min_same_time_distance_m": min_same_time_distance,
         }
 
-    def _classify_severity(self, ttc: float) -> str:
-        """根据预测碰撞时间分类冲突严重度。"""
-        if ttc <= self.critical_horizon_sec:
+    @staticmethod
+    def _closest_same_time_distance_m(
+        motor_pos_m: np.ndarray,
+        non_motor_pos_m: np.ndarray,
+        motor_velocity_ms: np.ndarray,
+        non_motor_velocity_ms: np.ndarray,
+        start_time_sec: float,
+        end_time_sec: float,
+    ) -> float:
+        """双方到达路径交点期间，连续同刻中心距的最小值。"""
+        start = float(start_time_sec)
+        end = float(end_time_sec)
+        if end < start:
+            start, end = end, start
+
+        relative_position = non_motor_pos_m - motor_pos_m
+        relative_velocity = non_motor_velocity_ms - motor_velocity_ms
+        relative_speed_sq = float(np.dot(relative_velocity, relative_velocity))
+
+        candidate_times = [start, end]
+        if relative_speed_sq > 1e-9:
+            closest_time = -float(np.dot(relative_position, relative_velocity)) / relative_speed_sq
+            candidate_times.append(min(max(closest_time, start), end))
+
+        distances = [
+            float(np.linalg.norm(
+                (non_motor_pos_m + t * non_motor_velocity_ms)
+                - (motor_pos_m + t * motor_velocity_ms)
+            ))
+            for t in candidate_times
+        ]
+        return min(distances)
+
+    def _classify_scene(
+        self,
+        motor_profile: dict | None,
+        non_motor_profile: dict | None,
+        prediction: dict,
+    ) -> str | None:
+        if motor_profile is None or non_motor_profile is None:
+            return None
+        if not non_motor_profile["is_straight"]:
+            return None
+        if motor_profile["turn_leg_min_m"] < self.min_turn_leg_m:
+            return None
+
+        motor_turn = motor_profile["turn_angle_deg"]
+        if motor_turn <= -self.turn_angle_threshold_deg:
+            return "suspected_right_turn_mv_nmv"
+        if motor_turn >= self.turn_angle_threshold_deg:
+            return "suspected_unprotected_left_turn"
+        return None
+
+    def _collect_evidence(
+        self,
+        prediction: dict,
+        motor_profile: dict | None,
+        non_motor_profile: dict | None,
+    ) -> list[str]:
+        evidence = []
+        is_path_intersection = prediction.get("prediction_type") == "path_intersection"
+        hard_ttc = prediction["ttc_sec"] <= self.hard_ttc_sec
+        hard_pet = (
+            is_path_intersection
+            and prediction["pet_sec"] <= self.hard_pet_sec
+        )
+        if hard_ttc:
+            evidence.append("hard_ttc_or_pet")
+        if hard_pet:
+            evidence.append("hard_pet")
+
+        profiles = [p for p in (motor_profile, non_motor_profile) if p is not None]
+        if any(
+            p["min_acceleration_ms2"] <= self.hard_deceleration_ms2
+            for p in profiles
+        ):
+            evidence.append("hard_deceleration")
+        # 机动车右/左转本身会产生大 heading 变化，不能直接当作避险急转向。
+        if (
+            non_motor_profile is not None
+            and non_motor_profile["max_heading_change_deg"] >= self.hard_heading_change_deg
+        ):
+            evidence.append("hard_steering")
+        if any(p["is_stopped"] for p in profiles):
+            evidence.append("stop_or_yield")
+
+        behavior_evidence = {
+            "hard_deceleration",
+            "hard_steering",
+            "stop_or_yield",
+        }
+        if "hard_ttc_or_pet" in evidence or behavior_evidence.intersection(evidence):
+            return evidence
+        return []
+
+    def _classify_severity(self, prediction: dict, evidence: list[str]) -> str:
+        """根据 TTC/PET 和避险证据分类冲突严重度。"""
+        if "hard_ttc_or_pet" in evidence:
+            return "critical"
+        if "hard_pet" in evidence and (
+            "hard_deceleration" in evidence
+            or "hard_steering" in evidence
+            or "stop_or_yield" in evidence
+        ):
+            return "critical"
+        if "hard_deceleration" in evidence or "stop_or_yield" in evidence:
             return "critical"
         return "warning"
+
+    def _risk_score(self, prediction: dict, evidence: list[str]) -> int:
+        score = 0
+        if prediction["ttc_sec"] <= self.hard_ttc_sec:
+            score += 40
+        elif prediction["ttc_sec"] <= self.critical_horizon_sec:
+            score += 25
+        else:
+            score += 10
+
+        if (
+            prediction.get("prediction_type") == "path_intersection"
+            and prediction["pet_sec"] <= self.hard_pet_sec
+        ):
+            score += 30
+        if "hard_deceleration" in evidence:
+            score += 20
+        if "stop_or_yield" in evidence:
+            score += 20
+        if "hard_steering" in evidence:
+            score += 10
+        return min(score, 100)
+
+    def _conflict_angle_deg(
+        self,
+        motor_velocity_ms: np.ndarray,
+        non_motor_velocity_ms: np.ndarray,
+    ) -> float | None:
+        motor_speed = float(np.linalg.norm(motor_velocity_ms))
+        non_motor_speed = float(np.linalg.norm(non_motor_velocity_ms))
+        if (
+            motor_speed < self.relative_speed_min_ms
+            or non_motor_speed < self.relative_speed_min_ms
+        ):
+            return None
+        cos_theta = float(
+            np.dot(motor_velocity_ms, non_motor_velocity_ms)
+            / (motor_speed * non_motor_speed)
+        )
+        cos_theta = max(min(cos_theta, 1.0), -1.0)
+        return float(np.degrees(np.arccos(cos_theta)))
+
+    def _is_valid_conflict_angle(self, angle_deg: float) -> bool:
+        return self.min_conflict_angle_deg <= angle_deg <= self.max_conflict_angle_deg
+
+    @staticmethod
+    def _normalize_angle_deg(angle: float) -> float:
+        return (angle + 180.0) % 360.0 - 180.0
 
     def _should_emit_pair(self, pair_key: tuple, severity: str) -> bool:
         previous = self._reported_pair_severity.get(pair_key)

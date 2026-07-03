@@ -20,7 +20,7 @@ services/triton
 services/influxdb_data
 services/grafana/grafana.db
 .superpowers
-.playwright-mcp
+**.playwright**
 node_modules
 qa*
 weights

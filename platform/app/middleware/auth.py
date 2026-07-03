@@ -14,6 +14,7 @@ PUBLIC_PATHS = [
     "/ready",
     "/ws/",          # WebSocket connections (auth handled via channel subscriptions)
     "/video/",       # Video stream endpoints (MJPEG proxy)
+    "/api/v1/video/camera/",  # Browser <img> MJPEG proxy
     "/api/v1/auth/login",
     "/api/v1/auth/register",
     "/api/v1/pipelines/proxy-map",  # Camera port mapping for Vite dev proxy

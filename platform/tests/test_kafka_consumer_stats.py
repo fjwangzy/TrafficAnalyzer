@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 
 from app.kafka.consumer import KafkaConsumerService
 
@@ -16,7 +17,40 @@ class _FailingLaneAnnotationStore:
         raise OSError("[Errno 30] Read-only file system: '/calibration'")
 
 
+class _FailingKafkaConsumer:
+    def __init__(self):
+        self.stopped = False
+        self.subscribed_pattern = None
+
+    def subscribe(self, pattern=None, topics=None):
+        self.subscribed_pattern = pattern
+
+    async def start(self):
+        raise OSError("broker unavailable")
+
+    async def stop(self):
+        self.stopped = True
+
+
 class KafkaConsumerStatsTest(unittest.IsolatedAsyncioTestCase):
+    async def test_start_failure_closes_consumer_and_enters_degraded_mode(self):
+        ws = _RecordingWS()
+        fake_consumer = _FailingKafkaConsumer()
+        service = KafkaConsumerService(
+            bootstrap_servers="missing-kafka:9092",
+            group_id="test",
+            topics_pattern="statistics_.*",
+            ws_manager=ws,
+        )
+
+        with patch("app.kafka.consumer.AIOKafkaConsumer", return_value=fake_consumer):
+            await service.start()
+            await service.stop()
+
+        self.assertTrue(fake_consumer.stopped)
+        self.assertIsNone(service._consumer)
+        self.assertFalse(service._running)
+
     async def test_stats_broadcast_continues_when_lane_annotation_store_fails(self):
         ws = _RecordingWS()
         service = KafkaConsumerService(

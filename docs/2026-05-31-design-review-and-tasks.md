@@ -24,7 +24,7 @@
 
 系统实现与设计文档**高度对齐**。三进程并行管道、14 节点链、FrameElement 共享数据载体、遥测驱动单应性标定、无人机运动补偿、方向流量零标注分类、Kafka 多 Topic 发布、平台 WebSocket 推送等核心设计**全部落地且质量良好**。
 
-端到端测试 49/49 PASS 表明管道核心逻辑稳定。平台侧（FastAPI + Kafka Consumer + Alert Engine + PipelineManager）框架完整，具备承接生产流量的基础。
+端到端测试已更新为 2026-07-02 的 56 PASS / 0 FAIL / 0 WARN，表明管道核心逻辑稳定。平台侧（FastAPI + Kafka Consumer + Alert Engine + PipelineManager）框架完整，具备承接生产流量的基础。
 
 ### 1.2 发现统计
 
@@ -76,9 +76,9 @@
 |----------|----------|--------|------|
 | Dashboard | ✅ 存在 | 80% | 501行，WebSocket 对接 |
 | Monitoring | ✅ 存在 | 80% | 838行，视频流 + 实时指标 |
-| Drones | ✅ 存在 | 70% | 878行，**telemetry WebSocket 待验证** |
+| Drones | ✅ 存在 | 90% | API + `telemetry:{drone_id}` WebSocket 已接入并有前端测试覆盖 |
 | Alerts | ✅ 存在 | 70% | 规则配置 + 历史告警 |
-| GIS | ✅ 存在 | 50% | **轨迹回放未实现** |
+| GIS | ✅ 存在 | 85% | 历史轨迹与历史冲突证据复盘已实现 |
 | Pipelines | ❓ 待查 | — | 路由文件中未发现独立 pipelines 页面 |
 
 ---
@@ -87,25 +87,13 @@
 
 ### 🔴 Critical — 阻塞设计目标
 
-#### C-001: track_complete / conflict 事件不持久化
+#### C-001: track_complete / conflict 事件不持久化（已修复）
 
 - **位置**：`platform/app/kafka/consumer.py` — `_handle_track_complete()` / `_handle_conflict()`
 - **设计期望**：`track_complete_* → 轨迹存储 + 推送`、`conflicts_* → 告警引擎 + 推送`（存入 InfluxDB）
-- **当前实现**：仅 WebSocket 广播，**不写入 InfluxDB**
-- **影响**：
-  - Trajectory API (`/api/v1/trajectories`) 查 `track_events` 表 → 空结果
-  - GIS 轨迹回放无法工作
-  - 历史冲突无法查询
-  - 告警审计链断裂（只有内存中的 alert，无 InfluxDB 持久化）
-- **修复方案**：
-  ```python
-  # consumer._handle_track_complete() 增加:
-  influx = request.app.state.influx  # 需要注入到 consumer
-  influx.write_track_event(data)  # 写入 track_events measurement
-  
-  # consumer._handle_conflict() 增加:
-  influx.write_conflict_event(data)  # 写入 conflict_events measurement
-  ```
+- **历史实现**：仅 WebSocket 广播，不写入 InfluxDB
+- **当前状态**：Kafka consumer 已将 `track_complete_*` 写入 `track_events`，将 `conflicts_*` 写入 `conflict_events`；平台提供 `GET /api/v1/trajectories/{intersection_id}` 和 `GET /api/v1/trajectories/{intersection_id}/conflicts` 支持 GIS 轨迹/冲突复盘。
+- **验证**：`platform/tests/test_influx_query.py` 覆盖轨迹与冲突证据字段持久化/反序列化；`platform/tests/test_core_api_routes.py` 覆盖历史冲突 API；`traffic-fly-console/src/features/gis/index.test.tsx` 覆盖 GIS 历史轨迹与冲突证据展示。
 
 #### C-002: KafkaProducerNode 同步 `.get(timeout=1)` 阻塞管道
 
@@ -572,14 +560,14 @@ T-102(持久化) → T-302(GIS轨迹) → T-502(冲突启用)
 | 5 | 遥测驱动标定 | ✅ PASS | Nadir + Oblique 双模式 |
 | 6 | 运动补偿 | ✅ PASS | GPS锚定 + 速度矢量 + 悬停 |
 | 7 | 方向流量零标注 | ✅ PASS | heading-based 分类 |
-| 8 | Kafka 多 Topic | ⚠️ PARTIAL | 缺 telemetry topic |
-| 9 | 平台消费者 | ⚠️ PARTIAL | 缺 InfluxDB 持久化 |
-| 10 | 告警引擎完整性 | ⚠️ PARTIAL | 缺 2 条规则 |
-| 11 | 道路数动态化 | ❌ FAIL | 硬编码 5 条 |
-| 12 | Kafka 可靠性 | ❌ FAIL | 同步阻塞 |
-| 13 | 前端功能完整 | ⚠️ PARTIAL | GIS 轨迹回放未实现 |
+| 8 | Kafka 多 Topic | ✅ PASS | statistics / track_complete / conflicts / telemetry 均已输出 |
+| 9 | 平台消费者 | ✅ PASS | WebSocket 推送 + track/conflict InfluxDB 持久化 |
+| 10 | 告警引擎完整性 | ✅ PASS | high_avg_speed / multiple_conflicts 与告警持久化已补齐 |
+| 11 | 道路数动态化 | ✅ PASS | 统计查询和前端展示已按动态 road_* 字段处理 |
+| 12 | Kafka 可靠性 | ✅ PASS | Producer 异步队列发送，Kafka 抖动不阻塞主检测管道 |
+| 13 | 前端功能完整 | ✅ PASS | Monitoring、Drones、Dashboard、GIS 轨迹/冲突复盘均有覆盖 |
 | 14 | 代码质量 | ⚠️ PARTIAL | 死代码 + 动态属性 + 巨型文件 |
-| 15 | 测试覆盖 | ⚠️ PARTIAL | E2E 通过但单元测试不足 |
+| 15 | 测试覆盖 | ⚠️ PARTIAL | E2E、平台、前端、ByteTrack/工具单测已扩展；长视频与部署环境仍需持续回归 |
 
 ---
 

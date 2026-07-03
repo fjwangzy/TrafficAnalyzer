@@ -7,6 +7,85 @@ from nodes.KafkaProducerNode import KafkaProducerNode
 
 
 class KafkaActiveTrajectoriesTest(unittest.TestCase):
+    def _producer_without_kafka(self):
+        producer = object.__new__(KafkaProducerNode)
+        producer.topic_name = "statistics_7"
+        producer.track_complete_topic = "track_complete_7"
+        producer.conflicts_topic = "conflicts_7"
+        producer.telemetry_topic = "telemetry_7"
+        producer.intersection_id = "INT_camera_7"
+        producer.camera_id = 7
+        producer.how_often_sec = 1.0
+        producer.last_send_time = None
+        producer.buffer_analytics_sec = 0.0
+        producer._fps_window_sec = 2.0
+        producer._fps_timestamps = []
+        producer._capacity_veh_per_min = 30.0
+        producer._queue_threshold_m = 80.0
+        producer._free_flow_speed_kmh = 40.0
+        producer._active_trajectory_tail_points = 30
+        producer._telemetry_interval = 0.2
+        producer._last_telemetry_time = 0.0
+        return producer
+
+    def test_process_enqueues_stats_tracks_conflicts_and_telemetry_topics(self):
+        frame = np.zeros((20, 20, 3), dtype=np.uint8)
+        frame_element = FrameElement("test", frame, 2.0, 1, {"1": [0, 0, 1, 0, 1, 1, 0, 1]})
+        frame_element.info = {"cars_amount": 4, "roads_activity": {1: 2.5}}
+        frame_element.id_list = [101, 202]
+        frame_element.buffer_tracks = {}
+        frame_element.direction_stats = {"straight": {"count": 2, "avg_speed_kmh": 18.0}}
+        frame_element.queue_count = 1
+        frame_element.completed_tracks = [{
+            "track_id": 101,
+            "trajectory_px": [[1, 2], [3, 4]],
+            "trajectory_world_m": [[0.1, 0.2], [0.3, 0.4]],
+            "turn_behavior": "straight",
+            "avg_speed_kmh": 18.0,
+            "entry_point_m": [0.1, 0.2],
+            "exit_point_m": [0.3, 0.4],
+        }]
+        frame_element.conflict_events = [{
+            "motor_id": 101,
+            "non_motor_id": 202,
+            "prediction_type": "path_intersection",
+            "ttc_sec": 1.2,
+            "pet_sec": 0.3,
+            "severity": "critical",
+            "conflict_scene": "suspected_right_turn_mv_nmv",
+            "evidence": ["hard_ttc_or_pet"],
+        }]
+        frame_element.telemetry = {"latitude": 36.7, "longitude": 117.0, "height": 120.0}
+
+        producer = self._producer_without_kafka()
+        sent = []
+        producer._enqueue = lambda topic, data: sent.append((topic, data))
+
+        out = producer.process(frame_element)
+
+        topics = [topic for topic, _ in sent]
+        self.assertIs(out, frame_element)
+        self.assertEqual(
+            topics,
+            ["statistics_7", "track_complete_7", "conflicts_7", "telemetry_7"],
+        )
+        stats = sent[0][1]
+        self.assertEqual(stats["msg_type"], "stats")
+        self.assertEqual(stats["intersection_id"], "INT_camera_7")
+        self.assertEqual(stats["cars"], 4)
+        self.assertEqual(stats["road_1"], 2.5)
+        self.assertEqual(stats["direction_flow"], frame_element.direction_stats)
+        self.assertEqual(stats["queue_count"], 1)
+        self.assertEqual(stats["conflict_count"], 1)
+
+        self.assertEqual(sent[1][1]["msg_type"], "track_complete")
+        self.assertEqual(sent[1][1]["track_id"], 101)
+        self.assertEqual(sent[2][1]["msg_type"], "conflict")
+        self.assertEqual(sent[2][1]["conflict_scene"], "suspected_right_turn_mv_nmv")
+        self.assertEqual(sent[3][1]["msg_type"], "telemetry")
+        self.assertEqual(sent[3][1]["drone_id"], "drone_7")
+        self.assertEqual(sent[3][1]["height"], 120.0)
+
     def test_build_active_trajectories_includes_world_points_and_track_metadata(self):
         frame = np.zeros((100, 100, 3), dtype=np.uint8)
         frame_element = FrameElement("test", frame, 3.0, 90, {})

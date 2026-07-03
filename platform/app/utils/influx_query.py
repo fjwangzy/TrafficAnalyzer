@@ -25,6 +25,16 @@ class InfluxQuery:
             database=database,
         )
         self._db = database
+        self._ensure_database()
+
+    def _ensure_database(self) -> None:
+        """Create and select the configured database if it is missing."""
+        databases = self._client.get_list_database()
+        database_names = {db.get("name") for db in databases}
+        if self._db not in database_names:
+            self._client.create_database(self._db)
+            logger.info(f"InfluxDB database created: {self._db}")
+        self._client.switch_database(self._db)
 
     # ─── Write Methods (T-102) ───
 
@@ -157,11 +167,36 @@ class InfluxQuery:
                 "ttc_sec": float(data.get("ttc_sec", 0) or 0),
                 "distance_m": float(data.get("distance_m", 0) or 0),
             }
+            for field in (
+                "pet_sec",
+                "arrival_time_delta_sec",
+                "motor_arrival_ttc_sec",
+                "non_motor_arrival_ttc_sec",
+                "conflict_angle_deg",
+                "motor_speed_kmh",
+            ):
+                if data.get(field) is not None:
+                    fields[field] = float(data[field])
+            if data.get("risk_score") is not None:
+                fields["risk_score"] = int(data["risk_score"])
+
+            for field in (
+                "evidence",
+                "motor_position_m",
+                "non_motor_position_m",
+                "world_anchor_lat_lon",
+            ):
+                if data.get(field) is not None:
+                    fields[field] = json.dumps(data[field], ensure_ascii=False)
 
             tags = {
                 "intersection_id": intersection_id,
                 "severity": str(data.get("severity", "info")),
             }
+            if data.get("prediction_type") is not None:
+                tags["prediction_type"] = str(data["prediction_type"])
+            if data.get("conflict_scene") is not None:
+                tags["conflict_scene"] = str(data["conflict_scene"])
 
             ts = data.get("timestamp", time.time())
             point = {
@@ -204,32 +239,30 @@ class InfluxQuery:
             points = list(result.get_points())
 
             # T-201: 额外查询动态道路字段（road_1..road_8）
-            road_query = f"""
-                SELECT *
-                FROM "intersection_stats"
-                WHERE "intersection_id" = '{intersection_id}'
-                  AND time > now() - {period}
-                GROUP BY time({granularity})
-                ORDER BY time ASC
-            """
-            road_result = self._client.query(road_query)
-            road_points = list(road_result.get_points())
+            try:
+                road_query = f"""
+                    SELECT mean(*)
+                    FROM "intersection_stats"
+                    WHERE "intersection_id" = '{intersection_id}'
+                      AND time > now() - {period}
+                    GROUP BY time({granularity})
+                    ORDER BY time ASC
+                """
+                road_result = self._client.query(road_query)
+                road_points = list(road_result.get_points())
+            except Exception as e:
+                logger.error(f"InfluxDB road stats query error: {e}")
+                road_points = []
 
-            # 合并：将 road_* 字段加入主查询结果
-            if road_points:
-                road_fields = {}
-                for rp in road_points:
-                    for k, v in rp.items():
-                        if k.startswith("road_") and v is not None:
-                            if k not in road_fields:
-                                road_fields[k] = []
-                            road_fields[k].append(v)
-
-                # 对每个时间点，计算均值
-                for i, point in enumerate(points):
-                    for k, vals in road_fields.items():
-                        if i < len(vals):
-                            point[k] = vals[i]
+            for i, point in enumerate(points):
+                if i >= len(road_points):
+                    break
+                for key, value in road_points[i].items():
+                    if value is None:
+                        continue
+                    field = key[5:] if key.startswith("mean_") else key
+                    if field.startswith("road_"):
+                        point[field] = value
 
             return points
         except Exception as e:
@@ -360,7 +393,20 @@ class InfluxQuery:
         """
         try:
             result = self._client.query(q)
-            return list(result.get_points())
+            points = list(result.get_points())
+            for p in points:
+                for field in (
+                    "evidence",
+                    "motor_position_m",
+                    "non_motor_position_m",
+                    "world_anchor_lat_lon",
+                ):
+                    if field in p and isinstance(p[field], str):
+                        try:
+                            p[field] = json.loads(p[field])
+                        except (json.JSONDecodeError, TypeError):
+                            pass
+            return points
         except Exception as e:
             logger.error(f"InfluxDB query error: {e}")
             return []

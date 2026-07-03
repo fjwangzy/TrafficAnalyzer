@@ -20,7 +20,8 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 | `docs/2026-05-30-drone-motion-compensation-design.md` | 无人机运动补偿 + 事件世界坐标设计 |
 | `docs/2026-05-30-pipeline-platform-integration.md` | **视频检测流×平台整合方案**（Kafka对齐、PipelineManager、docker-compose统一） |
 | `docs/2026-05-31-uav-traffic-perception-system-design.md` | **总体技术设计方案**（背景/架构/模型/数据/平台/实施路径/风险/演进，完整版） |
-| `docs/test_report_inter_xqh.md` | 端到端测试报告（inter_xqh视频+SRT遥测，49/49 PASS） |
+| `docs/test_report_inter_xqh.md` | 端到端测试报告（inter_xqh视频+SRT遥测，当前 56 PASS / 0 FAIL / 0 WARN） |
+| `docs/2026-07-02-tcc-business-closure-audit.md` | TCC 业务闭环完成审计（逐项验收证据与最终补跑清单） |
 | `docs/superpowers/specs/` | 设计规格文档目录 |
 
 ## 文档维护规则
@@ -31,7 +32,7 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 ```bash
 # 使用 inter_xqh 视频 + SRT 遥测（需 YOLO 权重 weights/uav_best.pt）
 python test_pipeline_inter_xqh.py
-# 预期: 49 PASS / 0 FAIL（CPU上约3分钟，GPU约1分钟）
+# 预期: 56 PASS / 0 FAIL / 0 WARN（CPU上约1.5~3分钟，GPU约1分钟）
 ```
 
 ### 平台启动
@@ -39,10 +40,17 @@ python test_pipeline_inter_xqh.py
 cd platform
 pip install -e .
 python scripts/run_local.py
-# 访问 http://localhost:8000 — 43 条 API 路由
+# 访问 http://localhost:8000 — OpenAPI 55 paths / 58 operations
 # /api/v1/pipelines — 管道管理
 # /api/v1/drones — 无人机管理
 # /api/v1/intersections — 路口管理
+```
+
+### 轻量回归测试
+```bash
+python -m pytest platform/tests -q
+python -m pytest test_kafka_active_trajectories.py test_utils_local.py test_byte_tracker_core.py test_grafana_provisioning.py -q
+cd traffic-fly-console && npm test && npm run build
 ```
 
 ### Docker 全栈
@@ -137,9 +145,9 @@ VideoReader → DetectionTrackingNodes → HomographyCalibrationNode → MotionC
 | `LaneDetectionNode`         | `nodes/LaneDetectionNode.py`           | YOLO segmentation model for lane marking/pavement detection. Generates stable lane polygons from image features. Priority: manual > model > auto. First-frame caching for fixed cameras.                  |
 | `LaneAnalysisNode`          | `nodes/LaneAnalysisNode.py`            | Lane-level flow, queue length, headway. Data-driven (auto-skips when no lane polygons).                                                                                                              |
 | `TrajectoryNode`            | `nodes/TrajectoryNode.py`              | Turn behavior classification + world-coordinate trajectory output (`trajectory_world_m`).                                                                                                            |
-| `ConflictDetectionNode`     | `nodes/ConflictDetectionNode.py`       | Motor/non-motor conflict via TTC + proximity. World-coordinate positions. `enabled: false` by default.                                                                                                |
+| `ConflictDetectionNode`     | `nodes/ConflictDetectionNode.py`       | Motor/non-motor conflict via future path-intersection TTC/PET, near-miss evidence, conflict scene, risk score, and world-coordinate predicted positions. `enabled: true` by default; invalid homography/insufficient trajectory automatically skips.                  |
 | `CalcStatisticsNode`        | `nodes/CalcStatisticsNode.py`          | Computes `cars_amount` (smoothed) and `roads_activity` (vehicles/minute per road).                                                                                                                    |
-| `KafkaProducerNode`         | `nodes/KafkaProducerNode.py`           | Multi-topic: `statistics_{n}`, `track_complete_{n}`, `conflicts_{n}`. Sends every `how_often_sec` seconds. Includes direction_flow, drone_position, is_hovering.                                     |
+| `KafkaProducerNode`         | `nodes/KafkaProducerNode.py`           | Multi-topic: `statistics_{n}`, `track_complete_{n}`, `conflicts_{n}`, `telemetry_{n}`. Sends every `how_often_sec` seconds with asynchronous queueing. Includes direction_flow, drone_position, is_hovering, active trajectories, and conflict counts.                 |
 | `ShowNode`                  | `nodes/ShowNode.py`                    | Renders bounding boxes, road polygons, speed labels, direction overlay (S:/L:/R:), lane polygons, FPS, statistics. Uses **supervision** library (`RoundBoxAnnotator`, `LabelAnnotator`, `TraceAnnotator`, `MaskAnnotator`) for polished visualization. |
 | `VideoSaverNode`            | `nodes/VideoSaverNode.py`              | Writes `frame_result` to MP4 file.                                                                                                                                                                   |
 | `FlaskServerVideoNode`      | `nodes/FlaskServerVideoNode.py`        | Streams `frame_result` via Flask MJPEG endpoint at `/video`.                                                                                                                                         |
@@ -176,7 +184,7 @@ All implement the same `get_nearest(timestamp) -> dict` interface, so VideoReade
 
 | Script | Purpose |
 |---|---|
-| `test_pipeline_inter_xqh.py` | Full pipeline E2E test with 4K drone video + SRT telemetry (49 checks) |
+| `test_pipeline_inter_xqh.py` | Full pipeline E2E test with 4K drone video + SRT telemetry (current 56 PASS / 0 FAIL / 0 WARN) |
 | `test_pipeline_no_yolo.py` | Pipeline test without YOLO (for CI without GPU) |
 
 ### Test data
@@ -308,7 +316,7 @@ python scripts/run_local.py
 
 ### Platform Kafka Consumer
 
-The platform subscribes to all pipeline topics via regex pattern `(statistics|track_complete|conflicts|telemetry)_.*` and routes messages to WebSocket channels:
+The platform subscribes to pipeline topics plus system metrics via regex pattern `((statistics|track_complete|conflicts|telemetry)_.*|system_metrics)` and routes messages to WebSocket channels:
 
 | Topic pattern | msg_type | Handler | WebSocket channel |
 |---|---|---|---|
@@ -316,6 +324,7 @@ The platform subscribes to all pipeline topics via regex pattern `(statistics|tr
 | `track_complete_*` | `track_complete` | `_handle_track_complete()` | `intersection:{id}` |
 | `conflicts_*` | `conflict` | `_handle_conflict()` | `intersection:{id}` + `alerts` |
 | `telemetry_*` | `telemetry` | `_handle_telemetry()` | `telemetry:{drone_id}` |
+| `system_metrics` | `system_metrics` | `_handle_system_metrics()` | `system` |
 
 Stats messages also update `drone_store` via `update_drone_from_stats()` (extracts `drone_position` field). Telemetry messages update via `update_drone_telemetry()`.
 

@@ -63,6 +63,44 @@ PRINT_PROFILE_INFO = False
 _QUEUE_GET_TIMEOUT = 10
 
 
+def _can_write_log_file(filename: str) -> bool:
+    """Return whether a FileHandler target can be opened for append."""
+    log_path = filename if os.path.isabs(filename) else os.path.join(os.getcwd(), filename)
+    log_dir = os.path.dirname(log_path) or "."
+    try:
+        os.makedirs(log_dir, exist_ok=True)
+        with open(log_path, "a", encoding="utf-8"):
+            pass
+    except OSError:
+        return False
+    return True
+
+
+def _drop_unwritable_file_handlers(cfg: dict) -> dict:
+    """Remove FileHandlers that cannot write in the current process cwd."""
+    handlers = cfg.get("handlers") or {}
+    removed = []
+    for name, handler in list(handlers.items()):
+        if handler.get("class") != "logging.FileHandler":
+            continue
+        filename = handler.get("filename")
+        if filename and _can_write_log_file(filename):
+            continue
+        handlers.pop(name, None)
+        removed.append(name)
+
+    if not removed:
+        return cfg
+
+    root = cfg.get("root") or {}
+    root["handlers"] = [h for h in root.get("handlers", []) if h not in removed]
+    for logger_cfg in (cfg.get("loggers") or {}).values():
+        logger_cfg["handlers"] = [
+            h for h in logger_cfg.get("handlers", []) if h not in removed
+        ]
+    return cfg
+
+
 def _setup_logging_in_subprocess():
     """在子进程中初始化日志配置。
 
@@ -75,6 +113,7 @@ def _setup_logging_in_subprocess():
     if os.path.exists(config_path):
         with open(config_path) as f:
             cfg = yaml.safe_load(f)
+        cfg = _drop_unwritable_file_handlers(cfg)
         logging.config.dictConfig(cfg)
 
 

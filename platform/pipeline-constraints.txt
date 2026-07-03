@@ -1,0 +1,4 @@
+# Keep platform-spawned detector dependencies aligned with the root detector image.
+numpy<2
+torch==2.2.2
+torchvision==0.17.2

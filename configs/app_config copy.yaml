@@ -173,6 +173,8 @@ conflict_detection:
   critical_horizon_sec: 3.0
   sample_interval_sec: 0.2
   collision_radius_m: 2.0
+  enable_same_time_cpa: false
+  same_time_collision_radius_m: 0.8
   arrival_time_tolerance_sec: 1.0
   relative_speed_min_ms: 0.5
 

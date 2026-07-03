@@ -42,13 +42,15 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
             await session.close()
 
 
-async def init_db():
+async def init_db() -> bool:
     """Initialize database tables."""
     try:
+        from app.models.alert import AlertRecord  # noqa: F401
+        from app.models.user import User
+
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
 
-        from app.models.user import User
         from app.services.auth_service import get_password_hash
 
         # Docker 和本地首次启动都需要可验证的默认账号；已有 admin 时保持原数据不变。
@@ -67,10 +69,12 @@ async def init_db():
             elif admin_user.email == "admin@traffic.local":
                 admin_user.email = "admin@trafficanalyzer.dev"
                 await session.commit()
+        return True
     except Exception as e:
         # Log but don't fail - database might not be available in dev
         import logging
         logging.getLogger(__name__).warning(f"Database initialization failed: {e}")
+        return False
 
 
 async def close_db():

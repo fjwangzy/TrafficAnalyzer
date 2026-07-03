@@ -82,9 +82,10 @@ class WSManager:
         action = msg.get("action", "")
 
         if action == "subscribe":
-            channel = msg.get("channel", "")
-            if channel:
+            channels = self._message_channels(msg)
+            for channel in channels:
                 await self.subscribe(ws, channel)
+            for channel in channels:
                 await ws.send_text(json.dumps({
                     "action": "subscribed",
                     "channel": channel,
@@ -92,9 +93,10 @@ class WSManager:
                 }))
 
         elif action == "unsubscribe":
-            channel = msg.get("channel", "")
-            if channel:
+            channels = self._message_channels(msg)
+            for channel in channels:
                 await self.unsubscribe(ws, channel)
+            for channel in channels:
                 await ws.send_text(json.dumps({
                     "action": "unsubscribed",
                     "channel": channel,
@@ -147,3 +149,12 @@ class WSManager:
         async with self._lock:
             self._channels.clear()
             self._subscriptions.clear()
+
+    @staticmethod
+    def _message_channels(msg: dict[str, Any]) -> list[str]:
+        """Return subscription channel names from either channel or channels."""
+        channels = msg.get("channels")
+        if isinstance(channels, list):
+            return [str(ch) for ch in channels if ch]
+        channel = msg.get("channel", "")
+        return [str(channel)] if channel else []

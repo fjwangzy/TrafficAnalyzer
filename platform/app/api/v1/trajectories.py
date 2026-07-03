@@ -24,6 +24,20 @@ async def get_trajectories(
     return []
 
 
+@router.get("/{intersection_id}/conflicts")
+async def get_conflict_history(
+    intersection_id: str,
+    request: Request,
+    period: str = Query("1h"),
+    limit: int = Query(200, le=2000),
+):
+    """Get historical conflict events for an intersection."""
+    influx = request.app.state.influx
+    if influx:
+        return influx.query_conflict_events(intersection_id, period, limit)
+    return []
+
+
 @router.get("/{intersection_id}/heatmap")
 async def get_trajectory_heatmap(
     intersection_id: str,

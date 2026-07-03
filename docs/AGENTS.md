@@ -1,0 +1,54 @@
+# AGENTS.md — Codex 长期协作规则
+
+> 本文件是 Codex 在 TrafficAnalyzer 仓库中长期协作的工程规范。
+> 根目录 `AGENTS.md` 是入口索引；本文件记录稳定开发规则、模块边界和验证要求。
+
+## 基本原则
+
+- 先读后写：修改代码前先阅读目标文件、直接依赖和相关契约文档。
+- 保持节点式管道：视频分析能力优先落在 `nodes/` 节点中，不在 `main_optimized.py` 内堆业务逻辑。
+- 以 `FrameElement` 为唯一帧级数据载体：新增跨节点字段必须在 `elements/FrameElement.py` 声明。
+- 配置驱动：运行参数进入 `configs/app_config.yaml`，需要容器差异时通过环境变量或 Hydra override 注入。
+- 不回退用户已有改动：工作树可能包含并行修改，除非用户明确要求，不还原不相关文件。
+
+## 模块边界
+
+| 模块 | 边界 |
+|------|------|
+| `elements/` | 共享数据模型，只被管道节点和入口引用 |
+| `nodes/` | 视频检测、跟踪、态势、冲突和输出节点 |
+| `utils_local/` | 几何、单应性、车道推断等纯工具 |
+| `byte_tracker/` | ByteTrack 移植代码，参数优先从配置调整 |
+| `platform/app/` | FastAPI 单体平台，不重新拆回微服务 |
+| `traffic-fly-console/` | React 前端，实时态势、GIS、告警、管道和无人机页面 |
+| `docs/` | 架构、业务逻辑、API、数据库和测试报告，完成任务后同步更新 |
+
+## TCC 闭环验证习惯
+
+优先使用可重复的自动化验证：
+
+```bash
+python test_pipeline_inter_xqh.py
+python -m pytest platform/tests -q
+python -m pytest test_kafka_active_trajectories.py test_utils_local.py test_byte_tracker_core.py test_grafana_provisioning.py -q
+cd traffic-fly-console && npm test && npm run build
+```
+
+当前 inter_xqh 端到端基线为 `56 PASS / 0 FAIL / 0 WARN`。如果测试资产或权重缺失，应记录缺失项，不能把未运行的验证当作通过。
+
+## 文档同步
+
+涉及以下能力时必须同步对应文档：
+
+- Kafka/WebSocket/API 契约：更新 `docs/API_CONTRACTS.md`。
+- InfluxDB/PostgreSQL schema 或 topic：更新 `docs/DATABASE_SCHEMA.md`。
+- 管道节点、数据流或进程模型：更新 `docs/ARCHITECTURE.md` 和 `docs/BUSINESS_LOGIC.md`。
+- 验证结果、TCC 交付状态：更新 `docs/test_report_inter_xqh.md` 和 `docs/TASKS.md`。
+
+## 禁止事项
+
+- 禁止新增绕过 `main_optimized.py` 的生产入口。
+- 禁止在 ShowNode 中加入业务判定逻辑。
+- 禁止将 `platform/` 重新拆为 gateway/services/shared 微服务结构。
+- 禁止使用 `python-jose`，平台鉴权使用 PyJWT。
+- 禁止把旧的 0.9m~1.7m CPA 擦肩事件重新作为默认机非冲突业务口径。

@@ -6,11 +6,11 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
-from app.core.database import init_db, close_db
+from app.core.database import init_db, close_db, async_session_maker
 from app.middleware.auth import AuthMiddleware
 from app.kafka.ws_manager import WSManager
 from app.kafka.consumer import KafkaConsumerService
-from app.services.alert_engine import AlertEngine
+from app.services.alert_engine import AlertEngine, SqlAlertStore
 from app.services.lane_annotation_store import LaneAnnotationStore
 from app.services.pipeline_manager import PipelineManager
 from app.utils.influx_query import InfluxQuery
@@ -27,15 +27,20 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     """Application lifespan manager."""
     # ── Initialize database ──
+    db_available = False
     try:
-        await init_db()
+        db_available = await init_db()
+        if not db_available:
+            raise RuntimeError("database initialization failed")
         logger.info(f"Database initialized: {settings.db_host}:{settings.db_port}")
     except Exception as e:
         logger.warning(f"Database unavailable (auth features disabled): {e}")
 
     # ── Initialize components ──
     ws_manager = WSManager()
-    alert_engine = AlertEngine(ws_manager, settings)
+    alert_store = SqlAlertStore(async_session_maker) if db_available else None
+    alert_engine = AlertEngine(ws_manager, settings, alert_store=alert_store)
+    await alert_engine.load_persisted_alerts()
     lane_annotation_store = LaneAnnotationStore(
         db_path=settings.lane_annotation_db_path,
         hover_seconds=settings.lane_annotation_hover_seconds,
@@ -69,7 +74,10 @@ async def lifespan(app: FastAPI):
             influx_client=influx,  # T-102: 注入 InfluxDB 客户端用于持久化
         )
         await kafka_service.start()
-        logger.info(f"Kafka consumer started: {settings.kafka_bootstrap}")
+        if kafka_service._consumer is not None:
+            logger.info(f"Kafka consumer started: {settings.kafka_bootstrap}")
+        else:
+            logger.warning(f"Kafka consumer degraded: {settings.kafka_bootstrap}")
     except Exception as e:
         logger.warning(f"Kafka consumer failed to start (real-time disabled): {e}")
 
@@ -88,6 +96,7 @@ async def lifespan(app: FastAPI):
     app.state.kafka_service = kafka_service
     app.state.pipeline_manager = pipeline_manager
     app.state.settings = settings
+    app.state.db_available = db_available
 
     logger.info(f"🚀 Traffic Platform started on port {settings.service_port}")
     logger.info(f"   - Database: {settings.db_host}:{settings.db_port}")
@@ -160,7 +169,7 @@ async def health():
 async def readiness_check():
     """Check if all dependencies are ready."""
     services = {
-        "database": "healthy",
+        "database": "healthy" if getattr(app.state, "db_available", False) else "degraded",
         "kafka": "unknown",
         "influxdb": "unknown",
         "pipeline_manager": "healthy",
@@ -168,10 +177,10 @@ async def readiness_check():
 
     # Check Kafka
     kafka_service = app.state.kafka_service if hasattr(app.state, "kafka_service") else None
-    if kafka_service and kafka_service._running:
+    if kafka_service and kafka_service._running and kafka_service._consumer is not None:
         services["kafka"] = "healthy"
     elif kafka_service:
-        services["kafka"] = "unhealthy"
+        services["kafka"] = "degraded"
     else:
         services["kafka"] = "not_configured"
 

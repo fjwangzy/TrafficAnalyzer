@@ -78,7 +78,7 @@ TrafficAnalyzer 是一个环形交叉路口交通分析系统。核心功能：�
                       ▼
 ┌─────────────────────────────────────────────────────────┐
 │             ConflictDetectionNode（默认启用）             │
-│  机非未来轨迹碰撞预测 + 预测冲突点世界坐标输出             │
+│  右转/左转机非 near-miss 证据漏斗 + 冲突点世界坐标输出      │
 └─────────────────────┬───────────────────────────────────┘
                       ▼
 ┌─────────────────────────────────────────────────────────┐
@@ -146,7 +146,7 @@ Grafana (provisioned dashboards)
 Dashboard panels: 车辆数 + 道路拥堵 + 车速 + 方向流量
 
 Platform Consumer (platform/app/kafka/consumer.py)
-  │ 订阅 (statistics|track_complete|conflicts|telemetry)_.*
+  │ 订阅 ((statistics|track_complete|conflicts|telemetry)_.*|system_metrics)
   │
   │ statistics_* → _handle_stats()
   │   ├── WebSocket → intersection:{id}
@@ -172,10 +172,39 @@ PipelineManager (platform/app/services/pipeline_manager.py)
   │ 管理检测管道生命周期
   │ POST /api/v1/pipelines → 启动子进程(python main_optimized.py)
   │ DELETE /api/v1/pipelines/{id} → SIGTERM → 10s → SIGKILL
-  │ 后台监控任务: 每5s检查进程存活状态
+  │ 后台监控任务: 每5s检查进程存活状态，return_code=0 记为 stopped，非零记为 error
   ▼
 检测管道子进程: GPU推理 + CPU计算 + Kafka输出
 ```
+
+平台容器会把项目根目录以 `/project` 只读挂载，并在镜像构建时安装
+`platform/pipeline-requirements.txt` 中的检测器依赖，并通过
+`platform/pipeline-constraints.txt` 锁定 `numpy<2`、`torch==2.2.2` 和
+`torchvision==0.17.2`，避免 `ultralytics` 自由解析到不兼容或过重的新版
+Torch/CUDA 包。依赖文件应覆盖根 `requirements.txt`，否则通过 `POST /api/v1/pipelines`
+启动 `main_optimized.py` 时会出现缺少 `hydra`、YOLO、OpenCV 等模块的错误。
+Platform 拉起的检测器命令会追加 `hydra/job_logging=disabled`，避免 Hydra 默认
+`logs/app.log` 文件 handler 在只读 `/project` 下创建日志失败；检测器 stdout/stderr
+由 PipelineManager 持续 drain 并保留尾部用于异常诊断。`main_optimized.py`
+的 multiprocessing 子进程会重新加载日志配置；若 `FileHandler` 目标不可写，会自动
+移除 file handler 并降级到 console，避免 reader/tracker/show worker 因日志文件不可写退出。
+
+### Platform/Vite MJPEG 代理
+
+Platform 通过 PipelineManager 启动检测器子进程时，每条管道分配独立 `VIDEO_PORT`。
+检测器 Flask MJPEG 服务绑定在 Platform 容器内部 `127.0.0.1:{video_port}`；
+宿主机 Vite dev server 不能直接访问该容器本地端口。实时页面的
+`/camera_N` 因此走两跳代理：
+
+```
+Browser <img src="/camera_10">
+  → Vite /camera_10
+  → Platform /api/v1/video/camera/10
+  → Platform container localhost:8101/video
+```
+
+`/api/v1/video/camera/{camera_id}` 是公开只读 MJPEG 端点，未运行对应管道时返回
+`camera_not_running`。这保证前端 `<img>` 不需要 Bearer token 也能显示检测画面。
 
 ### Nginx 视频流聚合
 
@@ -184,7 +213,8 @@ http://localhost:8009/camera_{n}
   → proxy_pass http://traffic_analyzer_camera_{n}:8100/video
 ```
 
-使用正则 `~ ^/camera_(\d+)$` 动态路由到对应摄像头容器的 Flask MJPEG 端点。
+生产多 camera 容器模式使用正则 `~ ^/camera_(\d+)$` 动态路由到对应摄像头容器的
+Flask MJPEG 端点。
 
 ### WebSocket 频道模型
 

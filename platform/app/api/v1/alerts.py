@@ -36,7 +36,7 @@ async def acknowledge_alert(alert_id: str, request: Request):
     user = "admin"
     if hasattr(request.state, "user") and request.state.user:
         user = getattr(request.state.user, "username", "admin")
-    alert = engine.acknowledge_alert(alert_id, user)
+    alert = await engine.acknowledge_alert(alert_id, user)
     if not alert:
         return {"error": "not_found", "id": alert_id}
     return alert

@@ -1,0 +1,15 @@
+# Dependencies required when PipelineManager spawns /project/main_optimized.py
+# from inside the platform container.
+ultralytics>=8.3.0
+opencv-python==4.9.0.80
+shapely>=2.0.6
+hydra-core==1.3.2
+Flask==3.0.3
+kafka-python-ng>=2.2.0
+paho-mqtt>=2.0.0
+supervision>=0.24.0
+scipy>=1.10.0
+matplotlib>=3.7.0
+tqdm
+cython_bbox>=0.1.5
+lapx>=0.9.0

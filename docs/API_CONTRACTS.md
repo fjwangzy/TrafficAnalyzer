@@ -97,20 +97,28 @@
   "intersection_id": "INT_camera_1",
   "motor_id": 142,
   "non_motor_id": 156,
+  "prediction_type": "path_intersection",
   "motor_position_m": [12.3, -5.2],
-  "non_motor_position_m": [12.8, -4.9],
-  "distance_m": 2.3,
+  "non_motor_position_m": [12.3, -5.2],
+  "distance_m": 0.0,
   "ttc_sec": 1.5,
-  "arrival_time_delta_sec": 0.0,
-  "motor_arrival_ttc_sec": 1.5,
+  "pet_sec": 0.2,
+  "arrival_time_delta_sec": 0.2,
+  "motor_arrival_ttc_sec": 1.3,
   "non_motor_arrival_ttc_sec": 1.5,
   "severity": "warning",
+  "conflict_scene": "suspected_right_turn_mv_nmv",
+  "conflict_angle_deg": 90.0,
+  "evidence": ["hard_ttc_or_pet", "hard_pet"],
+  "risk_score": 70,
   "motor_speed_kmh": 25.0,
   "world_anchor_lat_lon": [31.234567, 121.456789]
 }
 ```
 
-冲突检测默认启用（`conflict_detection.enabled: true`），但无有效单应性矩阵或双方世界坐标速度向量时会自动跳过，避免像素距离误报。`ttc_sec` 基于 motor/non_motor 当前世界坐标速度向量做未来 `0-5s` 轨迹预测；双方未来位置在同一预测时刻进入 `collision_radius_m`（默认 `2.0m`），或双方预测路径存在空间交点且到达时间差不超过 `arrival_time_tolerance_sec`（默认 `1.0s`）时触发。只有未来轨迹碰撞才会上报 `conflict`。`distance_m` 表示预测冲突时刻的双方距离，路径交点场景为 `0.0`；`motor_position_m` / `non_motor_position_m` 表示预测冲突点附近的双方未来世界坐标。`motor_arrival_ttc_sec` / `non_motor_arrival_ttc_sec` 表示双方到达冲突点的预测时间。`motor_id` / `non_motor_id` 轨迹对同级别事件不重复上报，但允许从 `warning` 升级为 `critical` 再次上报，直到轨迹清理后释放状态。Platform Kafka consumer 的实时冲突缓存和 WebSocket 推送同样按 `motor_id` / `non_motor_id` upsert，同级重复消息会被丢弃，升级消息会替换原事件并重新推送。机非分类由 `vehicle_classification.non_motor_class_names` / `non_motor_class_ids` 配置非机动车集合；未配置的已知检测类别按机动车处理。摩托车、电动车相关类别默认归入非机动车。
+冲突检测默认启用（`conflict_detection.enabled: true`），但无有效单应性矩阵、双方世界坐标速度向量或足够历史轨迹时会自动跳过，避免像素距离和短轨迹抖动误报。`ttc_sec` 基于 motor/non_motor 世界坐标运动趋势做未来 `0-5s` 候选交汇预测；有足够历史轨迹时，预测方向优先取最近一个有效轨迹段，速度大小沿用 `SpeedEstimationNode` 的米/秒估计，避免线性回归测速方向在转弯或轨迹错位时制造虚假交点。默认路径交点候选必须同时满足：双方预测路径存在空间交点、到达时间差不超过 `arrival_time_tolerance_sec`（默认 `1.0s`）、且双方到达交点这段时间内的连续同刻最小中心距进入 `same_time_collision_radius_m`（默认 `0.8m`）共同冲突区；只有数学射线交点但同刻距离仍偏大的 0.9m~1.7m 擦肩轨迹不会被判成相撞。同刻 CPA 候选默认关闭（`enable_same_time_cpa: false`），显式开启后也只使用 `same_time_collision_radius_m`，且 CPA 的 `pet_sec=0` 不作为 PET 侵占证据。候选还必须满足 `30°~150°` 冲突角，并归入无车道标注轨迹几何近似场景：`suspected_right_turn_mv_nmv` 或 `suspected_unprotected_left_turn`。机动车转弯场景除首尾 heading 差外，还要求转弯前后两段投影位移都达到 `min_turn_leg_m`（默认 `2.0m`），用于过滤短窗口小折线和近直行误分。
+
+最终 `conflict` 事件需要 near-miss 证据：`hard_ttc_or_pet`（默认 TTC <= 1.5s）可直接触发；路径交点 `hard_pet`（默认 PET <= 1.0s）只表示极近抢行强度，必须叠加 `hard_deceleration`、`hard_steering`、`stop_or_yield` 之一才触发事件，避免仅凭数学交点和低 PET 把近距离错位经过报成 near-miss。`hard_steering` 只把非机动车短窗口 heading 突变视为避险证据，机动车正常右/左转不计作避险急转向。`prediction_type` 标识候选来源，默认业务口径只展示/处理 `path_intersection`；显式启用扩展时产生的 `same_time_cpa` 属于中心点同刻最近接近候选，Monitoring 冲突回放入口会过滤该类 CPA-only 擦肩事件。旧格式事件仅在缺少 `prediction_type` 且 `distance_m` 近似 `0.0` 时按路径交点兼容，带 `prediction_type=path_intersection` 但 `distance_m` 非零的畸形消息也会被前端过滤，0.9m/1.3m/1.7m 等非零距离旧 CPA 消息不会进入业务冲突列表。`distance_m` 表示预测冲突时刻的双方距离，路径交点场景为 `0.0`；`motor_position_m` / `non_motor_position_m` 表示预测冲突点附近的双方未来世界坐标。`motor_arrival_ttc_sec` / `non_motor_arrival_ttc_sec` 表示双方到达冲突点的预测时间。`motor_id` / `non_motor_id` 轨迹对同级别事件不重复上报，但允许从 `warning` 升级为 `critical` 再次上报，直到轨迹清理后释放状态。Platform Kafka consumer 的实时冲突缓存和 WebSocket 推送同样按 `motor_id` / `non_motor_id` upsert，同级重复消息会被丢弃，升级消息会替换原事件并重新推送。机非分类由 `vehicle_classification.non_motor_class_names` / `non_motor_class_ids` 配置非机动车集合；未配置的已知检测类别按机动车处理。摩托车、电动车相关类别默认归入非机动车。
 
 ### 世界坐标说明
 
@@ -157,15 +165,15 @@ lon = anchor_lon + easting_m / (111320 × cos(radians(anchor_lat)))
 ### 生产者
 - 文件：`nodes/KafkaProducerNode.py`
 - 序列化：`json.dumps(x).encode("utf-8")`
-- 同步发送：`.get(timeout=1)`（阻塞等待 broker 确认）
+- 异步发送：主线程只调用 `_enqueue(topic, data)` 写入有界队列；后台 `kafka_sender` 线程调用 `KafkaProducer.send()`，Kafka 阻塞或短暂失败不会阻塞检测管道。
 
 ### 消费者
 - Telegraf `[[inputs.kafka_consumer]]`
 - 配置：`services/telegraf/telegraf.conf`
 
 ### ⚠️ 契约约束
-- **不可更改字段名**：Grafana 仪表盘的 InfluxQL 查询直接引用 `road_1`~`road_5`
-- **不可更改 road 数量**：硬编码 5 条道路，增减需要同时修改 CalcStatisticsNode、KafkaProducerNode、Telegraf、Grafana 仪表盘
+- **不可更改既有 road 字段名**：为兼容 Grafana/InfluxQL，统计消息继续保留 `road_1`~`road_N`，同时新增动态 `roads` 数组供平台按实际道路数消费。
+- **新增道路优先走动态数组**：CalcStatisticsNode/KafkaProducerNode/Platform 查询已支持动态道路数；旧 Grafana 看板若直接引用固定 `road_1`~`road_5`，新增道路需要同步扩展看板查询。
 - **不可更改 topic 命名规则**：Telegraf 配置中按 topic 名匹配
 
 ## 2. Flask 视频流 API
@@ -182,6 +190,16 @@ lon = anchor_lon + easting_m / (111320 × cos(radians(anchor_lat)))
 - 帧尺寸：由 `video_server_node.output_size` 控制（默认 `[1280, 720]`）
 - JPEG 质量：由 `video_server_node.jpeg_quality` 控制（默认 `92`）
 - 绑定地址：`0.0.0.0:8100`
+
+#### Platform `GET /api/v1/video/camera/{camera_id}`
+- 返回：运行中 PipelineManager 管道的 MJPEG 流，`multipart/x-mixed-replace; boundary=frame`
+- 用途：浏览器 `<img src="/camera_N">` 无法携带 Bearer token，且检测器子进程绑定在 Platform 容器内 `127.0.0.1:{video_port}`；因此由 Platform 先在容器内访问 `http://127.0.0.1:{video_port}/video`，再把流转发给前端。
+- 无运行管道：返回 `404 {"error":"camera_not_running","camera_id":N}`
+- 认证：该端点为公开只读流端点，由 `AuthMiddleware.PUBLIC_PATHS` 放行。
+
+#### Vite dev `GET /camera_N`
+- 前端开发服务器将 `/camera_N` 转发到 `http://localhost:8000/api/v1/video/camera/{N}`。
+- 不再直接转发到宿主机 `localhost:{video_port}/video`，因为 Docker Platform 启动的检测器端口只在容器本地可达。
 
 ### 技术细节
 - 使用 Flask 的 `Response` 生成器实现流式推送
@@ -471,15 +489,35 @@ Content-Type: application/json
 }
 ```
 
+#### `GET /ready`
+- 公开端点，用于平台依赖就绪检查。PostgreSQL 或 Kafka 不可用时平台仍可启动，但返回 `degraded`，避免状态页误报。
+- 返回（200）：
+```json
+{
+  "status": "degraded",
+  "services": {
+    "database": "degraded",
+    "kafka": "degraded",
+    "influxdb": "healthy",
+    "pipeline_manager": "healthy"
+  },
+  "pipelines_active": 0
+}
+```
+
 ### WebSocket 端点
 
-#### `WS /ws/{channel}`
+#### `WS /ws/realtime`
 - 连接后发送订阅消息：
 ```json
 {
   "action": "subscribe",
   "channels": ["intersection:INT_camera_1", "alerts", "telemetry:drone_001"]
 }
+```
+也兼容单频道格式：
+```json
+{"action": "subscribe", "channel": "system"}
 ```
 - 服务端推送消息格式：
 ```json
@@ -499,7 +537,11 @@ Content-Type: application/json
   - `intersection:{intersection_id}` — 实时统计 + 轨迹完成 + 冲突事件
   - `alerts` — 系统级告警（AlertEngine 触发）
   - `telemetry:{drone_id}` — 无人机实时遥测
-  - `system` — GPU/系统指标
+- `system` — GPU/系统指标
+- Platform Kafka consumer 默认订阅 topic pattern：
+```text
+((statistics|track_complete|conflicts|telemetry)_.*|system_metrics)
+```
 
 ### 认证机制
 - JWT token 在 `Authorization: Bearer <token>` 头中传递
@@ -539,7 +581,22 @@ Content-Type: application/json
 - `PIPELINE_FRAME_STRIDE`：写入检测器 `FRAME_STRIDE` 环境变量，例如 `3`
 - `KAFKA_BOOTSTRAP`：检测器和平台 Kafka 地址，例如 `localhost:9092`
 
+Docker 部署中，平台容器通过 `PIPELINE_PROJECT_ROOT=/project` 启动挂载的根
+`main_optimized.py`。镜像必须安装 `platform/pipeline-requirements.txt`
+中的检测器依赖，并用 `platform/pipeline-constraints.txt` 固定
+`numpy<2`、`torch==2.2.2`、`torchvision==0.17.2`；否则
+`POST /api/v1/pipelines` 会创建任务但很快进入 `error`，典型错误为
+`ModuleNotFoundError: No module named 'hydra'`，或因新版 Torch/CUDA/NumPy
+解析导致镜像过重、OpenCV 不兼容。由于 `/project` 为只读挂载，Platform 启动
+检测器时还会追加 `hydra/job_logging=disabled`，避免 Hydra 文件日志 handler
+尝试写入 `logs/app.log` 导致 `ValueError: Unable to configure handler 'file'`。
+检测器 multiprocessing 子进程也会检测 `FileHandler` 是否可写，不可写时自动移除
+file handler 并降级到 console，避免 reader/tracker/show worker 因同一日志配置退出。
+
 平台会为每条检测管道创建独立进程组；停止管道时终止整个进程组，避免 `main_optimized.py` 的 multiprocessing worker 被父进程遗留后继续向 Kafka 写数据。
+后台健康检查会每 5 秒检查子进程退出状态：`return_code == 0` 表示视频处理自然结束，
+管道状态转为 `stopped`；非零退出才转为 `error`，并把 stderr 尾部写入
+`error_message` 用于页面诊断。
 
 #### 管道响应体
 ```json
@@ -581,7 +638,68 @@ Content-Type: application/json
 | GET | `/api/v1/telemetry/{id}` | 最新遥测数据 |
 | GET | `/api/v1/telemetry/{id}/history` | 遥测历史 |
 | GET | `/api/v1/missions` | 任务列表 |
+| POST | `/api/v1/missions` | 创建任务并立即启动检测管道 |
 | GET | `/api/v1/missions/{id}` | 任务详情 |
+
+#### `POST /api/v1/missions`
+
+创建任务时会将无人机绑定到路口，并调用 PipelineManager 启动检测管道。成功后任务响应中包含 `pipeline_id` 和当前 pipeline 状态；如果检测管道启动阶段抛出异常，任务状态会更新为 `error`，`error_message` 保存错误摘要，API 返回 `502` 供前端或运维诊断。
+
+请求：
+```json
+{
+  "name": "小清河早高峰巡检",
+  "drone_id": "drone_7",
+  "intersection_id": "INT_camera_7",
+  "video_src": "test_videos/inter_xqh/DJI_20260403142902_0001_V小清河北路与水屯路路口.mp4",
+  "roads_json": "",
+  "telemetry_source": "srt",
+  "telemetry_file_path": "test_videos/inter_xqh/telemetry.srt"
+}
+```
+
+响应（201）：
+```json
+{
+  "id": "mission-1a2b3c4d",
+  "name": "小清河早高峰巡检",
+  "drone_id": "drone_7",
+  "intersection_id": "INT_camera_7",
+  "status": "running",
+  "pipeline_id": "pipe-mission",
+  "pipeline": {
+    "pipeline_id": "pipe-mission",
+    "status": "running",
+    "camera_id": 10,
+    "topic_name": "statistics_10",
+    "video_port": 8101
+  }
+}
+```
+
+### 轨迹复盘 `/api/v1/trajectories`
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/v1/trajectories/{intersection_id}` | 查询路口历史轨迹，支持 `period` / `limit` |
+| GET | `/api/v1/trajectories/{intersection_id}/conflicts` | 查询路口历史冲突事件，支持 `period` / `limit`，返回 TTC/PET、场景、证据、风险分和预测位置 |
+| GET | `/api/v1/trajectories/{intersection_id}/turn-summary` | 查询转向行为汇总 |
+
+Console GIS 页会在选中路口后调用 `GET /api/v1/trajectories/{intersection_id}?period=1h&limit=200`，展示最近历史轨迹数量、轨迹 ID、转向、车辆类型、均速、时长和轨迹点数，用于复盘 `track_complete` 写入后的路线形态。
+同一页面还会调用 `GET /api/v1/trajectories/{intersection_id}/conflicts?period=1h&limit=200`，展示历史冲突 pair、TTC/PET、业务场景、证据和风险分。数据来自 InfluxDB `conflict_events`，包含 `prediction_type`、`conflict_scene`、`pet_sec`、`evidence`、`risk_score`、双方预测位置和 GPS 锚点，可用于把实时冲突列表中的事件扩展为事后证据链查询。
+
+### 告警中心 `/api/v1/alerts`
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/v1/alerts` | 告警列表，支持 `severity/status/limit/offset` |
+| GET | `/api/v1/alerts/{id}` | 告警详情 |
+| POST | `/api/v1/alerts/{id}/acknowledge` | 确认告警 |
+| GET | `/api/v1/alerts/{id}/push-logs` | 告警推送记录 |
+
+AlertEngine 创建告警和确认告警时会写入 PostgreSQL `alerts` 表；Platform 启动时会加载已持久化告警，
+因此告警列表、详情和确认状态可跨服务重启保留。PostgreSQL 不可用时，平台降级为内存告警，
+实时 WebSocket `alerts` 推送仍继续工作，但历史告警不可跨重启恢复。
 
 ### 系统监控 `/api/v1/system`
 
@@ -671,7 +789,7 @@ Content-Type: application/json
 
 ### `conflict` 消息
 通过 `intersection:{id}` 频道推送，与 Kafka conflicts topic 格式一致。
-- Monitoring 页面会保留并显示最近 20 个实时冲突 pair；同一 `motor_id` / `non_motor_id` 的重复消息会合并为一条事件行。点击事件行会在 BEV 上叠加 motor/non_motor 短时回放层，回放控制状态与实时 `active_trajectories` 投放解耦。
+- Monitoring 页面会保留并显示最近 20 个实时冲突 pair；同一 `motor_id` / `non_motor_id` 的重复消息会合并为一条事件行。点击事件行会在 BEV 上叠加 motor/non_motor 短时回放层，回放控制状态与实时 `active_trajectories` 投放解耦。页面只把 `prediction_type=path_intersection && distance_m≈0.0` 作为业务冲突回放；旧格式仅在 `distance_m` 近似 `0.0` 时兼容，`same_time_cpa`、旧 CPA 非零距离消息或畸形 path 非零距离消息会被过滤，避免仅中心点 0.9m~1.7m 擦肩事件进入机非冲突列表。BEV 回放中的风险圈和距离辅助线均使用事件预测位置，不能使用播放进度下两车当前点替代预测冲突点。
 - severity="critical" → AlertEngine 创建 P1 告警
 - severity="warning" → AlertEngine 创建 P2 告警
 
@@ -695,6 +813,10 @@ Content-Type: application/json
   "ts": 1234567890.456
 }
 ```
+
+Drones 页面会根据 `/api/v1/drones` 返回的无人机 ID 动态订阅
+`telemetry:{drone_id}`，收到 WebSocket 消息后立即覆盖轮询得到的最新遥测值；
+`GET /api/v1/telemetry/{id}` 仍保留为首屏加载和断线兜底。
 
 ### `alert_new` 消息
 通过 `alerts` 频道推送（AlertEngine 触发）：

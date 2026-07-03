@@ -282,13 +282,13 @@ for key in roads_activity:
 - `_configure_tracking_colors()` — 配置颜色方案
 - `_class_color_indices()` — 将类别名归一化为稳定调色板索引
 
-### 9. 机非冲突未来轨迹预测
+### 9. 机非冲突 near-miss 预测
 
 **实现文件**：`nodes/ConflictDetectionNode.py`
 
 冲突检测默认启用，但要求存在有效单应性矩阵；无米级世界坐标时自动跳过，避免像素距离误报。节点只比较 `motor` 与 `non_motor` 轨迹，两个机动车或两个非机动车不会生成机非冲突。
 
-冲突定义为未来轨迹碰撞预测，而不是当前距离临界值。节点使用双方当前世界坐标速度向量，在 `0-5s` 预测窗口内做两类判断：
+冲突不再等同于“未来轨迹几何交汇”。节点先使用双方世界坐标运动趋势，在 `0-5s` 预测窗口内生成候选交汇，再通过专项场景和 near-miss 证据过滤误报。有足够历史轨迹时，预测方向优先取最近一个有效轨迹段，速度大小沿用 `SpeedEstimationNode` 的米/秒估计；这样保留测速线性回归的平滑性，同时避免转弯或历史回归向量把未来轨迹拉向虚假交点。历史不足时才回退到 `track.velocity_ms`。
 
 ```
 motor_future(t) = motor_pos + motor_velocity * t
@@ -296,10 +296,28 @@ non_motor_future(t) = non_motor_pos + non_motor_velocity * t
 d(t) = |motor_future(t) - non_motor_future(t)|
 ```
 
-1. 同刻碰撞半径：双方未来位置在同一预测时刻进入 `collision_radius_m`（默认 `2.0m`）。
-2. 路径交叉点：两条恒速预测轨迹在未来窗口内存在空间交点，且双方到达该交点的时间差不超过 `arrival_time_tolerance_sec`（默认 `1.0s`）。
+候选交汇：
 
-当前距离较近但未来轨迹不会碰撞时不上报。`ttc_sec` 表示预测冲突时间；路径交叉点场景下同时输出 `motor_arrival_ttc_sec` / `non_motor_arrival_ttc_sec` 和 `arrival_time_delta_sec`。`0-3s` 预测碰撞标记为 `critical`，`3-5s` 标记为 `warning`。`motor_id` / `non_motor_id` 轨迹对同级别事件不重复上报，但允许从 `warning` 升级为 `critical` 再次上报；直到任一轨迹从 `buffer_tracks` 清理后释放状态。
+1. 路径交叉点：两条恒速预测轨迹在未来窗口内存在空间交点，双方到达该交点的时间差不超过 `arrival_time_tolerance_sec`（默认 `1.0s`），且在双方到达交点这段时间内连续同刻中心距必须进入 `same_time_collision_radius_m`（默认 `0.8m`）共同冲突区。这是默认业务口径，要求既有明确冲突点，也有同一时空占用概率；只有数学射线交点但同刻距离仍偏大的轨迹会被过滤。
+2. 同刻 CPA 扩展：`enable_same_time_cpa` 默认关闭，避免只因中心点擦肩距离为 0.9m~1.7m 就判成相撞。显式开启后，对双方相对运动求最近接近点（CPA），只有最近距离进入 `same_time_collision_radius_m`（默认 `0.8m`）才作为 TTC 候选；`collision_radius_m` 不再直接用于同刻触发。CPA 候选中的 `pet_sec=0` 只表示同一预测时刻测距，不作为 PET 侵占证据。
+3. 冲突角过滤：只保留 `30°~150°` 的横向/斜向交叉冲突，过滤同向并行、追尾类和近似正面对向场景。
+
+前端业务回放只展示 `prediction_type=path_intersection` 且 `distance_m` 近似 `0.0` 的事件；旧格式 Kafka/WebSocket 消息仅在缺少 `prediction_type` 且 `distance_m` 近似 `0.0` 时按路径交点兼容，避免历史 0.9m/1.3m/1.7m CPA 擦肩事件或畸形 path 事件继续进入冲突列表。
+
+专项场景：
+
+- `suspected_right_turn_mv_nmv`：机动车历史轨迹呈右转，非机动车近似直行。
+- `suspected_unprotected_left_turn`：机动车历史轨迹呈左转，非机动车近似直行。
+
+机动车转弯不仅要求首尾 heading 差超过 `turn_angle_threshold_deg`（默认 `45°`），还要求转弯前后两段投影位移都不小于 `min_turn_leg_m`（默认 `2.0m`），避免短窗口抖动、小折线或近直行轨迹被误分为右转/左转。以上场景均为无车道标注下的轨迹几何近似，因此字段使用 `suspected_*`。不依赖道路/车道多边形；`ROADS_JSON=""` 时仍可运行。
+
+near-miss 证据：
+
+- `hard_ttc_sec`（默认 `1.5s`）以内视为极危险 TTC，可直接触发 `hard_ttc_or_pet`。
+- `hard_pet_sec`（默认 `1.0s`）以内只表示极近 PET 抢行强度，需叠加至少一种避险行为证据才触发事件，避免仅凭数学路径交点把“近距离错位经过”报成 near-miss。
+- 普通 TTC/PET 风险同样必须叠加至少一种避险行为证据：`hard_deceleration`（默认最大减速度 `<= -3.0m/s²`）、`hard_steering`（非机动车短窗口 heading 突变；机动车正常右/左转不计作避险急转向）、`stop_or_yield`（从移动降到低速停止/让行）。
+
+`ttc_sec` 表示预测冲突时间；`pet_sec` 表示双方到达冲突点的时间差近似值；路径交叉点场景下同时输出 `motor_arrival_ttc_sec` / `non_motor_arrival_ttc_sec` 和 `arrival_time_delta_sec`。事件附加输出 `conflict_scene`、`conflict_angle_deg`、`evidence`、`risk_score`。`motor_id` / `non_motor_id` 轨迹对同级别事件不重复上报，但允许从 `warning` 升级为 `critical` 再次上报；直到任一轨迹从 `buffer_tracks` 清理后释放状态。
 
 ## 统计数据的完整生命周期
 

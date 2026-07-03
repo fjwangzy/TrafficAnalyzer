@@ -24,7 +24,7 @@ def main():
     # Kafka (local)
     os.environ.setdefault("KAFKA_BOOTSTRAP", "localhost:9092")
     os.environ.setdefault("KAFKA_CONSUMER_GROUP", "platform-consumer")
-    os.environ.setdefault("KAFKA_TOPICS_PATTERN", "(statistics|track_complete|conflicts|telemetry)_.*")
+    os.environ.setdefault("KAFKA_TOPICS_PATTERN", "((statistics|track_complete|conflicts|telemetry)_.*|system_metrics)")
 
     # InfluxDB (local)
     os.environ.setdefault("INFLUX_HOST", "localhost")

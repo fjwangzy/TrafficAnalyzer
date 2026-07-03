@@ -424,203 +424,350 @@ conflict_config = {
         "enabled": True,
         "prediction_horizon_sec": 5.0,
         "critical_horizon_sec": 3.0,
+        "hard_ttc_sec": 1.5,
+        "hard_pet_sec": 1.0,
         "sample_interval_sec": 0.1,
         "collision_radius_m": 2.0,
+        "same_time_collision_radius_m": 0.8,
         "arrival_time_tolerance_sec": 1.0,
         "relative_speed_min_ms": 0.5,
+        "min_history_points": 4,
+        "min_conflict_angle_deg": 30.0,
+        "max_conflict_angle_deg": 150.0,
+        "turn_angle_threshold_deg": 45.0,
+        "min_turn_leg_m": 2.0,
+        "straight_angle_threshold_deg": 25.0,
+        "hard_deceleration_ms2": -3.0,
+        "hard_heading_change_deg": 60.0,
+        "stop_speed_ms": 1.0,
+        "moving_speed_ms": 2.0,
     },
 }
 
-fe_near_diverging = FrameElement("test", frame, 10.0, 300, roads_info)
-fe_near_diverging.id_list = [101, 202]
-fe_near_diverging.tracked_xyxy = [[0, 0, 2, 2], [2.6, 0, 4.6, 2]]
-fe_near_diverging.homography_matrix = np.eye(3)
+def _track(track_id, vehicle_class, velocity, history, speed_kmh=12.0):
+    tr = TrackElement(id=track_id, timestamp_first=history[0][2])
+    tr.vehicle_class = vehicle_class
+    tr.avg_speed_kmh = speed_kmh
+    tr.velocity_ms = np.array(velocity, dtype=np.float64)
+    tr.position_history = history
+    tr.trajectory_points = [(p[0], p[1]) for p in history]
+    return tr
 
-motor_track = TrackElement(id=101, timestamp_first=0.0)
-motor_track.vehicle_class = "motor"
-motor_track.avg_speed_kmh = 10.0
-motor_track.velocity_ms = np.array([1.0, 0.0])
-non_motor_track = TrackElement(id=202, timestamp_first=0.0)
-non_motor_track.vehicle_class = "non_motor"
-non_motor_track.avg_speed_kmh = 5.0
-non_motor_track.velocity_ms = np.array([1.0, 0.0])
-fe_near_diverging.buffer_tracks = {
-    101: motor_track,
-    202: non_motor_track,
-}
 
-near_diverging_events = ConflictDetectionNode(conflict_config).process(fe_near_diverging).conflict_events
+def _bbox_at(x, y):
+    return [x - 1, y - 1, x + 1, y + 1]
 
+
+def _conflict_frame(motor_track, non_motor_track):
+    fe = FrameElement("test", frame, 20.0, 600, {})
+    fe.id_list = [motor_track.id, non_motor_track.id]
+    mx, my = motor_track.position_history[-1][:2]
+    nx, ny = non_motor_track.position_history[-1][:2]
+    fe.tracked_xyxy = [_bbox_at(mx, my), _bbox_at(nx, ny)]
+    fe.homography_matrix = np.eye(3)
+    fe.drone_displacement_m = np.array([0.0, 0.0])
+    fe.world_anchor_lat_lon = [36.702909, 117.022330]
+    fe.buffer_tracks = {motor_track.id: motor_track, non_motor_track.id: non_motor_track}
+    return fe
+
+
+straight_motor = _track(
+    101,
+    "motor",
+    [0.0, 4.0],
+    [(0.0, -8.0, 0.0), (0.0, -6.0, 1.0), (0.0, -4.0, 2.0), (0.0, -2.0, 3.0)],
+)
+crossing_non_motor = _track(
+    202,
+    "non_motor",
+    [4.0, 0.0],
+    [(-10.0, 0.0, 0.0), (-8.0, 0.0, 1.0), (-6.0, 0.0, 2.0), (-4.0, 0.0, 3.0)],
+)
+no_scene_events = ConflictDetectionNode(conflict_config).process(
+    _conflict_frame(straight_motor, crossing_non_motor)
+).conflict_events
 results.check(
-    "近距离但未来轨迹不碰撞时不产生冲突事件",
-    len(near_diverging_events) == 0,
-    f"events={near_diverging_events}"
+    "TTC/PET危险但不属于右转/左转专项场景时不上报",
+    len(no_scene_events) == 0,
+    f"events={no_scene_events}"
 )
 
-fe_critical = FrameElement("test", frame, 20.0, 600, roads_info)
-fe_critical.id_list = [303, 404]
-fe_critical.tracked_xyxy = [[0, 0, 2, 2], [10, 0, 12, 2]]
-fe_critical.homography_matrix = np.eye(3)
-fe_critical.drone_displacement_m = np.array([0.0, 0.0])
-fe_critical.world_anchor_lat_lon = [36.702909, 117.022330]
-
-critical_motor = TrackElement(id=303, timestamp_first=0.0)
-critical_motor.vehicle_class = "motor"
-critical_motor.avg_speed_kmh = 14.4
-critical_motor.velocity_ms = np.array([4.0, 0.0])
-critical_non_motor = TrackElement(id=404, timestamp_first=0.0)
-critical_non_motor.vehicle_class = "non_motor"
-critical_non_motor.avg_speed_kmh = 0.0
-critical_non_motor.velocity_ms = np.array([0.0, 0.0])
-fe_critical.buffer_tracks = {
-    303: critical_motor,
-    404: critical_non_motor,
-}
-
-critical_events = ConflictDetectionNode(conflict_config).process(fe_critical).conflict_events
+right_turn_motor = _track(
+    303,
+    "motor",
+    [0.0, -3.0],
+    [(-5.0, 0.0, 0.0), (-2.0, 0.0, 1.0), (0.0, -1.0, 2.0), (0.0, -2.0, 3.0)],
+    speed_kmh=10.8,
+)
+right_turn_non_motor = _track(
+    404,
+    "non_motor",
+    [4.0, 0.0],
+    [(-12.0, -6.0, 0.0), (-10.0, -6.0, 1.0), (-8.0, -6.0, 2.0), (-6.0, -6.0, 3.0)],
+    speed_kmh=14.4,
+)
+right_turn_events = ConflictDetectionNode(conflict_config).process(
+    _conflict_frame(right_turn_motor, right_turn_non_motor)
+).conflict_events
 results.check(
-    "0-3秒未来轨迹碰撞产生 critical 冲突事件",
-    len(critical_events) == 1,
-    f"events={critical_events}"
+    "疑似右转机非场景且 hard TTC/PET 时产生 critical 冲突",
+    (
+        len(right_turn_events) == 1
+        and right_turn_events[0]["severity"] == "critical"
+        and right_turn_events[0]["prediction_type"] == "path_intersection"
+        and right_turn_events[0]["conflict_scene"] == "suspected_right_turn_mv_nmv"
+        and "hard_ttc_or_pet" in right_turn_events[0]["evidence"]
+        and "motor_position_m" in right_turn_events[0]
+    ),
+    f"events={right_turn_events}"
 )
 
-if critical_events:
-    results.check(
-        "冲突事件包含 motor/non_motor id",
-        critical_events[0]["motor_id"] == 303 and critical_events[0]["non_motor_id"] == 404,
-        f"event={critical_events[0]}"
-    )
-    results.check(
-        "冲突严重级别为 critical",
-        critical_events[0]["severity"] == "critical",
-        f"severity={critical_events[0]['severity']}"
-    )
-    results.check(
-        "冲突事件输出预测碰撞TTC",
-        abs(critical_events[0]["ttc_sec"] - 2.0) < 0.11,
-        f"event={critical_events[0]}"
-    )
-    results.check(
-        "冲突事件输出世界坐标",
-        "motor_position_m" in critical_events[0] and "non_motor_position_m" in critical_events[0],
-        f"event={critical_events[0]}"
-    )
-
-fe_warning = FrameElement("test", frame, 22.0, 660, roads_info)
-fe_warning.id_list = [505, 606]
-fe_warning.tracked_xyxy = [[0, 0, 2, 2], [16, 0, 18, 2]]
-fe_warning.homography_matrix = np.eye(3)
-warning_motor = TrackElement(id=505, timestamp_first=0.0)
-warning_motor.vehicle_class = "motor"
-warning_motor.avg_speed_kmh = 14.4
-warning_motor.velocity_ms = np.array([4.0, 0.0])
-warning_non_motor = TrackElement(id=606, timestamp_first=0.0)
-warning_non_motor.vehicle_class = "non_motor"
-warning_non_motor.avg_speed_kmh = 0.0
-warning_non_motor.velocity_ms = np.array([0.0, 0.0])
-fe_warning.buffer_tracks = {
-    505: warning_motor,
-    606: warning_non_motor,
-}
-warning_events = ConflictDetectionNode(conflict_config).process(fe_warning).conflict_events
+evidence_node = ConflictDetectionNode(conflict_config)
+cpa_without_avoidance_evidence = evidence_node._collect_evidence(
+    {"prediction_type": "same_time_cpa", "ttc_sec": 2.4, "pet_sec": 0.0},
+    {
+        "min_acceleration_ms2": 0.0,
+        "max_heading_change_deg": 75.0,
+        "is_stopped": False,
+    },
+    {
+        "min_acceleration_ms2": 0.0,
+        "max_heading_change_deg": 5.0,
+        "is_stopped": False,
+    },
+)
 results.check(
-    "3-5秒未来轨迹碰撞产生 warning 冲突事件",
-    len(warning_events) == 1 and warning_events[0]["severity"] == "warning",
-    f"events={warning_events}"
+    "CPA候选pet=0不作为PET证据且机动车正常转弯不算急转向避险",
+    cpa_without_avoidance_evidence == [],
+    f"evidence={cpa_without_avoidance_evidence}"
+)
+
+path_pet_evidence = evidence_node._collect_evidence(
+    {"prediction_type": "path_intersection", "ttc_sec": 2.4, "pet_sec": 0.8},
+    {
+        "min_acceleration_ms2": 0.0,
+        "max_heading_change_deg": 75.0,
+        "is_stopped": False,
+    },
+    {
+        "min_acceleration_ms2": 0.0,
+        "max_heading_change_deg": 70.0,
+        "is_stopped": False,
+    },
+)
+results.check(
+    "路径交点候选PET低于阈值且叠加避险急转向时作为hard证据",
+    path_pet_evidence == ["hard_pet", "hard_steering"],
+    f"evidence={path_pet_evidence}"
+)
+
+pet_only_without_avoidance_evidence = evidence_node._collect_evidence(
+    {"prediction_type": "path_intersection", "ttc_sec": 2.4, "pet_sec": 0.8},
+    {
+        "min_acceleration_ms2": 0.0,
+        "max_heading_change_deg": 75.0,
+        "is_stopped": False,
+    },
+    {
+        "min_acceleration_ms2": 0.0,
+        "max_heading_change_deg": 5.0,
+        "is_stopped": False,
+    },
+)
+results.check(
+    "PET危险但TTC不极端且无避险行为证据时不上报",
+    pet_only_without_avoidance_evidence == [],
+    f"evidence={pet_only_without_avoidance_evidence}"
+)
+
+cpa_only_config = {
+    "conflict_detection": {
+        **conflict_config["conflict_detection"],
+        "same_time_collision_radius_m": 2.0,
+        "enable_same_time_cpa": False,
+    },
+}
+cpa_only_prediction = ConflictDetectionNode(cpa_only_config)._predict_collision(
+    np.array([0.0, 0.0]),
+    np.array([0.4, 1.0]),
+    np.array([0.0, 1.0]),
+    np.array([1.0, 0.0]),
+)
+results.check(
+    "默认不把仅CPA近距离且无未来路径交点的轨迹作为冲突候选",
+    cpa_only_prediction is None,
+    f"prediction={cpa_only_prediction}"
+)
+
+loose_pet_no_same_space_prediction = ConflictDetectionNode(conflict_config)._predict_collision(
+    np.array([0.0, 0.0]),
+    np.array([-8.0, 5.0]),
+    np.array([0.0, 2.0]),
+    np.array([4.0, 0.0]),
+)
+results.check(
+    "路径交点到达时间差达标但同刻中心距离超过实际碰撞半径时不上报",
+    loose_pet_no_same_space_prediction is None,
+    f"prediction={loose_pet_no_same_space_prediction}"
+)
+
+near_miss_point_nine_motor = _track(
+    407,
+    "motor",
+    [0.0, -3.0],
+    [(-5.0, 0.0, 0.0), (-2.0, 0.0, 1.0), (0.0, -1.0, 2.0), (0.0, -2.0, 3.0)],
+    speed_kmh=10.8,
+)
+near_miss_point_nine_non_motor = _track(
+    408,
+    "non_motor",
+    [4.0, 0.0],
+    [(-7.5, -2.0, 0.0), (-5.5, -2.0, 1.0), (-3.5, -2.0, 2.0), (-1.5, -2.0, 3.0)],
+    speed_kmh=14.4,
+)
+near_miss_point_nine_events = ConflictDetectionNode(conflict_config).process(
+    _conflict_frame(near_miss_point_nine_motor, near_miss_point_nine_non_motor)
+).conflict_events
+results.check(
+    "同刻预测最近距离约0.9m但无有效PET交汇时不上报",
+    len(near_miss_point_nine_events) == 0,
+    f"events={near_miss_point_nine_events}"
+)
+
+near_miss_but_separated_motor = _track(
+    409,
+    "motor",
+    [0.0, -3.0],
+    [(-5.0, 0.0, 0.0), (-2.0, 0.0, 1.0), (0.0, -1.0, 2.0), (0.0, -2.0, 3.0)],
+    speed_kmh=10.8,
+)
+near_miss_but_separated_non_motor = _track(
+    410,
+    "non_motor",
+    [2.0, 0.0],
+    [(-13.0, -9.25, 0.0), (-11.0, -9.25, 1.0), (-9.0, -9.25, 2.0), (-7.0, -9.25, 3.0)],
+    speed_kmh=7.2,
+)
+near_miss_but_separated_events = ConflictDetectionNode(conflict_config).process(
+    _conflict_frame(near_miss_but_separated_motor, near_miss_but_separated_non_motor)
+).conflict_events
+results.check(
+    "同刻预测最近距离约1.8m且无有效PET交汇时不上报",
+    len(near_miss_but_separated_events) == 0,
+    f"events={near_miss_but_separated_events}"
+)
+
+stale_regression_motor = _track(
+    413,
+    "motor",
+    [0.0, -3.0],
+    [(-5.0, 0.0, 0.0), (-2.0, 0.0, 1.0), (0.0, -1.0, 2.0), (0.0, -2.0, 3.0)],
+    speed_kmh=10.8,
+)
+stale_regression_non_motor = _track(
+    414,
+    "non_motor",
+    [4.0, 0.0],
+    [(-4.0, -12.0, 0.0), (-4.0, -10.0, 1.0), (-4.0, -8.0, 2.0), (-4.0, -6.0, 3.0)],
+    speed_kmh=14.4,
+)
+stale_regression_events = ConflictDetectionNode(conflict_config).process(
+    _conflict_frame(stale_regression_motor, stale_regression_non_motor)
+).conflict_events
+results.check(
+    "有历史轨迹时优先使用最近轨迹方向，避免测速回归向量制造虚假交点",
+    len(stale_regression_events) == 0,
+    f"events={stale_regression_events}"
+)
+
+minor_kink_motor = _track(
+    411,
+    "motor",
+    [0.0, -3.0],
+    [(0.0, 0.0, 0.0), (1.5, 0.0, 1.0), (1.8, -0.2, 2.0), (1.8, -2.0, 3.0)],
+    speed_kmh=10.8,
+)
+minor_kink_non_motor = _track(
+    412,
+    "non_motor",
+    [4.0, 0.0],
+    [(-12.0, -6.0, 0.0), (-10.0, -6.0, 1.0), (-8.0, -6.0, 2.0), (-6.0, -6.0, 3.0)],
+    speed_kmh=14.4,
+)
+minor_kink_events = ConflictDetectionNode(conflict_config).process(
+    _conflict_frame(minor_kink_motor, minor_kink_non_motor)
+).conflict_events
+results.check(
+    "机动车只是短窗口小折线且转弯腿不足时不上报",
+    len(minor_kink_events) == 0,
+    f"events={minor_kink_events}"
+)
+
+ordinary_config = {
+    "conflict_detection": {
+        **conflict_config["conflict_detection"],
+        "collision_radius_m": 0.5,
+        "hard_pet_sec": 0.2,
+    },
+}
+left_turn_motor_no_evidence = _track(
+    505,
+    "motor",
+    [0.0, 3.0],
+    [(-3.0, -10.0, 0.0), (-1.0, -10.0, 1.0), (0.0, -9.0, 2.0), (0.0, -8.0, 3.0)],
+)
+left_turn_non_motor = _track(
+    606,
+    "non_motor",
+    [4.0, 0.0],
+    [(-14.0, 0.0, 0.0), (-12.0, 0.0, 1.0), (-10.0, 0.0, 2.0), (-8.0, 0.0, 3.0)],
+)
+ordinary_no_evidence_events = ConflictDetectionNode(ordinary_config).process(
+    _conflict_frame(left_turn_motor_no_evidence, left_turn_non_motor)
+).conflict_events
+results.check(
+    "普通 TTC/PET 风险但无避险行为证据时不上报",
+    len(ordinary_no_evidence_events) == 0,
+    f"events={ordinary_no_evidence_events}"
+)
+
+left_turn_motor_decel = _track(
+    707,
+    "motor",
+    [0.0, 3.0],
+    [(-8.0, -10.0, 0.0), (0.0, -10.0, 1.0), (0.0, -8.0, 2.0), (0.0, -8.0, 3.0)],
+)
+left_turn_non_motor_2 = _track(
+    808,
+    "non_motor",
+    [4.0, 0.0],
+    [(-15.6, 0.0, 0.0), (-13.6, 0.0, 1.0), (-11.6, 0.0, 2.0), (-9.6, 0.0, 3.0)],
+)
+ordinary_with_evidence_events = ConflictDetectionNode(ordinary_config).process(
+    _conflict_frame(left_turn_motor_decel, left_turn_non_motor_2)
+).conflict_events
+results.check(
+    "疑似无保护左转普通风险叠加急减速证据时上报",
+    (
+        len(ordinary_with_evidence_events) == 1
+        and ordinary_with_evidence_events[0]["conflict_scene"] == "suspected_unprotected_left_turn"
+        and "hard_deceleration" in ordinary_with_evidence_events[0]["evidence"]
+        and ordinary_with_evidence_events[0]["pet_sec"] > 0.2
+    ),
+    f"events={ordinary_with_evidence_events}"
 )
 
 conflict_node_once_per_pair = ConflictDetectionNode(conflict_config)
-first_pair_frame = FrameElement("test", frame, 50.0, 1500, roads_info)
-first_pair_frame.id_list = [701, 702]
-first_pair_frame.tracked_xyxy = [[0, 0, 2, 2], [10, 0, 12, 2]]
-first_pair_frame.homography_matrix = np.eye(3)
-pair_motor = TrackElement(id=701, timestamp_first=0.0)
-pair_motor.vehicle_class = "motor"
-pair_motor.avg_speed_kmh = 14.4
-pair_motor.velocity_ms = np.array([4.0, 0.0])
-pair_non_motor = TrackElement(id=702, timestamp_first=0.0)
-pair_non_motor.vehicle_class = "non_motor"
-pair_non_motor.avg_speed_kmh = 0.0
-pair_non_motor.velocity_ms = np.array([0.0, 0.0])
-first_pair_frame.buffer_tracks = {701: pair_motor, 702: pair_non_motor}
-first_pair_events = conflict_node_once_per_pair.process(first_pair_frame).conflict_events
-
-second_pair_frame = FrameElement("test", frame, 56.0, 1680, roads_info)
-second_pair_frame.id_list = [701, 702]
-second_pair_frame.tracked_xyxy = [[0, 0, 2, 2], [10, 0, 12, 2]]
-second_pair_frame.homography_matrix = np.eye(3)
-second_pair_frame.buffer_tracks = first_pair_frame.buffer_tracks
-second_pair_events = conflict_node_once_per_pair.process(second_pair_frame).conflict_events
-
+first_pair_events = conflict_node_once_per_pair.process(
+    _conflict_frame(right_turn_motor, right_turn_non_motor)
+).conflict_events
+second_pair_events = conflict_node_once_per_pair.process(
+    _conflict_frame(right_turn_motor, right_turn_non_motor)
+).conflict_events
 results.check(
     "motor/non_motor 轨迹对首次跨过冲突临界点后不重复上报",
     len(first_pair_events) == 1 and len(second_pair_events) == 0,
     f"first={first_pair_events}, second={second_pair_events}"
-)
-
-conflict_node_upgrade_pair = ConflictDetectionNode(conflict_config)
-warning_pair_frame = FrameElement("test", frame, 60.0, 1800, roads_info)
-warning_pair_frame.id_list = [801, 802]
-warning_pair_frame.tracked_xyxy = [[0, 0, 2, 2], [16, 0, 18, 2]]
-warning_pair_frame.homography_matrix = np.eye(3)
-upgrade_motor = TrackElement(id=801, timestamp_first=0.0)
-upgrade_motor.vehicle_class = "motor"
-upgrade_motor.avg_speed_kmh = 14.4
-upgrade_motor.velocity_ms = np.array([4.0, 0.0])
-upgrade_non_motor = TrackElement(id=802, timestamp_first=0.0)
-upgrade_non_motor.vehicle_class = "non_motor"
-upgrade_non_motor.avg_speed_kmh = 0.0
-upgrade_non_motor.velocity_ms = np.array([0.0, 0.0])
-warning_pair_frame.buffer_tracks = {801: upgrade_motor, 802: upgrade_non_motor}
-warning_pair_events = conflict_node_upgrade_pair.process(warning_pair_frame).conflict_events
-
-critical_pair_frame = FrameElement("test", frame, 61.0, 1830, roads_info)
-critical_pair_frame.id_list = [801, 802]
-critical_pair_frame.tracked_xyxy = [[0, 0, 2, 2], [10, 0, 12, 2]]
-critical_pair_frame.homography_matrix = np.eye(3)
-critical_pair_frame.buffer_tracks = warning_pair_frame.buffer_tracks
-critical_pair_events = conflict_node_upgrade_pair.process(critical_pair_frame).conflict_events
-
-results.check(
-    "同一轨迹对从 warning 进入 critical 时再次上报升级事件",
-    (
-        len(warning_pair_events) == 1
-        and warning_pair_events[0]["severity"] == "warning"
-        and len(critical_pair_events) == 1
-        and critical_pair_events[0]["severity"] == "critical"
-    ),
-    f"warning={warning_pair_events}, critical={critical_pair_events}"
-)
-
-fe_intersection_arrival = FrameElement("test", frame, 62.0, 1860, roads_info)
-fe_intersection_arrival.id_list = [901, 902]
-fe_intersection_arrival.tracked_xyxy = [[-1, -1, 1, 1], [19, -31, 21, -29]]
-fe_intersection_arrival.homography_matrix = np.eye(3)
-intersection_motor = TrackElement(id=901, timestamp_first=0.0)
-intersection_motor.vehicle_class = "motor"
-intersection_motor.avg_speed_kmh = 36.0
-intersection_motor.velocity_ms = np.array([10.0, 0.0])
-intersection_non_motor = TrackElement(id=902, timestamp_first=0.0)
-intersection_non_motor.vehicle_class = "non_motor"
-intersection_non_motor.avg_speed_kmh = 36.0
-intersection_non_motor.velocity_ms = np.array([0.0, 10.0])
-fe_intersection_arrival.buffer_tracks = {
-    901: intersection_motor,
-    902: intersection_non_motor,
-}
-
-intersection_arrival_events = (
-    ConflictDetectionNode(conflict_config)
-    .process(fe_intersection_arrival)
-    .conflict_events
-)
-results.check(
-    "交叉路口路径交点到达时间差在阈值内时产生冲突事件",
-    (
-        len(intersection_arrival_events) == 1
-        and abs(intersection_arrival_events[0]["arrival_time_delta_sec"] - 1.0) < 0.11
-    ),
-    f"events={intersection_arrival_events}"
 )
 
 fe_false_ttc = FrameElement("test", frame, 21.0, 630, roads_info)
@@ -782,6 +929,48 @@ results.check(
     "无道路标注时不绘制自动车道统计黑底块",
     black_pixels == 0,
     f"black_pixels={black_pixels}"
+)
+
+
+# ============================================================
+# Test 9: main_optimized 子进程日志在只读目录下降级到 console
+# ============================================================
+print("\n" + "="*60)
+print("Test 9: 子进程日志文件不可写时降级")
+print("="*60)
+
+import main_optimized as main_optimized_module
+
+logging_cfg = {
+    "version": 1,
+    "handlers": {
+        "console": {"class": "logging.StreamHandler"},
+        "file": {"class": "logging.FileHandler", "filename": "logs/app.log"},
+    },
+    "root": {"handlers": ["console", "file"], "level": "INFO"},
+    "loggers": {"demo": {"handlers": ["file"]}},
+}
+original_can_write_log_file = main_optimized_module._can_write_log_file
+try:
+    main_optimized_module._can_write_log_file = lambda filename: filename != "logs/app.log"
+    sanitized_logging_cfg = main_optimized_module._drop_unwritable_file_handlers(logging_cfg)
+finally:
+    main_optimized_module._can_write_log_file = original_can_write_log_file
+
+results.check(
+    "不可写FileHandler被移除",
+    "file" not in sanitized_logging_cfg["handlers"],
+    f"handlers={sanitized_logging_cfg['handlers'].keys()}"
+)
+results.check(
+    "root logger 保留 console handler",
+    sanitized_logging_cfg["root"]["handlers"] == ["console"],
+    f"root={sanitized_logging_cfg['root']}"
+)
+results.check(
+    "普通 logger 同步移除不可写 file handler",
+    sanitized_logging_cfg["loggers"]["demo"]["handlers"] == [],
+    f"logger={sanitized_logging_cfg['loggers']['demo']}"
 )
 
 

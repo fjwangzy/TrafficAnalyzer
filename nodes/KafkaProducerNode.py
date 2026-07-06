@@ -316,10 +316,10 @@ class KafkaProducerNode:
         timestamp = frame_element.timestamp
         current_fps = self._compute_fps()
 
-        if frame_element.frame_num == 1:
+        if self.last_send_time is None or frame_element.frame_num == 1:
             self.last_send_time = current_time
 
-        if current_time - self.last_send_time > self.how_often_sec or frame_element.frame_num == 1:
+        if current_time - self.last_send_time > self.how_often_sec or self.last_send_time == current_time:
             cars_amount = frame_element.info["cars_amount"]
             roads_activity = frame_element.info["roads_activity"]
 

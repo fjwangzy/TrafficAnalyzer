@@ -38,7 +38,7 @@ video_reader:
   roads_info: ${oc.env:ROADS_JSON,''} # 可选：包含视频中道路坐标的 json 文件；为空则不使用道路标注
 
 detection_node:
-  weight_pth: weights/yolo11l-visdrone.pt  # 模型 .pt 或 .engine (TensorRT) 文件的路径
+  weight_pth: weights/yolo11s-visdrone.pt  # 模型 .pt 或 .engine (TensorRT) 文件的路径
   classes_to_detect: [0,1,2,3,4,5,6,7,8,9]  # yolo11l-visdrone.pt: 0 pedestrian, 1 people, 2 bicycle, 3 car, 4 van, 5 truck, 6 tricycle, 7 awning-tricycle, 8 bus, 9 motor
   confidence: 0.05  # 检测器置信度阈值；航拍小目标非机动车需保留低分候选
   iou: 0.4  # NMS 阈值（值越大，匹配到的目标越多）
@@ -89,6 +89,9 @@ show_node:
 video_saver_node:
   fps: 24  # 增加此值可以加速最终输出视频
   out_folder: test_videos/videos_out  # 结果输出文件夹
+  save_conflict_clips: True       # 新增：是否开启冲突事件录制
+  clip_before_sec: 5.0            # 新增：录制冲突前几秒
+  clip_after_sec: 5.0             # 新增：录制冲突后几秒
 
 kafka_producer_node: #// 摄像头 id
   bootstrap_servers: ${oc.env:KAFKA_BOOTSTRAP,kafka:29092} #127.0.0.1:9092 #kafka:29092
@@ -205,26 +208,28 @@ auto_lane:
 
 conflict_detection:
   enabled: true  # 新模型已提供非机动车识别；无有效单应性时节点会自动跳过
-  prediction_horizon_sec: 5.0   # 预测未来 0-5 秒候选交汇
+  prediction_horizon_sec: 3.0   # 预测时域（秒），5s太远容易误报
   critical_horizon_sec: 3.0     # 普通风险的 TTC 分界
-  hard_ttc_sec: 1.5             # TTC 极危险阈值，可直接作为 near-miss 证据
+  hard_ttc_sec: 2.0             # TTC 极危险阈值（秒），适度收紧避免满屏
   hard_pet_sec: 1.0             # PET 极危险阈值，可直接作为 near-miss 证据
   sample_interval_sec: 0.2      # 未来轨迹采样间隔
   collision_radius_m: 2.0       # 兼容保留的候选观察半径；同刻碰撞使用下方更严半径
-  enable_same_time_cpa: false   # 默认只用路径交点/PET，避免近距离擦边被当作冲突
-  same_time_collision_radius_m: 0.8 # CPA及路径交点PET候选的同刻共同冲突区半径
-  arrival_time_tolerance_sec: 1.0 # 路径交点预测的到达时间差上限；仍需同刻进入共同冲突区
+  enable_same_time_cpa: true    # 启用擦边和并行冲突检测 (原为 false)
+  same_time_collision_radius_m: 1.0 # 共同冲突区半径（米）
+  arrival_time_tolerance_sec: 1.5 # 放宽路径交点预测的到达时间差上限 (原 1.0)
   relative_speed_min_ms: 0.5     # 相对速度低于该值时不计算 TTC，避免抖动误报
   min_history_points: 4          # 场景/避险证据需要的最少历史轨迹点
-  min_conflict_angle_deg: 30.0   # 过滤同向/追尾类误报
-  max_conflict_angle_deg: 150.0  # 过滤近似对向但非横向抢行场景
+  min_conflict_angle_deg: 35.0  # 角度下限，严格过滤同向行驶/追尾（单应性形变会导致平行轨迹产生 20-30 度夹角）
+  max_conflict_angle_deg: 175.0  # 放宽上限，允许对向/近对向冲突（closing_rate 已防误报）
   turn_angle_threshold_deg: 45.0 # 无标注轨迹几何近似右转/左转
-  min_turn_leg_m: 2.0            # 转弯前后两段投影位移都需达到该值，过滤短窗口小折线
+  min_turn_leg_m: 1.0            # 转弯前后两段投影位移都需达到该值，过滤短窗口小折线
   straight_angle_threshold_deg: 25.0 # NMV 近似直行阈值
-  hard_deceleration_ms2: -3.0    # 急减速避险证据
-  hard_heading_change_deg: 60.0  # 急转向避险证据
+  hard_deceleration_ms2: -2.0    # 急减速避险证据 (适度回调，原 -3.0 → -1.0 → -2.0)
+  hard_heading_change_deg: 45.0  # 急转向避险证据 (适度回调，原 60.0 → 30.0 → 45.0)
   stop_speed_ms: 1.0             # 低速停止/让行判定阈值
   moving_speed_ms: 2.0           # 从移动降到低速才算停止/让行
+  max_pair_distance_m: 15.0      # 新增：距离预过滤，两车距离超过此值直接跳过
+  emit_cooldown_sec: 2.0         # 同一配对同级别事件的重发冷却时间（秒）
 
 geojson_export:
   enabled: true                      # 启用 BEV 轨迹 GeoJSON 导出

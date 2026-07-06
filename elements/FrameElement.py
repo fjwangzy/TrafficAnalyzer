@@ -72,3 +72,8 @@ class FrameElement:
 
         # ── 新增：Kafka发送控制 ──
         self.send_to_kafka: bool = False  # 本帧是否已发送到Kafka
+
+        # ── 新增：SharedMemory 优化 ──
+        self.shm_name: str | None = None
+        self.shm_shape: tuple | None = None
+        self.shm_dtype: str | None = None

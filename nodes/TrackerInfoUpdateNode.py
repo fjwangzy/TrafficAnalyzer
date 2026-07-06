@@ -129,8 +129,8 @@ class TrackerInfoUpdateNode:
             # 累积position_history（含时间戳，供SpeedEstimationNode和DirectionFlowNode使用）
             self.buffer_tracks[id].position_history.append((cx, cy, frame_element.timestamp))
             # 限制position_history大小（SpeedEstimationNode会进一步裁剪到history_frames）
-            if len(self.buffer_tracks[id].position_history) > 30:
-                self.buffer_tracks[id].position_history = self.buffer_tracks[id].position_history[-30:]
+            if len(self.buffer_tracks[id].position_history) > 60:
+                self.buffer_tracks[id].position_history = self.buffer_tracks[id].position_history[-60:]
 
             # 出口道路检测：车辆从一条道路移动到另一条道路时记录exit_road
             current_road = intersects_central_point(

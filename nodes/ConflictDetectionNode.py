@@ -1,4 +1,5 @@
 import logging
+import time as _time
 import numpy as np
 
 from elements.FrameElement import FrameElement
@@ -13,7 +14,8 @@ class ConflictDetectionNode:
     """机非冲突检测节点：基于 near-miss 证据漏斗检测机非冲突。
 
     需要单应性标定才能准确计算米级距离。无标定时跳过（避免误报）。
-    先生成未来交汇候选，再要求疑似右转/左转专项场景和 TTC/PET 或避险行为证据。
+    四层漏斗：碰撞预测 → 场景分类 → 避险证据 → 严重度分级。
+    支持右转/左转专项场景和通用交汇场景（直行交叉、变道切入等）。
     """
 
     def __init__(self, config: dict) -> None:
@@ -21,7 +23,7 @@ class ConflictDetectionNode:
         self.enabled = cfg.get("enabled", True)
         self.prediction_horizon_sec = cfg.get("prediction_horizon_sec", 5.0)
         self.critical_horizon_sec = cfg.get("critical_horizon_sec", 3.0)
-        self.hard_ttc_sec = cfg.get("hard_ttc_sec", 1.5)
+        self.hard_ttc_sec = cfg.get("hard_ttc_sec", 2.0)
         self.hard_pet_sec = cfg.get("hard_pet_sec", 1.0)
         self.sample_interval_sec = cfg.get("sample_interval_sec", 0.2)
         self.collision_radius_m = cfg.get("collision_radius_m", 2.0)
@@ -43,7 +45,10 @@ class ConflictDetectionNode:
         self.stop_speed_ms = cfg.get("stop_speed_ms", 1.0)
         self.moving_speed_ms = cfg.get("moving_speed_ms", 2.0)
         self.min_segment_speed_ms = cfg.get("min_segment_speed_ms", 0.2)
-        self._reported_pair_severity: dict[tuple, str] = {}
+        self.max_pair_distance_m = cfg.get("max_pair_distance_m", 15.0)
+        self.emit_cooldown_sec = cfg.get("emit_cooldown_sec", 2.0)
+        # (pair_key) -> {"severity": str, "timestamp": float}
+        self._reported_pairs: dict[tuple, dict] = {}
         self._severity_rank = {"warning": 1, "critical": 2}
 
     @profile_time
@@ -75,6 +80,10 @@ class ConflictDetectionNode:
                 self._velocity_ms(track),
                 motion_profile,
             )
+            # 过滤从未真正移动过的车辆（纯 bbox 抖动噪声）
+            # 用 max_speed_kmh 而非 avg_speed_kmh：急停过的车依然保留
+            if track.max_speed_kmh < 5.0:
+                continue
             entry = {
                 "track_id": track_id,
                 "center_px": (cx, cy),
@@ -90,13 +99,14 @@ class ConflictDetectionNode:
 
         # 冲突检测
         conflict_events = []
+        now = frame_element.timestamp
         live_track_ids = set(frame_element.buffer_tracks.keys())
         inactive_pairs = [
-            k for k in self._reported_pair_severity
+            k for k in self._reported_pairs
             if k[0] not in live_track_ids or k[1] not in live_track_ids
         ]
         for k in inactive_pairs:
-            self._reported_pair_severity.pop(k, None)
+            self._reported_pairs.pop(k, None)
 
         for motor in motor_tracks:
             for non_motor in non_motor_tracks:
@@ -108,6 +118,11 @@ class ConflictDetectionNode:
                 pts = pixel_to_world(
                     np.array([motor["center_px"], non_motor["center_px"]]), H
                 )
+
+                # 距离预过滤：两车世界坐标距离 > 阈值，直接跳过
+                pair_dist = float(np.linalg.norm(pts[0] - pts[1]))
+                if pair_dist > self.max_pair_distance_m:
+                    continue
 
                 prediction = self._predict_collision(
                     pts[0],
@@ -130,15 +145,16 @@ class ConflictDetectionNode:
                     prediction,
                     motor["motion_profile"],
                     non_motor["motion_profile"],
+                    scene,
                 )
                 if not evidence:
                     continue
 
-                severity = self._classify_severity(prediction, evidence)
-                if severity and self._should_emit_pair(pair_key, severity):
+                severity = self._classify_severity(prediction, evidence, scene)
+                if severity and self._should_emit_pair(pair_key, severity, now):
                     event = {
-                        "motor_id": motor["track_id"],
-                        "non_motor_id": non_motor["track_id"],
+                        "motor_id": int(motor["track_id"]),
+                        "non_motor_id": int(non_motor["track_id"]),
                         "prediction_type": prediction["prediction_type"],
                         "distance_m": round(prediction["distance_m"], 2),
                         "ttc_sec": round(prediction["ttc_sec"], 2),
@@ -183,7 +199,9 @@ class ConflictDetectionNode:
                             ]
 
                     conflict_events.append(event)
-                    self._reported_pair_severity[pair_key] = severity
+                    self._reported_pairs[pair_key] = {
+                        "severity": severity, "timestamp": now
+                    }
 
         frame_element.conflict_events = conflict_events
         return frame_element
@@ -326,6 +344,20 @@ class ConflictDetectionNode:
         if motor_velocity_ms is None or non_motor_velocity_ms is None:
             return None
 
+        # 至少一方速度 >= 1 m/s（允许急停方接近 0）
+        motor_speed = float(np.linalg.norm(motor_velocity_ms))
+        non_motor_speed = float(np.linalg.norm(non_motor_velocity_ms))
+        if motor_speed < 1.0 and non_motor_speed < 0.5:
+            return None
+
+        # 物理验证：两车必须真的在靠近（相对位置·相对速度 < 0）
+        relative_position = non_motor_pos_m - motor_pos_m
+        relative_vel = non_motor_velocity_ms - motor_velocity_ms
+        closing_rate = float(np.dot(relative_position, relative_vel))
+        if closing_rate >= 0:
+            # 距离正在增大或保持不变，不可能碰撞
+            return None
+
         conflict_angle = self._conflict_angle_deg(
             motor_velocity_ms,
             non_motor_velocity_ms,
@@ -333,7 +365,6 @@ class ConflictDetectionNode:
         if conflict_angle is None or not self._is_valid_conflict_angle(conflict_angle):
             return None
 
-        relative_vel = non_motor_velocity_ms - motor_velocity_ms
         relative_speed = float(np.linalg.norm(relative_vel))
         if relative_speed < self.relative_speed_min_ms:
             return None
@@ -519,25 +550,42 @@ class ConflictDetectionNode:
         non_motor_profile: dict | None,
         prediction: dict,
     ) -> str | None:
+        """场景分类：识别右转/左转专项场景和通用交汇场景。
+
+        改进：不再要求机动车必须完成大角度转弯，也不再要求非机动车必须直行。
+        只要至少一方在移动，即可进入通用交汇场景进行后续证据判定。
+        """
         if motor_profile is None or non_motor_profile is None:
             return None
-        if not non_motor_profile["is_straight"]:
-            return None
-        if motor_profile["turn_leg_min_m"] < self.min_turn_leg_m:
+
+        # 至少一方在移动（双方都停着不算冲突）
+        if (motor_profile["current_speed_ms"] < self.relative_speed_min_ms
+                and non_motor_profile["current_speed_ms"] < self.relative_speed_min_ms):
             return None
 
         motor_turn = motor_profile["turn_angle_deg"]
-        if motor_turn <= -self.turn_angle_threshold_deg:
+
+        # 专项场景：机动车明确右转 + 非机动车近似直行
+        if (motor_turn <= -self.turn_angle_threshold_deg
+                and non_motor_profile["is_straight"]
+                and motor_profile["turn_leg_min_m"] >= self.min_turn_leg_m):
             return "suspected_right_turn_mv_nmv"
-        if motor_turn >= self.turn_angle_threshold_deg:
+
+        # 专项场景：机动车明确左转 + 非机动车近似直行
+        if (motor_turn >= self.turn_angle_threshold_deg
+                and non_motor_profile["is_straight"]
+                and motor_profile["turn_leg_min_m"] >= self.min_turn_leg_m):
             return "suspected_unprotected_left_turn"
-        return None
+
+        # 通用交汇场景：直行交叉、变道切入、小角度汇流等
+        return "general_crossing"
 
     def _collect_evidence(
         self,
         prediction: dict,
         motor_profile: dict | None,
         non_motor_profile: dict | None,
+        scene: str = "",
     ) -> list[str]:
         evidence = []
         is_path_intersection = prediction.get("prediction_type") == "path_intersection"
@@ -571,12 +619,31 @@ class ConflictDetectionNode:
             "hard_steering",
             "stop_or_yield",
         }
+
+        # 通用交汇场景要求更严格：必须有 hard_ttc/pet 证据，仅靠行为证据不够
+        if scene == "general_crossing":
+            if "hard_ttc_or_pet" in evidence or "hard_pet" in evidence:
+                return evidence
+            return []
+
+        # 专项场景（右转/左转）：hard_ttc 或 任意行为证据即可
         if "hard_ttc_or_pet" in evidence or behavior_evidence.intersection(evidence):
             return evidence
         return []
 
-    def _classify_severity(self, prediction: dict, evidence: list[str]) -> str:
+    def _classify_severity(self, prediction: dict, evidence: list[str], scene: str = "") -> str:
         """根据 TTC/PET 和避险证据分类冲突严重度。"""
+        # 通用交汇场景：只有 hard_ttc + 行为证据 才升级 critical
+        if scene == "general_crossing":
+            if "hard_ttc_or_pet" in evidence and (
+                "hard_deceleration" in evidence
+                or "hard_steering" in evidence
+                or "stop_or_yield" in evidence
+            ):
+                return "critical"
+            return "warning"
+
+        # 专项场景（右转/左转）：沿用原逻辑
         if "hard_ttc_or_pet" in evidence:
             return "critical"
         if "hard_pet" in evidence and (
@@ -637,8 +704,17 @@ class ConflictDetectionNode:
     def _normalize_angle_deg(angle: float) -> float:
         return (angle + 180.0) % 360.0 - 180.0
 
-    def _should_emit_pair(self, pair_key: tuple, severity: str) -> bool:
-        previous = self._reported_pair_severity.get(pair_key)
+    def _should_emit_pair(self, pair_key: tuple, severity: str, now: float) -> bool:
+        """基于时间冷却的去重：同级别每 emit_cooldown_sec 秒允许重发一次，升级则立即发出。"""
+        previous = self._reported_pairs.get(pair_key)
         if previous is None:
             return True
-        return self._severity_rank[severity] > self._severity_rank[previous]
+        prev_severity = previous["severity"]
+        prev_time = previous["timestamp"]
+        # 严重度升级 → 立即发出
+        if self._severity_rank.get(severity, 0) > self._severity_rank.get(prev_severity, 0):
+            return True
+        # 同级别 → 冷却期后允许重发
+        if now - prev_time >= self.emit_cooldown_sec:
+            return True
+        return False

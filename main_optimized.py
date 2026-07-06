@@ -26,8 +26,9 @@ os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")  # MPS设备NMS等操�
 
 import signal
 from time import sleep, time
-from multiprocessing import Process, Queue
+from multiprocessing import Process, Queue, shared_memory
 from queue import Empty
+import numpy as np
 
 import hydra
 from tqdm import tqdm
@@ -144,6 +145,33 @@ def proc_frame_reader_and_detection(
         ts0 = time()
         frame_element = detection_node.process(frame_element)
         ts1 = time()
+        ts1 = time()
+        
+        # ── 新增：共享内存优化，避免 4K 帧 pickle 序列化 ──
+        if frame_element.frame is not None:
+            # 创建共享内存
+            shm = shared_memory.SharedMemory(create=True, size=frame_element.frame.nbytes)
+            # 拷贝数据
+            buffer = np.ndarray(frame_element.frame.shape, dtype=frame_element.frame.dtype, buffer=shm.buf)
+            buffer[:] = frame_element.frame[:]
+            # 记录元数据
+            frame_element.shm_name = shm.name
+            frame_element.shm_shape = frame_element.frame.shape
+            frame_element.shm_dtype = str(frame_element.frame.dtype)
+            # 清空真实的 frame 引用，防止被序列化
+            frame_element.frame = None
+            
+            # [Fix WinError 2]: 在 Windows 下，如果没有进程保留 shared_memory 的引用，底层内存会被立即销毁
+            # 为防止下游在 attach 时找不到文件，进程 1 必须保留引用足够长的时间 (略大于 Queue 的最大排队数)
+            if not hasattr(proc_frame_reader_and_detection, 'shm_pool'):
+                proc_frame_reader_and_detection.shm_pool = []
+            proc_frame_reader_and_detection.shm_pool.append(shm)
+            
+            # 保持 60 个引用（Queue maxsize 为 50），保证下游必然已经接收到并重新附加了句柄
+            if len(proc_frame_reader_and_detection.shm_pool) > 60:
+                old_shm = proc_frame_reader_and_detection.shm_pool.pop(0)
+                old_shm.close()
+
         queue_out.put(frame_element)  # 阻塞等待，确保不丢帧
         if PRINT_PROFILE_INFO:
             print(
@@ -193,6 +221,20 @@ def proc_tracker_update_and_calc(
                 break
             continue
         ts1 = time()
+        
+        # ── 新增：附加共享内存 ──
+        _shm_tracker = None
+        if hasattr(frame_element, "shm_name") and frame_element.shm_name:
+            try:
+                _shm_tracker = shared_memory.SharedMemory(name=frame_element.shm_name)
+                frame_element.frame = np.ndarray(
+                    frame_element.shm_shape, 
+                    dtype=np.dtype(frame_element.shm_dtype), 
+                    buffer=_shm_tracker.buf
+                )
+            except Exception as e:
+                print(f"[proc_tracker] Failed to attach shm: {e}")
+                frame_element.frame = None
         frame_element = homography_node.process(frame_element)
         frame_element = motion_compensation_node.process(frame_element)
         frame_element = tracker_info_update_node.process(frame_element)
@@ -208,6 +250,17 @@ def proc_tracker_update_and_calc(
         if send_info_kafka:
             frame_element = kafka_producer_node.process(frame_element)
         ts2 = time()
+        
+        # 传给进程 3 前，再次断开 frame 引用，并由本进程接力保持引用以防 WinError 2
+        if _shm_tracker is not None:
+            frame_element.frame = None
+            if not hasattr(proc_tracker_update_and_calc, 'shm_pool'):
+                proc_tracker_update_and_calc.shm_pool = []
+            proc_tracker_update_and_calc.shm_pool.append(_shm_tracker)
+            if len(proc_tracker_update_and_calc.shm_pool) > 60:
+                old_shm = proc_tracker_update_and_calc.shm_pool.pop(0)
+                old_shm.close()
+
         queue_out.put(frame_element)  # 阻塞等待，确保不丢帧
         if PRINT_PROFILE_INFO:
             print(
@@ -228,8 +281,9 @@ def proc_show_node(queue_in: Queue, config: dict, tracker_pid: int):
     _setup_logging_in_subprocess()
     show_node = ShowNode(config)
     save_video = config["pipeline"]["save_video"]
+    save_conflict_clips = config["video_saver_node"].get("save_conflict_clips", False)
     show_in_web = config["pipeline"]["show_in_web"]
-    if save_video:
+    if save_video or save_conflict_clips:
         video_saver_node = VideoSaverNode(config["video_saver_node"])
     if show_in_web:
         video_server_node = VideoServer(config)
@@ -243,12 +297,36 @@ def proc_show_node(queue_in: Queue, config: dict, tracker_pid: int):
                 break
             continue
         ts1 = time()
+        
+        # ── 新增：附加共享内存供渲染 ──
+        _shm_show = None
+        if hasattr(frame_element, "shm_name") and frame_element.shm_name:
+            try:
+                _shm_show = shared_memory.SharedMemory(name=frame_element.shm_name)
+                # 直接使用原图进行渲染（就地修改），从而节约内存和拷贝
+                frame_element.frame = np.ndarray(
+                    frame_element.shm_shape, 
+                    dtype=np.dtype(frame_element.shm_dtype), 
+                    buffer=_shm_show.buf
+                )
+            except Exception as e:
+                print(f"[proc_show] Failed to attach shm: {e}")
+                frame_element.frame = None
         frame_element = show_node.process(frame_element)
-        if save_video:
-            video_saver_node.process(frame_element)
+        if save_video or save_conflict_clips:
+            video_saver_node.process(frame_element, save_video=save_video)
         if show_in_web:
             video_server_node.process(frame_element)
         ts2 = time()
+        
+        # ── 新增：渲染结束，销毁共享内存 ──
+        if _shm_show is not None:
+            _shm_show.close()
+            try:
+                _shm_show.unlink()
+            except Exception:
+                pass
+            frame_element.frame = None
         if PRINT_PROFILE_INFO:
             print(
                 f"PROC_SHOW_NODE: {(time()-ts0) * 1000:.0f} ms: "

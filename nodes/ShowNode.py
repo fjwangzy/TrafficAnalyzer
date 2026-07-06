@@ -92,6 +92,11 @@ class ShowNode:
         # 字体参数：
         self.fontFace = 1
         self.fontScale = 2.0
+        
+        # --- 冲突余辉机制 ---
+        self.persistent_conflicts = {}
+        self.processed_frames = 0
+        self.persist_frames = int(config.get("video_saver_node", {}).get("fps", 24) * 3.0)
         self.thickness = 2
 
         # 多边形和边界框参数：
@@ -303,7 +308,8 @@ class ShowNode:
             frame_element, FrameElement
         ), f"ShowNode | 输入元素格式错误 {type(frame_element)}"
 
-        frame_result = frame_element.frame.copy()
+        # 结合共享内存就地修改，直接引用以避免 4K 帧复制
+        frame_result = frame_element.frame
 
         if self.show_only_yolo_detections:
             frame_result = self._draw_detections(frame_result, frame_element)
@@ -335,21 +341,25 @@ class ShowNode:
             if lane_polygons:
                 self._draw_lane_polygons(frame_result, lane_polygons, lane_source)
 
-        # 绘制自动推断的车道中心线和统计（仅当无人工标注时）
-        inferred_lanes = getattr(frame_element, "inferred_lanes", None)
-        if inferred_lanes and not lane_polygons:
-            self._draw_inferred_lanes(
-                frame_result,
-                inferred_lanes,
-                show_stats=bool(frame_element.roads_info),
-            )
+        # 绘制自动推断的车道中心线和统计（已关闭，减少视觉干扰）
+        # inferred_lanes = getattr(frame_element, "inferred_lanes", None)
+        # if inferred_lanes and not lane_polygons:
+        #     self._draw_inferred_lanes(
+        #         frame_result,
+        #         inferred_lanes,
+        #         show_stats=bool(frame_element.roads_info),
+        #     )
+
+        # 绘制冲突事件及警示连线 (必定调用以维持余辉显示)
+        conflict_events = getattr(frame_element, "conflict_events", None)
+        self._draw_conflicts(frame_result, conflict_events, frame_element)
 
         # 处理显示统计信息的单独窗口
         if self.show_info_statistics:
             frame_result = self._draw_stats_panel(frame_result, frame_element)
 
         frame_element.frame_result = frame_result
-        frame_show = cv2.resize(frame_result.copy(), (-1, -1), fx=self.scale, fy=self.scale)
+        frame_show = cv2.resize(frame_result, (-1, -1), fx=self.scale, fy=self.scale)
 
         if self.imshow:
             cv2.imshow(frame_element.source, frame_show)
@@ -749,3 +759,200 @@ class ShowNode:
                 thickness=label_thickness, color=color,
             )
             lane_idx += 1
+
+    def _draw_conflicts(self, frame_result, conflict_events, frame_element):
+        """在输出画面上绘制机非冲突事件（专业级可视化，支持余辉跟随）。"""
+        self.processed_frames += 1
+
+        # 1. 刷新新收到的事件到余辉字典中
+        for event in (conflict_events or []):
+            motor_id = str(event.get("motor_id"))
+            non_motor_id = str(event.get("non_motor_id"))
+            if motor_id and motor_id != "None" and non_motor_id and non_motor_id != "None":
+                key = (motor_id, non_motor_id)
+                self.persistent_conflicts[key] = {
+                    "event": event,
+                    "expire": self.processed_frames + self.persist_frames
+                }
+
+        # 2. 清理过期事件
+        self.persistent_conflicts = {
+            k: v for k, v in self.persistent_conflicts.items()
+            if self.processed_frames <= v["expire"]
+        }
+
+        if not self.persistent_conflicts:
+            return
+
+        buffer_tracks = getattr(frame_element, "buffer_tracks", {})
+        if not buffer_tracks:
+            return
+
+        # 动态分辨率缩放
+        img_h, img_w = frame_result.shape[:2]
+        s = max(1, img_w / 1920)  # 基准 1920p
+
+        # 按 TTC 排序，只绘制最紧急的 5 个
+        sorted_conflicts = sorted(
+            self.persistent_conflicts.items(),
+            key=lambda item: item[1]["event"].get("ttc_sec", 99),
+        )[:5]
+
+        overlay = frame_result.copy()
+
+        for key, data in sorted_conflicts:
+            event = data["event"]
+            motor_id, non_motor_id = key
+            severity = event.get("severity")
+            ttc = event.get("ttc_sec", 0.0)
+
+            # 查找轨迹
+            motor = non_motor = None
+            for tid, t in buffer_tracks.items():
+                if str(tid) == motor_id:
+                    motor = t
+                if str(tid) == non_motor_id:
+                    non_motor = t
+                if motor and non_motor:
+                    break
+            if not motor or not non_motor:
+                continue
+
+            motor_pts = getattr(motor, "trajectory_points", None)
+            non_motor_pts = getattr(non_motor, "trajectory_points", None)
+            if not motor_pts or not non_motor_pts:
+                continue
+
+            pt_m = (int(motor_pts[-1][0]), int(motor_pts[-1][1]))
+            pt_n = (int(non_motor_pts[-1][0]), int(non_motor_pts[-1][1]))
+
+            # 配色方案
+            if severity == "critical":
+                line_color = (60, 60, 230)      # 深红
+                badge_bg = (40, 30, 180)         # 暗红背景
+                badge_border = (80, 80, 255)     # 亮红边框
+                text_color = (255, 255, 255)
+                marker_color = (0, 0, 255)
+                ttc_label = f"TTC {ttc:.1f}s"
+            else:
+                line_color = (30, 160, 230)      # 深琥珀
+                badge_bg = (20, 120, 180)        # 暗琥珀背景
+                badge_border = (50, 190, 255)    # 亮琥珀边框
+                text_color = (255, 255, 255)
+                marker_color = (0, 180, 255)
+                ttc_label = f"TTC {ttc:.1f}s"
+
+            # ── 虚线连接 ──
+            self._draw_dashed_line(overlay, pt_m, pt_n, line_color,
+                                   thickness=max(1, int(2 * s)),
+                                   dash_length=int(12 * s),
+                                   gap_length=int(8 * s))
+
+            # ── 端点钻石标记 ──
+            diamond_r = int(6 * s)
+            for pt in (pt_m, pt_n):
+                diamond_pts = np.array([
+                    [pt[0], pt[1] - diamond_r],
+                    [pt[0] + diamond_r, pt[1]],
+                    [pt[0], pt[1] + diamond_r],
+                    [pt[0] - diamond_r, pt[1]],
+                ], dtype=np.int32)
+                cv2.fillPoly(overlay, [diamond_pts], marker_color)
+                cv2.polylines(overlay, [diamond_pts], True, (255, 255, 255),
+                              max(1, int(1 * s)))
+
+            # ── 圆角徽章 ──
+            cx = (pt_m[0] + pt_n[0]) // 2
+            cy = (pt_m[1] + pt_n[1]) // 2
+
+            font = cv2.FONT_HERSHEY_SIMPLEX
+            font_scale = 0.5 * s
+            font_thick = max(1, int(1.5 * s))
+            (tw, th), baseline = cv2.getTextSize(ttc_label, font, font_scale, font_thick)
+
+            pad_x = int(10 * s)
+            pad_y = int(6 * s)
+            badge_w = tw + pad_x * 2
+            badge_h = th + pad_y * 2
+            bx1 = cx - badge_w // 2
+            by1 = cy - badge_h // 2
+            bx2 = bx1 + badge_w
+            by2 = by1 + badge_h
+            corner_r = int(6 * s)
+
+            # 圆角矩形背景（半透明）
+            self._draw_rounded_rect(overlay, (bx1, by1), (bx2, by2),
+                                     corner_r, badge_bg, badge_border,
+                                     border_thick=max(1, int(1.5 * s)))
+
+            # TTC 文字
+            tx = cx - tw // 2
+            ty = cy + th // 2 - 1
+            cv2.putText(overlay, ttc_label, (tx, ty),
+                        font, font_scale, text_color, font_thick, cv2.LINE_AA)
+
+        # 半透明混合
+        cv2.addWeighted(overlay, 0.85, frame_result, 0.15, 0, frame_result)
+
+    @staticmethod
+    def _draw_dashed_line(img, pt1, pt2, color, thickness=1,
+                          dash_length=10, gap_length=6):
+        """绘制虚线。"""
+        dx = pt2[0] - pt1[0]
+        dy = pt2[1] - pt1[1]
+        dist = max(1, int(np.sqrt(dx * dx + dy * dy)))
+        step = dash_length + gap_length
+        for i in range(0, dist, step):
+            start_ratio = i / dist
+            end_ratio = min((i + dash_length) / dist, 1.0)
+            start = (int(pt1[0] + dx * start_ratio),
+                     int(pt1[1] + dy * start_ratio))
+            end = (int(pt1[0] + dx * end_ratio),
+                   int(pt1[1] + dy * end_ratio))
+            cv2.line(img, start, end, color, thickness, cv2.LINE_AA)
+
+    @staticmethod
+    def _draw_rounded_rect(img, pt1, pt2, radius, fill_color,
+                            border_color, border_thick=1):
+        """绘制圆角矩形（填充 + 边框）。"""
+        x1, y1 = pt1
+        x2, y2 = pt2
+        r = min(radius, (x2 - x1) // 2, (y2 - y1) // 2)
+        if r < 1:
+            cv2.rectangle(img, pt1, pt2, fill_color, -1)
+            cv2.rectangle(img, pt1, pt2, border_color, border_thick)
+            return
+
+        # 填充主体
+        cv2.rectangle(img, (x1 + r, y1), (x2 - r, y2), fill_color, -1)
+        cv2.rectangle(img, (x1, y1 + r), (x2, y2 - r), fill_color, -1)
+        # 四个圆角
+        cv2.ellipse(img, (x1 + r, y1 + r), (r, r), 180, 0, 90, fill_color, -1)
+        cv2.ellipse(img, (x2 - r, y1 + r), (r, r), 270, 0, 90, fill_color, -1)
+        cv2.ellipse(img, (x2 - r, y2 - r), (r, r), 0, 0, 90, fill_color, -1)
+        cv2.ellipse(img, (x1 + r, y2 - r), (r, r), 90, 0, 90, fill_color, -1)
+
+        # 边框
+        pts = []
+        for angle in range(0, 361, 5):
+            rad = np.radians(angle)
+            if angle <= 90:
+                ox, oy = x2 - r, y1 + r
+            elif angle <= 180:
+                ox, oy = x1 + r, y1 + r
+            elif angle <= 270:
+                ox, oy = x1 + r, y2 - r
+            else:
+                ox, oy = x2 - r, y2 - r
+            pts.append((int(ox + r * np.cos(np.radians(angle - 90))),
+                        int(oy + r * np.sin(np.radians(angle - 90)))))
+        # Simplified border: just use rectangle lines for the straight parts
+        cv2.line(img, (x1 + r, y1), (x2 - r, y1), border_color, border_thick)
+        cv2.line(img, (x1 + r, y2), (x2 - r, y2), border_color, border_thick)
+        cv2.line(img, (x1, y1 + r), (x1, y2 - r), border_color, border_thick)
+        cv2.line(img, (x2, y1 + r), (x2, y2 - r), border_color, border_thick)
+        cv2.ellipse(img, (x1 + r, y1 + r), (r, r), 180, 0, 90, border_color, border_thick)
+        cv2.ellipse(img, (x2 - r, y1 + r), (r, r), 270, 0, 90, border_color, border_thick)
+        cv2.ellipse(img, (x2 - r, y2 - r), (r, r), 0, 0, 90, border_color, border_thick)
+        cv2.ellipse(img, (x1 + r, y2 - r), (r, r), 90, 0, 90, border_color, border_thick)
+

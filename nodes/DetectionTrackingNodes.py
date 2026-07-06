@@ -57,7 +57,8 @@ class DetectionTrackingNodes:
             frame_element, FrameElement
         ), f"DetectionTrackingNodes | 输入元素格式错误 {type(frame_element)}"
 
-        frame = frame_element.frame.copy()
+        # 去掉不必要的 copy，因为检测过程只读
+        frame = frame_element.frame
 
         t_detect_start = time.time()
         outputs = self.model.predict(frame, imgsz=self.imgsz, conf=self.conf, verbose=False,

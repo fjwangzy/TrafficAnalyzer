@@ -1,5 +1,7 @@
 # 视频检测流 × 无人机平台整合方案
 
+> **架构替代声明（2026-07-13）**：本文“Phase 1 已完成”只描述当时遗留链路的技术验证；其中 Kafka Topic/`msg_type`/WebSocket、InfluxDB/Telegraf/Grafana、数据库和 Compose 目标已由 [ADR-019](DECISIONS.md) 替代。现行目标以 [ARCHITECTURE.md](ARCHITECTURE.md)、[API_CONTRACTS.md](API_CONTRACTS.md) 和 [DATABASE_SCHEMA.md](DATABASE_SCHEMA.md) 为准，本文不得作为 `road9`/TimescaleDB 迁移完成证据。
+
 > 日期：2026-05-30
 > 状态：**Phase 1 已完成** ✅ — 端到端验证通过（2026-07-02: 56 PASS / 0 FAIL / 0 WARN）
 > 目标：将检测管道（pipeline）与管理平台（platform）打通，实现端到端的无人机交通监控闭环

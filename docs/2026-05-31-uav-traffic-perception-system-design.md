@@ -1,5 +1,7 @@
 # 无人机交通态势感知系统 — 总体技术设计方案
 
+> **架构替代声明（2026-07-13）**：本文保留算法设计与当时实现事实；其中 Kafka Topic/`msg_type`/WebSocket、InfluxDB/Telegraf/Grafana、数据库和部署链路已由 [ADR-019](DECISIONS.md) 替代。现行目标以 [ARCHITECTURE.md](ARCHITECTURE.md)、[API_CONTRACTS.md](API_CONTRACTS.md) 和 [DATABASE_SCHEMA.md](DATABASE_SCHEMA.md) 为准：database=`road9`、UAV 内部消息/自建表使用 `uav_` 前缀、时序存储使用 TimescaleDB。本文不得作为现行数据契约或部署验收依据。
+
 > **版本**：v1.0  
 > **日期**：2026-05-31  
 > **状态**：Draft — 待评审  

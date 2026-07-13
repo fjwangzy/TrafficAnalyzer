@@ -2,6 +2,10 @@
 
 This file provides guidance to Codex (Codex.ai/code) when working with code in this repository.
 
+## 数据架构优先级（ADR-019）
+
+自 2026-07-13 起，目标架构固定为 PostgreSQL connection database=`road9` + TimescaleDB；UAV 内部 Topic、`msg_type`、WebSocket channel 和本项目自建表统一使用 `uav_` 前缀；InfluxDB、Telegraf、Grafana 为迁移后退役链路。本文后续出现的旧 Topic、InfluxDB/Grafana、Telegraf 或旧 WebSocket 描述仅表示**当前遗留实现/回归基线**，不得用于新增功能或覆盖 `docs/DECISIONS.md` ADR-019、`docs/ARCHITECTURE.md`、`docs/API_CONTRACTS.md`、`docs/DATABASE_SCHEMA.md` 的目标契约。
+
 ## 项目文档索引
 
 **所有开发工作前必须先阅读相关文档。**
@@ -12,12 +16,12 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 | `docs/ARCHITECTURE.md` | 系统架构（进程模型、管道设计、微服务数据路径） |
 | `docs/BUSINESS_LOGIC.md` | 核心业务逻辑（检测、跟踪、道路分配、统计计算） |
 | `docs/PROJECT_STRUCTURE.md` | 项目结构和文件说明 |
-| `docs/API_CONTRACTS.md` | API 契约（Kafka 消息格式、Flask 端点、InfluxDB 查询） |
-| `docs/DATABASE_SCHEMA.md` | 数据库结构（InfluxDB measurement、Kafka topic） |
+| `docs/API_CONTRACTS.md` | API 契约（目标/遗留 Kafka、REST、WebSocket 与持久化映射） |
+| `docs/DATABASE_SCHEMA.md` | 数据库结构（`road9`、TimescaleDB、`uav_*` 表与历史迁移） |
 | `docs/DECISIONS.md` | 架构决策记录（ADR） |
 | `docs/TASKS.md` | 技术债清单和待办事项 |
 | `docs/2026-05-29-srt-traffic-situation-design.md` | 交通态势感知系统设计（方向/车道/轨迹/冲突） |
-| `docs/2026-05-30-drone-motion-compensation-design.md` | 无人机运动补偿 + 事件世界坐标设计 |
+| `docs/superpowers/specs/2026-05-30-drone-motion-compensation-design.md` | 无人机运动补偿 + 事件世界坐标设计 |
 | `docs/2026-05-30-pipeline-platform-integration.md` | **视频检测流×平台整合方案**（Kafka对齐、PipelineManager、docker-compose统一） |
 | `docs/2026-05-31-uav-traffic-perception-system-design.md` | **总体技术设计方案**（背景/架构/模型/数据/平台/实施路径/风险/演进，完整版） |
 | `docs/test_report_inter_xqh.md` | 端到端测试报告（inter_xqh视频+SRT遥测，当前 56 PASS / 0 FAIL / 0 WARN） |
@@ -49,28 +53,30 @@ python scripts/run_local.py
 ### 轻量回归测试
 ```bash
 python -m pytest platform/tests -q
-python -m pytest test_kafka_active_trajectories.py test_utils_local.py test_byte_tracker_core.py test_grafana_provisioning.py -q
+python -m pytest test_kafka_active_trajectories.py test_utils_local.py test_byte_tracker_core.py -q
+# 迁移完成前可单独运行遗留 test_grafana_provisioning.py；它不属于目标架构验收
 cd traffic-fly-console && npm test && npm run build
 ```
 
-### Docker 全栈
+### Docker 全栈（当前遗留栈，仅用于迁移回归）
 ```bash
 docker compose -f ./docker-compose.yaml -f ./docker-compose.test.yaml -p traffic_analyzer up -d --build
 # Kafka:9092, InfluxDB:8087, Platform:8000, Console:8080, Grafana:3111
 # Console 登录: admin / admin123
 # 注意: docker-compose.test.yaml 是无 GPU 验证覆盖，camera 1/2/3 需使用根 compose 或追加 --profile gpu-only。
+# 目标 Compose 必须移除 InfluxDB/Telegraf/Grafana，并改用 road9/TimescaleDB。
 ```
 
 
-## Project Overview
+## Project Overview（当前代码清单；目标态见 ADR-019）
 
-TrafficAnalyzer is a roundabout traffic analysis system that processes video (MP4 or RTSP streams) to detect vehicles, track them, compute per-road congestion statistics, and visualize results via Grafana dashboards. This is the `feature/influx` branch — a multi-camera production version using InfluxDB as the time-series database.
+TrafficAnalyzer processes video (MP4 or RTSP streams) to detect vehicles, track them, and compute traffic indicators. The current `feature/influx` code still contains an InfluxDB/Grafana legacy implementation; it is migration inventory, not the target production architecture. The target is `road9`/TimescaleDB with Platform REST/WebSocket visualization.
 
 Code comments and README are primarily in Chinese/Russian. All user-facing logs, config comments, and variable names are a mix of Chinese and English.
 
 ## Build and Run
 
-### Docker Compose (full stack)
+### Docker Compose（当前遗留 full stack，待按 ADR-019 迁移）
 
 ```bash
 # Create .env file with credentials first (see README for template)
@@ -99,7 +105,7 @@ python generate_lanes.py <video_path> <output_json_path>
 # Click 4 points per lane polygon; output is a JSON file compatible with configs/ roads format
 ```
 
-### Export / update Grafana dashboards
+### Export / update Grafana dashboards（废弃链路，仅迁移归档）
 
 `export_dashboards.py`, `fetch_dashboard.py`, `update_dashboards.py` are helper scripts at the repo root for Grafana dashboard management.
 
@@ -157,7 +163,7 @@ VideoReader → DetectionTrackingNodes → HomographyCalibrationNode → MotionC
 - **`main.py`** — single-process sequential loop. Debug only.
 - **`main_optimized.py`** — 3-process multiprocessing pipeline (reader+detection | tracker+stats+kafka | show+save+flask). The **only** production entry point. Includes process health checks (is_alive + queue timeout) from the old stream variants. Queues have `maxsize=50`.
 
-### Microservices data path
+### Microservices data path（当前遗留链路）
 
 ```
 Backend (KafkaProducerNode) → Kafka topic statistics_{n}

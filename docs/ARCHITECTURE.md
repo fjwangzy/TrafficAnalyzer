@@ -1,10 +1,23 @@
 # ARCHITECTURE.md — TrafficAnalyzer 系统架构
 
-> 基于 commit `84c6bd6` 的真实代码分析。
+> 当前实现说明基于 commit `84c6bd6` 的真实代码分析；标记为“目标态”的内容依据
+> ADR-019（2026-07-13）编制，尚需代码、数据库迁移和 Compose 改造后才视为已实施。
 
 ## 系统总览
 
-TrafficAnalyzer 是一个环形交叉路口交通分析系统。核心功能：从视频流（MP4 文件或 RTSP 实时流）中检测车辆、跟踪轨迹、计算每条道路的拥堵统计，并通过 Grafana 仪表盘可视化结果。
+TrafficAnalyzer 是智慧交通大项目下的无人机 AI 交通分析子系统。核心功能是从视频流
+（MP4 文件或 RTSP 实时流）中检测车辆、跟踪轨迹、计算道路与车道指标、识别冲突和
+形成可复核事件。目标态由无人机平台前端提供实时态势与历史查询，不再依赖 Grafana。
+
+### 架构状态说明
+
+- **当前实现**：代码和 Compose 中仍存在 `statistics_*` 等旧 Topic、Telegraf、InfluxDB、
+  Grafana 和 `InfluxQuery`；以下保留这些描述用于迁移核对，不能据此认定为目标架构。
+- **目标态（Accepted）**：PostgreSQL 连接数据库固定为 `road9`，启用 TimescaleDB 扩展；
+  无人机平台消息名和平台自建物理表名统一以 `uav_` 开头；废弃
+  Kafka → Telegraf → InfluxDB → Grafana 链路。
+- **实施判定**：只有代码、数据库迁移、配置、Compose、回归测试和数据核验全部完成，
+  目标态才可从“规划”改为“已实施”。
 
 ```
 ┌─────────────────────────────────────────────────────────┐
@@ -88,7 +101,8 @@ TrafficAnalyzer 是一个环形交叉路口交通分析系统。核心功能：�
                       ▼
 ┌─────────────────────────────────────────────────────────┐
 │             KafkaProducerNode                            │
-│  statistics_{n} + track_complete_{n} + conflicts_{n}     │
+│  当前：statistics_{n} / track_complete_{n} / conflicts_{n}│
+│  目标：对应名称统一增加 uav_ 前缀                         │
 │  含方向流量/车道统计/自动车道/车速/无人机位置/冲突计数   │
 └─────────────────────┬───────────────────────────────────┘
                       ▼
@@ -123,7 +137,9 @@ TrafficAnalyzer 是一个环形交叉路口交通分析系统。核心功能：�
 - **运动补偿位置**：MotionCompensationNode 在进程 2 中，位于 HomographyCalibrationNode 之后
 - **历史**：整合了旧版 `main_stream_optimized.py`（2 进程 RTSP v1）和 `main_stream_optimized_v2.py`（2 进程 RTSP v2 + 健康检查）的特性
 
-## 微服务数据路径
+## 数据路径（当前实现与目标态）
+
+### 当前实现：待迁移旧链路
 
 ```
 Backend (KafkaProducerNode)
@@ -177,6 +193,115 @@ PipelineManager (platform/app/services/pipeline_manager.py)
 检测管道子进程: GPU推理 + CPU计算 + Kafka输出
 ```
 
+上述路径是仓库当前实现。`Telegraf → InfluxDB → Grafana` 已被 ADR-019 标记为废弃，
+仅在迁移核验窗口内允许临时保留，不得继续作为新功能的依赖。
+
+### 目标态：Kafka + PostgreSQL/TimescaleDB + 无人机平台
+
+```text
+无人机 AI 检测管道
+  │
+  ├── uav_statistics_{camera_id}       （周期态势指标）
+  ├── uav_track_complete_{camera_id}   （完成轨迹）
+  ├── uav_conflicts_{camera_id}        （冲突事件）
+  └── uav_telemetry_{camera_id}        （无人机遥测）
+          │
+          ▼
+Kafka（异步传输与削峰；Topic / msg_type 均以 uav_ 开头）
+          │
+          ▼
+Platform Consumer（校验、幂等、路网 ID 关联、持久化）
+          │
+          ├── PostgreSQL database: road9
+          │     ├── TimescaleDB hypertables
+          │     │     ├── uav_traffic_metrics
+          │     │     ├── uav_system_metrics
+          │     │     ├── uav_telemetry_metrics
+          │     │     ├── uav_track_points
+          │     │     └── uav_conflict_events
+          │     └── 事件与业务表
+          │           ├── uav_message_inbox（消费幂等基线）
+          │           ├── uav_track_events / uav_ai_events
+          │           ├── uav_event_outbox / uav_event_delivery_attempts
+          │           ├── uav_event_feedback / uav_dead_letters
+          │           └── uav_evidence_packages / uav_evidence_items
+          │
+          ├── REST 历史查询 / 聚合查询
+          └── WebSocket 实时广播
+                ├── uav_intersection:{intersection_id}
+                ├── uav_alerts
+                ├── uav_alerts:{intersection_id}
+                ├── uav_system
+                ├── uav_telemetry:{drone_id}
+                └── uav_calibration
+                         │
+                         ▼
+                 traffic-fly-console
+```
+
+目标态约束：
+
+- PostgreSQL 连接参数中的 `DB_NAME` 固定选择 `road9`；`road9` 是 database，不能自动解释成
+  schema。旧 `ycx`/`road10` 调查结果只作为历史调查证据，不能覆盖本决策。
+- TimescaleDB 与普通 PostgreSQL 表位于同一 `road9` 数据库，统一事务、权限、备份与审计；
+  指标、遥测、轨迹点和冲突事件进入 canonical hypertable，轨迹摘要、AI 事件、可靠投递、
+  反馈、死信和证据元数据进入 canonical 普通业务表。
+- `uav_traffic_metrics` 统一通过 `grain_type`、`grain_key` 表达指标粒度：
+  `grain_type` 取 `intersection`、`link`、`lane`，`grain_key` 分别保存对应的权威
+  `inter_id`、`link_id`、`lane_id`。
+- `uav_message_inbox` 是长期 canonical 消费幂等表，不是迁移期临时表。Consumer 必须在
+  同一 PostgreSQL 事务内先登记 `(source_system, message_id)` 唯一记录、校验 payload hash，
+  再写事实数据并回填 fact references/status；同时保留 Topic、partition、offset。其保留期
+  必须覆盖系统允许的最大消息重放窗口。
+- TimescaleDB hypertable 的唯一键因分区约束需要包含时间列，只能作为第二层防重；不得用它
+  代替 `uav_message_inbox` 的跨时间消息幂等判断。
+- 所有无人机平台拥有的 Kafka Topic、`msg_type`、WebSocket channel 和物理表名必须以
+  `uav_` 开头。示例中的复数形式是目标契约，落库与接口文档必须保持一致。
+- camera-scoped Topic 必须由统一 builder 使用“消息类别 + 显式 `camera_id`”生成；builder
+  负责校验 `camera_id` 并选择 canonical 模板。禁止从一个 Topic 名通过字符串替换推导
+  另一个 Topic，避免相似词、前后缀或自定义配置导致误路由。
+- `track_complete`、`conflict`、AI event 和证据引用属于不可静默丢失数据。生产侧必须先写
+  持久化 spool/outbox 再进入内存发送队列，只有收到 Kafka/下游确认后才清理；队列满、
+  进程崩溃或 send 失败必须可重试和可告警。周期指标仅在契约明确允许有损时才可丢弃，且
+  必须通过 `uav_system_metrics` 上报预期、已发/已收、丢弃量和 coverage。
+- Kafka Consumer 必须关闭 auto commit。只有 `uav_message_inbox` 与全部事实数据在同一
+  PostgreSQL 事务成功提交后，才可手动提交对应 offset；数据库失败时不提交，使消息能够
+  重放。数据库已提交但 offset 尚未提交时的重复消费由 inbox 幂等吸收。
+- `road9` 中既有的共享路网主数据、PostgreSQL 系统目录和 TimescaleDB 扩展内部对象不属于
+  无人机平台自建表，不强制重命名；无人机平台只读引用时必须保存路网版本和权威 ID。
+- 不再为 Grafana 或 InfluxDB 新增查询、面板、measurement 或兼容字段；可视化统一由
+  `traffic-fly-console` 通过平台 REST/WebSocket 获取。
+- 规划统一事件总线使用 `uav_ai_events`，主平台回执使用 `uav_ai_event_feedback`；在其合同
+  冻结前，现有分场景 Topic 继续承担检测管道内部传输，但迁移后的名称必须带 `uav_`。
+
+#### 历史 InfluxDB 时间迁移边界
+
+旧 InfluxDB point 的 `time` 不能统一映射为 TimescaleDB 的 `observed_at` 或
+`occurred_at`。不同 measurement 的写入路径和原始 payload 不同，必须由独立转换器按
+measurement 判断时间语义：
+
+- `statistics` 类 point 的 `time` 可能是 Telegraf/InfluxDB 写入时刻，不必然等于视频帧
+  观测时刻；`conflict` 类 point 也可能只保留 Consumer 写入时刻，而非冲突发生时刻。
+- `track_complete` 历史数据存在把视频流相对秒误当 Unix 秒转换的风险，可能形成靠近
+  Unix epoch（1970 年）的伪时间。此类值不得直接进入 `uav_track_events` 或
+  `uav_track_points` 的业务时间列。
+- 每条迁移记录必须保留 `source_time_raw`、`source_time_semantics` 和 `time_quality`。
+  `source_time_semantics` 至少区分 `event_time`、`write_time`、`stream_relative`、
+  `unknown`；`time_quality` 至少区分 `verified`、`inferred`、`invalid`、`unknown`。
+- 只有能由原消息字段、任务起始时间、视频时间轴或其他可审计证据证明的时间，才可写入
+  `observed_at`/`occurred_at`。无法证明时，旧 `time` 只作为 `ingested_at`/原始审计信息，
+  不得冒充业务发生时间。
+- 异常轨迹先进入隔离区；仅当任务开始时间与流相对秒的组合关系可证明时才允许重建，且
+  必须记录重建方法和 `time_quality=inferred`。无法重建的记录保留隔离，不参与业务时序
+  聚合、轨迹排序或事件 SLA 计算。
+- 历史 `statistics` 可能同时经 Telegraf 和 Platform Consumer 写入。两条路径不是两份独立
+  观测，迁移时必须按 source writer、原 Topic/partition/offset、message ID 或可审计指纹
+  识别重复；不能把两边记录简单相加。缺少可靠关联键时，应选择并记录权威来源，将另一侧
+  仅用于对账，并降低迁移质量标记。
+
+因此，历史回填需要“measurement 分支 + 时间质量门禁”，不能使用一条
+`Influx time → occurred_at` 的通用 SQL 完成。
+
 平台容器会把项目根目录以 `/project` 只读挂载，并在镜像构建时安装
 `platform/pipeline-requirements.txt` 中的检测器依赖，并通过
 `platform/pipeline-constraints.txt` 锁定 `numpy<2`、`torch==2.2.2` 和
@@ -218,21 +343,24 @@ Flask MJPEG 端点。
 
 ### WebSocket 频道模型
 
-前端通过 `useWebSocket` hook 订阅频道，平台 Kafka consumer 按频道广播：
+前端通过 `useWebSocket` hook 订阅频道，平台 Kafka consumer 按频道广播。当前代码仍使用
+无前缀频道，目标态必须迁移为下表中的 `uav_` 名称：
 
-| 频道名 | 消息类型 | 来源 | 前端页面 |
+| 当前频道（待迁移） | 目标频道 | 目标 `msg_type` 示例 | 前端页面 |
 |---|---|---|---|
-| `intersection:{id}` | stats, track_complete, conflict | Kafka stats/track/conflict topics | Monitoring, Dashboard |
-| `alerts` | alert_new | AlertEngine | Dashboard |
-| `system` | system_metrics | Kafka system_metrics topic | Dashboard |
-| `telemetry:{drone_id}` | telemetry | Kafka telemetry topic | Drones |
+| `intersection:{id}` | `uav_intersection:{intersection_id}` | `uav_stats`, `uav_track_complete`, `uav_conflict` | Monitoring, Dashboard |
+| `alerts` | `uav_alerts` | `uav_alert_new`, `uav_alert_updated` | Dashboard |
+| — | `uav_alerts:{intersection_id}` | `uav_alert_new`, `uav_alert_updated` | Monitoring |
+| `system` | `uav_system` | `uav_system_metrics` | Dashboard |
+| `telemetry:{drone_id}` | `uav_telemetry:{drone_id}` | `uav_telemetry` | Drones |
+| — | `uav_calibration` | `uav_lane_annotation_task` | Calibration |
 
 订阅协议：
 ```json
 // 订阅
-{"action": "subscribe", "channel": "intersection:INT_camera_1"}
+{"action": "subscribe", "channel": "uav_intersection:INT_camera_1"}
 // 推送
-{"channel": "intersection:INT_camera_1", "type": "stats", "data": {...}, "ts": 1234567890}
+{"channel": "uav_intersection:INT_camera_1", "type": "uav_stats", "data": {...}, "ts": 1234567890}
 ```
 
 ### 遥测数据源
@@ -310,6 +438,7 @@ Flask MJPEG 端点。
 ## 平台 Web 服务架构（platform/）
 
 > 2026-05-29 从微服务重构为单体架构。
+> 下图为 ADR-019 的平台目标态；仓库当前仍包含 `InfluxQuery` 和旧 Compose 服务，属于待迁移项。
 
 ### 系统总览
 
@@ -338,9 +467,10 @@ Flask MJPEG 端点。
 │  └────────┬───────────┴──────────────┬─────────────────────────┘ │
 │           │                          │                           │
 │  ┌────────┴────────┐    ┌────────────┴────────────┐             │
-│  │   PostgreSQL    │    │   Kafka Consumer        │             │
-│  │  （SQLAlchemy） │    │  （aiokafka）           │             │
-│  └─────────────────┘    └────────────┬────────────┘             │
+│  │ PostgreSQL      │    │   Kafka Consumer        │             │
+│  │ database=road9  │    │  （aiokafka）           │             │
+│  │ + TimescaleDB   │    └────────────┬────────────┘             │
+│  └────────┬────────┘                 │                          │
 │                                      │                          │
 │                           ┌──────────┴──────────┐               │
 │                           │  WebSocket Manager  │               │
@@ -348,8 +478,8 @@ Flask MJPEG 端点。
 │                           └─────────────────────┘               │
 │                                                                 │
 │                           ┌─────────────────────┐               │
-│                           │   InfluxDB Query    │               │
-│                           │ （influx_query.py） │               │
+│                           │ PostgreSQL/Timescale│               │
+│                           │ Repository（目标）  │               │
 │                           └─────────────────────┘               │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -357,28 +487,33 @@ Flask MJPEG 端点。
 ### 数据流
 
 ```
-1. 用户认证流程：
+1. 用户认证流程（目标）：
    POST /api/v1/auth/login
      → auth.py
      → auth_service.authenticate_user()
-     → PostgreSQL (users 表)
+     → PostgreSQL database=road9（平台自建认证表名以 uav_ 开头）
      → auth_service.create_access_token() (PyJWT)
      → 返回 JWT token
 
-2. 实时数据推送流程：
-   视频分析管道 → Kafka topic (statistics_*, detections_*, etc.)
+2. 实时数据推送与持久化流程（目标）：
+   视频分析管道 → Kafka topic (uav_statistics_*, uav_track_complete_*,
+                              uav_conflicts_*, uav_telemetry_*)
      → KafkaConsumerService.consume_loop()
-     → 解析消息类型
-     → ws_manager.broadcast(channel, data)
+     → 校验 uav_* msg_type、幂等键和路网关联字段
+     → PostgreSQL/TimescaleDB 持久化成功
+     → ws_manager.broadcast(uav_* channel, data)
      → WebSocket 客户端
 
-3. 时序数据查询流程：
+3. 时序数据查询流程（目标）：
    GET /api/v1/trajectories?intersection_id=X&start=T1&end=T2
      → trajectories.py
-     → influx_query.query_track_events()
-     → InfluxDB 1.8 (InfluxQL)
+     → PostgreSQL/Timescale repository
+     → database `road9` 内的 `uav_track_events`，关联 `uav_track_points`
      → 返回轨迹列表
 ```
+
+目标态不包含 Telegraf、InfluxDB 或 Grafana。迁移完成前，当前实现仍可能从
+`influx_query.py` 查询旧数据；这只是过渡兼容，不得作为新增 API 的数据源。
 
 ### 关键设计决策
 
@@ -394,7 +529,8 @@ Flask MJPEG 端点。
 
 #### 2. 优雅降级模式
 
-**决策**：应用启动时不要求所有依赖（DB、Kafka、InfluxDB）可用，而是在 lifespan 中尝试连接并记录状态。
+**决策（目标态）**：应用启动时不要求所有依赖（PostgreSQL/TimescaleDB、Kafka）可用，
+而是在 lifespan 中尝试连接并记录状态。当前代码中的 InfluxDB 健康项须随迁移删除。
 **原因**：开发环境可能没有完整的基础设施栈，应用应该能够部分工作。
 **实现**：`/ready` 端点返回各依赖的健康状态，客户端根据可用功能调整 UI。
 
@@ -415,7 +551,9 @@ Flask MJPEG 端点。
 
 **关键环境变量**：
 
-- `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME` — PostgreSQL
+- `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME` — PostgreSQL；目标态
+  `DB_NAME=road9`，不得把 `road9` 当作 schema 名替代数据库名
 - `KAFKA_BOOTSTRAP` — Kafka broker
-- `INFLUX_HOST`, `INFLUX_PORT`, `INFLUX_DATABASE` — InfluxDB
+- `INFLUX_HOST`, `INFLUX_PORT`, `INFLUX_DATABASE` — 仅为当前旧实现兼容配置，完成
+  PostgreSQL/TimescaleDB 迁移后删除
 - `JWT_SECRET_KEY`, `JWT_ALGORITHM` — JWT 签名

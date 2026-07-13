@@ -10,6 +10,7 @@
 - 以 `FrameElement` 为唯一帧级数据载体：新增跨节点字段必须在 `elements/FrameElement.py` 声明。
 - 配置驱动：运行参数进入 `configs/app_config.yaml`，需要容器差异时通过环境变量或 Hydra override 注入。
 - 不回退用户已有改动：工作树可能包含并行修改，除非用户明确要求，不还原不相关文件。
+- 遵守 ADR-019：目标为 database=`road9` + TimescaleDB，UAV 内部消息/自建表使用 `uav_` 前缀；旧 InfluxDB/Telegraf/Grafana 只做迁移回归，不得扩建。
 
 ## 模块边界
 
@@ -30,18 +31,19 @@
 ```bash
 python test_pipeline_inter_xqh.py
 python -m pytest platform/tests -q
-python -m pytest test_kafka_active_trajectories.py test_utils_local.py test_byte_tracker_core.py test_grafana_provisioning.py -q
+python -m pytest test_kafka_active_trajectories.py test_utils_local.py test_byte_tracker_core.py -q
+# 迁移完成前可单独运行遗留 test_grafana_provisioning.py；它不属于目标架构验收
 cd traffic-fly-console && npm test && npm run build
 ```
 
-当前 inter_xqh 端到端基线为 `56 PASS / 0 FAIL / 0 WARN`。如果测试资产或权重缺失，应记录缺失项，不能把未运行的验证当作通过。
+当前 inter_xqh 端到端基线为 `56 PASS / 0 FAIL / 0 WARN`。如果测试资产或权重缺失，应记录缺失项，不能把未运行的验证当作通过；该基线也不能替代 ADR-019 的 `road9`/TimescaleDB、消息改名、迁移对账和退役验收。
 
 ## 文档同步
 
 涉及以下能力时必须同步对应文档：
 
 - Kafka/WebSocket/API 契约：更新 `docs/API_CONTRACTS.md`。
-- InfluxDB/PostgreSQL schema 或 topic：更新 `docs/DATABASE_SCHEMA.md`。
+- PostgreSQL/TimescaleDB schema、表、历史迁移或 Topic：更新 `docs/DATABASE_SCHEMA.md`。
 - 管道节点、数据流或进程模型：更新 `docs/ARCHITECTURE.md` 和 `docs/BUSINESS_LOGIC.md`。
 - 验证结果、TCC 交付状态：更新 `docs/test_report_inter_xqh.md` 和 `docs/TASKS.md`。
 

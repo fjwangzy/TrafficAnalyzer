@@ -1,5 +1,7 @@
 # RTSP + MQTT遥测 无标注交通态势感知系统方案
 
+> **架构替代声明（2026-07-13）**：本文保留态势算法、遥测与无标注设计；其中可复制的旧 Kafka/InfluxDB 契约与部署链路已由 [ADR-019](DECISIONS.md) 替代。现行消息、数据库和时序存储契约以 [API_CONTRACTS.md](API_CONTRACTS.md) 与 [DATABASE_SCHEMA.md](DATABASE_SCHEMA.md) 为准。
+
 > 日期：2026-05-29
 > 状态：Draft
 > 分支：feature/influx

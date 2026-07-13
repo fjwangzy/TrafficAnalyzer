@@ -1,6 +1,6 @@
 # TASKS.md — TrafficAnalyzer 任务追踪
 
-> 最后更新：2026-05-31（基于设计审查 `2026-05-31-design-review-and-tasks.md` 实施）
+> 最后更新：2026-07-13（已纳入无人机 AI PRD v1.8、`road9`/TimescaleDB 目标架构及 `uav_` 统一命名）
 
 ## 技术债清单
 
@@ -25,11 +25,11 @@
 - **状态**：🟡 部分解决 — 已添加 `test_pipeline_inter_xqh.py`（49项端到端检查）、`test_pipeline_no_yolo.py`（无GPU CI测试）、`test_e2e_inter_xqh.py`（端到端集成测试）、`scripts/inject_test_data.py`（WebSocket数据注入）
 - **建议**：继续为 `utils_local/utils.py` 和 `byte_tracker/` 编写单元测试
 
-#### TD-004: Grafana 凭据硬编码
+#### TD-004: Grafana 凭据硬编码（由旧链路退役关闭）
 - **位置**：`export_dashboards.py:6`、`fetch_dashboard.py:5`、`update_dashboards.py:5`
 - **问题**：`admin:admin` 凭据硬编码在脚本中
 - **影响**：安全风险（虽然这些脚本仅用于开发环境）
-- **建议**：从环境变量或 `.env` 文件读取
+- **处置**：ADR-019 已决定退役 Grafana 链路；退役前不得扩大使用，相关脚本/凭据随旧链路安全下线并执行秘密扫描，不再为其新增功能。
 
 #### TD-014: congestion_index 未计算 → ✅ 已解决
 - **状态**：✅ 已修复（2026-05-31）
@@ -244,11 +244,42 @@
 - [x] **页面发起 inter_xqh 全流程验证（T-417）**
 
 ### 近期（1-2 周）
+- [x] 完成 `docs/generated/uav-traffic-ai-prd/` S1-S7 七个分册详细评审草案及跨分册一致性审查（2026-07-13）
+- [x] 冻结目标数据架构：PostgreSQL connection database=`road9`，UAV Topic/`msg_type`/WebSocket/自建表统一 `uav_`，指标采用 TimescaleDB，InfluxDB/Telegraf/Grafana 迁移后退役（ADR-019）
+- [ ] 盘点 `road9` 的 schema、现有平台表、权威路网只读视图和扩展状态；确认 `road9` 是 database 名而非默认 schema，并输出对象归属/迁移矩阵
+- [ ] 在 `road9` 安装并验收 TimescaleDB，冻结扩展版本/许可、目标 schema、chunk、索引、压缩、保留、连续聚合、容量、备份恢复、高可用和 RPO/RTO
+- [ ] 将 PostgreSQL 部署镜像/托管实例切换为兼容的 TimescaleDB 发行形态；当前镜像不含扩展，必须在目标环境做安装、升级和恢复演练
+- [ ] 冻结并评审全部 `uav_*` DDL：核心 Hypertable、长期消费幂等 `uav_message_inbox`、AI 事件/outbox/attempt/feedback/dead-letter、证据、测绘、执法、路网上下文、绑定、审计及现有平台表迁移；同一实体不得重复建表或双真源
+- [ ] 引入受控 Alembic migrations 并设置版本表 `uav_alembic_version`；生产环境停止依赖 `Base.metadata.create_all()` 隐式建表
+- [ ] 统一生产者/消费者/API/前端消息为 `uav_statistics_*`、`uav_track_complete_*`、`uav_conflicts_*`、`uav_telemetry_*`、`uav_ai_events` 等目标 Topic，以及 `uav_*` msg_type/WebSocket channel；制定旧名兼容窗口与强制退役日期
+- [ ] 重构 Kafka Topic builder，禁止以字符串替换从统计 Topic 推导其他 Topic；以 `camera_id` 显式生成并覆盖全量契约测试
+- [ ] 按消息等级建设可靠发送：轨迹/冲突/AI事件/证据引用使用持久化 spool/outbox 和补发；周期指标允许丢弃时记录覆盖率、缺口与丢弃计数
+- [ ] Consumer 关闭 auto commit，按 `uav_message_inbox` + 事实同事务成功后手动提交 offset；增加数据库异常、崩溃点、同 ID 不同 hash 和重放测试
+- [ ] 将 Platform 的 InfluxDB writer/query repository 替换为 PostgreSQL/TimescaleDB 写读层，API、WebSocket、告警、轨迹、冲突和报表统一从 `road9` 查询
+- [ ] 制定旧 InfluxDB 分 measurement 历史迁移规则：不得把旧 `time` 一律映射 `occurred_at`；保留 `source_time_raw/source_time_semantics/time_quality`，统计/冲突消费时刻只能映射 `ingested_at`，epoch 附近轨迹须隔离并决定丢弃或按原视频/业务字段重建
+- [ ] 执行可回滚双写与对账：比较记录数、时间边界、关键聚合、空值/类型、幂等、抽样事件和查询结果；冻结阈值、责任人、观察期及差异补偿方案
+- [ ] 对账时单独识别 Telegraf `camera_*` 与 Platform `intersection_stats` 的历史重复，按来源/窗口/指纹去重；不允许简单相加
+- [ ] 迁移现有用户/告警时保留密码哈希、主外键和 sequence，验证认证、授权、告警状态及服务重启恢复
+- [ ] 冻结轨迹/事件业务唯一键：不得单独使用会随进程重启复用的 `track_id`，至少纳入 task/pipeline/session/camera 与 source_system 上下文
+- [ ] 验证 TimescaleDB 查询到 REST 的 TIMESTAMPTZ、JSONB、Decimal、空值和排序语义；不兼容变更必须明确升级 API major 版本
+- [ ] 冻结 `uav_system_metrics` 生产责任、指标目录、单位/标签、采样周期、基数、保留和告警阈值，并实现采集与契约测试
+- [ ] 页面/API 切读 `road9` 并完成性能、故障注入、备份恢复与回滚演练；停止旧写入后确认无新增 InfluxDB 数据
+- [ ] 从 compose、配置、依赖、测试和运维手册移除 Telegraf/InfluxDB/Grafana；归档批准范围内历史数据，完成秘密扫描后再删除旧 provisioning/脚本
+- [ ] 按分册顺序组织正式专项评审：先冻结 S5 路网与共性能力、S6 主平台集成，再并行确认 S1-S4，最后汇总冻结 S7 质量验收与运营
+- [ ] 为 S1-S7 各分册补齐需求负责人、业务规则阈值、接口字段、验收样本量、截止时间和关闭依据，并将所有 `【验收阻断】` 同步回总 PRD 第 14 章
+- [ ] `docs/roaddata.md` 已移除明文连接信息；仍须完成原凭据轮换、密钥管理/环境变量接入和仓库历史秘密扫描
+- [ ] 由数据负责人确认 `road9` database 内的权威路网 schema/只读视图及路网版本对象，并冻结路口/Link/车道字段、代码表、几何类型、SRID 和 GCJ02 语义；不得照搬历史 `ycx/road10` 结构
+- [ ] 设计路网只读视图/API与本地版本缓存，禁止检测逐帧直连远程生产库
+- [ ] 建立本地 `intersection_id`/视觉车道与权威 `inter_id/link_id/lane_id + road_data_version` 的绑定和人工校正流程
+- [ ] 为统计、轨迹、冲突和执法线索增加路网版本、主数据ID、地图匹配方法/置信度及 `unmapped` 降级用例
+- [ ] 冻结智慧交通主平台 AI 事件 schema：全局事件ID映射、幂等回执、持久化重试/死信、风险等级映射和复核反馈
+- [ ] 取得 LSTM 简化及雷达测速依赖的甲方书面确认，或恢复为投标合同交付范围；货车识别范围已固定为现有模型货车/非货车二分类，不新增细分类建设
+- [ ] 制定风险热区合同验收阶段、样本积累窗口和验收用例
 - [ ] 清除 Kafka stale data（运行 `scripts/fix_kafka_and_restart.sh`）
-- [x] 验证 Kafka → Platform → InfluxDB 全链路数据流（T-105）
+- [x] 验证 Kafka → Platform → InfluxDB 遗留链路数据流（T-105；仅作为迁移前基线，不是目标架构验收）
 - [x] 验证 Platform/Vite MJPEG 路由（T-106；生产独立 camera 容器 Nginx 路由保留为部署形态）
 - [ ] 优化 inter_xqh 道路多边形（精确标注道路区域）
-- [ ] 修复 TD-009：export_dashboards.py 路径问题
+- [x] ~~修复 TD-009：export_dashboards.py 路径问题~~ — ADR-019 已决定退役 Grafana，改由旧链路退役任务统一处理
 - [x] 为 `utils_local/utils.py` 添加单元测试（T-405）
 - [x] Mission-Pipeline 绑定：创建任务时自动启动检测管道（T-303）
 - [x] 前端 Drones 页面接入 `telemetry:{drone_id}` WebSocket 实时遥测（T-301）
@@ -259,13 +290,13 @@
 - [x] 解决 TD-006：ShowNode supervision 重构（T-401） ✅
 - [x] 自动车道推断：从轨迹数据自动发现车道中心线+各方向指标（T-407） ✅
 - [x] 为 ByteTrack 核心算法添加单元测试（T-406）
-- [ ] 合并 docker-compose 文件（统一 Kafka/InfluxDB/Nginx 实例）
+- [ ] 合并 docker-compose 文件并切换为 Kafka + PostgreSQL/TimescaleDB + Platform/Nginx；移除 InfluxDB/Telegraf/Grafana 运行依赖
 - [x] GIS 轨迹回放（基于 track_complete + InfluxDB 数据）（T-302）
 - [ ] 管道健康监控面板（PipelineManager 状态 + 进程日志流）
 - [x] Alert 持久化到 PostgreSQL（T-305）
 
 ### 远期（3-6 月）
-- [ ] 评估是否升级到 InfluxDB 2.x
+- [x] ~~评估是否升级到 InfluxDB 2.x~~ — ADR-019 已决定迁移至 `road9`/TimescaleDB，不再升级 InfluxDB
 - [ ] 评估是否使用 ultralytics 内置跟踪替代 byte_tracker/
 - [ ] 添加 RTSP 流的自动重连机制
 - [ ] 巡检报告自动生成（PDF/HTML）

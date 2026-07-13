@@ -1,339 +1,424 @@
 # DATABASE_SCHEMA.md — TrafficAnalyzer 数据库结构
 
-> 基于 commit `e69acee` 的真实代码分析。
+> 本文同时记录目标数据架构与迁移前现状。除明确标记为“当前实现/遗留”的内容外，目标结构均为待实施契约，不能据此宣称数据库、TimescaleDB 扩展或数据迁移已经完成。
 
-## InfluxDB 1.8
+## 1. 已冻结的数据架构决策（目标态）
 
-### 连接信息
-| 参数 | 值 |
-|------|------|
-| 版本 | InfluxDB 1.8 |
-| 端口 | 8086（容器内）/ 8087（宿主机映射） |
-| 数据库 | `influx` |
-| 保留策略 | 自动创建，30 天保留 |
-| 认证 | 环境变量 `INFLUXDB_ADMIN_USER` / `INFLUXDB_ADMIN_PASSWORD` |
+以下决策由项目方确认，自 2026-07-13 起作为后续设计、开发与验收基线：
 
-平台启动时会通过 `platform/app/utils/influx_query.py::InfluxQuery` 检查目标数据库；
-若 `influx` 不存在会自动创建并切换到该库。根 `docker-compose.yaml` 同时配置
-`INFLUX_DB=influx`（应用读取）和 `INFLUXDB_DB=influx`（InfluxDB 1.8 首次初始化读取），
-确保新卷和已有旧卷都能自愈。
+| 决策项 | 目标契约 |
+| --- | --- |
+| PostgreSQL connection database | `road9`；这是连接参数中的 database，不自动解释为同名 schema |
+| 时序能力 | 在 `road9` 安装并启用 TimescaleDB 扩展 |
+| 无人机平台自建表 | 表名一律以 `uav_` 开头 |
+| 消息命名 | Kafka Topic、`msg_type` 及平台实时消息类型一律以 `uav_` 开头 |
+| 指标权威存储 | PostgreSQL/TimescaleDB |
+| 废弃链路 | Grafana、Telegraf、InfluxDB 不进入目标部署和验收链路 |
 
-### Measurement: `camera_{N}`（Telegraf/Grafana 兼容链路）
+这里的 `uav_` 表前缀约束只约束无人机平台创建、迁移和拥有的表，不要求改名、复制或迁移智慧交通大项目已有的路网主数据表。现有路网表由数据资产方拥有，无人机平台只读引用。此前对 `ycx` connection database 和 `road10` schema 的只读调查仅作为历史证据，不再构成目标连接或权威数据源选择。
 
-每个摄像头一个 measurement，由 Telegraf 的 `name_override` 配置控制。
+以下内容仍为 `【待确认】`，不得写死为已具备：
 
-#### 字段（Fields）
+- `road9` connection database 的实际连接地址、目标 schema、账户、TLS、连接池和读写权限；不能因为 database 名称为 `road9` 就假定 schema 也叫 `road9`；
+- TimescaleDB 可用版本、安装权限、license 能力与 `CREATE EXTENSION` 执行主体；
+- 路网表/视图准确名称、字段、代码表、几何类型、SRID、GCJ02 语义和版本有效期规则；
+- 生产数据量、chunk 大小、压缩/列式存储能力、保留期和历史迁移窗口；
+- InfluxDB 历史数据是否回迁、回迁范围和数据对账口径。
 
-| 字段名 | 数据类型 | 说明 | 来源 |
-|--------|----------|------|------|
-| `cars` | float | 当前帧滑动窗口平均车辆数 | CalcStatisticsNode → KafkaProducerNode |
-| `road_1` ~ `road_N` | float | 动态道路活跃度（辆/分钟）；兼容字段，平台主契约优先使用 `roads` 数组 | CalcStatisticsNode |
-| `camera_id` | string | 摄像头标识（格式 `id_{N}`） | KafkaProducerNode |
-
-#### 标签（Tags）
-| 标签名 | 说明 |
-|--------|------|
-| `host` | Telegraf 自动添加的主机名 |
-
-#### 时间戳
-- 由 Telegraf 的 `interval = "2s"` 控制写入频率
-- 实际数据频率由 KafkaProducerNode 的 `how_often_sec`（默认 1 秒）控制
-
-### Measurement: `intersection_stats`（Platform 复盘链路）
-
-平台 Kafka consumer 收到 `statistics_*` 后通过 `platform/app/utils/influx_query.py::write_stats()` 写入，用于平台历史统计查询。
-
-#### 标签（Tags）
-
-| 标签名 | 说明 |
-|--------|------|
-| `intersection_id` | 路口标识，如 `INT_camera_1` |
-| `camera_id` | 摄像头标识，如 `id_1` |
-
-#### 字段（Fields）
-
-| 字段名 | 数据类型 | 说明 |
-|--------|----------|------|
-| `cars` | float | 当前帧车辆数/滑动平均车辆数 |
-| `fps` | float | 检测管道处理帧率 |
-| `congestion_index` | float | 多因子拥堵指数 |
-| `active_tracks` | int | 当前活跃轨迹数 |
-| `total_vehicles` | int | 累计车辆数 |
-| `road_1` ~ `road_8` | float | 动态道路活跃度，按消息中 roads 或兼容字段写入 |
-| `dir_straight_count` / `dir_left_turn_count` / `dir_right_turn_count` / `dir_u_turn_count` | int | 各方向车辆数 |
-| `dir_*_avg_speed` | float | 各方向平均速度 |
-| `avg_speed_kmh` | float | 整体平均速度 |
-| `queue_count` | int | 当前排队车辆数 |
-
-### Measurement: `track_events`
-
-平台 Kafka consumer 收到 `track_complete_*` 后通过 `write_track_event()` 写入，用于轨迹历史查询、转向统计和 BEV 复盘。
-
-#### 标签（Tags）
-
-| 标签名 | 说明 |
-|--------|------|
-| `intersection_id` | 路口标识 |
-| `turn_behavior` | `straight` / `left_turn` / `right_turn` / `u_turn` / `unknown` |
-| `vehicle_class` | `motor` / `non_motor` / `unknown` |
-
-#### 字段（Fields）
-
-| 字段名 | 数据类型 | 说明 |
-|--------|----------|------|
-| `track_id` | int | 跟踪 ID |
-| `duration_sec` | float | 轨迹持续时间 |
-| `avg_speed_kmh` | float | 平均速度 |
-| `max_speed_kmh` | float | 最大速度 |
-| `trajectory_world_m` | string(JSON) | 世界坐标轨迹点列 |
-| `trajectory_px` | string(JSON) | 像素坐标轨迹点列 |
-| `entry_point_m` | string(JSON) | 入口世界坐标 |
-| `exit_point_m` | string(JSON) | 出口世界坐标 |
-| `world_anchor_lat_lon` | string(JSON) | 世界坐标 GPS 锚点 |
-| `start_road` | int | 起始道路 ID（有道路标注时） |
-| `exit_road` | int | 离开道路 ID（有道路标注时） |
-
-### Measurement: `conflict_events`
-
-平台 Kafka consumer 收到 `conflicts_*` 后通过 `write_conflict_event()` 写入，用于冲突事件历史复盘。
-
-#### 标签（Tags）
-
-| 标签名 | 说明 |
-|--------|------|
-| `intersection_id` | 路口标识 |
-| `severity` | `warning` / `critical` / `info` |
-| `prediction_type` | `path_intersection` / `same_time_cpa` 等候选来源 |
-| `conflict_scene` | `suspected_right_turn_mv_nmv` / `suspected_unprotected_left_turn` 等业务场景 |
-
-#### 字段（Fields）
-
-| 字段名 | 数据类型 | 说明 |
-|--------|----------|------|
-| `motor_id` | int | 机动车轨迹 ID |
-| `non_motor_id` | int | 非机动车轨迹 ID |
-| `ttc_sec` | float | 预测碰撞时间 |
-| `distance_m` | float | 预测冲突时刻双方距离 |
-| `pet_sec` | float | 双方到达冲突点时间差 |
-| `arrival_time_delta_sec` | float | 到达时间差（与 `pet_sec` 同源，便于前端/报表读取） |
-| `motor_arrival_ttc_sec` | float | 机动车到达冲突点预测时间 |
-| `non_motor_arrival_ttc_sec` | float | 非机动车到达冲突点预测时间 |
-| `conflict_angle_deg` | float | 双方速度向量夹角 |
-| `risk_score` | int | 0-100 风险分 |
-| `motor_speed_kmh` | float | 机动车速度 |
-| `evidence` | string(JSON) | near-miss 证据数组，如 `hard_ttc_or_pet`、`hard_pet`、`hard_deceleration` |
-| `motor_position_m` | string(JSON) | 机动车预测冲突点世界坐标 |
-| `non_motor_position_m` | string(JSON) | 非机动车预测冲突点世界坐标 |
-| `world_anchor_lat_lon` | string(JSON) | 世界坐标 GPS 锚点 |
-
-### 数据写入路径
-
-```
-KafkaProducerNode.send(topic="statistics_{N}", value={...})
-  ↓ JSON 序列化
-Kafka topic: statistics_{N}
-  ↓ Telegraf kafka_consumer input
-Telegraf (data_format = "json", name_override = "camera_{N}")
-  ↓ line protocol
-InfluxDB measurement: camera_{N}
-
-Platform KafkaConsumer 订阅 ((statistics|track_complete|conflicts|telemetry)_.*|system_metrics)
-  ↓ statistics_*       → write_stats()
-  ↓ track_complete_*   → write_track_event()
-  ↓ conflicts_*        → write_conflict_event()
-InfluxDB measurements: intersection_stats / track_events / conflict_events
-```
-
-### Telegraf 配置（关键部分）
-```toml
-[[outputs.influxdb]]
-  urls = ["http://influxdb:8086"]
-  database = "influx"
-
-[[inputs.kafka_consumer]]
-  brokers = ["kafka:29092"]
-  topics = ["statistics_1"]
-  data_format = "json"
-  name_override = "camera_1"
-  json_string_fields = ["camera_id",]
-
-[[inputs.kafka_consumer]]
-  brokers = ["kafka:29092"]
-  topics = ["statistics_2"]
-  data_format = "json"
-  name_override = "camera_2"
-  json_string_fields = ["camera_id",]
-```
-
-**为什么 `json_string_fields` 只包含 `camera_id`**：默认情况下 Telegraf 将 JSON 中的字符串字段忽略。`camera_id` 是唯一需要保留的字符串字段（作为 field 而非 tag 存储）。
-
-### 查询模式（Grafana/Platform InfluxQL）
-
-#### 车辆数时序图
-```sql
-SELECT mean("cars")
-FROM "camera_1"
-WHERE $timeFilter
-GROUP BY time($interval)
-```
-- 使用 `mean()` 聚合以适应 Grafana 的时间分辨率
-- `$timeFilter` 和 `$interval` 是 Grafana 模板变量
-
-#### 当前道路拥堵（最新值）
-```sql
-SELECT *
-FROM "camera_1"
-ORDER BY time DESC
-LIMIT 1
-```
-实际仪表盘可按路口配置选择 `road_1` ~ `road_N` 字段。
-
-#### 道路拥堵趋势
-```sql
-SELECT *
-FROM "camera_1"
-ORDER BY time DESC
-```
-
-#### 平台历史统计
-```sql
-SELECT mean("cars") AS "cars",
-       mean("avg_speed_kmh") AS "avg_speed_kmh",
-       mean("active_tracks") AS "active_tracks"
-FROM "intersection_stats"
-WHERE "intersection_id" = 'INT_camera_1'
-  AND time > now() - 1h
-GROUP BY time(1m)
-ORDER BY time ASC
-```
-
-#### 历史轨迹复盘
-```sql
-SELECT *
-FROM "track_events"
-WHERE "intersection_id" = 'INT_camera_1'
-  AND time > now() - 1h
-ORDER BY time DESC
-LIMIT 500
-```
-
-#### 历史冲突复盘
-```sql
-SELECT *
-FROM "conflict_events"
-WHERE "intersection_id" = 'INT_camera_1'
-  AND time > now() - 1h
-ORDER BY time DESC
-LIMIT 200
-```
-平台 API：`GET /api/v1/trajectories/{intersection_id}/conflicts?period=1h&limit=200`，返回字段与 `conflict_events` 一致，并将 `evidence`、`motor_position_m`、`non_motor_position_m`、`world_anchor_lat_lon` 从 JSON 字符串还原为数组。
-
-### 新增摄像头的数据库操作
-
-1. **无需手动创建 database/measurement** — Platform 启动时会确保 `influx` database 存在；InfluxDB 1.8 在首次写入时自动创建 measurement
-2. **需要在 Telegraf 中添加 `[[inputs.kafka_consumer]]` 块** — 指定新 topic 和 name_override
-3. **需要重启 Telegraf 容器** — `docker compose restart telegraf`
-
-## PostgreSQL（平台业务库）
-
-平台业务库由 `platform/app/core/database.py::init_db()` 通过 SQLAlchemy
-`Base.metadata.create_all()` 初始化。PostgreSQL 不可用时平台会降级启动，但认证和告警历史
-等依赖数据库的能力会受限。
-
-### Table: `users`
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `id` | int PK | 用户 ID |
-| `username` | string | 登录名 |
-| `email` | string | 邮箱 |
-| `hashed_password` | string | bcrypt 密码哈希 |
-| `role` | string | `admin` / `operator` / `viewer` |
-| `is_active` | bool | 是否启用 |
-| `created_at` | timestamp | 创建时间 |
-| `updated_at` | timestamp | 更新时间 |
-
-### Table: `alerts`
-
-平台 AlertEngine 创建和确认告警时会同步写入 PostgreSQL；启动时会加载历史告警到内存缓存，
-因此 `/api/v1/alerts`、Dashboard 未处理告警数和告警详情在服务重启后仍可用于事件处置复盘。
-数据库不可用时平台降级为内存告警，不阻塞实时 WebSocket 推送。
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `id` | string PK | 告警 ID |
-| `intersection_id` | string | 路口 ID |
-| `alert_type` | string | 告警类型，如 `conflict`、`congestion`、`queue_overflow` |
-| `severity` | string | `P1` / `P2` / `P3` |
-| `title` | string | 告警标题 |
-| `description` | text/null | 告警描述 |
-| `status` | string | `open` / `acknowledged` |
-| `timestamp` | string | 触发时间（ISO 格式） |
-| `track_ids` | JSON | 关联轨迹 ID 列表 |
-| `snapshot_url` | string/null | 告警截图 URL |
-| `video_clip_url` | string/null | 视频片段 URL |
-| `vlm_summary` | text/null | VLM 分析摘要 |
-| `acknowledged_by` | string/null | 确认人 |
-| `acknowledged_at` | string/null | 确认时间（ISO 格式） |
-| `push_logs` | JSON | 推送记录 |
-| `updated_at` | timestamp/null | 最近持久化更新时间 |
-
-## Grafana SQLite（内部数据库）
-
-### 文件位置
-- `services/grafana/grafana.db` — Grafana 运行时 SQLite 数据库
-- `services/grafana/provisioning/dashboards/` — Grafana 仪表盘 provisioning
-- `services/grafana/provisioning/datasources/datasource.yaml` — Grafana 数据源 provisioning
-
-### 说明
-- 此文件由 Grafana 自动管理，不应手动修改
-- 包含用户、会话、告警等运行时数据
-- 仪表盘定义通过 provisioning 目录管理，不存储在此数据库中
-- 已在 `.gitignore` 中排除
-
-### Provisioned datasources
-
-| 名称 | UID | 类型 | 容器内地址 | 用途 |
-|------|-----|------|------------|------|
-| `InfluxDB` | `cdycrblq6bf9ce` | `influxdb` | `http://influxdb:8086` | 兼容 Grafana 旧统计看板，查询 `influx` 数据库中的 `camera_{N}` measurement |
-| `PostgreSQL` | `f848db3d-2635-4913-be1c-ae2d0db7c90a` | `grafana-postgresql-datasource` | `postgres:5432` | 查询平台业务库 `traffic_platform` |
-
-`camera-1.json` 与 `camera-2.json` 固定引用上述 datasource UID。变更 datasource UID 前必须同步更新 dashboard JSON，否则 Grafana 面板会显示数据源缺失。
-
-Grafana 容器通过根 `docker-compose.yaml` 注入 `INFLUXDB_ADMIN_USER` / `INFLUXDB_ADMIN_PASSWORD`，供 datasource provisioning 在容器启动时展开；未提供 `.env` 时 Grafana 登录默认值为 `admin` / `admin123`，InfluxDB datasource 用户名和密码保持为空，适配本地无认证 InfluxDB 1.8。
-
-## Kafka 数据模型
-
-### Topic 结构
-| Topic | 生产者 | 消费者 | 保留期 |
-|-------|--------|--------|--------|
-| `statistics_{camera_id}` | 检测管道 KafkaProducerNode | Telegraf、Platform KafkaConsumer | 24 小时 |
-| `track_complete_{camera_id}` | 检测管道 KafkaProducerNode | Platform KafkaConsumer | 24 小时 |
-| `conflicts_{camera_id}` | 检测管道 KafkaProducerNode | Platform KafkaConsumer | 24 小时 |
-| `telemetry_{camera_id}` | 检测管道 KafkaProducerNode（消息体含 `drone_id`）/平台适配器 | Platform KafkaConsumer | 24 小时 |
-| `system_metrics` | 系统指标生产者/平台适配器 | Platform KafkaConsumer | 24 小时 |
-
-Platform 订阅正则：
+## 2. 目标 PostgreSQL/TimescaleDB 逻辑架构（待实现）
 
 ```text
-((statistics|track_complete|conflicts|telemetry)_.*|system_metrics)
+uav_* Kafka topics / Platform APIs
+  -> UAV message consumer（校验 schema_version + 幂等去重）
+     -> 普通 PostgreSQL 表：业务状态、配置、绑定、投递状态
+     -> TimescaleDB hypertables：指标、遥测、轨迹和冲突时序事实
+        -> Platform REST/WebSocket 查询与聚合
+
+road9 路网主数据（外部拥有，只读）
+  -> 版本快照/只读视图/API
+  -> uav_road_context_snapshots + uav_visual_lane_bindings
+  -> 事件和时序事实只保存版本化引用，不修改路网主数据
 ```
 
-### 消息格式
-- 序列化：JSON（`json.dumps().encode("utf-8")`）
-- 无 key（所有消息发送到同一 partition）
-- 无 schema registry（无 schema 验证）
+目标部署不再包含 `Kafka -> Telegraf -> InfluxDB -> Grafana` 路径。Kafka 可继续作为实时消息总线，但持久化消费者直接写入 `road9`；平台看板和历史 API 从 PostgreSQL/TimescaleDB 查询。
 
-### Kafka 配置
-| 参数 | 值 |
-|------|------|
-| 内部监听器 | `kafka:29092`（PLAINTEXT） |
-| 外部监听器 | `localhost:9092`（SASL_PLAINTEXT） |
-| 认证 | JAAS PlainLoginModule |
-| 消息保留 | 24 小时 |
-| Zookeeper | `zookeeper:2181` |
+### 2.1 扩展与迁移管理
 
-### ⚠️ 数据安全
-- Kafka 内部通信无加密（PLAINTEXT）
-- 外部监听器使用 SASL_PLAINTEXT（有认证但无 TLS 加密）
-- 适合内网部署，不适合公网暴露
+建议的目标初始化前置条件如下；具体 DDL 由 DBA 审核后执行：
+
+```sql
+-- 目标 database: road9
+CREATE EXTENSION IF NOT EXISTS timescaledb;
+```
+
+- 扩展是否已安装、版本是否符合项目要求、应用账户能否执行扩展安装均为 `【验收阻断】【待确认】`。
+- 平台迁移版本表必须命名为 `uav_alembic_version`；不得创建默认的 `alembic_version` 等无 `uav_` 前缀自建表。
+- 应用运行账户不应拥有扩展安装、database 创建或路网主表 DDL 权限；安装/升级由 DBA 账户执行。
+- 所有 DDL、hypertable 转换、策略创建和回滚脚本必须纳入版本化迁移，不依赖运行时 `create_all()` 隐式建表。
+
+## 3. 表职责总览（目标契约，待实现）
+
+### 3.1 TimescaleDB hypertable
+
+| 表名 | 时间列 | 事实粒度 | 推荐唯一键 | 主要用途 |
+| --- | --- | --- | --- | --- |
+| `uav_traffic_metrics` | `observed_at` | 路口/道路/车道/采样时刻 | `(observed_at, source_system, source_message_id, grain_type, grain_key)` | 车辆数、速度、排队、方向流量、拥堵指标 |
+| `uav_track_points` | `observed_at` | 一条轨迹的一个时序点 | `(observed_at, source_system, source_message_id, point_seq)` | 轨迹点序列、时空查询和 BEV 复盘 |
+| `uav_conflict_events` | `occurred_at` | 一次冲突事件/升级 | `(occurred_at, source_system, source_message_id)` | TTC/PET、冲突证据和风险复盘 |
+| `uav_telemetry_metrics` | `observed_at` | 无人机遥测采样 | `(observed_at, source_system, source_message_id)` | 飞行轨迹、姿态、云台和定位质量 |
+| `uav_system_metrics` | `observed_at` | 实例/设备/指标采样 | `(observed_at, source_system, source_message_id, metric_name)` | GPU、CPU、内存、管道和消息积压 |
+
+这些表保存追加型时序事实。告警确认、事件投递状态、用户、任务等会被更新的业务对象不得为了“统一”而强行做成 hypertable。
+
+### 3.2 普通 PostgreSQL 表
+
+| 表名 | 主键/唯一性候选 | 职责 |
+| --- | --- | --- |
+| `uav_users` | `id`；`username`、`email` 唯一 | 平台用户与角色 |
+| `uav_alerts` | `id` | 告警当前状态、确认信息和证据引用 |
+| `uav_missions` | `id` | 无人机任务生命周期 |
+| `uav_pipelines` | `id` | 分析管道实例与运行状态 |
+| `uav_track_events` | `id`；`(source_system, source_message_id)` 唯一 | 完成轨迹业务主记录、摘要和轨迹点父对象 |
+| `uav_ai_events` | `(source_system, source_event_id)`；`(source_system, idempotency_key)` 唯一 | 向智慧交通主平台交付的 AI 事件主记录 |
+| `uav_event_outbox` | `id`；`(source_system, message_id, destination)` 唯一；外发幂等键另设条件唯一 | 待投递消息、下一次重试时间和当前投递状态 |
+| `uav_event_delivery_attempts` | `id` | 每次投递尝试和响应摘要 |
+| `uav_event_feedback` | `id`；`(source_system, feedback_idempotency_key)` 唯一 | 主平台确认/驳回和结果反馈审计 |
+| `uav_dead_letters` | `id` | 超过重试上限或不可解析消息的人工补偿入口 |
+| `uav_evidence_packages` | `id`；`(source_system, source_event_id)` 索引 | 事件证据清单、对象存储引用、哈希和完整性元数据 |
+| `uav_evidence_items` | `id`；`package_id` 索引 | 单个图片/视频/测绘/结构化证据项 |
+| `uav_message_inbox` | `(source_system, message_id)` 唯一 | 长期 canonical 消费幂等、消息身份校验、处理状态与事实引用审计 |
+| `uav_road_context_snapshots` | `(road_data_version, inter_id)` | 路网只读版本快照/缓存元数据 |
+| `uav_visual_lane_bindings` | `(binding_id)`；业务唯一键待定 | 本地视觉车道到权威路口/Link/车道的版本化绑定 |
+| `uav_alembic_version` | `version_num` | UAV 平台数据库迁移版本 |
+
+若后续新增任何中间表、审计表、关联表、物化结果表或 Timescale continuous aggregate，其物理名称同样必须以 `uav_` 开头。TimescaleDB 自动创建的内部对象不属于平台自建表，不受此前缀约束。
+
+所有消息、事件、投递、反馈和证据相关普通表都必须保存 `source_system`，canonical 值固定为 `uav_traffic_analyzer_ai`；涉及消息 ID、事件 ID 或幂等键的跨系统唯一约束必须把 `source_system` 纳入组合键。
+
+### 3.3 规划业务表目录（PRD 级、DDL 待冻结）
+
+> 本目录来自总 PRD 与 S5 分册的逻辑实体，是后续 migration/DDL 评审输入，不表示这些表已经创建或字段已经冻结。第 3.1、3.2 节列出的 canonical 核心表仍是唯一基线；本节与核心表同名的条目表示补充其业务字段，不得重复建表或另造同义表。
+
+| 领域 | 规划物理表 | 形态候选 | 与 canonical 基线的关系 | DDL 待冻结重点 |
+| --- | --- | --- | --- | --- |
+| 事故测绘 | `uav_survey_tasks` | 普通表 | 测绘任务主对象；结果事件统一关联 `uav_ai_events(event_type=survey_result)` | 状态机、任务分配、任务/事件唯一关系、软删除 |
+| 事故测绘 | `uav_capture_batches` | 普通表 | 隶属测绘任务，组织视频/帧引用、遥测、标定和质量检查；原始材料仍由证据表引用 | batch 唯一键、时间范围、coverage、版本、内容哈希 |
+| 事故测绘 | `uav_survey_measurements` | 普通表候选 | 隶属 `uav_survey_tasks`，保存点/线/面量算值和误差 | 几何/数值类型、坐标系、单位、修订版本、唯一键 |
+| 事故测绘 | `uav_scene_annotations` | 普通表/PostGIS 候选 | 隶属 capture batch/测绘任务，保存事故车辆、痕迹和散落物的版本化标注 | category、geometry/SRID、来源、置信度、review_state、版本链 |
+| 事故测绘 | `uav_survey_reports` | 普通表 | 报告元数据；证据材料引用 `uav_evidence_packages`、`uav_evidence_items` | 报告版本、签章/导出引用、不可变状态和保留期 |
+| 执法 | `uav_enforcement_zones` | 普通表 | 电子围栏配置，不复制权威路网几何 | PostGIS 类型/SRID、有效期、审批、路网版本引用 |
+| 执法 | `uav_enforcement_rules` | 普通表 | 执法领域规则内容，引用共性 `uav_rule_versions` | 规则 schema、适用区、时段、生效/回滚和审批 |
+| 执法 | `uav_enforcement_clues` | 一对一详情表候选 | 仅保存 `uav_ai_events(event_type=enforcement_clue)` 专属字段，不另建事件主表或状态机 | 与事件组合唯一键、雷达/视频速度字段、复核边界 |
+| 证据 | `uav_evidence_packages` | canonical 普通表 | 第 3.2 节既有基线；所有测绘/执法事件共用 | 包版本、事件关联、内容哈希、存储状态、保留策略 |
+| 证据 | `uav_evidence_items` | canonical 普通表 | 第 3.2 节既有基线；保存单个材料的不可变引用 | 材料类型、父子派生、哈希、对象引用、访问控制 |
+| 审计 | `uav_audit_logs` | 追加型普通表/分区表候选 | 统一记录同步、发布、绑定、调阅、导出、删除和回滚 | 审计主体、前后值、trace_id、防篡改、归档分区 |
+| 路网上下文 | `uav_road_context_snapshots` | canonical 普通表 | 第 3.2 节既有基线；缓存 manifest/校验值，不复制权威路网库 | 快照内容边界、校验、发布/退役、保留和回滚 |
+| 设备绑定 | `uav_device_intersection_bindings` | 普通表 | 无人机/相机/任务到权威路口的有效期映射 | 设备类型、有效期排他约束、任务优先级、审计 |
+| 视觉车道绑定 | `uav_visual_lane_bindings` | canonical 普通表 | 第 3.2 节既有基线；本地车道到 inter/link/lane 的版本化绑定 | calibration/version 唯一键、确认/退役、差异与回滚 |
+| 地图匹配 | `uav_map_match_results` | 普通表/分区表候选 | 轨迹/事件的匹配结果或候选；权威 ID 同时回写对应事实摘要 | subject 类型、候选集、revision、置信度、拒判原因、保留期 |
+| 规则治理 | `uav_rule_versions` | 普通表 | 拥堵、冲突、测绘和执法共用的规则发布元数据 | 规则类型、schema、审批、生效窗口、原子切换和回滚 |
+| 无人机资产 | `uav_drones` | 普通表 | 保存 UAV 平台所需设备身份、型号和配置；时序遥测仍进 `uav_telemetry_metrics` | 与大项目设备主数据关系、唯一编码、状态快照边界 |
+| 标定 | `uav_calibrations` | 普通表 | 保存标定版本、适用设备/路口、参数引用和质量状态 | 参数 schema、版本、审批、有效期、文件/对象引用 |
+| 车道标注任务 | `uav_lane_annotation_tasks` | 普通表 | 承接现有 JSON/文件任务状态；确认结果关联 `uav_visual_lane_bindings` | 任务状态、图片引用、标注版本、幂等和迁移校验 |
+| 视频源 | `uav_video_sources` | 普通表候选 | 仅在需要持久化源配置/授权元数据时使用；运行时 stream 对象不入库 | 是否建表、密钥引用、脱敏、健康状态和权限 |
+| 身份角色 | `uav_roles` | 普通表候选 | 是否从 `uav_users.role` 拆出取决于统一身份/RBAC 模型 | 角色来源、权限关系、同步权威和迁移策略 |
+| 数据迁移 | `uav_migration_quarantine` | 普通表候选 | 隔离无法证明业务时间、epoch 异常或 schema 不可解析的遗留记录，不属于业务事实主表 | 原始 measurement/Topic、raw payload、`ingested_at`、判定原因、重建/丢弃审批 |
+
+目录收敛规则：
+
+- `uav_ai_events` 是 S1～S4 对外交付事件的唯一主表；测绘、执法或冲突领域表只能保存任务/配置/专属详情，不得复制事件 ID、投递状态、审核状态和证据主关系。
+- `uav_event_outbox`、`uav_event_delivery_attempts`、`uav_event_feedback`、`uav_dead_letters` 是唯一可靠投递与反馈基线，业务分册不得各建一套 outbox/receipt/dead-letter 表。
+- `uav_evidence_packages`、`uav_evidence_items`、`uav_road_context_snapshots`、`uav_visual_lane_bindings` 在第 3.2 节已存在；本目录只是补充 PRD 责任，不触发第二套同名或同义表。
+- `uav_rule_versions` 保存共性发布元数据，`uav_enforcement_rules` 保存执法领域规则内容；二者通过外键/版本键关联，不重复保存两套生效状态。
+- `uav_map_match_results` 是否独立持久化、是否按时间分区，必须由查询需求、数据量和历史复现要求决定；未冻结前不得为了“预留”自动建表。
+- 所有候选表的主键、外键、PostGIS 类型、schema、RLS、索引、分区、保留和迁移顺序由正式 migration/DDL 统一冻结；PRD 表名目录不能替代数据库设计评审。
+
+### 3.4 当前内存/文件状态去向盘点（目标 disposition，待实现）
+
+> 本表明确目标处置方式，不表示迁移已经完成。“迁库”只持久化可恢复的业务状态/配置；Python 对象、进程句柄、打开的视频流等瞬态资源继续留在运行时内存。
+
+| 当前对象/载体 | 当前形态 | 目标 disposition | 目标表/权威源 | 边界与待办 |
+| --- | --- | --- | --- | --- |
+| DRONES / `drone_store` | 内存设备与最新状态 | 迁库 + 运行时缓存 | `uav_drones`；遥测历史进 `uav_telemetry_metrics` | 设备身份/配置持久化，最新在线状态可缓存；与大项目设备主数据权威关系 `TBD` |
+| MISSIONS | 当前内存状态 | 迁库 | `uav_missions` | 持久化任务定义、期望状态、关联路口/无人机和生命周期；恢复语义待冻结 |
+| intersection/device map | 本地映射/配置与外部路网调查 | 外部权威 + 迁库绑定 | 外部权威路口只读视图/API + `uav_device_intersection_bindings` | 不盲建重复 `uav_intersections` 路口底库；仅保存设备/任务到权威 `inter_id` 的版本化绑定 |
+| PipelineManager desired/config | 内存管理对象 | 迁库 | `uav_pipelines` | 保存管道配置、期望状态和可恢复状态摘要 |
+| PipelineManager 进程句柄/队列/锁 | OS/Python 运行时对象 | 继续内存 | 无数据库表 | PID/handle 不作为可恢复真源；服务重启后按持久化期望状态重新核对/拉起，策略 `TBD` |
+| 管道/GPU/系统运行指标 | 内存/消息/旧 InfluxDB | 迁库 | `uav_system_metrics` | 仅追加时序事实；不得把进程对象序列化入库 |
+| alerts | 内存 + 当前无前缀 `alerts` 表 | 迁库 | `uav_alerts` | 迁移告警当前状态与确认信息；不复制主平台派警处置状态 |
+| calibration / lane annotation JSON | 文件/JSON | 迁库，原文件按迁移期只读保留 | `uav_calibrations`、`uav_lane_annotation_tasks`、`uav_visual_lane_bindings` | 校验版本、坐标、图片/文件哈希和绑定关系；切换后由数据库/API 成为 UAV 配置真源 |
+| 视频 `_STREAMS` | 运行时 stream 注册表 | 默认继续内存 | 默认无表；`uav_video_sources` 为 `TBD` 候选 | 打开的 stream、连接对象和帧缓存不入库；如持久化视频源，只保存配置/密钥引用，禁止明文凭据 |
+| users / role 字段 | 当前无前缀 `users` 表及行内 role | 迁库；角色拆表 `TBD` | `uav_users`；可选 `uav_roles` | 是否拆角色表由统一身份/RBAC 权威模型冻结，不能先建一套本地角色体系 |
+
+验收时必须逐项给出迁移脚本、数据量/抽样对账、回滚方式和切换责任人；标为“继续内存”的对象不得为了满足表目录而创建占位表，标为“外部权威”的对象不得被复制成无人机平台路网主库。
+
+## 4. hypertable 公共字段与约束（目标契约）
+
+所有 hypertable 至少包含：
+
+| 字段 | 类型 | 约束/说明 |
+| --- | --- | --- |
+| `source_system` | TEXT | 非空，唯一 canonical 值 `uav_traffic_analyzer_ai`；参与幂等唯一约束 |
+| `source_message_id` | UUID | 对应 canonical envelope 的 `message_id`；生产端生成，重试保持不变 |
+| `msg_type` | TEXT | 必须是对应的 `uav_*` canonical 类型 |
+| `schema_version` | TEXT | 如 `uav_stats/v1` |
+| `observed_at` / `occurred_at` | TIMESTAMPTZ | 业务发生时间，统一以 UTC 存储 |
+| `produced_at` | TIMESTAMPTZ | 消息生产时间 |
+| `ingested_at` | TIMESTAMPTZ | 数据库接收时间，默认 `now()` |
+| `camera_id` | TEXT/NULL | 设备侧相机标识；准确类型待冻结 |
+| `drone_id` | TEXT/NULL | 无人机标识 |
+| `intersection_id` | TEXT/NULL | 迁移期本地路口标识 |
+| `inter_id` | TEXT/NULL | 路网权威路口 ID，无法匹配时为空 |
+| `road_data_version` | TEXT/NULL | 与权威路网 ID 同时保存 |
+| `road_context_status` | TEXT | `ok/stale/missing/version_mismatch` |
+| `source_time_raw` | JSONB/NULL | 原始时间字段和值；迁移/重建后仍保留，禁止覆盖 |
+| `source_time_semantics` | TEXT | `event_time/stream_relative/consumer_time/writer_time/reconstructed/unknown` |
+| `time_quality` | TEXT | `verified/reconstructed/ingest_only/quarantined` |
+| `payload` | JSONB | 暂未结构化或版本扩展字段；高频过滤字段应单列 |
+
+`source_system` 应同时设置非空和检查约束，拒绝 `uav_traffic_analyzer_ai` 以外的替代值；不能只靠应用默认值保证。
+
+`source_time_raw/source_time_semantics/time_quality` 同样适用于 `uav_track_events`、`uav_ai_events` 和 `uav_migration_quarantine` 等承载历史时间的普通表；不得因本节标题为 hypertable 而省略。
+
+### 4.1 时间语义
+
+- 数据库存储使用 `TIMESTAMPTZ` 和 UTC；API 可按请求时区展示，禁止存储无时区本地时间。
+- 指标、遥测和轨迹点以各自采样时刻 `observed_at` 分区；冲突以业务发生时刻 `occurred_at` 分区。普通表 `uav_track_events` 不使用 hypertable 时间分区。
+- `produced_at` 用于消息延迟评估，`ingested_at` 用于入库延迟和补录识别，二者不能替代业务时间。
+- 新 canonical 消息必须提供可验证的业务时间；新写入默认 `source_time_semantics=event_time`、`time_quality=verified`。
+- 离线视频回放必须以可证明的录像开始绝对时间/任务时间锚点加流相对秒重建业务时间，并保留原始相对值，设置 `source_time_semantics=reconstructed`、`time_quality=reconstructed` 和 `payload.replay=true`；准确锚点规则 `【待确认】`。
+
+#### 4.1.1 遗留 InfluxDB 时间迁移（P0）
+
+当前实现的时间字段不是统一业务时钟：`FrameElement.timestamp` 是视频/流相对秒；完成轨迹的 `timestamp_first/timestamp_last` 也可能是相对秒，但历史写入曾把 `timestamp_last` 当 Unix 秒解释，导致记录落在 epoch 附近。统计和冲突消息缺少统一业务 timestamp 时，Influx writer 会回退到 `time.time()`，此时 Influx point time 表示消费/写入时刻，不是事件发生时刻。
+
+禁止把所有旧 Influx `time` 一律映射到 `observed_at/occurred_at`。迁移必须按 measurement、字段和来源分支：
+
+| 遗留来源 | 已知语义 | 允许映射 | 禁止做法 |
+| --- | --- | --- | --- |
+| `camera_*` / `intersection_stats` | 多数为 Telegraf/Platform 消费或写入时刻 | 只证明为 `ingested_at`；若另有录像/任务绝对时间证据，可重建 `observed_at` | 直接声明为车辆观测时刻 |
+| `track_events.timestamp_first/last` | 可能是流相对秒 | 原值进 `source_time_raw`；有录像开始绝对时间和同源校验时重建起止时间 | 直接 `to_timestamp(relative_seconds)` |
+| epoch 附近的 `track_events` point time | 可能由相对 `timestamp_last` 误作 Unix 秒产生 | 隔离，关联源视频/任务重建；无法重建时经审批丢弃或仅留迁移审计 | 当作 1970 年真实业务事件进入查询 |
+| `conflict_events` | 消息常无业务 timestamp，Influx time 可能是 writer fallback | 只证明为 `ingested_at`；有原视频帧/任务时间锚点时才重建 `occurred_at` | 用写入时间计算事件发现时延或 TTC 发生时刻 |
+
+迁移处理规则：
+
+1. 每条迁移记录保留 `source_time_raw`、`source_time_semantics`、`time_quality` 和原 measurement/series 标识。
+2. 能由源视频绝对开始时间、任务记录或明确业务字段重建的，写入 canonical 表并标记 `reconstructed`，同时保存重建算法/证据引用。
+3. 只能证明消费/写入时刻的，只能保存为 `ingested_at`；不得为了满足 hypertable 非空时间列而伪造 `observed_at/occurred_at`。
+4. 无法证明业务时间或命中 epoch 异常的记录进入 `uav_migration_quarantine` 候选表，不直接进入 canonical hypertable；由数据负责人决定从源视频重建、保留为迁移审计或批准丢弃。
+5. 历史对账、SLA、模型准确率和事件时效统计默认排除 `time_quality=ingest_only/quarantined`，是否纳入特定报表必须显式说明。
+
+### 4.2 唯一键和幂等
+
+- 第一层全局幂等由普通表 `uav_message_inbox` 的唯一键 `(source_system, message_id)` 保证，不受消息时间或 hypertable chunk 边界影响。
+- TimescaleDB hypertable 的唯一索引必须包含时间分区列，因此事实表唯一键至少包含“时间列 + `source_system` + `source_message_id`”；一条消息拆成多粒度/多点记录时还必须包含 `grain_type + grain_key` 或 `point_seq`。这是第二层防重，不能代替 inbox。
+- `source_message_id` 在生产端首次生成；同一消息重试、旧新 Topic 双投或消费者重放时不得变化。
+- 兼容旧消息缺少 `source_message_id` 时，由适配器按“旧 Topic + partition + offset”生成稳定 ID，并同样写入长期 `uav_message_inbox`。
+- AI 事件对外投递使用 `idempotency_key`；与内部时序消息的 `source_message_id` 分工明确，不互相替代。
+- 禁止用到达时间或数据库自增 ID 作为跨系统幂等键。
+
+`uav_message_inbox` 最少字段与处理规则：
+
+| 字段 | 类型候选 | 说明 |
+| --- | --- | --- |
+| `source_system` / `message_id` | TEXT / UUID | 组合唯一键；source_system 固定 canonical 值 |
+| `payload_hash` | TEXT | canonical 序列化后的内容哈希 |
+| `status` | TEXT | `received/processed/failed/quarantined` |
+| `topic` / `partition` / `offset` | TEXT / INTEGER / BIGINT | Kafka 来源定位；非 Kafka 输入允许为空并记录 adapter source |
+| `first_seen_at` | TIMESTAMPTZ | 首次接收时间 |
+| `processed_at` | TIMESTAMPTZ/NULL | canonical 事实成功提交时间 |
+| `fact_refs` | JSONB | 实际写入表、主键/时间键引用数组 |
+| `error_code` / `error_detail` | TEXT/NULL | 失败/隔离原因；详情必须脱敏 |
+
+- canonical 事实写入和 inbox `status=processed + fact_refs` 更新必须在 `road9` 的同一事务提交；事实失败时不得留下已处理标记。
+- 收到相同 `(source_system,message_id)` 且 hash 相同时返回既有结果，不重复写入；hash 不同时隔离到 `uav_migration_quarantine`/`uav_dead_letters` 并告警，不覆盖原消息或事实。
+- inbox 不是迁移期临时表。保留期至少覆盖 Kafka 最大重放窗口、离线回迁窗口和审计追溯窗口；在正式期限冻结前不得早于其关联事实删除。
+
+### 4.3 Kafka consumer 事务与 offset 边界（目标契约）
+
+- Consumer 配置必须 `enable_auto_commit=false`。
+- 单条/单批消息按“校验 → 开启数据库事务 → inbox 去重/身份校验 → 写事实 → inbox 标记 processed/fact_refs → 提交数据库 → 手动提交 Kafka offset”执行。
+- 数据库事务失败时回滚且不提交 offset；消息由 Kafka 重放。数据库已提交但 offset 未提交的崩溃窗口由 inbox 幂等吸收。
+- 不可重试消息必须先把 `uav_dead_letters` 或 `uav_migration_quarantine` 记录耐久提交，再手动提交 offset；日志不是耐久隔离。
+- Kafka offset 不属于 PostgreSQL 事务，目标是 at-least-once delivery + exactly-once business effect，不能在验收材料中误称为跨系统 exactly-once transaction。
+
+### 4.4 chunk 与索引候选
+
+首版候选策略如下，必须经容量压测和 DBA 评审后冻结：
+
+| 表 | chunk 时间间隔候选 | 常用索引候选 |
+| --- | --- | --- |
+| `uav_traffic_metrics` | 1 天 | `(inter_id, grain_type, observed_at DESC)`、`(camera_id, observed_at DESC)` |
+| `uav_telemetry_metrics` / `uav_system_metrics` | 1 天 | `(drone_id, observed_at DESC)`、`(metric_name, observed_at DESC)` |
+| `uav_track_points` | 1 天 | `(track_event_id, observed_at ASC)` |
+| `uav_conflict_events` | 7 天 | `(inter_id, occurred_at DESC)`、业务事件/轨迹对 ID |
+
+- 首版不启用额外 space partition，除非容量测试证明单时间维无法满足写入或维护要求。
+- JSONB 仅对已确认的过滤路径建立表达式/GIN 索引，避免无差别索引放大写入成本。
+- chunk interval 应使活跃 chunk 的索引能进入可用内存；上述数值只是评审起点。
+
+## 5. 指标与事件表核心字段（目标契约）
+
+### 5.1 `uav_traffic_metrics`
+
+除公共字段外，至少包含：
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `cars` | DOUBLE PRECISION | 当前车辆数/滑动窗口平均 |
+| `active_tracks` | INTEGER | 活跃轨迹数 |
+| `avg_speed_kmh` | DOUBLE PRECISION | 平均速度 |
+| `queue_count` | INTEGER | 排队车辆数 |
+| `congestion_index` | DOUBLE PRECISION/NULL | 拥堵指数，口径待冻结 |
+| `direction_flow` | JSONB | 直行、左转、右转、掉头统计 |
+| `roads` | JSONB | 动态 Link/道路统计数组；目标主字段 |
+| `grain_type` | TEXT | `intersection/link/lane`，决定本行指标粒度 |
+| `grain_key` | TEXT | 对应粒度稳定键；优先使用权威 ID，本地键须显式标记 |
+| `link_id` / `lane_id` | TEXT/NULL | Link/车道粒度的权威 ID；路口粒度为空 |
+| `window_start` / `window_end` | TIMESTAMPTZ | 指标覆盖窗口 |
+| `expected_samples` / `actual_samples` | INTEGER | 预期/实际参与样本数 |
+| `dropped_samples` | INTEGER | 背压、队列满或采样策略丢弃数 |
+| `coverage_ratio` | DOUBLE PRECISION | `actual/expected`，范围 0～1；分母为 0 的规则待冻结 |
+| `drop_reason` | TEXT/NULL | 丢弃/降采样原因枚举 |
+
+旧 `road_1`～`road_N` 仅由兼容适配器读取，不作为目标表列展开。`uav_traffic_metrics` 通过 `grain_type` 统一承载路口、Link 和车道粒度，不再拆分另一套车道指标表。目标数据优先使用权威 `link_id/lane_id`、指标值和 `road_data_version` 表达。
+
+### 5.2 `uav_track_events` 与 `uav_track_points`
+
+`uav_track_events` 是普通业务表，至少包含 `track_id`、车辆类别、转向行为、起止时间、持续时长、均速/最高速、入口/出口 Link/车道、世界锚点和地图匹配质量。`uav_track_points` 是按 `observed_at` 分区的 hypertable，逐点保存 `track_event_id`、`point_seq`、ENU/像素坐标和点质量；同一轨迹内 `point_seq` 单调递增。批量写入、抽稀和长期保留规则仍为 `【待确认】`。
+
+### 5.3 `uav_conflict_events`
+
+至少包含事件 ID、机动车/非机动车轨迹 ID、`prediction_type`、TTC、PET、最小距离、冲突角、风险分、严重度、场景、证据、预测位置、地图匹配和质量字段。同一轨迹对升级事件是否复用业务事件 ID、如何表达修订版本须在消息契约冻结时确认。
+
+### 5.4 `uav_telemetry_metrics` 与 `uav_system_metrics`
+
+- 遥测至少保存定位、姿态、云台、速度、悬停状态、定位质量和任务/管道引用。
+- 系统指标采用 `metric_name + metric_value + labels JSONB` 的可扩展模型；高频固定指标可按压测结果单列。
+- `uav_system_metrics` 必须持续记录各 Topic attempted/published/dropped、spool/queue 深度与高水位、最后成功时间和 coverage；运行遥测降采样也必须生成相应窗口覆盖信息。
+- `coverage_ratio` 低于待冻结门槛的数据必须带质量标志，默认不得作为完整时段参与业务 KPI、SLA 或模型验收。
+- 不再为每个摄像头创建独立 measurement/表，摄像头和路口通过列与索引区分。
+
+## 6. 普通业务表关键边界（目标契约）
+
+### 6.1 `uav_users` 与 `uav_alerts`
+
+当前代码中的 `users`、`alerts` 是遗留表名。目标迁移后分别使用 `uav_users`、`uav_alerts`；迁移脚本需保留主键和关联关系，并验证认证、告警确认与重启恢复。
+
+`uav_alerts` 保存告警当前状态及关联 `uav_conflict_events`/`uav_ai_events` 的引用，不复制智慧交通主平台的派警、处置、案件归档状态。
+
+### 6.2 AI 事件与可靠投递
+
+- `uav_ai_events` 保存子项目事件事实和审核状态；智慧交通主平台分配的 ID 作为外部引用。
+- `uav_ai_events.event_type` 的事故测绘 canonical 值固定为 `survey_result`；正式枚举/CHECK 约束必须拒绝 `accident_survey`。迁移适配器可读取该遗留别名，但写入前必须转换并在兼容审计字段保留原值。
+- `uav_event_outbox` 保存事件类消息的待投递 payload、`generated/delivering/delivered/delivery_failed` 状态和下次重试时间；既可承载内部 Kafka 事件 spool，也可承载智慧交通主平台外发 outbox，必须用 destination/type 区分。
+- `uav_event_delivery_attempts` 保存尝试时间、目标、耗时、响应码和脱敏错误摘要。
+- `uav_event_feedback` 保存主平台 `confirmed/rejected`、原因和可用结果，反馈消费以平台反馈 ID/幂等键去重。
+- `uav_dead_letters` 保存超过重试上限或不可解析的消息及人工处理状态；不得仅在日志中记录后丢弃。
+- `uav_evidence_packages`/`uav_evidence_items` 保存证据包与证据项元数据、哈希和外部对象引用；大视频/图片不直接写入 PostgreSQL 大字段，具体对象存储由大项目确认。
+- 业务事务与 outbox 写入必须原子提交；网络投递不得阻塞视频逐帧处理。
+
+`uav_event_outbox` 至少保存 `source_system`、`message_id`、可空 `idempotency_key`、`destination_type`、`destination`（Topic/接口标识）、`payload_hash`、`payload`、`status`、`attempt_count`、`next_retry_at`、`created_at`、`delivered_at` 和脱敏 `last_error`。内部消息以 `(source_system,message_id,destination)` 防重；主平台外发再对非空 `(source_system,idempotency_key,destination)` 建条件唯一索引。事件首次生成与 outbox 入列必须原子；仅在 broker/目标平台确认后标记 delivered/清理，重启重放复用原 ID。若检测进程不能直接事务写 `road9`，必须使用具备 fsync/崩溃恢复能力的本地持久化 spool，再由适配器转入 canonical outbox；进程内队列不合格。
+
+### 6.3 路网快照与视觉绑定
+
+- `uav_road_context_snapshots` 只保存从 `road9` 路网数据读取的版本/缓存元数据，不能成为另一个无版本路网主库。
+- `uav_visual_lane_bindings` 保存 `local_lane_key -> inter_id + link_id + lane_id + road_data_version` 以及置信度、方法和人工确认信息。
+- 主数据版本变化不得重写历史指标、轨迹或事件；每条事实保留产生时的 `road_data_version`。
+- 管道启动时读取已发布版本快照并缓存，不得逐帧查询远程/共享路网表。
+- `road9` 中具体路网表/视图路径仍为 `【验收阻断】【待确认】`；此前调查的 `road10.*` 不再作为目标引用。
+
+## 7. 压缩、连续聚合与保留策略候选（待确认）
+
+以下仅为容量评审候选，不是已创建策略：
+
+| 数据 | 压缩/列式转换候选 | 在线明细保留候选 | 长期策略候选 |
+| --- | --- | --- | --- |
+| 路口/车道指标 | 7 天后 | 180 天 | 1 分钟/5 分钟连续聚合保留 2 年 |
+| 遥测/系统指标 | 7 天后 | 90 天 | 分钟级聚合保留 1 年 |
+| 轨迹点 `uav_track_points` | 30 天后 | 365 天 | 轨迹主记录由普通表独立保留，点列按合同归档或延长保留 |
+| 冲突事件 | 30 天后 | 365 天以上 | 依据执法/审计要求冻结，不得仅按成本删除 |
+
+- 策略名称、DDL 语法依赖最终 TimescaleDB 版本；必须在目标环境验证后纳入迁移。
+- 连续聚合物化视图名称必须以 `uav_` 开头，例如 `uav_traffic_metrics_1m`。
+- 删除策略必须区分原始指标、证据事件和业务记录。事故测绘、执法线索、告警及主平台交付记录不能套用普通指标的短保留期。
+- 启用压缩/列式转换前必须验证乱序补写、事件修订、备份恢复和查询性能。
+
+## 8. canonical Kafka 数据模型（目标契约，待实现）
+
+| Topic | `msg_type` | 目标消费者 | 保留期 |
+| --- | --- | --- | --- |
+| `uav_statistics_{camera_id}` | `uav_stats` | Platform/TimescaleDB writer | 24 小时候选 |
+| `uav_track_complete_{camera_id}` | `uav_track_complete` | Platform/TimescaleDB writer | 24 小时候选 |
+| `uav_conflicts_{camera_id}` | `uav_conflict` | Platform/TimescaleDB writer、告警引擎 | 24 小时候选 |
+| `uav_telemetry_{camera_id}` | `uav_telemetry` | Platform/TimescaleDB writer | 24 小时候选 |
+| `uav_system_metrics` | `uav_system_metrics` | Platform/TimescaleDB writer | 24 小时候选 |
+| `uav_ai_events` | `uav_ai_event` | 智慧交通主平台集成适配器 | 以联调契约为准 |
+| `uav_ai_event_feedback` | `uav_ai_event_feedback` | UAV 质量反馈消费者 | 以联调契约为准 |
+
+目标订阅正则：
+
+```text
+^(uav_statistics_|uav_track_complete_|uav_conflicts_|uav_telemetry_).+$|^uav_(system_metrics|ai_events|ai_event_feedback)$
+```
+
+Topic 的复数/单数按上表固定，禁止消费者自行猜测；`msg_type` 只表达消息类别，具体业务 `event_type`（如 conflict、congestion）无需添加 `uav_`。
+
+生产者必须用 allowlist Topic builder 和显式 `camera_id` 生成 camera-scoped Topic；禁止通过字符串替换/切片从 `uav_statistics_*` 派生其他 Topic。builder 的输入校验、映射和异常必须有单元测试。
+
+## 9. 迁移前当前实现与兼容边界
+
+> 本节是代码现状清单，不是目标契约。当前仓库尚未完成以下迁移，不能宣称已使用 `road9`、TimescaleDB 或 canonical `uav_*` 名称。
+
+当前实现仍包括：
+
+- 旧 Topic：`statistics_*`、`track_complete_*`、`conflicts_*`、`telemetry_*`、`system_metrics`；
+- 旧 `msg_type`：`stats`、`track_complete`、`conflict`、`telemetry` 等；
+- Telegraf 将部分统计消息写入 InfluxDB 1.8；
+- Platform 的历史指标、轨迹和冲突查询依赖 InfluxDB measurements；
+- Grafana 使用 InfluxDB/旧 PostgreSQL 数据源；
+- PostgreSQL 业务表仍存在无前缀的 `users`、`alerts`；
+- 代码可能通过 SQLAlchemy `create_all()` 初始化表，而非受控版本迁移。
+
+### 9.1 历史统计双写去重（P0）
+
+旧 `statistics_*` 可能把同一消息经两条路径写入 InfluxDB：Telegraf 写 `camera_{N}`，Platform consumer 写 `intersection_stats`。迁移时两边是同源副本，不得把数值或行数相加。
+
+| 迁移步骤 | 约束 |
+| --- | --- |
+| 来源标记 | 每行保留 `legacy_source_path=telegraf_camera/platform_intersection`、measurement、series/tag、raw time 和 payload/field fingerprint |
+| 路口映射 | 先冻结 camera ID 到 intersection ID 的有效期映射，不能只按当前配置回填历史 |
+| 重复识别 | 综合来源映射、字段指纹和经时间语义校正后的容差；Influx time 只能作为信号之一，不能单独判重 |
+| 取值策略 | 确认同源后选择批准的权威分支，或仅对另一分支独有字段做补全；`cars`、方向流量、道路活跃度和样本数不得求和 |
+| 歧义处理 | 无法证明同源/独立的记录进入隔离集，保留两份原值，不进入业务汇总 |
+| 对账输出 | 分列两分支原始行数、确认重复数、择源数、字段补全数、歧义数和最终 canonical 行数 |
+
+迁移脚本必须在抽样路口和跨时段数据上验证去重误合并/漏合并率；阈值、权威分支和容差未签字前不得执行全量回迁。
+
+### 9.2 兼容迁移顺序
+
+1. DBA 确认 `road9`、TimescaleDB 版本/权限、备份恢复和 migration 账户。
+2. 创建 `uav_*` 普通表、hypertable、索引和策略；发布只读路网视图/快照接口。
+3. 消费端先支持新旧 Topic，并把旧消息规范化为 canonical envelope；通过 `uav_message_inbox` 去重。
+4. 生产端切换到 `uav_*` Topic/`msg_type`。如需短期双投，必须复用 `source_message_id` 并限定窗口。
+5. 对 PostgreSQL/TimescaleDB 与旧 InfluxDB 做数量、时间桶、关键指标和抽样事件对账。
+6. 历史 API 切换到 PostgreSQL/TimescaleDB，观察期通过后停止 Telegraf/InfluxDB 新写入。
+7. 冻结旧库只读并按确认的历史回迁/归档方案处理，随后移除 Grafana、Telegraf、InfluxDB 部署和配置。
+8. 删除旧 Topic 消费兼容与无前缀表只能在所有生产者、消费者、回放工具和主平台联调方完成切换后执行。
+
+迁移期禁止让新旧消费者各自生成不同事件 ID 后重复写入，也禁止在未完成数据对账和回滚演练前直接删除旧 InfluxDB 数据。
+
+## 10. 验收门禁
+
+- `SELECT current_database()` 返回 `road9`。
+- `pg_extension` 中存在经确认版本的 TimescaleDB；应用账户无扩展安装权限但具备所需 DML 权限。
+- UAV 平台自建关系的物理表名均匹配 `^uav_`；不存在新建的无前缀业务表。
+- 所有目标 Topic、`msg_type` 和 WebSocket 消息类型均匹配 `^uav_`。
+- Topic builder 显式使用 camera ID 且不含字符串替换派生；各 kind 路由单测通过。
+- 事件 spool/outbox 经断网、队列满、进程崩溃和重启测试无静默丢失；指标 drop/coverage 可观测且低覆盖窗口被正确降质。
+- Consumer 关闭 auto commit；数据库失败不提交 offset，数据库提交后崩溃重放由 inbox 幂等吸收，同 ID 不同 hash 被隔离。
+- hypertable 写入、乱序补录、幂等重放、时间桶聚合、压缩/保留策略和备份恢复通过验收。
+- 路网引用携带 `road_data_version`；无法匹配时为空并标记 `unmapped`，不伪造权威 ID。
+- Platform 历史查询不再依赖 InfluxQL；目标部署不启动 Grafana、Telegraf、InfluxDB。
+- Telegraf `camera_N` 与 Platform `intersection_stats` 双写完成去重/择源，未简单相加；迁移数量、分钟级聚合、轨迹/冲突抽样和告警关联对账达到双方冻结阈值。

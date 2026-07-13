@@ -3,9 +3,13 @@
 > 本文件是 Claude 作为 TrafficAnalyzer 长期核心工程师的协作规范。
 > 所有开发工作必须先阅读本文件。
 
+## 数据架构优先级（ADR-019）
+
+目标架构固定为 PostgreSQL connection database=`road9` + TimescaleDB；UAV 内部 Topic、`msg_type`、WebSocket channel 和本项目自建表使用 `uav_` 前缀；InfluxDB、Telegraf、Grafana 为迁移后退役链路。本文中仍出现的旧 Topic、InfluxDB/Grafana 或 Telegraf 描述只表示当前遗留实现，不得用于新增功能；若与 `DECISIONS.md` ADR-019、`ARCHITECTURE.md`、`API_CONTRACTS.md`、`DATABASE_SCHEMA.md` 冲突，以后者为准。
+
 ## 项目概要
 
-TrafficAnalyzer 是一个环形交叉路口交通分析系统。使用 YOLO11 检测车辆、ByteTrack 跟踪轨迹、shapely 判定道路归属，通过 Kafka→Telegraf→InfluxDB→Grafana 管道实现多摄像头实时监控。
+TrafficAnalyzer 是智慧交通大项目下的无人机交通 AI 子系统，使用 YOLO11 检测车辆、ByteTrack 跟踪轨迹并计算态势/冲突。当前代码仍有 Kafka→Telegraf/InfluxDB→Grafana 遗留链路；目标数据链路为 `uav_*` Kafka → PostgreSQL database=`road9`/TimescaleDB → Platform API/WebSocket。
 
 ## 开发规则
 
@@ -46,16 +50,16 @@ TrafficAnalyzer 是一个环形交叉路口交通分析系统。使用 YOLO11 �
 - **禁止**使用 python-jose（ARM64 兼容性问题），必须使用 PyJWT
 - 新增 API 端点必须添加 JWT 认证中间件保护（公开端点除外）
 - Kafka 消费者和 WebSocket 管理器在应用 lifespan 中初始化和启动
-- InfluxDB 查询使用 InfluxQL（1.8 版本），不使用 Flux
+- 目标历史查询使用 PostgreSQL/TimescaleDB；InfluxQL 只允许在迁移兼容适配器中读取旧数据，不得扩展为新查询契约
 - 前端 `traffic-fly-console/nginx.conf` 必须代理到 `platform:8000`（不是 gateway）
 
 ### 7. 摄像头微服务规范（视频分析管道）
 - 视频分析管道（`main*.py`）仍使用独立容器模式
 - 新增摄像头必须：
   1. 在 `docker-compose.yaml` 添加 `traffic_analyzer_camera_{n}` 服务
-  2. 在 `telegraf.conf` 添加对应的 `[[inputs.kafka_consumer]]`
-  3. 创建新的 Grafana 仪表盘 JSON
-  4. Nginx 配置无需修改（使用正则动态路由）
+  2. 使用统一 Topic builder 发布 `uav_statistics_{camera_id}` 等目标消息
+  3. 配置 Platform 消费、`road9` 写入和 API/WebSocket 展示，不新增 Telegraf/Grafana 配置
+  4. Nginx 配置无需修改时继续使用正则动态路由
 
 ### 7. 第三方代码规范
 - `byte_tracker/` 目录是从开源项目移植的代码，保持其原始结构
@@ -83,10 +87,10 @@ TrafficAnalyzer 是一个环形交叉路口交通分析系统。使用 YOLO11 �
 4. **禁止在 ShowNode 中添加业务逻辑** — 它只负责渲染
 5. **禁止在 Dockerfile 中使用 `latest` 标签的 GPU 基础镜像** — 当前使用 `python:3.10.13` 是有意的
 6. **禁止在 kafka_producer_node 配置中硬编码 bootstrap_servers** — 本地开发和 Docker 环境使用不同的地址
-7. **禁止直接修改 Grafana 仪表盘 JSON** — 应通过 Grafana UI 编辑后用 `export_dashboards.py` 导出
+7. **禁止新增或扩展 Grafana 仪表盘** — Grafana 已进入退役范围；遗留文件只允许迁移、归档和安全清理
 8. **禁止在 platform/ 中使用 python-jose** — ARM64 上会触发 SIGILL（exit 132），必须使用 PyJWT
 9. **禁止将 platform/ 重新拆分为微服务** — 已经过单体架构验证，微服务增加了不必要的复杂度
-10. **禁止在 platform/app/main.py 的 lifespan 中阻塞启动** — 所有依赖（DB、Kafka、InfluxDB）必须优雅降级
+10. **禁止在 platform/app/main.py 的 lifespan 中阻塞启动** — PostgreSQL/TimescaleDB、Kafka 等依赖必须按批准策略就绪或显式降级，不得静默吞掉持久化失败
 
 ## 模块边界
 
@@ -117,7 +121,9 @@ platform/app/ ← 单体 Web 平台，独立模块
 
 ## API 规范
 
-### 视频分析管道 Kafka 消息格式（不可更改，Grafana 仪表盘依赖此格式）
+### 视频分析管道 Kafka 遗留消息格式（仅迁移适配器兼容）
+
+以下无前缀/固定道路字段是当前遗留格式，不再是“不可更改”的目标契约。目标生产者必须遵循 `API_CONTRACTS.md` 的 `uav_*` 信封、动态粒度和时间语义；迁移期适配器可读取旧格式，但须有退役日期。
 ```json
 {
   "camera_id": "id_{camera_id}",
@@ -162,12 +168,11 @@ platform/app/ ← 单体 Web 平台，独立模块
 
 ## 数据访问规范
 
-- InfluxDB 使用 1.8 版本（InfluxQL 查询语言，不是 Flux）
-- 数据库名：`influx`
-- Grafana 兼容统计链路 measurement 命名：`camera_{n}`（由 Telegraf 的 `name_override` 控制）
-- 平台复盘链路 measurement 命名：`intersection_stats`、`track_events`、`conflict_events`（由 Platform Kafka consumer 直写，见 ADR-014）
-- 保留策略：统计默认 30 天；轨迹/冲突按平台查询和部署策略保留
-- 写入路径：`statistics_*` 同时保留 Kafka → Telegraf → `camera_{n}` 和 Platform consumer → `intersection_stats`；`track_complete_*` / `conflicts_*` 由 Platform consumer 写入 `track_events` / `conflict_events`
+- 目标连接 database 固定为 `road9`，但 schema、账号和权限必须显式配置，不得假定同名 schema。
+- 时序指标、遥测、轨迹点和冲突事实写 TimescaleDB Hypertable；事务对象写普通 `uav_*` PostgreSQL 表。
+- `uav_message_inbox` 以 `(source_system,message_id)` 提供长期消费幂等，并与事实写入同一事务；Kafka offset 只能在事务成功后提交。
+- 旧 InfluxDB 只读用于迁移；旧 `time` 不得统一映射为 `occurred_at`，须保留原始时间、语义和质量并隔离 epoch 异常。
+- 新增/修改表、Topic、保留、压缩和迁移规则必须同步 `DATABASE_SCHEMA.md`，不得通过运行时 `create_all()` 隐式变更生产 schema。
 
 ## 重构规范
 
@@ -194,7 +199,7 @@ platform/app/ ← 单体 Web 平台，独立模块
 ### 禁止的重构
 - 不得将 FrameElement 改为 dataclass（会破坏多进程序列化）
 - 不得将 Hydra 替换为其他配置框架（整个项目深度依赖）
-- 不得将 InfluxDB 1.8 升级到 2.x（查询语言不兼容，Grafana 仪表盘需要重写）
+- 不得升级或扩建 InfluxDB/Grafana 链路；按 ADR-019 迁移至 `road9`/TimescaleDB 并完成对账后退役
 
 ## 测试规范
 

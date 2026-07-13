@@ -248,3 +248,16 @@ traffic-fly-console/
 ├── README.md                        # Console 本地/Docker 启动与验证命令
 └── src/features/                    # 主导航业务页面（Dashboard/Monitoring/GIS/Drones/Reports/Admin/Users 等）
 ```
+
+### 新版 Console 原型（console2/）
+
+`console2/` 是基于 `docs/generated/2026-06-29-uav-traffic-ai-prd.md` 的独立 React/Vite 交互原型，不替换现有生产前端。其信息架构面向交通指挥员的一屏态势研判：全屏检测器输出主画布、可与主画布互换的右上 BEV 轨迹视图、顶部飞行姿态、左侧交通 KPI、右侧实时 AI 事件和底部回看时间轴。当前使用真实感模拟数据验证主辅视图交换、轨迹/车道/风险图层、无人机状态、事件筛选和技术复核交互，后续再按平台 API/WebSocket 契约接入实时数据。
+
+```
+console2/
+├── src/App.jsx                      # 单屏态势驾驶舱及原型交互
+├── src/styles.css                   # 深色指挥中心视觉与响应式布局
+├── public/assets/                   # 夜间无人机路口视觉资产
+├── README.md                        # 原型范围、运行和资产说明
+└── design-qa.md                     # 参考图与浏览器实现的视觉验收记录
+```

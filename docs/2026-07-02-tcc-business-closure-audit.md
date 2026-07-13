@@ -1,5 +1,7 @@
 # TCC 交通态势感知业务闭环完成审计
 
+> **架构替代声明（2026-07-13）**：本文保留 2026-07-02 的业务闭环与遗留环境验收证据；其中旧 Topic/WebSocket、InfluxDB/Telegraf/Grafana 和部署链路已由 [ADR-019](DECISIONS.md) 替代。本文结果不代表 database=`road9`、`uav_` 统一命名、TimescaleDB、历史迁移或旧链路退役已验收，现行目标以 [ARCHITECTURE.md](ARCHITECTURE.md)、[API_CONTRACTS.md](API_CONTRACTS.md) 和 [DATABASE_SCHEMA.md](DATABASE_SCHEMA.md) 为准。
+
 **日期**: 2026-07-02  
 **目标**: 验证“视频/无人机接入 → 检测跟踪 → 态势分析 → 事件告警 → 平台可视化 → 历史复盘”的 TCC 业务闭环是否具备可演示、可复盘、可继续扩展的交付状态。
 

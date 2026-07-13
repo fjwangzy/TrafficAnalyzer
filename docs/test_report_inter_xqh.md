@@ -1,5 +1,7 @@
 # 端到端测试报告：inter_xqh 视频 + SRT 遥测
 
+> **架构替代声明（2026-07-13）**：`56 PASS / 0 FAIL / 0 WARN` 是 2026-07-02 对遗留环境的回归证据，继续用于算法/管道防回退；它不证明 database=`road9`、`uav_` 消息与表命名、TimescaleDB、历史数据迁移或 InfluxDB/Telegraf/Grafana 退役已完成。目标数据架构及新增验收门禁见 [ADR-019](DECISIONS.md)、[API_CONTRACTS.md](API_CONTRACTS.md) 和 [DATABASE_SCHEMA.md](DATABASE_SCHEMA.md)。
+
 **日期**: 2026-07-02
 **测试资产**: `test_videos/inter_xqh/`  
 - 视频: `DJI_20260403142902_0001_V小清河北路与水屯路路口.mp4` (5.4GB, 4K, 16.5min)  

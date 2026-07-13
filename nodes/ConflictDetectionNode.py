@@ -46,6 +46,7 @@ class ConflictDetectionNode:
         self.moving_speed_ms = cfg.get("moving_speed_ms", 2.0)
         self.min_segment_speed_ms = cfg.get("min_segment_speed_ms", 0.2)
         self.max_pair_distance_m = cfg.get("max_pair_distance_m", 15.0)
+        self.min_trajectory_length_m = cfg.get("min_trajectory_length_m", 3.0)
         self.emit_cooldown_sec = cfg.get("emit_cooldown_sec", 2.0)
         # (pair_key) -> {"severity": str, "timestamp": float}
         self._reported_pairs: dict[tuple, dict] = {}
@@ -84,6 +85,15 @@ class ConflictDetectionNode:
             # 用 max_speed_kmh 而非 avg_speed_kmh：急停过的车依然保留
             if track.max_speed_kmh < 5.0:
                 continue
+            # 过滤轨迹长度不足的目标（路边停靠车辆等），要求世界坐标累计位移 >= 阈值
+            if len(track.position_history) >= 2:
+                pts_px = np.array([(p[0], p[1]) for p in track.position_history])
+                pts_world = pixel_to_world(pts_px, H)
+                traj_length = float(np.sum(np.linalg.norm(np.diff(pts_world, axis=0), axis=1)))
+                if traj_length < self.min_trajectory_length_m:
+                    continue
+            else:
+                continue  # 位置点不足，无法判断轨迹
             entry = {
                 "track_id": track_id,
                 "center_px": (cx, cy),
@@ -364,6 +374,20 @@ class ConflictDetectionNode:
         )
         if conflict_angle is None or not self._is_valid_conflict_angle(conflict_angle):
             return None
+
+        # 过滤同向并行：冲突角度较小（< 60°）时，检查沿连线方向的接近速度
+        # 同向并行车辆虽然 closing_rate < 0（微小横向漂移），但沿连线方向的
+        # 实际接近速度很低，不构成碰撞风险
+        if conflict_angle < 60.0:
+            pair_vec = non_motor_pos_m - motor_pos_m
+            pair_dist = float(np.linalg.norm(pair_vec))
+            if pair_dist > 0.1:
+                pair_dir = pair_vec / pair_dist
+                # 沿连线方向的相对速度（正值=远离，负值=靠近）
+                closing_along_line = float(np.dot(relative_vel, pair_dir))
+                # 接近速度太低（< 1 m/s），视为并行通行
+                if abs(closing_along_line) < 1.0:
+                    return None
 
         relative_speed = float(np.linalg.norm(relative_vel))
         if relative_speed < self.relative_speed_min_ms:

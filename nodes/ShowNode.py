@@ -446,9 +446,28 @@ class ShowNode:
             return frame
 
         # 构建标签（含车速）—— 仅针对有效框
+        # 当存在活跃冲突事件时，只为冲突相关目标保留标签，非冲突目标标签置空以减少视觉干扰
+        conflict_ids = set()
+        if self.persistent_conflicts:
+            for (motor_id, non_motor_id) in self.persistent_conflicts:
+                conflict_ids.add(str(motor_id))
+                conflict_ids.add(str(non_motor_id))
+        
+        current_conflicts = getattr(frame_element, "conflict_events", None)
+        if current_conflicts:
+            for event in current_conflicts:
+                if "motor_id" in event:
+                    conflict_ids.add(str(event["motor_id"]))
+                if "non_motor_id" in event:
+                    conflict_ids.add(str(event["non_motor_id"]))
+
         labels = []
         for i in valid_idx:
             tid = frame_element.id_list[i]
+            # 有冲突时隐藏非冲突目标的标签
+            if conflict_ids and str(tid) not in conflict_ids:
+                labels.append("")
+                continue
             cls_name = frame_element.tracked_cls[i] if frame_element.tracked_cls else ""
             label = f"#{tid} {cls_name}"
             if self.show_speed_labels and buffer_tracks:
@@ -470,10 +489,13 @@ class ShowNode:
 
         # 圆角边框
         frame = self.sv_box_annotator.annotate(scene=frame, detections=detections)
-        # 标签（带背景色，与边框同色）
-        frame = self.sv_label_annotator.annotate(
-            scene=frame, detections=detections, labels=labels
+        # 标签（带背景色，与边框同色），添加透明度
+        overlay = frame.copy()
+        overlay = self.sv_label_annotator.annotate(
+            scene=overlay, detections=detections, labels=labels
         )
+        # 混合叠加，使标签带有 70% 不透明度
+        cv2.addWeighted(overlay, 0.7, frame, 0.3, 0, frame)
         # 轨迹尾迹
         if self.show_trace_trails:
             frame = self.sv_trace_annotator.annotate(scene=frame, detections=detections)
@@ -798,13 +820,17 @@ class ShowNode:
             key=lambda item: item[1]["event"].get("ttc_sec", 99),
         )[:5]
 
-        overlay = frame_result.copy()
-
         for key, data in sorted_conflicts:
             event = data["event"]
             motor_id, non_motor_id = key
             severity = event.get("severity")
             ttc = event.get("ttc_sec", 0.0)
+
+            # 确保当前帧两个目标都处于活跃（可见）状态
+            # id_list 仅包含当前帧实际检测并成功匹配的目标，短暂丢失的目标不会在其中
+            active_ids = {str(tid) for tid in getattr(frame_element, "id_list", [])}
+            if motor_id not in active_ids or non_motor_id not in active_ids:
+                continue
 
             # 查找轨迹
             motor = non_motor = None
@@ -843,7 +869,7 @@ class ShowNode:
                 ttc_label = f"TTC {ttc:.1f}s"
 
             # ── 虚线连接 ──
-            self._draw_dashed_line(overlay, pt_m, pt_n, line_color,
+            self._draw_dashed_line(frame_result, pt_m, pt_n, line_color,
                                    thickness=max(1, int(2 * s)),
                                    dash_length=int(12 * s),
                                    gap_length=int(8 * s))
@@ -857,13 +883,45 @@ class ShowNode:
                     [pt[0], pt[1] + diamond_r],
                     [pt[0] - diamond_r, pt[1]],
                 ], dtype=np.int32)
-                cv2.fillPoly(overlay, [diamond_pts], marker_color)
-                cv2.polylines(overlay, [diamond_pts], True, (255, 255, 255),
+                cv2.fillPoly(frame_result, [diamond_pts], marker_color)
+                cv2.polylines(frame_result, [diamond_pts], True, (255, 255, 255),
                               max(1, int(1 * s)))
 
             # ── 圆角徽章 ──
-            cx = (pt_m[0] + pt_n[0]) // 2
-            cy = (pt_m[1] + pt_n[1]) // 2
+            mid_x = (pt_m[0] + pt_n[0]) / 2.0
+            mid_y = (pt_m[1] + pt_n[1]) / 2.0
+            
+            # 计算法向量，将标签偏移，避免遮挡车辆
+            link_dx = float(pt_n[0] - pt_m[0])
+            link_dy = float(pt_n[1] - pt_m[1])
+            link_dist = max(1.0, np.hypot(link_dx, link_dy))
+            # 单位法向量（垂直于两车连线）
+            nx = -link_dy / link_dist
+            ny =  link_dx / link_dist
+
+            # 自适应偏移：基础 50px，同时确保与两端点的距离 >= min_clearance
+            base_offset = 50 * s
+            min_clearance = 35 * s
+            offset_mag = base_offset
+            for attempt in range(5):
+                cx_try = mid_x + nx * offset_mag
+                cy_try = mid_y + ny * offset_mag
+                d_m = np.hypot(cx_try - pt_m[0], cy_try - pt_m[1])
+                d_n = np.hypot(cx_try - pt_n[0], cy_try - pt_n[1])
+                if d_m >= min_clearance and d_n >= min_clearance:
+                    break
+                offset_mag += 15 * s
+
+            cx = int(mid_x + nx * offset_mag)
+            cy = int(mid_y + ny * offset_mag)
+
+            # 边界钳制
+            cx = max(60, min(img_w - 60, cx))
+            cy = max(30, min(img_h - 30, cy))
+
+            # 画一根很细的指示线连接连线中点和偏移后的标签中心
+            cv2.line(frame_result, (int(mid_x), int(mid_y)), (cx, cy),
+                     line_color, max(1, int(1 * s)), cv2.LINE_AA)
 
             font = cv2.FONT_HERSHEY_SIMPLEX
             font_scale = 0.5 * s
@@ -880,19 +938,24 @@ class ShowNode:
             by2 = by1 + badge_h
             corner_r = int(6 * s)
 
-            # 圆角矩形背景（半透明）
-            self._draw_rounded_rect(overlay, (bx1, by1), (bx2, by2),
-                                     corner_r, badge_bg, badge_border,
-                                     border_thick=max(1, int(1.5 * s)))
+            # 计算 ROI 的实际边界（防越界）
+            x1, y1 = max(0, bx1), max(0, by1)
+            x2, y2 = min(img_w, bx2), min(img_h, by2)
+            
+            # 圆角矩形背景（仅对背景应用半透明混合）
+            if x2 > x1 and y2 > y1:
+                roi = frame_result[y1:y2, x1:x2]
+                roi_overlay = roi.copy()
+                self._draw_rounded_rect(roi_overlay, (bx1 - x1, by1 - y1), (bx2 - x1, by2 - y1),
+                                        corner_r, badge_bg, badge_border,
+                                        border_thick=max(1, int(1.5 * s)))
+                cv2.addWeighted(roi_overlay, 0.40, roi, 0.60, 0, roi)
 
-            # TTC 文字
+            # TTC 文字（保持 100% 不透明）
             tx = cx - tw // 2
             ty = cy + th // 2 - 1
-            cv2.putText(overlay, ttc_label, (tx, ty),
+            cv2.putText(frame_result, ttc_label, (tx, ty),
                         font, font_scale, text_color, font_thick, cv2.LINE_AA)
-
-        # 半透明混合
-        cv2.addWeighted(overlay, 0.85, frame_result, 0.15, 0, frame_result)
 
     @staticmethod
     def _draw_dashed_line(img, pt1, pt2, color, thickness=1,

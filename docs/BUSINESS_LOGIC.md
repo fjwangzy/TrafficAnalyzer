@@ -1,6 +1,7 @@
 # BUSINESS_LOGIC.md — TrafficAnalyzer 核心业务逻辑
 
-> 基于 commit `84c6bd6` 的真实代码分析。
+> 当前实现说明基于 commit `84c6bd6` 的真实代码分析；标记为“目标态”的消息命名与
+> 持久化逻辑依据 ADR-019（2026-07-13），尚未完成代码、数据库和 Compose 迁移。
 
 ## 核心业务流程
 
@@ -135,7 +136,7 @@ for key in roads_activity:
 - 除以时间窗口得到"辆/分钟"单位
 - **为什么用 buffer_analytics 而不是实时窗口**：需要足够的时间窗口才能反映真实的交通流量
 
-### 5. Kafka 消息发送
+### 5. Kafka 消息发送（当前实现）
 
 **实现文件**：`nodes/KafkaProducerNode.py`
 
@@ -172,6 +173,111 @@ for key in roads_activity:
 - `lanes`: 统一格式数组，前端直接读取，无需区分来源
 
 `send_to_kafka` 字段已在 FrameElement 中声明（TD-005 已修复），KafkaProducerNode 设置后由下游节点消费。
+
+#### 5.1 目标消息命名
+
+Kafka 继续承担检测管道到平台之间的异步传输与削峰，但所有无人机平台消息入口必须统一
+使用 `uav_` 前缀：
+
+| 业务消息 | 目标 Topic | 目标 `msg_type` 示例 |
+|---|---|---|
+| 周期态势指标 | `uav_statistics_{camera_id}` | `uav_stats` |
+| 完成轨迹 | `uav_track_complete_{camera_id}` | `uav_track_complete` |
+| 冲突事件 | `uav_conflicts_{camera_id}` | `uav_conflict` |
+| 无人机遥测 | `uav_telemetry_{camera_id}` | `uav_telemetry` |
+| 系统指标 | `uav_system_metrics` | `uav_system_metrics` |
+| 统一 AI 事件（规划） | `uav_ai_events` | `uav_ai_event` |
+| 主平台反馈（规划） | `uav_ai_event_feedback` | `uav_ai_event_feedback` |
+
+当前代码中的 `statistics_*`、`track_complete_*`、`conflicts_*`、`telemetry_*` 和
+`system_metrics` 均是待迁移旧名称。迁移期间可以短期双读或双发用于核验，但目标态不得
+长期保留无 `uav_` 前缀的别名。
+
+所有带相机维度的 Topic 必须通过统一 builder 以消息类别和显式 `camera_id` 生成，例如
+输入 `statistics + camera_id` 选择 `uav_statistics_{camera_id}` 模板。业务代码不得使用
+`str.replace()` 或其他字符串替换，从统计 Topic 推导轨迹、冲突或遥测 Topic。
+
+#### 5.2 目标持久化业务规则
+
+平台 Consumer 接收消息后按以下顺序处理：
+
+1. 校验 Topic 与 `msg_type` 均符合 `uav_` 命名规则，并校验消息版本、事件时间、来源标识
+   和幂等键；不合格消息进入可观测的失败处理流程，不直接写业务表。
+2. 以 PostgreSQL 连接数据库 `road9` 为唯一平台持久化入口；`road9` 是 database 名，
+   不能在实现中默认当作 schema 名。
+3. 每条消息以 `(source_system, message_id)` 登记长期 canonical 表
+   `uav_message_inbox`，保存 payload hash、Topic、partition、offset、处理 status 和事实
+   引用。inbox 登记、hash 校验、事实写入与 fact references/status 更新必须在同一事务内
+   完成：相同键且 hash 相同按重复消息返回，hash 不同视为冲突并进入审计/死信处理。
+   inbox 保留期必须覆盖最大重放窗口，不能在重放仍可能发生时提前清理。
+4. 不同路口/路段/车道粒度的交通指标通过 `grain_type`、`grain_key` 统一写入
+   `uav_traffic_metrics`：`grain_type` 取 `intersection`、`link`、`lane`，`grain_key`
+   分别对应权威 `inter_id`、`link_id`、`lane_id`；不再为不同粒度另建同义指标表。
+   系统指标与遥测分别写入 `uav_system_metrics`、`uav_telemetry_metrics`。三者均为
+   TimescaleDB hypertable，以业务观测时间为时序主时间，接收时间单独保留用于计算链路延迟。
+5. 完成轨迹的摘要写入普通业务表 `uav_track_events`，轨迹采样点写入 hypertable
+   `uav_track_points`；冲突时序事件写入 hypertable `uav_conflict_events`。
+6. 统一 AI 事件写入 `uav_ai_events`；可靠投递、每次尝试、主平台反馈和死信分别写入
+   `uav_event_outbox`、`uav_event_delivery_attempts`、`uav_event_feedback`、
+   `uav_dead_letters`；证据包和证据条目分别写入 `uav_evidence_packages`、
+   `uav_evidence_items`。反馈消息仍使用 `uav_ai_event_feedback` Topic/`msg_type`，消息名
+   与物理表名不要求相同，但映射必须在契约中固定。
+7. 全部事实写入完成后更新 inbox status/fact references，并提交同一 PostgreSQL 事务。
+8. Consumer 必须配置 `enable_auto_commit=false`；仅在第 7 步事务提交成功后手动提交 Kafka
+   offset。数据库失败时回滚且不提交 offset，等待重放；数据库已提交但 offset 提交前崩溃
+   时，重放消息由 `uav_message_inbox` 幂等识别。
+9. 事务提交后，再按业务范围向 `uav_intersection:{intersection_id}`、`uav_alerts`、
+   `uav_alerts:{intersection_id}`、`uav_system`、`uav_telemetry:{drone_id}` 或
+   `uav_calibration` 广播实时消息；告警新增/更新分别使用 `uav_alert_new`、
+   `uav_alert_updated`，车道标注任务保留 `uav_lane_annotation_task`。写库失败时不得把
+   未持久化数据伪装成已成功处理。
+10. 平台自建物理表名统一以 `uav_` 开头。`road9` 内既有共享路网主数据、PostgreSQL
+   系统对象及 TimescaleDB 扩展内部对象不归无人机平台所有，不要求重命名；业务记录通过
+   `inter_id`、`link_id`、`lane_id` 和路网版本关联它们。
+
+TimescaleDB hypertable 的唯一约束必须包含时间分区列，因此只能作为第二层防重；跨时间、
+迟到和重放消息的第一层幂等必须由 `uav_message_inbox` 完成，不能只依赖事实表唯一键。
+
+目标态不再写入 InfluxDB，也不再通过 Telegraf 转换指标；历史查询、聚合和运营页面均从
+PostgreSQL/TimescaleDB 读取。分区粒度、压缩、保留期、连续聚合和数据降采样参数需要在
+上线容量评估后冻结，不能沿用 InfluxDB 配置直接推定。
+
+#### 5.3 生产发送可靠性与数据覆盖率
+
+- 完成轨迹、冲突、AI 事件和证据引用必须先进入持久化 spool/outbox，再尝试放入内存发送
+  队列。内存队列只是吞吐优化，不是可靠性边界；队列满或 Kafka send 失败时记录必须仍在
+  持久层，并按稳定 `message_id` 重试，禁止只记日志后丢弃。
+- 证据文件可仍由对象/文件存储承载，但其引用、哈希和关联事件进入可靠 outbox；不能出现
+  事件已交付而证据引用因队列溢出永久缺失的状态。
+- 周期指标若经容量评审明确允许有损，必须在 `uav_system_metrics` 中同时报告期望样本数、
+  实际生成/发送/接收数、drop 数和 coverage，使查询方能够识别统计缺口；禁止把缺失窗口
+  当作零流量。
+- spool/outbox 持久化失败属于链路故障，必须触发健康降级和告警，不能继续返回“发送成功”。
+
+#### 5.4 历史数据时间语义与双写去重规则
+
+新消息应分别携带业务时间和接收时间：指标/遥测使用 `observed_at`，事件使用
+`occurred_at`，平台另存 `ingested_at`。迁移旧 InfluxDB 数据时不得假设 point `time`
+就是业务时间，处理规则如下：
+
+1. 按 measurement 和历史写入代码分支转换，不允许一套通用映射覆盖
+   `statistics`、`conflict`、`track_complete` 等不同来源。
+2. 原始时间和值域判断结果必须随记录保存为 `source_time_raw`、
+   `source_time_semantics`、`time_quality`；转换和重建过程必须可追溯。
+3. `statistics` 与 `conflict` 的 Influx `time` 可能是写入时刻。只有 payload 中存在可验证
+   的帧/事件时间并能与任务窗口对应时，才填充 `observed_at`/`occurred_at`；否则该时间只
+   作为 `ingested_at`，业务时间保持未知并退出业务时序聚合。
+4. `track_complete` 可能把流相对秒当成 Unix 秒，表现为时间落在 epoch 附近或明显超出
+   无人机任务窗口。命中异常规则的轨迹必须隔离，禁止按错误时间写入生产 hypertable。
+5. 只有同时具备任务开始时间、流相对秒及可核验视频/帧证据时，才可按
+   `task_started_at + stream_relative_seconds` 重建轨迹时间，并标记
+   `source_time_semantics=stream_relative`、`time_quality=inferred`；否则保留原始值并维持
+   `invalid`/`unknown`，等待人工处置。
+6. 数据查询和连续聚合默认只使用 `verified` 或经批准的 `inferred` 业务时间。只有
+   `ingested_at` 的记录用于迁移审计和数量对账，不参与趋势、轨迹排序、告警时效或 SLA。
+7. 历史统计可能由 Telegraf 与 Platform Consumer 同时写入；两路记录不得简单相加。优先
+   使用 source writer、Topic/partition/offset、message ID 去重，缺失这些键时使用经过评审
+   的业务指纹并选择一个权威来源；无法可靠判定的样本只进入对账/隔离结果并降低质量标记。
 
 ### 6. 模型车道检测（YOLO 分割）
 
@@ -321,6 +427,8 @@ near-miss 证据：
 
 ## 统计数据的完整生命周期
 
+### 当前实现（待迁移）
+
 ```
 帧 N 进入 VideoReader
   → 原始帧 + 道路坐标
@@ -348,3 +456,32 @@ near-miss 证据：
 帧 N 进入 VideoSaverNode / FlaskServerVideoNode
   → 写入文件或推流
 ```
+
+当前生命周期只描述检测管道代码事实；其下游仍可能由 Telegraf 写 InfluxDB，并由 Grafana
+展示。该旧链路已废弃，不能作为目标验收依据。
+
+### 目标持久化生命周期
+
+```text
+帧/轨迹/冲突在检测管道形成业务结果
+  → KafkaProducerNode 发布 uav_* Topic 和 uav_* msg_type
+  → Platform Consumer 校验 schema_version / occurred_at / source_event_id / idempotency_key
+  → 关联 road9 中的路口、路段、车道权威 ID 与 road_data_version
+  → 在同一事务登记 uav_message_inbox 并写入 database=road9 内的 uav_* 事实表
+      ├── 时序：uav_traffic_metrics / uav_system_metrics / uav_telemetry_metrics /
+      │         uav_track_points / uav_conflict_events
+      └── 业务：uav_track_events / uav_ai_events / uav_event_outbox / ...
+  → PostgreSQL 事务提交成功后手动提交 Kafka offset
+  → 广播 uav_* WebSocket channel
+  → traffic-fly-console 展示实时状态，并通过 REST 查询 TimescaleDB 历史与聚合数据
+```
+
+业务失败语义：
+
+- 重复消息以业务幂等键去重，不重复累计流量、不重复生成告警或交付记录。
+- 数据库暂时不可用时，由 Consumer 重试或进入失败处理队列；恢复后按原事件时间补写，
+  不得以接收恢复时间替代业务观测时间。
+- 路网映射缺失时保留原始本地标识并标记 `unmapped`，不得伪造 `inter_id`、`link_id`、
+  `lane_id`；后续补映射不得无审计地改写历史版本。
+- PostgreSQL/TimescaleDB 是目标态唯一统计与事件查询源。InfluxDB 仅允许在迁移核验期
+  只读对账或短期影子写入，完成切换后必须停止生产写入并下线 Grafana/Telegraf/InfluxDB。

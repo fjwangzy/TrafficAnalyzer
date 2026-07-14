@@ -309,6 +309,9 @@ services:
       dockerfile: Dockerfile
     container_name: traffic_platform
     restart: unless-stopped
+    # 4K detector frames use multiprocessing.shared_memory. The Docker default
+    # (64 MiB) cannot hold the bounded in-flight frame queue.
+    shm_size: 512m
     environment:
       DEBUG: "false"
       SERVICE_PORT: 8000
@@ -349,11 +352,11 @@ services:
     networks:
       - prod_network
 
-  traffic-fly-console:
+  console2:
     build:
-      context: ./traffic-fly-console
+      context: ./console2
       dockerfile: Dockerfile
-    container_name: traffic_fly_console
+    container_name: traffic_console2
     restart: unless-stopped
     ports:
       - "8080:8080"

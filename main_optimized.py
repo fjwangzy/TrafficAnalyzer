@@ -62,6 +62,7 @@ PRINT_PROFILE_INFO = False
 
 # 队列取数据超时(秒)：下游进程在 timeout 内未收到帧时检查上游是否存活
 _QUEUE_GET_TIMEOUT = 10
+_FRAME_QUEUE_MAXSIZE = max(1, int(os.environ.get("FRAME_QUEUE_MAXSIZE", "8")))
 
 
 def _can_write_log_file(filename: str) -> bool:
@@ -142,6 +143,7 @@ def proc_frame_reader_and_detection(
     video_reader = VideoReader(config["video_reader"], config.get("telemetry"))
     detection_node = DetectionTrackingNodes(config)
     for frame_element in video_reader.process():
+        shm = None
         ts0 = time()
         frame_element = detection_node.process(frame_element)
         ts1 = time()
@@ -161,18 +163,19 @@ def proc_frame_reader_and_detection(
             # 清空真实的 frame 引用，防止被序列化
             frame_element.frame = None
             
-            # [Fix WinError 2]: 在 Windows 下，如果没有进程保留 shared_memory 的引用，底层内存会被立即销毁
-            # 为防止下游在 attach 时找不到文件，进程 1 必须保留引用足够长的时间 (略大于 Queue 的最大排队数)
-            if not hasattr(proc_frame_reader_and_detection, 'shm_pool'):
-                proc_frame_reader_and_detection.shm_pool = []
-            proc_frame_reader_and_detection.shm_pool.append(shm)
-            
-            # 保持 60 个引用（Queue maxsize 为 50），保证下游必然已经接收到并重新附加了句柄
-            if len(proc_frame_reader_and_detection.shm_pool) > 60:
-                old_shm = proc_frame_reader_and_detection.shm_pool.pop(0)
-                old_shm.close()
-
         queue_out.put(frame_element)  # 阻塞等待，确保不丢帧
+        if shm is not None:
+            if os.name == "nt":
+                # Windows requires one live handle until the downstream process attaches.
+                if not hasattr(proc_frame_reader_and_detection, "shm_pool"):
+                    proc_frame_reader_and_detection.shm_pool = []
+                proc_frame_reader_and_detection.shm_pool.append(shm)
+                if len(proc_frame_reader_and_detection.shm_pool) > _FRAME_QUEUE_MAXSIZE + 2:
+                    proc_frame_reader_and_detection.shm_pool.pop(0).close()
+            else:
+                # POSIX keeps the named segment alive until ShowNode unlinks it. Closing
+                # the creator handle prevents a 4K-frame leak that exhausts /dev/shm.
+                shm.close()
         if PRINT_PROFILE_INFO:
             print(
                 f"PROC_FRAME_READER_AND_DETECTION: {(time()-ts0) * 1000:.0f} ms: "
@@ -251,17 +254,20 @@ def proc_tracker_update_and_calc(
             frame_element = kafka_producer_node.process(frame_element)
         ts2 = time()
         
-        # 传给进程 3 前，再次断开 frame 引用，并由本进程接力保持引用以防 WinError 2
+        # 传给进程 3 前，再次断开 frame 引用。
         if _shm_tracker is not None:
             frame_element.frame = None
-            if not hasattr(proc_tracker_update_and_calc, 'shm_pool'):
-                proc_tracker_update_and_calc.shm_pool = []
-            proc_tracker_update_and_calc.shm_pool.append(_shm_tracker)
-            if len(proc_tracker_update_and_calc.shm_pool) > 60:
-                old_shm = proc_tracker_update_and_calc.shm_pool.pop(0)
-                old_shm.close()
 
         queue_out.put(frame_element)  # 阻塞等待，确保不丢帧
+        if _shm_tracker is not None:
+            if os.name == "nt":
+                if not hasattr(proc_tracker_update_and_calc, "shm_pool"):
+                    proc_tracker_update_and_calc.shm_pool = []
+                proc_tracker_update_and_calc.shm_pool.append(_shm_tracker)
+                if len(proc_tracker_update_and_calc.shm_pool) > _FRAME_QUEUE_MAXSIZE + 2:
+                    proc_tracker_update_and_calc.shm_pool.pop(0).close()
+            else:
+                _shm_tracker.close()
         if PRINT_PROFILE_INFO:
             print(
                 f"PROC_TRACKER_UPDATE_AND_CALC: {(time()-ts0) * 1000:.0f} ms: "
@@ -341,8 +347,8 @@ def proc_show_node(queue_in: Queue, config: dict, tracker_pid: int):
 def main(config) -> None:
     time_sleep_start = 5
 
-    queue_detect_out = Queue(maxsize=50)
-    queue_track_out = Queue(maxsize=50)
+    queue_detect_out = Queue(maxsize=_FRAME_QUEUE_MAXSIZE)
+    queue_track_out = Queue(maxsize=_FRAME_QUEUE_MAXSIZE)
 
     # 顺序启动进程（每个下游进程需要上游 PID 做健康检查）
     reader_process = Process(
@@ -369,8 +375,26 @@ def main(config) -> None:
     )
     display_process.start()
 
-    # 等待显示进程完成（它是管道末端，最后退出）
+    processes = (reader_process, tracker_process, display_process)
+    while display_process.exitcode is None:
+        for process in processes:
+            if process.exitcode not in (None, 0):
+                logging.getLogger(__name__).error(
+                    "Pipeline worker %s exited with code %s",
+                    process.name,
+                    process.exitcode,
+                )
+                for sibling in processes:
+                    if sibling.is_alive():
+                        sibling.terminate()
+                for sibling in processes:
+                    sibling.join(timeout=5)
+                raise SystemExit(1)
+        sleep(0.2)
+
     display_process.join()
+    for process in (reader_process, tracker_process):
+        process.join(timeout=5)
 
 
 if __name__ == "__main__":

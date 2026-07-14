@@ -76,8 +76,13 @@ CREATE EXTENSION IF NOT EXISTS timescaledb;
 | --- | --- | --- |
 | `uav_users` | `id`；`username`、`email` 唯一 | 平台用户与角色 |
 | `uav_alerts` | `id` | 告警当前状态、确认信息和证据引用 |
-| `uav_missions` | `id` | 无人机任务生命周期 |
+| `uav_drones` | `id`；设备编码/序列号候选唯一 | 无人机身份、型号、启用状态、默认路口和默认源引用；在线状态由遥测计算 |
+| `uav_video_sources` | `id` | RTSP/服务器 MP4 配置、密钥引用、启用和验证状态；打开的 stream 不入库 |
+| `uav_telemetry_sources` | `id` | MQTT/服务器 SRT 遥测配置、密钥引用、启用和验证状态 |
+| `uav_flight_plans` | `id` | 单次/周期计划、时区、路网/源引用、状态和修订版本 |
+| `uav_missions` | `id`；`(flight_plan_id, scheduled_start_at)` 首次执行唯一 | 一次计划窗口或立即执行任务的生命周期、计划快照、实际时间、原因和 pipeline 引用 |
 | `uav_pipelines` | `id` | 分析管道实例与运行状态 |
+| `uav_audit_logs` | `id`；主体/业务对象/发生时间索引 | 配置、启停、自动执行、失败、停止、重试和敏感操作审计 |
 | `uav_track_events` | `id`；`(source_system, source_message_id)` 唯一 | 完成轨迹业务主记录、摘要和轨迹点父对象 |
 | `uav_ai_events` | `(source_system, source_event_id)`；`(source_system, idempotency_key)` 唯一 | 向智慧交通主平台交付的 AI 事件主记录 |
 | `uav_event_outbox` | `id`；`(source_system, message_id, destination)` 唯一；外发幂等键另设条件唯一 | 待投递消息、下一次重试时间和当前投递状态 |
@@ -111,16 +116,20 @@ CREATE EXTENSION IF NOT EXISTS timescaledb;
 | 执法 | `uav_enforcement_clues` | 一对一详情表候选 | 仅保存 `uav_ai_events(event_type=enforcement_clue)` 专属字段，不另建事件主表或状态机 | 与事件组合唯一键、雷达/视频速度字段、复核边界 |
 | 证据 | `uav_evidence_packages` | canonical 普通表 | 第 3.2 节既有基线；所有测绘/执法事件共用 | 包版本、事件关联、内容哈希、存储状态、保留策略 |
 | 证据 | `uav_evidence_items` | canonical 普通表 | 第 3.2 节既有基线；保存单个材料的不可变引用 | 材料类型、父子派生、哈希、对象引用、访问控制 |
-| 审计 | `uav_audit_logs` | 追加型普通表/分区表候选 | 统一记录同步、发布、绑定、调阅、导出、删除和回滚 | 审计主体、前后值、trace_id、防篡改、归档分区 |
+| 审计 | `uav_audit_logs` | canonical 追加型普通表/分区表候选 | 第 3.2 节既有基线；统一记录同步、发布、绑定、调阅、导出、删除、调度和回滚 | 审计主体、前后值、trace_id、防篡改、归档分区 |
 | 路网上下文 | `uav_road_context_snapshots` | canonical 普通表 | 第 3.2 节既有基线；缓存 manifest/校验值，不复制权威路网库 | 快照内容边界、校验、发布/退役、保留和回滚 |
 | 设备绑定 | `uav_device_intersection_bindings` | 普通表 | 无人机/相机/任务到权威路口的有效期映射 | 设备类型、有效期排他约束、任务优先级、审计 |
 | 视觉车道绑定 | `uav_visual_lane_bindings` | canonical 普通表 | 第 3.2 节既有基线；本地车道到 inter/link/lane 的版本化绑定 | calibration/version 唯一键、确认/退役、差异与回滚 |
 | 地图匹配 | `uav_map_match_results` | 普通表/分区表候选 | 轨迹/事件的匹配结果或候选；权威 ID 同时回写对应事实摘要 | subject 类型、候选集、revision、置信度、拒判原因、保留期 |
 | 规则治理 | `uav_rule_versions` | 普通表 | 拥堵、冲突、测绘和执法共用的规则发布元数据 | 规则类型、schema、审批、生效窗口、原子切换和回滚 |
-| 无人机资产 | `uav_drones` | 普通表 | 保存 UAV 平台所需设备身份、型号和配置；时序遥测仍进 `uav_telemetry_metrics` | 与大项目设备主数据关系、唯一编码、状态快照边界 |
+| 无人机资产 | `uav_drones` | canonical 普通表 | 第 3.2 节既有基线；保存 UAV 平台所需设备身份、型号和配置；时序遥测仍进 `uav_telemetry_metrics` | 与大项目设备主数据关系、唯一编码、状态快照边界 |
+| 无人机接入 | `uav_video_sources` | canonical 普通表 | 第 3.2 节既有基线；保存 RTSP/服务器 MP4 配置与验证状态，运行时 stream 不入库 | secret reference、脱敏、allowlist、验证状态、与遥测源配对 |
+| 无人机接入 | `uav_telemetry_sources` | canonical 普通表 | 第 3.2 节既有基线；保存 MQTT/服务器 DJI `.srt` 遥测配置与验证状态 | secret reference、Topic、allowlist、SRT 解析/覆盖质量、与视频源配对 |
+| 飞行计划 | `uav_flight_plans` | canonical 普通表 | 第 3.2 节既有基线；保存 once/weekly 计划定义，不保存真实飞控航线 | schedule schema、IANA timezone、跨午夜、例外日期、状态、修订和冲突查询 |
+| 任务执行 | `uav_missions` | canonical 普通表 | 第 3.2 节既有基线；每个计划窗口或立即请求形成一个执行事实 | `(flight_plan_id,scheduled_start_at)` 唯一、状态机、快照、retry 父子关系、错误分类 |
+| 管道执行 | `uav_pipelines` | canonical 普通表 | 第 3.2 节既有基线；保存 Mission 的 Pipeline 期望状态和摘要，进程句柄留内存 | Mission 关系、节点归属、恢复、停止和错误摘要 |
 | 标定 | `uav_calibrations` | 普通表 | 保存标定版本、适用设备/路口、参数引用和质量状态 | 参数 schema、版本、审批、有效期、文件/对象引用 |
 | 车道标注任务 | `uav_lane_annotation_tasks` | 普通表 | 承接现有 JSON/文件任务状态；确认结果关联 `uav_visual_lane_bindings` | 任务状态、图片引用、标注版本、幂等和迁移校验 |
-| 视频源 | `uav_video_sources` | 普通表候选 | 仅在需要持久化源配置/授权元数据时使用；运行时 stream 对象不入库 | 是否建表、密钥引用、脱敏、健康状态和权限 |
 | 身份角色 | `uav_roles` | 普通表候选 | 是否从 `uav_users.role` 拆出取决于统一身份/RBAC 模型 | 角色来源、权限关系、同步权威和迁移策略 |
 | 数据迁移 | `uav_migration_quarantine` | 普通表候选 | 隔离无法证明业务时间、epoch 异常或 schema 不可解析的遗留记录，不属于业务事实主表 | 原始 measurement/Topic、raw payload、`ingested_at`、判定原因、重建/丢弃审批 |
 
@@ -131,6 +140,9 @@ CREATE EXTENSION IF NOT EXISTS timescaledb;
 - `uav_evidence_packages`、`uav_evidence_items`、`uav_road_context_snapshots`、`uav_visual_lane_bindings` 在第 3.2 节已存在；本目录只是补充 PRD 责任，不触发第二套同名或同义表。
 - `uav_rule_versions` 保存共性发布元数据，`uav_enforcement_rules` 保存执法领域规则内容；二者通过外键/版本键关联，不重复保存两套生效状态。
 - `uav_map_match_results` 是否独立持久化、是否按时间分区，必须由查询需求、数据量和历史复现要求决定；未冻结前不得为了“预留”自动建表。
+- S8 全域态势工作台默认通过 `uav_traffic_metrics`、`uav_telemetry_metrics`、`uav_system_metrics`、`uav_ai_events`、`uav_alerts`、任务/管道状态和权威路网只读对象构建读模型，不新建 `dashboard` 业务真源表；待办任务是现有事件、测绘、投递和配置状态的权限化摘要，不新建第二套任务真源。为性能增加的连续聚合、物化视图或缓存须使用 `uav_` 命名、可从事实重建，并保留 `as_of/window/coverage/road_data_version`。
+- S9 的 SourceProfile 是 API 聚合，不预先要求独立物理表；`uav_video_sources` 与 `uav_telemetry_sources` 的一对一配对外键/关联方式由 ERD 冻结。不得同时以 profile 表和两张源表保存两套启用、默认或验证状态。
+- `uav_flight_plans` 是排期定义真源，`uav_missions` 是执行事实真源，`uav_pipelines` 是分析进程状态真源；三者 ID、状态机和恢复语义不得混用。FlightPlan 只启停 AI Pipeline，不保存或下发真实飞控航线。
 - 所有候选表的主键、外键、PostGIS 类型、schema、RLS、索引、分区、保留和迁移顺序由正式 migration/DDL 统一冻结；PRD 表名目录不能替代数据库设计评审。
 
 ### 3.4 当前内存/文件状态去向盘点（目标 disposition，待实现）
@@ -139,15 +151,16 @@ CREATE EXTENSION IF NOT EXISTS timescaledb;
 
 | 当前对象/载体 | 当前形态 | 目标 disposition | 目标表/权威源 | 边界与待办 |
 | --- | --- | --- | --- | --- |
-| DRONES / `drone_store` | 内存设备与最新状态 | 迁库 + 运行时缓存 | `uav_drones`；遥测历史进 `uav_telemetry_metrics` | 设备身份/配置持久化，最新在线状态可缓存；与大项目设备主数据权威关系 `TBD` |
-| MISSIONS | 当前内存状态 | 迁库 | `uav_missions` | 持久化任务定义、期望状态、关联路口/无人机和生命周期；恢复语义待冻结 |
+| DRONES / `drone_store` | 内存设备与最新状态 | 迁库 + 运行时缓存 | `uav_drones`；遥测历史进 `uav_telemetry_metrics` | 设备身份/配置持久化，在线状态由新鲜遥测计算；与大项目设备主数据权威关系 `TBD` |
+| MISSIONS | 当前内存状态，创建即启动管道 | 迁库并拆分计划/执行语义 | `uav_flight_plans` + `uav_missions` | FlightPlan 保存排期；Mission 保存一次执行和冻结快照；现有立即执行入口标记 `trigger_type=manual` |
 | intersection/device map | 本地映射/配置与外部路网调查 | 外部权威 + 迁库绑定 | 外部权威路口只读视图/API + `uav_device_intersection_bindings` | 不盲建重复 `uav_intersections` 路口底库；仅保存设备/任务到权威 `inter_id` 的版本化绑定 |
 | PipelineManager desired/config | 内存管理对象 | 迁库 | `uav_pipelines` | 保存管道配置、期望状态和可恢复状态摘要 |
 | PipelineManager 进程句柄/队列/锁 | OS/Python 运行时对象 | 继续内存 | 无数据库表 | PID/handle 不作为可恢复真源；服务重启后按持久化期望状态重新核对/拉起，策略 `TBD` |
 | 管道/GPU/系统运行指标 | 内存/消息/旧 InfluxDB | 迁库 | `uav_system_metrics` | 仅追加时序事实；不得把进程对象序列化入库 |
 | alerts | 内存 + 当前无前缀 `alerts` 表 | 迁库 | `uav_alerts` | 迁移告警当前状态与确认信息；不复制主平台派警处置状态 |
 | calibration / lane annotation JSON | 文件/JSON | 迁库，原文件按迁移期只读保留 | `uav_calibrations`、`uav_lane_annotation_tasks`、`uav_visual_lane_bindings` | 校验版本、坐标、图片/文件哈希和绑定关系；切换后由数据库/API 成为 UAV 配置真源 |
-| 视频 `_STREAMS` | 运行时 stream 注册表 | 默认继续内存 | 默认无表；`uav_video_sources` 为 `TBD` 候选 | 打开的 stream、连接对象和帧缓存不入库；如持久化视频源，只保存配置/密钥引用，禁止明文凭据 |
+| `video_src` / `telemetry_source` / `telemetry_file_path` | 当前请求中的字符串或环境变量 | 迁库配置 + 运行时解析 | `uav_video_sources` + `uav_telemetry_sources` | 实时 RTSP+MQTT、本地 MP4+DJI `.srt` 成对；路径 allowlist，凭据只存 secret reference |
+| 视频 `_STREAMS` | 运行时 stream 注册表 | 继续内存 | 无配置表之外的运行时表 | 打开的 stream、连接对象和帧缓存不入库；配置只保存在 canonical source 表中 |
 | users / role 字段 | 当前无前缀 `users` 表及行内 role | 迁库；角色拆表 `TBD` | `uav_users`；可选 `uav_roles` | 是否拆角色表由统一身份/RBAC 权威模型冻结，不能先建一套本地角色体系 |
 
 验收时必须逐项给出迁移脚本、数据量/抽样对账、回滚方式和切换责任人；标为“继续内存”的对象不得为了满足表目录而创建占位表，标为“外部权威”的对象不得被复制成无人机平台路网主库。
@@ -328,6 +341,19 @@ CREATE EXTENSION IF NOT EXISTS timescaledb;
 - 主数据版本变化不得重写历史指标、轨迹或事件；每条事实保留产生时的 `road_data_version`。
 - 管道启动时读取已发布版本快照并缓存，不得逐帧查询远程/共享路网表。
 - `road9` 中具体路网表/视图路径仍为 `【验收阻断】【待确认】`；此前调查的 `road10.*` 不再作为目标引用。
+
+### 6.4 无人机数据源、FlightPlan、Mission 与 Pipeline
+
+- `uav_video_sources` 只接受 `rtsp/file`，`uav_telemetry_sources` 只接受 `mqtt/srt_file`；其中 SRT 固定指 DJI `.srt` 遥测字幕，不是视频协议。
+- 实时配对为 `rtsp + mqtt`，本地配对为 `file(MP4) + srt_file`。API 可将成对记录聚合为 SourceProfile，但数据库只能有一套启用、默认和验证状态真源。
+- RTSP/MQTT 凭据只保存 secret reference；服务器本地路径保存规范化值和 allowlist 根标识，禁止明文密码、任意路径和打开的流对象。
+- `uav_flight_plans` 至少保存 `drone_id/inter_id/road_data_version/video_source_id/telemetry_source_id/ai_mode/status/schedule_type/timezone/schedule_json/revision/enabled_at/retired_at`。`schedule_json` 的 schema 版本、CHECK 约束和索引须由 migration 冻结，不能存不可验证的任意 JSON。
+- `uav_missions` 至少保存 `flight_plan_id/trigger_type/scheduled_start_at/scheduled_end_at/actual_started_at/actual_ended_at/status/reason_code/error_summary/pipeline_id/parent_mission_id/retry_number` 以及设备、源、路网和计划快照。
+- 首次计划执行必须对非空 `(flight_plan_id, scheduled_start_at)` 建唯一约束；立即执行 Mission 的 `flight_plan_id` 可空并使用独立请求幂等键。retry 新建 Mission 并通过 `parent_mission_id` 关联，不覆盖原失败记录。
+- `uav_flight_plans` 使用 `draft/enabled/paused/completed/retired`；`uav_missions` 使用 `pending/starting/running/completed/failed/skipped/cancelled`。状态转换、操作者和原因进入 `uav_audit_logs`。
+- 调度器通过 PostgreSQL advisory lock 或经批准的数据库租约竞争执行资格；锁不是业务事实，不能以锁记录替代 Mission 唯一约束和状态事务。
+- `uav_pipelines` 保存期望状态、配置快照、执行节点和错误摘要；PID/handle/queue/lock 仍属于运行内存。Mission 与 Pipeline 不共享状态字段或主键。
+- `uav_telemetry_metrics` 必须带可空的 Mission/Pipeline 引用、设备 ID、业务时间和质量，便于区分实时任务、本地回放和非任务遥测。
 
 ## 7. 压缩、连续聚合与保留策略候选（待确认）
 

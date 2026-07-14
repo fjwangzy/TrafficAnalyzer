@@ -1,8 +1,8 @@
 # 无人机交通智能感知系统 PRD 分册索引
 
-本目录承接[总 PRD v1.8](../2026-06-29-uav-traffic-ai-prd.md)的板块级细化。总 PRD 管项目边界和跨板块原则，分册 PRD 管可实施、可测试、可验收的细节。
+本目录承接[总 PRD v2.1](../2026-06-29-uav-traffic-ai-prd.md)的板块级细化。总 PRD 管项目边界和跨板块原则，分册 PRD 管可实施、可测试、可验收的细节。
 
-所有分册共同遵守：PostgreSQL connection database=`road9`；UAV 内部 Topic、`msg_type`、WebSocket channel 和本项目自建表使用 `uav_` 前缀；时序指标使用 TimescaleDB；InfluxDB、Telegraf、Grafana 仅为待迁移退役的遗留链路。分册如与该基线冲突，应按总 PRD v1.8 修订，不得自行创建第二套命名。
+所有分册共同遵守：PostgreSQL connection database=`road9`；UAV 内部 Topic、`msg_type`、WebSocket channel 和本项目自建表使用 `uav_` 前缀；时序指标使用 TimescaleDB；InfluxDB、Telegraf、Grafana 仅为待迁移退役的遗留链路。分册如与该基线冲突，应按总 PRD v2.1 修订，不得自行创建第二套命名。
 
 ## 1. 分册清单
 
@@ -15,6 +15,8 @@
 | S5 | [路网与共性能力](S5-road-and-common-capabilities-prd.md) | 权威主数据、坐标、绑定、规则和证据共性能力 | 详细评审草案；优先冻结 |
 | S6 | [智慧交通主平台集成](S6-main-platform-integration-prd.md) | 事件契约、回执、重试及反馈 | 详细评审草案；优先冻结 |
 | S7 | [质量验收与运营](S7-quality-acceptance-operations-prd.md) | 数据集、指标、试点、上线和持续运营 | 详细评审草案；汇总冻结 |
+| S8 | [全域态势工作台（首屏 Dashboard）](S8-dashboard-one-map-prd.md) | 城市地图背景下的无人机路口态势、核心指标、重点关注、待办任务、监测保障和数据可信度 | 信息架构已冻结；地图/口径/接口/视觉验收待冻结 |
+| S9 | [无人机对接与飞行计划管理](S9-drone-integration-flight-plan-prd.md) | 无人机档案、RTSP+MQTT/MP4+SRT 数据源、单次/周期计划、Mission 调度与本地回放 | 详细评审草案；设备/接口/DDL/权限/高可用待冻结 |
 
 ## 2. 统一章节模板
 
@@ -43,6 +45,8 @@
 - 所有 `【验收阻断】` 已关闭，其他待补充项已有负责人和截止时间；
 - 货车识别保持货车/非货车二分类，不因分册细化扩大模型范围。
 - 数据对象明确区分 database、schema、普通表与 Hypertable；所有自建物理表和内部消息满足 `uav_` 命名，迁移/退役与时间语义有可执行验收。
+- S8 首屏中的项目覆盖、正在监测、风险、保障和可信度均有可解释口径；真实地图不得使用随机、数组序号或网格位置代替权威坐标。
+- S9 明确 FlightPlan 与 Mission、实时 RTSP+MQTT 与本地 MP4+DJI `.srt` 两组数据源边界；计划只启停 AI Pipeline，不控制无人机飞行。
 
 分册内维护 TBD 编号、内容、责任方和状态；计划关闭时间与关闭依据集中维护在总 PRD 第 14 章。若同一总项下的分册事项排期或证据不同，正式关闭前必须拆成独立总项，确保逐项可追踪。
 

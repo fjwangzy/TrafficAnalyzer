@@ -1,6 +1,6 @@
 # TASKS.md — TrafficAnalyzer 任务追踪
 
-> 最后更新：2026-07-13（已纳入无人机 AI PRD v1.8、`road9`/TimescaleDB 目标架构及 `uav_` 统一命名）
+> 最后更新：2026-07-14（已纳入无人机 AI PRD v2.1、S8 全域态势工作台、S9 无人机对接与飞行计划、Console2 六域信息架构、`road9`/TimescaleDB 目标架构及 `uav_` 统一命名）
 
 ## 技术债清单
 
@@ -245,11 +245,26 @@
 
 ### 近期（1-2 周）
 - [x] 完成 `docs/generated/uav-traffic-ai-prd/` S1-S7 七个分册详细评审草案及跨分册一致性审查（2026-07-13）
+- [x] 完成 S8 全域态势工作台（首屏 Dashboard）详细评审草案：以交通指挥中心主任为第一用户，冻结“全局态势—重点关注—平台待办—无人机保障—数据可信度—专业下钻”产品框架（2026-07-14）
+- [x] 完成 Console2 页面与 PRD 裁剪归并：正式导航收敛为全域态势、智能研判、事故测绘、执法线索、飞行任务、平台治理六域；旧视频、热区、报告和治理子页归并后不保留旧前端路由（2026-07-14）
+- [x] 统一 Console2 页面框架：工作台与实时监测共用 ConsoleFrame，左侧为六个一级业务域，顶部仅显示当前域二级页面；自动化回归 20/20、生产构建通过（2026-07-14）
+- [x] Console2 接管登录、实时监测、标定中心、系统与身份：统一 API Client/React Query/JWT 会话/可重连 WebSocket，真实 REST/WS/MJPEG、管理员后端校验、标注自然尺寸坐标、检测器/BEV 主次切换；旧 `traffic-fly-console` 已从 Compose/发布入口移除。Console2 全量回归 36/36，覆盖登录失败、刷新恢复、非法跳转、真实监控、视频重试、WS 重连/退订/去重、系统部分失败、用户只读、多车道自然尺寸坐标保存；Platform 全量回归 37/37，覆盖 REST/WS Token 与系统/用户/标定管理员校验；生产构建通过（2026-07-14）
+- [x] 完成 S9 无人机对接与飞行计划管理详细评审草案：冻结 RTSP+MQTT/服务器 MP4+DJI `.srt` 成对源、once/weekly FlightPlan、Mission 状态机、调度幂等和飞控边界（2026-07-13）
+- [ ] 冻结无人机设备权威编码、RTSP/MQTT 支持矩阵、secret reference、服务器本地资产 allowlist 及 MP4/SRT 时间覆盖校验口径
+- [ ] 冻结并实现 Drone/Source/FlightPlan/Mission API、`uav_drones/uav_video_sources/uav_telemetry_sources/uav_flight_plans/uav_missions/uav_pipelines` migration 和现有内存状态迁移
+- [ ] 在 FastAPI 单体中实现 FlightPlan Scheduler：≤5 秒扫描、PostgreSQL advisory lock/租约、`(flight_plan_id,scheduled_start_at)` 唯一、窗口内恢复和 `skipped/window_missed`
+- [ ] 将 `/drones` 增强为无人机、数据源、飞行计划、执行记录四页签，完成管理员写权限、指挥员/分析员只读和敏感字段脱敏
+- [ ] 使用 `inter_xqh` MP4+SRT 完成 S9 API 端到端验收；覆盖 once/weekly、跨午夜、例外日、重叠拒绝、重启、多实例、EOF、失败、停止/重试和非管理员 403
+- [ ] 由指挥中心冻结 S8 项目路口、具备监控条件、正在监测、监测降级、无人机保障和重点关注榜口径；未冻结前不得继续使用未定义的单一 `active` 作为主任结论
+- [ ] 将 `/` 从 KPI/趋势卡片重构为真实城市地图主导的项目一图概览；移除 `INT_camera_1` 趋势硬编码，按当前权限/辖区/项目范围聚合
+- [ ] 使用权威 `inter_id + road_data_version` 和经验证坐标替换 `/gis` 当前按数组序号生成的网格示意点位；底图失败时降级为列表，不得模拟真实位置
+- [ ] 冻结并实现 Dashboard overview/intersections/detail/drones 聚合 API、bbox/点位聚合、统一 `as_of`、可比时段、coverage、关注项入榜原因、缓存和断线 REST 回补
+- [ ] 完成 S8 主任首屏视觉原型及大屏/办公端适配，重点验证 5 秒全局辨识、30 秒重点定位、非颜色状态编码、空态/过期/断线/无权限状态
 - [x] 冻结目标数据架构：PostgreSQL connection database=`road9`，UAV Topic/`msg_type`/WebSocket/自建表统一 `uav_`，指标采用 TimescaleDB，InfluxDB/Telegraf/Grafana 迁移后退役（ADR-019）
 - [ ] 盘点 `road9` 的 schema、现有平台表、权威路网只读视图和扩展状态；确认 `road9` 是 database 名而非默认 schema，并输出对象归属/迁移矩阵
 - [ ] 在 `road9` 安装并验收 TimescaleDB，冻结扩展版本/许可、目标 schema、chunk、索引、压缩、保留、连续聚合、容量、备份恢复、高可用和 RPO/RTO
 - [ ] 将 PostgreSQL 部署镜像/托管实例切换为兼容的 TimescaleDB 发行形态；当前镜像不含扩展，必须在目标环境做安装、升级和恢复演练
-- [ ] 冻结并评审全部 `uav_*` DDL：核心 Hypertable、长期消费幂等 `uav_message_inbox`、AI 事件/outbox/attempt/feedback/dead-letter、证据、测绘、执法、路网上下文、绑定、审计及现有平台表迁移；同一实体不得重复建表或双真源
+- [ ] 冻结并评审全部 `uav_*` DDL：核心 Hypertable、无人机/视频源/遥测源/FlightPlan/Mission/Pipeline、长期消费幂等 `uav_message_inbox`、AI 事件/outbox/attempt/feedback/dead-letter、证据、测绘、执法、路网上下文、绑定、审计及现有平台表迁移；同一实体不得重复建表或双真源
 - [ ] 引入受控 Alembic migrations 并设置版本表 `uav_alembic_version`；生产环境停止依赖 `Base.metadata.create_all()` 隐式建表
 - [ ] 统一生产者/消费者/API/前端消息为 `uav_statistics_*`、`uav_track_complete_*`、`uav_conflicts_*`、`uav_telemetry_*`、`uav_ai_events` 等目标 Topic，以及 `uav_*` msg_type/WebSocket channel；制定旧名兼容窗口与强制退役日期
 - [ ] 重构 Kafka Topic builder，禁止以字符串替换从统计 Topic 推导其他 Topic；以 `camera_id` 显式生成并覆盖全量契约测试
@@ -265,8 +280,8 @@
 - [ ] 冻结 `uav_system_metrics` 生产责任、指标目录、单位/标签、采样周期、基数、保留和告警阈值，并实现采集与契约测试
 - [ ] 页面/API 切读 `road9` 并完成性能、故障注入、备份恢复与回滚演练；停止旧写入后确认无新增 InfluxDB 数据
 - [ ] 从 compose、配置、依赖、测试和运维手册移除 Telegraf/InfluxDB/Grafana；归档批准范围内历史数据，完成秘密扫描后再删除旧 provisioning/脚本
-- [ ] 按分册顺序组织正式专项评审：先冻结 S5 路网与共性能力、S6 主平台集成，再并行确认 S1-S4，最后汇总冻结 S7 质量验收与运营
-- [ ] 为 S1-S7 各分册补齐需求负责人、业务规则阈值、接口字段、验收样本量、截止时间和关闭依据，并将所有 `【验收阻断】` 同步回总 PRD 第 14 章
+- [ ] 按分册顺序组织正式专项评审：先冻结 S5 路网与共性能力、S6 主平台集成和 S9 无人机接入/调度，再并行确认 S1-S4、冻结 S8 首屏口径，最后汇总冻结 S7 质量验收与运营
+- [ ] 为 S1-S9 各分册补齐需求负责人、业务规则阈值、接口字段、验收样本量、截止时间和关闭依据，并将所有 `【验收阻断】` 同步回总 PRD 第 14 章
 - [ ] `docs/roaddata.md` 已移除明文连接信息；仍须完成原凭据轮换、密钥管理/环境变量接入和仓库历史秘密扫描
 - [ ] 由数据负责人确认 `road9` database 内的权威路网 schema/只读视图及路网版本对象，并冻结路口/Link/车道字段、代码表、几何类型、SRID 和 GCJ02 语义；不得照搬历史 `ycx/road10` 结构
 - [ ] 设计路网只读视图/API与本地版本缓存，禁止检测逐帧直连远程生产库

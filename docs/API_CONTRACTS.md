@@ -209,6 +209,151 @@ WebSocket 推送可沿用 `{channel, type, data, ts}` 外壳，但 `type` 和 UA
 - 管道启动读取已发布路网快照并缓存，不得逐帧查询共享路网表。
 - 此前 `ycx`/`road10` 调查只作为历史证据，`road10` 不再是目标连接或权威源选择。
 
+### 0.9 全域态势工作台读契约（S8 候选，待冻结）
+
+首屏 Dashboard 以交通指挥中心主任为第一用户，目标读模型只聚合现有权威路网、任务/设备、时序指标、AI 事件和系统健康事实，不新增第二套事件或处置真源。候选接口如下，最终路径、schema、错误码、bbox/分页、缓存和 SLA 由 S8-TBD-006 冻结：
+
+| 方法与候选路径 | 用途 | 最小返回边界 |
+| --- | --- | --- |
+| `GET /api/v1/dashboard/overview` | 主任核心指标、变化摘要、重点关注榜、权限化待办摘要和整体健康 | `project_scope/road_data_version/as_of/window/compare_window/data_quality/coverage_ratio/schema_version`，指标分子分母、变化方向、关注项入榜原因，以及 `pending_tasks[{task_type,target_id,count,oldest_wait_sec,target_route,quality}]` |
+| `GET /api/v1/dashboard/intersections` | 按权限、bbox、zoom 和筛选返回路口摘要或聚合簇 | `inter_id`、真实坐标、覆盖/监测/风险/质量四维状态、最后业务时间；禁止数组序号或随机位置 |
+| `GET /api/v1/dashboard/intersections/{inter_id}` | 选中路口详情 | 任务、无人机、管道、态势、事件、路网版本、质量及专业页面稳定深链参数 |
+| `GET /api/v1/dashboard/drones` | 当前视野/任务关联的无人机保障摘要 | `drone_id`、任务/路口、位置、遥测时间、定位质量和授权后的状态摘要 |
+
+接口路径不属于消息/自建表 `uav_` 前缀规则，但响应中的业务消息类型、事件引用和后端自建物理对象仍须遵守第 0 节 canonical 契约。overview 与地图摘要必须在同一权限和可比较时间口径下返回；缺失数据使用明确的 `stale/missing/unknown`，不得以 `0` 代替。
+
+主任首屏默认只订阅 `uav_alerts` 和 `uav_system`；选中路口后订阅 `uav_intersection:{intersection_id}`，需要无人机实时详情时再订阅 `uav_telemetry:{drone_id}`。禁止同时订阅城市全部路口明细频道。若未来新增全局路口状态增量，channel 和 `type` 必须以 `uav_` 开头并经过容量、恢复和幂等评审。
+
+重点关注榜必须返回可复算的入榜原因、持续时间、变化方向、规则/窗口和质量，不得只返回不透明综合分。上一可比时段只有在辖区、项目路口集合、指标口径和 coverage 可比较时才允许输出变化百分比。
+
+`pending_tasks` 只聚合本平台可执行的 `ai_review/survey_delivery/integration_replay/configuration_check`，按当前身份和数据范围过滤，并从现有事件、测绘、投递和配置状态计算；不得新增第二套任务真源，也不得返回主平台派警、处置、结案或处罚决定。
+
+### 0.10 无人机对接与飞行计划契约（S9 目标，待实现/冻结）
+
+本节是 S9 目标契约，不表示当前代码已经实现。当前 `DRONES/MISSIONS` 内存状态、`POST /api/v1/missions` 创建即启动 PipelineManager 及直接传 `video_src/telemetry_file_path` 的请求仍是迁移基线。
+
+#### 0.10.1 术语与状态
+
+- SRT 固定指 DJI `.srt` 遥测字幕，不指 Secure Reliable Transport 视频协议。
+- 实时源固定配对为 RTSP 视频 + MQTT 遥测；本地回放固定配对为服务器 MP4 文件 + `.srt` 遥测文件。
+- `FlightPlan` 是排期定义，状态为 `draft/enabled/paused/completed/retired`。
+- `Mission` 是一次执行，状态为 `pending/starting/running/completed/failed/skipped/cancelled`。
+- FlightPlan 保存 canonical `inter_id + road_data_version`；当前 Pipeline 所需 `intersection_id` 由兼容适配器生成，不能替代权威路口 ID。
+- FlightPlan 只自动启停 AI 检测 Pipeline，不下发航点、起降、返航或其他飞控指令。
+
+#### 0.10.2 目标 REST 路由
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| GET/POST | `/api/v1/drones` | 按权限查询/创建设备档案 |
+| GET/PATCH | `/api/v1/drones/{drone_id}` | 查询/编辑、启停和默认路口/源引用 |
+| GET/POST | `/api/v1/drones/{drone_id}/sources` | 查询脱敏源配置/创建成对数据源 |
+| PATCH | `/api/v1/drones/{drone_id}/sources/{source_profile_id}` | 编辑、启停或设为默认 |
+| POST | `/api/v1/drones/{drone_id}/sources/{source_profile_id}/validate` | 校验 RTSP+MQTT 或 MP4+SRT |
+| GET/POST | `/api/v1/flight-plans` | 查询/创建 FlightPlan |
+| GET/PATCH/DELETE | `/api/v1/flight-plans/{flight_plan_id}` | 查询/编辑；仅 draft 且无 Mission 时可删除 |
+| POST | `/api/v1/flight-plans/{flight_plan_id}/enable` | 校验设备、源、路网、排期和权限后启用 |
+| POST | `/api/v1/flight-plans/{flight_plan_id}/pause` | 暂停生成未来 Mission，不停止运行中的 Mission |
+| POST | `/api/v1/flight-plans/{flight_plan_id}/retire` | 永久停止未来执行并保留历史 |
+| GET | `/api/v1/flight-plans/{flight_plan_id}/occurrences` | 预览/查询带时区的未来执行窗口 |
+| GET/POST | `/api/v1/missions` | 查询执行记录/立即执行兼容入口 |
+| GET | `/api/v1/missions/{mission_id}` | 查询计划快照、实际时间、状态、原因和 pipeline 引用 |
+| POST | `/api/v1/missions/{mission_id}/stop` | 取消待执行或停止运行 Mission |
+| POST | `/api/v1/missions/{mission_id}/retry` | 从 failed Mission 创建新重试 Mission |
+
+写操作仅系统管理员可用；指挥员和数据分析员按授权路口只读。最终角色映射由 S9-TBD-008 冻结，前端隐藏按钮不能替代服务端鉴权。
+
+#### 0.10.3 无人机与数据源最小 shape
+
+无人机档案至少包含：
+
+```json
+{
+  "drone_id": "drone_001",
+  "name": "M300 RTK #1",
+  "model": "DJI Matrice 300 RTK",
+  "serial_number_masked": "***8A31",
+  "enabled": true,
+  "online_status": "online",
+  "default_inter_id": "inter-001",
+  "default_source_profile_id": "source-profile-001",
+  "last_telemetry_at": "2026-07-13T08:00:00Z"
+}
+```
+
+成对数据源最小 shape：
+
+```json
+{
+  "source_profile_id": "source-profile-001",
+  "drone_id": "drone_001",
+  "name": "生产实时源",
+  "mode": "live",
+  "enabled": true,
+  "is_default": true,
+  "video": {
+    "video_source_id": "video-source-001",
+    "type": "rtsp",
+    "location_masked": "rtsp://camera.example/***",
+    "credential_ref": "secret://uav/drone_001/rtsp"
+  },
+  "telemetry": {
+    "telemetry_source_id": "telemetry-source-001",
+    "type": "mqtt",
+    "broker_masked": "mqtts://broker.example:8883",
+    "topic": "thing/product/drone_001/osd",
+    "credential_ref": "secret://uav/drone_001/mqtt"
+  },
+  "validation": {
+    "status": "valid",
+    "validated_at": "2026-07-13T08:00:00Z",
+    "error_code": null
+  }
+}
+```
+
+本地回放使用 `mode=local_replay`、`video.type=file`、`telemetry.type=srt_file`。保存前对服务器路径做 realpath 规范化并限制在批准的 `UAV_LOCAL_ASSET_ROOTS` 内；响应只返回授权后的脱敏/相对显示值。校验至少包含 MP4 存在/可读/可解码、SRT 存在/可读/可解析以及时间或帧覆盖匹配。
+
+#### 0.10.4 FlightPlan 与 Mission 最小 shape
+
+```json
+{
+  "flight_plan_id": "flight-plan-001",
+  "name": "小清河早高峰",
+  "status": "enabled",
+  "drone_id": "drone_001",
+  "inter_id": "inter-001",
+  "road_data_version": "road9-2026-07-13",
+  "source_profile_id": "source-profile-001",
+  "ai_mode": "intersection_situation",
+  "schedule": {
+    "type": "weekly",
+    "timezone": "Asia/Shanghai",
+    "weekdays": [1, 2, 3, 4, 5],
+    "start_local_time": "07:00:00",
+    "end_local_time": "09:00:00",
+    "effective_from": "2026-07-13",
+    "effective_to": "2026-12-31",
+    "excluded_dates": ["2026-10-01"]
+  }
+}
+```
+
+`schedule.type=once` 时使用带 offset 的 `start_at/end_at`。weekly 的结束时刻不晚于开始时刻时，结束时间落在下一自然日。数据库时间以 UTC 保存，API 必须返回业务时区。
+
+Mission 至少返回 `mission_id/flight_plan_id/trigger_type/scheduled_start_at/scheduled_end_at/actual_started_at/actual_ended_at/status/reason_code/error_summary/pipeline_id/parent_mission_id/retry_number` 以及创建时冻结的设备、源、路网和计划快照。首次计划执行使用 `(flight_plan_id, scheduled_start_at)` 幂等；retry 创建新 Mission 并引用原 Mission，不能覆盖失败事实。
+
+#### 0.10.5 调度、冲突与错误
+
+- 调度器在 FastAPI 单体中作为后台服务运行，扫描周期不超过 5 秒；多实例通过 PostgreSQL advisory lock/数据库租约和唯一约束保证单调度者效果。
+- 同一无人机的 enabled 计划不得有重叠窗口；不同无人机可监测同一路口。
+- 平台重启时，当前时间仍在窗口内则幂等恢复；窗口已结束则 `status=skipped, reason_code=window_missed`，不自动补跑。
+- 编辑计划只影响未来执行；已生成/运行 Mission 保留原计划和数据源快照。
+- 本地视频 EOF 正常完成并返回 `completion_reason=source_eof`；源、路网、调度或 Pipeline 错误进入 failed 并返回脱敏、可分类原因。
+- 统一错误至少包含 `validation_error`、`forbidden`、`not_found`、`state_conflict`、`schedule_overlap`、`source_invalid`、`road_context_invalid`、`pipeline_start_failed` 和 `scheduler_unavailable`。
+
+目标验收接缝固定为：创建无人机/数据源 → 创建并启用 FlightPlan → 调度生成 Mission 并调用 PipelineManager → 查询视频/SRT 同步与遥测 → 到时或 EOF 停止 → 查询 Mission/审计。计划到 Pipeline running 的 P95 偏差目标 ≤10 秒，同一窗口重复 Mission/Pipeline 数必须为 0。
+
 ## 1. Kafka 消息契约（当前实现/遗留，待迁移）
 
 > 本节基于 commit `e69acee` 的代码现状。以下无 `uav_` 前缀名称只允许迁移兼容，不得用于新增生产者或正式目标验收。
@@ -691,7 +836,14 @@ Content-Type: application/json
 ```json
 {
   "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
-  "token_type": "bearer"
+  "token_type": "bearer",
+  "user": {
+    "id": 1,
+    "username": "admin",
+    "email": "admin@example.com",
+    "role": "admin",
+    "is_active": true
+  }
 }
 ```
 - 错误（401）：`{"detail": "Incorrect username or password"}`
@@ -805,6 +957,7 @@ Content-Type: application/json
 > 以下无前缀 channel 和 `type` 仅是遗留/迁移期兼容，非目标契约。目标值以第 0.5 节为准：`uav_intersection:*`、全局 `uav_alerts`、路口级 `uav_alerts:*`、`uav_system`、`uav_telemetry:*`、`uav_calibration` 以及对应 `uav_*` type。
 
 #### `WS /ws/realtime`
+- 连接 URL：`/ws/realtime?access_token=<JWT>`。缺失或无效 Token 在握手阶段以 `4401` 关闭；WebSocket 不读取 Cookie。
 - 连接后发送订阅消息：
 ```json
 {
@@ -844,9 +997,13 @@ Content-Type: application/json
 
 ### 认证机制
 - JWT token 在 `Authorization: Bearer <token>` 头中传递
+- Console2 仅使用 `sessionStorage:uav_access_token`，不读取旧 Console Cookie 或 Token key
+- WebSocket 因浏览器握手不能附加 Authorization header，使用 `access_token` query 参数并执行相同 JWT 校验
 - Token 包含 `sub`（user_id）、`username`、`role` 字段
 - 中间件在 `platform/app/middleware/auth.py` 中实现
 - 公开路径白名单：`/health`、`/ready`、`/api/v1/auth/login`、`/api/v1/auth/register`、`/docs`、`/openapi.json`
+- `/api/v1/system*`、`/api/v1/users*`、`/api/v1/calibration*` 由后端要求 `role=admin`；前端菜单隐藏和角色预览不是安全边界
+- 后端角色固定映射为 Console2 展示角色：`admin → 管理员`、`operator → 交通指挥员`、`viewer → 数据分析员`
 
 ## 8. 平台 REST API（43 条路由）
 
@@ -928,7 +1085,9 @@ file handler 并降级到 console，避免 reader/tracker/show worker 因同一�
 | GET | `/api/v1/intersections/{id}/stats` | 历史统计（当前 InfluxDB；目标 `uav_traffic_metrics`） |
 | GET | `/api/v1/intersections/{id}/lane-stats` | 车道级历史统计 |
 
-### 无人机管理 `/api/v1/drones`
+### 无人机管理 `/api/v1/drones`（当前实现/迁移基线）
+
+以下端点是当前代码现状；目标 Drone/Source/FlightPlan/Mission 契约见第 0.10 节。当前 `DRONES/MISSIONS` 为内存状态，不能作为重启恢复、周期排期或目标验收依据。
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
@@ -942,7 +1101,7 @@ file handler 并降级到 console，避免 reader/tracker/show worker 因同一�
 | POST | `/api/v1/missions` | 创建任务并立即启动检测管道 |
 | GET | `/api/v1/missions/{id}` | 任务详情 |
 
-#### `POST /api/v1/missions`
+#### `POST /api/v1/missions`（当前立即执行）
 
 创建任务时会将无人机绑定到路口，并调用 PipelineManager 启动检测管道。成功后任务响应中包含 `pipeline_id` 和当前 pipeline 状态；如果检测管道启动阶段抛出异常，任务状态会更新为 `error`，`error_message` 保存错误摘要，API 返回 `502` 供前端或运维诊断。
 
@@ -1022,7 +1181,7 @@ Console GIS 页会在选中路口后调用 `GET /api/v1/trajectories/{intersecti
 | GET | `/api/v1/calibration/summary` | 标定参数摘要 |
 | GET | `/api/v1/calibration/records` | 标定参数记录 |
 | GET | `/api/v1/calibration/lane-tasks` | 车道标注任务列表 |
-| GET | `/api/v1/calibration/lane-tasks/{task_id}/image` | 车道标注任务 JPEG 快照，供浏览器画布加载 |
+| GET | `/api/v1/calibration/lane-tasks/{task_id}/image` | 管理员 Bearer 鉴权后返回车道标注任务 JPEG；Console2 以 Blob URL 注入画布，不公开直链 |
 | GET | `/api/v1/calibration/lane-annotations` | 已保存车道标注参数列表 |
 | GET | `/api/v1/calibration/lane-annotations/{intersection_id}` | 查询某路口可复用车道参数 |
 | POST | `/api/v1/calibration/lane-tasks/{task_id}/annotation` | 保存人工车道标注结果 |

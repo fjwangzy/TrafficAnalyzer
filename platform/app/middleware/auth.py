@@ -2,17 +2,17 @@
 
 BaseHTTPMiddleware cannot properly handle WebSocket connections because
 it wraps the ASGI scope in a Request object, which breaks the WebSocket
-upgrade protocol. This implementation uses pure ASGI to correctly
-pass through WebSocket connections while enforcing JWT auth on HTTP routes.
+upgrade protocol. This pure ASGI implementation validates REST Bearer tokens
+and WebSocket query-string tokens before forwarding either scope.
 """
 from app.services.auth_service import verify_token
+from urllib.parse import parse_qs
 
 
 # Public paths that skip authentication
 PUBLIC_PATHS = [
     "/health",
     "/ready",
-    "/ws/",          # WebSocket connections (auth handled via channel subscriptions)
     "/video/",       # Video stream endpoints (MJPEG proxy)
     "/api/v1/video/camera/",  # Browser <img> MJPEG proxy
     "/api/v1/auth/login",
@@ -25,16 +25,14 @@ PUBLIC_PATHS = [
 
 
 def _is_public_path(path: str) -> bool:
-    if any(path.startswith(prefix) for prefix in PUBLIC_PATHS):
-        return True
-    return path.startswith("/api/v1/calibration/lane-tasks/") and path.endswith("/image")
+    return any(path.startswith(prefix) for prefix in PUBLIC_PATHS)
 
 
 class AuthMiddleware:
     """JWT authentication middleware — pure ASGI implementation.
 
-    Correctly handles WebSocket connections by passing them through
-    without attempting JWT validation. HTTP routes are validated normally.
+    Correctly handles WebSocket connections without wrapping their scope and
+    enforces the same JWT identity used by authenticated HTTP routes.
     """
 
     def __init__(self, app):
@@ -47,8 +45,20 @@ class AuthMiddleware:
             await self.app(scope, receive, send)
             return
 
-        # Pass through WebSocket connections without auth check
+        # WebSocket clients authenticate with the same JWT in the query string.
         if scope["type"] == "websocket":
+            query = parse_qs(scope.get("query_string", b"").decode("utf-8"))
+            token = query.get("access_token", [None])[0]
+            if not token:
+                await send({"type": "websocket.close", "code": 4401, "reason": "Missing access token"})
+                return
+            try:
+                payload = verify_token(token)
+                scope.setdefault("state", {})
+                scope["state"]["user"] = payload
+            except Exception:
+                await send({"type": "websocket.close", "code": 4401, "reason": "Invalid access token"})
+                return
             await self.app(scope, receive, send)
             return
 
@@ -85,6 +95,11 @@ class AuthMiddleware:
             scope["state"]["user"] = payload
         except Exception as e:
             await self._send_json_response(send, 401, {"detail": f"Invalid token: {str(e)}"})
+            return
+
+        admin_prefixes = ("/api/v1/system", "/api/v1/users", "/api/v1/calibration")
+        if path.startswith(admin_prefixes) and payload.get("role") != "admin":
+            await self._send_json_response(send, 403, {"detail": "Administrator role required"})
             return
 
         # Auth passed — continue to app

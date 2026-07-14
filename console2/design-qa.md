@@ -1,57 +1,62 @@
-# Console 2 Design QA
+# Console 2 四模块迁移 Design QA
+
+## Evidence
 
 - source visual truth path: `/var/folders/pn/nqzgl4zn26v8_864_4nws7_r0000gn/T/codex-clipboard-26f15801-ebd3-42d1-bf1e-1d6304c61d6a.png`
-- implementation screenshot path: `/Users/yaoyao/ai/TrafficAnalyzer/console2/prototype-v3-detector.png`
-- alternate BEV-primary screenshot path: `/Users/yaoyao/ai/TrafficAnalyzer/console2/prototype-v3-bev.png`
-- combined comparison evidence: `/Users/yaoyao/ai/TrafficAnalyzer/console2/design-comparison.png`
-- viewport: 1357 × 912
-- state: desktop dark mode, detector-output primary view, BEV secondary view, live event selected, review panel open
-- browser evidence: Codex in-app browser render
+- source interaction truth: 当前任务中的 Browser 标注，要求“左侧一级、上方二级”，并统一工作台与实时监测页面框架
+- implementation route: `http://localhost:4173/login`、`/monitoring`、`/admin/calibration`、`/admin/system`
+- implementation screenshot path: 未生成；本轮再次连接 Codex 应用内浏览器时初始化失败（`Cannot redefine property: process`）
+- intended viewport: 1305×892（标注视口）；补充目标 1366×768、1440×900、1920×1080
+- state: 管理员、全域态势；分别选中“工作台首屏”和“实时监测”
 
-**Findings**
+## Findings
 
-- No actionable P0/P1/P2 findings remain.
-- Composition and hierarchy: the implementation preserves the reference's narrow global rail, top navigation, left KPI stack, dominant aerial road canvas, right live/event panel, and bottom time axis. The central scene remains the strongest visual region.
-- Fonts and typography: the compact sans-serif hierarchy, subdued metadata, stronger numeric values, and dense command-center labels are consistent with the source. Chinese copy uses native system CJK fallbacks to avoid remote-font instability.
-- Spacing and layout rhythm: panel gutters, glass-card radii, compact chart spacing, and persistent edge controls remain consistent across the 2048 × 1149 frame. Body dimensions match the viewport with no horizontal or vertical overflow.
-- Colors and visual tokens: blue-black surfaces, cool blue trajectory/data accents, amber congestion, and coral critical-risk states follow the source's restrained night palette and preserve semantic contrast.
-- Image quality and asset fidelity: the detector feed uses the generated oblique UAV raster; BEV uses a dedicated generated 90° orthorectified raster rather than reusing a perspective crop. UI icons use Phosphor; charts use Recharts. No placeholder, handcrafted SVG, emoji, or CSS-illustration asset substitutes are present.
-- Copy and content: all visible product terms map to the UAV traffic PRD (GCJ02, congestion index, queues, TTC/PET, lane change, truck restriction evidence, technical review) and avoid claiming parent-platform dispatch functions.
+- [P0] 当前四模块迁移缺少浏览器渲染证据
+  - Location: `/login`、`/monitoring`、`/admin/calibration`、`/admin/system`。
+  - Evidence: 源截图和浏览器标注可见，但应用内浏览器运行时无法建立连接，因而没有同视口实现截图，也无法形成同帧对比。
+  - Impact: 无法确认登录卡片、监控主画布、标注画布和系统表格在目标分辨率下是否裁切，也无法完成检测器/BEV 主次切换的点击级视觉验收。
+  - Fix: 恢复应用内浏览器连接并启动 Platform 后，在 1366×768、1440×900、1920×1080 采集四个真实模块，验证登录、路口切换、视频重试、BEV 主次切换、标注保存、系统页签和无权限状态，再进行同帧对比。
 
-**Intentional Product Adaptations**
+## Implemented Structure
 
-- The source's generic city/building view modes are replaced by trajectory/lane/risk/raw-video modes relevant to TrafficAnalyzer.
-- The source's highlight gallery is replaced by a single UAV live view and a denser AI event stream, reflecting single-drone/single-intersection scope.
-- The reference's generic incident feed is replaced by AI technical-review events; dispatch, police assignment, and final enforcement decisions remain outside this subproject.
+- `ConsoleFrame` 是唯一页面壳层；工作台使用滚动内容区，实时监测使用沉浸式内容区。
+- 左侧窄栏由同一份 `navigationGroups` 渲染六个一级业务域，并按角色权限过滤。
+- 顶部只渲染当前业务域的二级页面；全域态势显示“工作台首屏 / 实时监测 / 轨迹研判”。
+- 已移除工作台原宽二级侧栏和监测页独立菜单副本。
+- 品牌、项目范围、时间窗口、新鲜度、异常入口、角色预览和 Toast 状态由共享壳层统一提供。
 
-**Interaction Verification**
+## Required Fidelity Surfaces
 
-- Map mode switch: passed; `风险` receives the active state.
-- UAV status popover: passed; altitude/status details become visible.
-- Event severity filter: passed; `高风险` narrows the event list to one card.
-- Event technical review: passed; acknowledging the filtered event removes it from the current list.
-- Flight attitude strip: passed; altitude, heading, pitch, roll, and gimbal state remain visible at 1357 × 912.
-- Detector/BEV primary-secondary swap: passed in both directions; the main image accessible name and right preview content update together.
-- Browser console: no errors or warnings after final reload.
+- Fonts and typography: 代码继续复用 Inter、PingFang SC 与现有字号/字重 token；缺少本轮浏览器截图，目视结论阻塞。
+- Spacing and layout rhythm: 64px 顶栏与 62px 一级窄栏保持不变；工作台内容左边界由 272px 收敛为 62px；缺少截图，裁切与节奏目视结论阻塞。
+- Colors and visual tokens: 复用现有蓝黑背景、冷蓝选中态、琥珀降级和珊瑚风险 token；未新增视觉语言。
+- Image quality and asset fidelity: 实时监测继续使用原 UAV/BEV 栅格资产，未改动图片裁切策略；本轮未生成或替换资产。
+- Copy and content: 一级域、二级页面名称与 PRD v2.1 六域目录一致；测试验证工作台和监测页均显示全域态势三个二级入口。
 
-**Comparison History**
+## Interaction Verification
 
-1. Initial comparison found one P2: the event-review panel used four grid columns for five visible groups, forcing the primary action into a narrow wrapped second row. Fix: widened the panel and changed it to five explicit columns.
-2. Initial comparison found one P2: the road canvas was darker than the source, reducing intersection and lane readability. Fix: increased scene brightness/saturation slightly and reduced side vignette opacity.
-3. Post-fix evidence in `prototype-v2.png` shows both issues resolved. No further P0/P1/P2 mismatches were found.
-4. Browser annotation iteration initially placed detector output in a floating center window. User clarified this was a P1 information-architecture mismatch: detector output must replace the entire map, with BEV as the swappable secondary viewport. Fix: removed the floating detector panel, made detector output the default full-canvas view, generated a dedicated BEV asset, and added bidirectional main/secondary swapping.
-5. Post-fix evidence in `prototype-v3-detector.png` and `prototype-v3-bev.png` confirms both states preserve the dashboard shell without overflow or obscured persistent controls.
+- `npm test -- --run`: 36/36 passed。
+- 新增回归覆盖认证会话、安全跳转、角色映射、后端权限边界、WebSocket 目标/现状消息规范化与去重，以及 `/` 与 `/monitoring` 的统一页面壳。
+- Platform 全量回归：37/37 passed；验证系统/用户/标定管理员权限、标注图片鉴权，以及 WebSocket 缺失/无效/有效 Token。
+- 真实模块组件回归覆盖检测器/BEV 主次切换、实时姿态和统计、告警确认、MJPEG 3 秒重试、WS 重连/退订/去重、系统部分失败、只读身份、多车道自然尺寸坐标和 `roads` 原样保存。
+- `npm run build`: passed；仅有既存的大 chunk 性能提示。
+- `git diff --check`: passed。
+- Browser primary interactions tested: blocked；未执行点击级浏览器验证。
+- Browser console errors checked: blocked；未取得浏览器连接。
 
-**Focused Region Comparison Evidence**
+## Comparison History
 
-- Left KPI stack: source and implementation both use a leading congestion score, compact metric cards, a trend chart, and a vehicle-distribution chart.
-- Center primary canvas: detector output fills the complete content canvas with tracking boxes, IDs, classes, confidence values, predicted tracks, and TTC marker; BEV can replace it without changing surrounding panels.
-- Right secondary viewport: defaults to dedicated BEV trajectory projection and becomes the detector preview after swapping.
-- Right event rail: source alert hierarchy is retained with critical/warning/info semantics and selected state.
-- Bottom rail: source time/event density is retained with an interactive live/replay control and playhead.
+1. 本轮首次比较在实现截图采集阶段阻塞；未形成可用于判断 P1/P2 视觉差异的同帧证据，也未进行伪视觉验收。
 
-**Follow-up Polish**
+## Implementation Checklist
 
-- P3: replace the simulated detector/BEV raster feeds with the real MJPEG/HLS detector stream and live ENU/GCJ02 BEV renderer when the API integration contract is implemented.
+- [x] 抽取并复用统一 ConsoleFrame。
+- [x] 左侧固定六个一级业务域。
+- [x] 顶部按当前域渲染二级页面。
+- [x] 保留监控沉浸式内容和飞行姿态/BEV 主次切换。
+- [x] 登录、实时监测、标定中心、系统与身份接入真实 REST/WS/MJPEG。
+- [x] 旧 Console 从 Compose/发布入口移除，删除旧前端路由兼容。
+- [x] 同步主 PRD、README/AGENTS、架构、API 契约、项目结构与任务记录。
+- [ ] 浏览器恢复后补采同视口截图并完成最终视觉对比。
 
-final result: passed
+final result: blocked

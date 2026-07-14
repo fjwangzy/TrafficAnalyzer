@@ -143,7 +143,7 @@ services:
 
   frontend:
     build:
-      context: ../../traffic-fly-console
+      context: ../../console2
       dockerfile: Dockerfile
     container_name: traffic-frontend
     environment:

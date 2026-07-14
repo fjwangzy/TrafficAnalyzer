@@ -233,31 +233,32 @@ platform/
 ├── gateway/                         # [已弃用] API 网关
 ├── services/                        # [已弃用] 微服务（flight/vision/operations）
 ├── shared/                          # [已弃用] 共享库
-└── frontend/                        # [已弃用] 前端（已迁移至 traffic-fly-console/）
+└── frontend/                        # [已弃用] 前端（现行前端为 console2/）
 ```
 
-### 前端目录（traffic-fly-console/）
+### 已退役前端目录（traffic-fly-console/）
 
-```
-traffic-fly-console/
-├── nginx.conf                       # Nginx 反向代理配置
-│                                    #   /api/ → platform:8000
-│                                    #   /ws/  → platform:8000
-│                                    #   /camera_1..3 → 对应检测容器 MJPEG
-├── Dockerfile                       # 前端容器镜像
-├── README.md                        # Console 本地/Docker 启动与验证命令
-└── src/features/                    # 主导航业务页面（Dashboard/Monitoring/GIS/Drones/Reports/Admin/Users 等）
-```
+`traffic-fly-console/` 仅保留迁移审计和历史回归证据，不再进入 Compose、Nginx 或发布构建；不得为其旧路由、Cookie/Token 或组件增加兼容层。
 
-### 新版 Console 原型（console2/）
+### 现行前端目录（console2/）
 
-`console2/` 是基于 `docs/generated/2026-06-29-uav-traffic-ai-prd.md` 的独立 React/Vite 交互原型，不替换现有生产前端。其信息架构面向交通指挥员的一屏态势研判：全屏检测器输出主画布、可与主画布互换的右上 BEV 轨迹视图、顶部飞行姿态、左侧交通 KPI、右侧实时 AI 事件和底部回看时间轴。当前使用真实感模拟数据验证主辅视图交换、轨迹/车道/风险图层、无人机状态、事件筛选和技术复核交互，后续再按平台 API/WebSocket 契约接入实时数据。
+`console2/` 是基于 PRD v2.1（S1–S9）的 React/Vite 生产前端。正式导航冻结为全域态势、智能研判、事故测绘、执法线索、飞行任务、平台治理六个工作域，并统一为“左侧一级业务域 + 顶部当前域二级页面”的共享壳层。登录、实时监测、标定中心和系统与身份已接入 Platform REST/WebSocket/MJPEG；这些模块禁止读取模拟数据。其余页面在后续迁移前继续使用契约化稳定模拟数据。旧前端地址不保留兼容。
 
 ```
 console2/
-├── src/App.jsx                      # 单屏态势驾驶舱及原型交互
-├── src/styles.css                   # 深色指挥中心视觉与响应式布局
+├── src/RouterApp.jsx                # 正式路由、认证守卫与权限边界
+├── src/App.jsx                      # 真实实时监测检测器/BEV 主屏
+├── src/auth/                        # 会话恢复、登录、退出、角色映射
+├── src/lib/                         # Platform API Client 与 WS 消息规范化
+├── src/hooks/useWebSocket.js        # 可重连订阅、退订和消息去重
+├── src/components/                  # 全局壳层、地图与通用领域组件
+├── src/pages/                       # 态势、研判、任务、测绘、执法、治理页面
+├── src/data/mockData.js             # 仅供尚未迁移页面使用的模拟数据
+├── src/state/AppState.jsx           # Context + reducer 内存业务状态
+├── src/styles.css                   # 深色指挥中心基础视觉
+├── src/full.css                     # 全版壳层和业务页面样式
 ├── public/assets/                   # 夜间无人机路口视觉资产
-├── README.md                        # 原型范围、运行和资产说明
+├── Dockerfile / nginx.conf          # 生产构建及 API/WS/MJPEG 代理
+├── README.md                        # 路由、真实/模拟边界、运行和验证说明
 └── design-qa.md                     # 参考图与浏览器实现的视觉验收记录
 ```

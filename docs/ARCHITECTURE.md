@@ -221,6 +221,8 @@ Platform Consumer（校验、幂等、路网 ID 关联、持久化）
           │     │     └── uav_conflict_events
           │     └── 事件与业务表
           │           ├── uav_message_inbox（消费幂等基线）
+          │           ├── uav_drones / uav_video_sources / uav_telemetry_sources
+          │           ├── uav_flight_plans / uav_missions / uav_pipelines
           │           ├── uav_track_events / uav_ai_events
           │           ├── uav_event_outbox / uav_event_delivery_attempts
           │           ├── uav_event_feedback / uav_dead_letters
@@ -236,7 +238,7 @@ Platform Consumer（校验、幂等、路网 ID 关联、持久化）
                 └── uav_calibration
                          │
                          ▼
-                 traffic-fly-console
+                       console2
 ```
 
 目标态约束：
@@ -270,7 +272,10 @@ Platform Consumer（校验、幂等、路网 ID 关联、持久化）
 - `road9` 中既有的共享路网主数据、PostgreSQL 系统目录和 TimescaleDB 扩展内部对象不属于
   无人机平台自建表，不强制重命名；无人机平台只读引用时必须保存路网版本和权威 ID。
 - 不再为 Grafana 或 InfluxDB 新增查询、面板、measurement 或兼容字段；可视化统一由
-  `traffic-fly-console` 通过平台 REST/WebSocket 获取。
+  `console2` 通过平台 REST/WebSocket 获取。
+- 无人机档案、数据源、FlightPlan、Mission 和 Pipeline 期望状态必须持久化到 `road9`；
+  当前内存 `DRONES/MISSIONS`、PID、进程句柄、打开的视频流和帧缓存只属于迁移/运行态，
+  不得作为重启恢复真源。
 - 规划统一事件总线使用 `uav_ai_events`，主平台回执使用 `uav_ai_event_feedback`；在其合同
   冻结前，现有分场景 Topic 继续承担检测管道内部传输，但迁移后的名称必须带 `uav_`。
 
@@ -369,9 +374,52 @@ Flask MJPEG 端点。
 |---|---|---|---|
 | MQTT 实时 | `services/TelemetrySubscriber.py` | DJI Cloud API JSON | 生产（直播无人机） |
 | JSON 文件 | `services/TelemetryFileReader.py` | DJI Cloud API JSON 导出 | 离线回放 |
-| SRT 字幕 | `services/SrtTelemetryParser.py` | DJI 视频字幕 (.srt) | 离线回放（逐帧精确） |
+| SRT 字幕 | `services/SrtTelemetryParser.py` | DJI 视频字幕 (`.srt`) | 离线回放（逐帧精确）；不是 Secure Reliable Transport 视频协议 |
 
 三种源实现相同的 `get_nearest(timestamp) -> dict` 接口，VideoReader 通过 `telemetry.source` 配置切换。
+
+### 无人机对接与飞行计划调度（S9 目标态）
+
+S9 在平台单体中增加持久化无人机配置与后台调度服务，不新增 flight 微服务。实时与本地源都复用现有 PipelineManager 和生产入口 `main_optimized.py`：
+
+```text
+管理员 / /drones 四页签
+  │
+  ├── Drone + SourceProfile
+  │     ├── live: RTSP video + MQTT telemetry
+  │     └── local_replay: server MP4 + DJI .srt telemetry
+  │
+  └── FlightPlan (once / weekly / timezone / exception dates)
+          │
+          ▼
+PostgreSQL road9
+  ├── uav_drones
+  ├── uav_video_sources / uav_telemetry_sources
+  ├── uav_flight_plans
+  ├── uav_missions
+  └── uav_pipelines
+          │
+          ▼
+FlightPlanScheduler（FastAPI 后台服务）
+  ├── 每 ≤5s 扫描到期窗口
+  ├── PostgreSQL advisory lock / 租约竞争单调度资格
+  ├── (flight_plan_id, scheduled_start_at) 唯一约束防重
+  ├── 窗口内重启恢复；错过完整窗口标记 skipped/window_missed
+  └── 到点创建 Mission、调用 PipelineManager；到时停止 Pipeline
+          │
+          ▼
+PipelineManager → main_optimized.py → Kafka uav_* → road9/TimescaleDB + WebSocket
+```
+
+架构边界：
+
+- FlightPlan 是排期定义，Mission 是一次业务执行，Pipeline 是分析进程；三类 ID 和状态机不得混用。
+- 同一无人机 enabled 计划不能重叠；不同无人机可以同时监测同一路口。
+- 编辑/暂停计划只影响未来执行，不改写运行中 Mission 的设备、源、路网和计划快照。
+- SourceProfile 是 API 聚合，物理数据由 `uav_video_sources` 与 `uav_telemetry_sources` 承载；配对关系只能有一套状态真源。
+- 本地路径经 realpath 规范化并限制在批准的 allowlist 根目录；RTSP/MQTT 凭据只保存 secret reference，API、日志和审计不得回显明文。
+- 平台启动时从数据库恢复当前窗口和 Pipeline 期望状态；进程句柄无法恢复，只能核对现存进程或幂等拉起。
+- 计划触发的是 AI 检测 Pipeline，不调用无人机航点、起降、返航或其他飞控接口。
 
 ## 配置系统
 
@@ -444,7 +492,7 @@ Flask MJPEG 端点。
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                        前端（traffic-fly-console）                │
+│                           前端（console2）                       │
 │                    React SPA + Nginx (:8080)                     │
 └────────────────────────────┬────────────────────────────────────┘
                              │ /api/*  /ws/*
@@ -454,7 +502,7 @@ Flask MJPEG 端点。
 │                      FastAPI + Uvicorn (:8000)                   │
 │  ┌─────────────────────────────────────────────────────────────┐│
 │  │                    JWT 认证中间件                             ││
-│  │           （公开端点：/health, /ready, /auth/*, /docs）       ││
+│  │       （登录公开；REST Bearer JWT；WebSocket query JWT）      ││
 │  └─────────────────────────────────────────────────────────────┘│
 │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌────────┐│
 │  │ auth.py  │ │intersec- │ │ drones.py│ │ alerts.py│ │system. ││
@@ -463,7 +511,7 @@ Flask MJPEG 端点。
 │       │            │            │            │           │      │
 │  ┌────┴────────────┴────────────┴────────────┴───────────┴────┐ │
 │  │                    业务逻辑层（services/）                   │ │
-│  │   auth_service.py  │  alert_engine.py                       │ │
+│  │ auth_service │ alert_engine │ PipelineManager │ Scheduler   │ │
 │  └────────┬───────────┴──────────────┬─────────────────────────┘ │
 │           │                          │                           │
 │  ┌────────┴────────┐    ┌────────────┴────────────┐             │
@@ -510,6 +558,16 @@ Flask MJPEG 端点。
      → PostgreSQL/Timescale repository
      → database `road9` 内的 `uav_track_events`，关联 `uav_track_points`
      → 返回轨迹列表
+
+4. 飞行计划执行流程（S9 目标）：
+   POST /api/v1/flight-plans/{id}/enable
+     → 校验 Drone、成对 Source、inter_id + road_data_version、权限和重叠窗口
+     → PostgreSQL database=road9 持久化 uav_flight_plans
+     → Scheduler 竞争 advisory lock 并扫描 due occurrence
+     → 事务创建唯一 uav_missions 记录，状态 pending → starting
+     → PipelineManager.start_pipeline()，保存 uav_pipelines 与 actual_started_at
+     → 状态 running；到时/本地 EOF 后停止并完成
+     → 重启窗口内幂等恢复，已错过窗口写 skipped/window_missed
 ```
 
 目标态不包含 Telegraf、InfluxDB 或 Grafana。迁移完成前，当前实现仍可能从

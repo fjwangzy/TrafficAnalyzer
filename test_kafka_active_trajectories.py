@@ -9,10 +9,10 @@ from nodes.KafkaProducerNode import KafkaProducerNode
 class KafkaActiveTrajectoriesTest(unittest.TestCase):
     def _producer_without_kafka(self):
         producer = object.__new__(KafkaProducerNode)
-        producer.topic_name = "statistics_7"
-        producer.track_complete_topic = "track_complete_7"
-        producer.conflicts_topic = "conflicts_7"
-        producer.telemetry_topic = "telemetry_7"
+        producer.topic_name = "uav_statistics_7"
+        producer.track_complete_topic = "uav_track_complete_7"
+        producer.conflicts_topic = "uav_conflicts_7"
+        producer.telemetry_topic = "uav_telemetry_7"
         producer.intersection_id = "INT_camera_7"
         producer.camera_id = 7
         producer.how_often_sec = 1.0
@@ -67,24 +67,35 @@ class KafkaActiveTrajectoriesTest(unittest.TestCase):
         self.assertIs(out, frame_element)
         self.assertEqual(
             topics,
-            ["statistics_7", "track_complete_7", "conflicts_7", "telemetry_7"],
+            ["uav_statistics_7", "uav_track_complete_7", "uav_conflicts_7", "uav_telemetry_7"],
         )
         stats = sent[0][1]
-        self.assertEqual(stats["msg_type"], "stats")
+        self.assertEqual(stats["msg_type"], "uav_stats")
         self.assertEqual(stats["intersection_id"], "INT_camera_7")
-        self.assertEqual(stats["cars"], 4)
-        self.assertEqual(stats["road_1"], 2.5)
-        self.assertEqual(stats["direction_flow"], frame_element.direction_stats)
-        self.assertEqual(stats["queue_count"], 1)
-        self.assertEqual(stats["conflict_count"], 1)
+        self.assertEqual(stats["source_system"], "uav_traffic_analyzer_ai")
+        self.assertEqual(stats["schema_version"], "uav_stats/v1")
+        self.assertEqual(stats["time_quality"], "ingest_only")
+        self.assertEqual(stats["data"]["cars"], 4)
+        self.assertEqual(stats["data"]["road_1"], 2.5)
+        self.assertEqual(stats["data"]["direction_flow"], frame_element.direction_stats)
+        self.assertEqual(stats["data"]["queue_count"], 1)
+        self.assertEqual(stats["data"]["conflict_count"], 1)
 
-        self.assertEqual(sent[1][1]["msg_type"], "track_complete")
-        self.assertEqual(sent[1][1]["track_id"], 101)
-        self.assertEqual(sent[2][1]["msg_type"], "conflict")
-        self.assertEqual(sent[2][1]["conflict_scene"], "suspected_right_turn_mv_nmv")
-        self.assertEqual(sent[3][1]["msg_type"], "telemetry")
+        self.assertEqual(sent[1][1]["msg_type"], "uav_track_complete")
+        self.assertEqual(sent[1][1]["data"]["track_id"], 101)
+        self.assertEqual(sent[2][1]["msg_type"], "uav_conflict")
+        self.assertEqual(sent[2][1]["data"]["conflict_scene"], "suspected_right_turn_mv_nmv")
+        self.assertEqual(sent[3][1]["msg_type"], "uav_telemetry")
         self.assertEqual(sent[3][1]["drone_id"], "drone_7")
-        self.assertEqual(sent[3][1]["height"], 120.0)
+        self.assertEqual(sent[3][1]["data"]["height"], 120.0)
+
+    def test_topic_builder_rejects_unsafe_camera_id(self):
+        self.assertEqual(
+            KafkaProducerNode._canonical_topics("10"),
+            ("uav_statistics_10", "uav_track_complete_10", "uav_conflicts_10", "uav_telemetry_10"),
+        )
+        with self.assertRaises(ValueError):
+            KafkaProducerNode._canonical_topics("../10")
 
     def test_build_active_trajectories_includes_world_points_and_track_metadata(self):
         frame = np.zeros((100, 100, 3), dtype=np.uint8)

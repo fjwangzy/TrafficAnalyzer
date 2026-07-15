@@ -10,7 +10,8 @@
 
 import re
 import logging
-from datetime import datetime
+from datetime import UTC, datetime
+from zoneinfo import ZoneInfo
 from bisect import bisect_left
 
 logger = logging.getLogger(__name__)
@@ -81,7 +82,15 @@ class SrtTelemetryParser:
                 meta_line = lines[3] if len(lines) > 3 else ""
 
                 # 提取键值对
-                telemetry = self._extract_fields(meta_line, srt_time)
+                recorded_at = None
+                if timestamp_str:
+                    recorded_at = (
+                        datetime.strptime(timestamp_str, "%Y-%m-%d %H:%M:%S.%f")
+                        .replace(tzinfo=ZoneInfo("Asia/Shanghai"))
+                        .astimezone(UTC)
+                        .isoformat()
+                    )
+                telemetry = self._extract_fields(meta_line, srt_time, recorded_at)
                 self._records.append(telemetry)
                 self._timestamps.append(srt_time)
             except (ValueError, IndexError) as e:
@@ -89,7 +98,7 @@ class SrtTelemetryParser:
 
         logger.info(f"SrtTelemetryParser: 从 {file_path} 加载了 {len(self._records)} 条遥测记录")
 
-    def _extract_fields(self, meta_line: str, timestamp: float) -> dict:
+    def _extract_fields(self, meta_line: str, timestamp: float, recorded_at: str | None = None) -> dict:
         """从 SRT 元数据行提取遥测字段。
 
         注意：某些字段共享同一个方括号，例如：
@@ -125,6 +134,7 @@ class SrtTelemetryParser:
 
         return {
             "timestamp": timestamp,
+            "recorded_at": recorded_at,
             "latitude": lat,
             "longitude": lon,
             "height": height,

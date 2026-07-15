@@ -1,0 +1,23 @@
+{
+  "schema_version": "uav.i6-local-database-outage/v1",
+  "generated_at": "2026-07-15T06:55:23.988028Z",
+  "environment": "isolated_local_non_contract",
+  "compose_project": "traffic_analyzer_i6_fault",
+  "database": "road9",
+  "baseline_status": 200,
+  "outage": {
+    "status": 503,
+    "code": "dashboard_dependency_unavailable",
+    "detected_after_sec": 0.274
+  },
+  "recovery": {
+    "status": 200,
+    "recovered_after_sec": 0.279
+  },
+  "execution_complete": true,
+  "elapsed_sec": 4.259,
+  "acceptance": {
+    "status": "blocked_external",
+    "detail": "This isolated single-instance drill does not approve production RTO/RPO, HA, data-loss, sustained-load or rollback requirements."
+  }
+}

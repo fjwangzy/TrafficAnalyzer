@@ -54,10 +54,48 @@ export const platformApi = {
   intersections: () => get('/intersections'),
   intersection: (id) => get(`/intersections/${encodeURIComponent(id)}`),
   intersectionStats: (id, period = '30m', granularity = '5m') => get(`/intersections/${encodeURIComponent(id)}/stats`, { params: { period, granularity } }),
+  trajectories: (id, params = {}) => get(`/trajectories/${encodeURIComponent(id)}`, { params }),
+  conflicts: (id, params = {}) => get(`/trajectories/${encodeURIComponent(id)}/conflicts`, { params }),
+  reviewConflict: (intersectionId, eventId, body) => post(`/trajectories/${encodeURIComponent(intersectionId)}/conflicts/${encodeURIComponent(eventId)}/review`, body),
   alerts: (params = {}) => get('/alerts', { params }),
   acknowledgeAlert: (id) => post(`/alerts/${encodeURIComponent(id)}/acknowledge`),
   pipelines: () => get('/pipelines'),
   telemetry: (droneId) => get(`/telemetry/${encodeURIComponent(droneId)}`),
+
+  dashboardOverview: () => get('/dashboard/overview'),
+  dashboardIntersections: (params = {}) => get('/dashboard/intersections', { params }),
+  dashboardIntersection: (interId) => get(`/dashboard/intersections/${encodeURIComponent(interId)}`),
+  dashboardDrones: () => get('/dashboard/drones'),
+
+  drones: () => get('/drones'),
+  createDrone: (body) => post('/drones', body),
+  updateDrone: (droneId, body) => patch(`/drones/${encodeURIComponent(droneId)}`, body),
+  droneSources: (droneId) => get(`/drones/${encodeURIComponent(droneId)}/sources`),
+  sources: () => get('/sources'),
+  createSource: (droneId, body) => post(`/drones/${encodeURIComponent(droneId)}/sources`, body),
+  updateSource: (droneId, profileId, body) => patch(`/drones/${encodeURIComponent(droneId)}/sources/${encodeURIComponent(profileId)}`, body),
+  validateSource: (droneId, profileId) => post(`/drones/${encodeURIComponent(droneId)}/sources/${encodeURIComponent(profileId)}/validate`),
+  flightPlans: () => get('/flight-plans'),
+  createFlightPlan: (body) => post('/flight-plans', body),
+  updateFlightPlan: (planId, body) => patch(`/flight-plans/${encodeURIComponent(planId)}`, body),
+  flightPlanAction: (planId, action, revision) => post(`/flight-plans/${encodeURIComponent(planId)}/${action}`, { revision }),
+  flightPlanOccurrences: (planId, count = 10) => get(`/flight-plans/${encodeURIComponent(planId)}/occurrences`, { params: { count } }),
+  missions: (params = {}) => get('/missions', { params }),
+  createMission: (body) => post('/missions', body),
+  stopMission: (missionId, reason) => post(`/missions/${encodeURIComponent(missionId)}/stop`, { reason }),
+  retryMission: (missionId, reason) => post(`/missions/${encodeURIComponent(missionId)}/retry`, { reason }),
+
+  enforcementZones: () => get('/enforcement/zones'),
+  createEnforcementZone: (body) => post('/enforcement/zones', body),
+  updateEnforcementZone: (zoneId, body) => patch(`/enforcement/zones/${encodeURIComponent(zoneId)}`, body),
+  publishEnforcementZone: (zoneId) => post(`/enforcement/zones/${encodeURIComponent(zoneId)}/publish`),
+  enforcementRules: () => get('/enforcement/rules'),
+  createEnforcementRule: (body) => post('/enforcement/rules', body),
+  updateEnforcementRule: (ruleId, body) => patch(`/enforcement/rules/${encodeURIComponent(ruleId)}`, body),
+  enforcementClues: (params = {}) => get('/enforcement/clues', { params }),
+  enforcementClue: (eventId) => get(`/enforcement/clues/${encodeURIComponent(eventId)}`),
+  reviewEnforcementClue: (eventId, body) => post(`/enforcement/clues/${encodeURIComponent(eventId)}/review`, body),
+  enforcementTruckSummary: () => get('/enforcement/truck-summary'),
 
   systemHealth: () => get('/system/health'),
   gpu: () => get('/system/gpu'),
@@ -98,5 +136,6 @@ export const platformApi = {
 }
 
 export function apiErrorMessage(error, fallback = '请求失败，请稍后重试') {
-  return error?.response?.data?.detail || error?.message || fallback
+  const detail = error?.response?.data?.detail
+  return (typeof detail === 'object' ? detail?.message || detail?.code : detail) || error?.message || fallback
 }

@@ -131,7 +131,7 @@ TrafficAnalyzer 是智慧交通大项目下的无人机 AI 交通分析子系统
 - **进程 1**：VideoReader + DetectionTrackingNodes（CPU 读取 + GPU 推理）
 - **进程 2**：Homography + MotionCompensation + TrackerInfoUpdate + Speed + Direction + LaneDetection + LaneAnalysis + Trajectory + AutoLaneInference + Conflict + CalcStatistics + KafkaProducer（CPU 密集）
 - **进程 3**：ShowNode + VideoSaver + FlaskServer（渲染 + IO）
-- **队列**：maxsize=50，进程间通过 `multiprocessing.Queue` 传递 FrameElement
+- **队列**：`FRAME_QUEUE_MAXSIZE` 默认 8，进程间通过 `multiprocessing.Queue` 传递 FrameElement；可按目标环境容量显式调整
 - **健康检查**：下游进程通过 `get(timeout=10)` + `is_alive()` 检测上游崩溃并自动退出
 - **为什么这样设计**：将 GPU 推理、CPU 计算、IO 操作分离到不同进程，利用多核并行
 - **运动补偿位置**：MotionCompensationNode 在进程 2 中，位于 HomographyCalibrationNode 之后
@@ -269,6 +269,9 @@ Platform Consumer（校验、幂等、路网 ID 关联、持久化）
 - Kafka Consumer 必须关闭 auto commit。只有 `uav_message_inbox` 与全部事实数据在同一
   PostgreSQL 事务成功提交后，才可手动提交对应 offset；数据库失败时不提交，使消息能够
   重放。数据库已提交但 offset 尚未提交时的重复消费由 inbox 幂等吸收。
+- schema 或消息身份冲突属于永久错误：Consumer 先把原始 payload、hash、Topic、partition、
+  offset 和原因耐久写入 `uav_message_dead_letters`，成功后才提交 offset；隔离写入失败仍 seek
+  原 offset。该入站隔离表与 EventDelivery 的 `uav_dead_letters` 各自独立。
 - `road9` 中既有的共享路网主数据、PostgreSQL 系统目录和 TimescaleDB 扩展内部对象不属于
   无人机平台自建表，不强制重命名；无人机平台只读引用时必须保存路网版本和权威 ID。
 - 不再为 Grafana 或 InfluxDB 新增查询、面板、measurement 或兼容字段；可视化统一由
@@ -306,6 +309,13 @@ measurement 判断时间语义：
 
 因此，历史回填需要“measurement 分支 + 时间质量门禁”，不能使用一条
 `Influx time → occurred_at` 的通用 SQL 完成。
+
+I6 已提供只读盘点工具 `scripts/inventory_legacy_influx.py`，仅允许访问本地
+`traffic_influxdb/influx` 与 `traffic_timescaledb_local/road9`，不会执行写入或迁移。
+`docs/test_report_i6_legacy_influx_inventory.json` 记录三类 measurement 的字段、标签、
+估算点数、series cardinality 和首末时间，并把候选目标表映射统一标为 `unverified`。
+实盘已确认 `track_events` 位于 1970-01-01 起 2.002～974.306667 秒的相对时间轴，必须
+隔离并按批准规则重建，不能直接写入 `uav_track_events.ended_at`。
 
 平台容器会把项目根目录以 `/project` 只读挂载，并在镜像构建时安装
 `platform/pipeline-requirements.txt` 中的检测器依赖，并通过
@@ -389,7 +399,7 @@ Flask MJPEG 端点。
 
 三种源实现相同的 `get_nearest(timestamp) -> dict` 接口，VideoReader 通过 `telemetry.source` 配置切换。
 
-### 无人机对接与飞行计划调度（S9 目标态）
+### 无人机对接与飞行计划调度（S9 当前工程实现）
 
 S9 在平台单体中增加持久化无人机配置与后台调度服务，不新增 flight 微服务。实时与本地源都复用现有 PipelineManager 和生产入口 `main_optimized.py`：
 
@@ -411,7 +421,7 @@ PostgreSQL road9
   └── uav_pipelines
           │
           ▼
-FlightPlanScheduler（FastAPI 后台服务）
+MissionOrchestrator（FastAPI 后台服务）
   ├── 每 ≤5s 扫描到期窗口
   ├── PostgreSQL advisory lock / 租约竞争单调度资格
   ├── (flight_plan_id, scheduled_start_at) 唯一约束防重
@@ -431,6 +441,37 @@ PipelineManager → main_optimized.py → Kafka uav_* → road9/TimescaleDB + We
 - 本地路径经 realpath 规范化并限制在批准的 allowlist 根目录；RTSP/MQTT 凭据只保存 secret reference，API、日志和审计不得回显明文。
 - 平台启动时从数据库恢复当前窗口和 Pipeline 期望状态；进程句柄无法恢复，只能核对现存进程或幂等拉起。
 - 计划触发的是 AI 检测 Pipeline，不调用无人机航点、起降、返航或其他飞控接口。
+- `RoadContext` 通过 `Road9RoadContextAdapter` 读取外部权威源，并可在本地使用显式 `FixtureRoadContextAdapter`；fixture 的质量始终为 `unverified`，不能模拟权威批准。
+- `EventDelivery` 统一事件/outbox/attempt/dead-letter/receipt/feedback 接缝；主平台 Adapter 在合同未冻结时使用禁用实现并返回 blocked，不产生伪成功。
+- 新 Pipeline 只生产 `uav_statistics_*` 等 canonical Topic；Kafka consumer 在迁移期同时接收 canonical 和旧 Topic。
+
+### 主任首屏只读聚合（S8 I5 第一阶段）
+
+```text
+Console2 /
+  → GET /api/v1/dashboard/{overview,intersections,intersections/{id},drones}
+  → DashboardReadModel（无写操作、无独立真源）
+     ├── RoadContextSnapshot / Mission / Pipeline / Drone
+     ├── TimescaleDB traffic/conflict/telemetry facts
+     └── AiEvent / SurveyTask / EventDelivery 状态
+  → uav.dashboard/v1 + as_of/window/quality/reason
+```
+
+- DashboardReadModel 只在查询时聚合现有事实，不创建 Dashboard 业务表。后续缓存、物化视图或连续聚合必须以 `uav_` 命名、可重建且不得复制事件/任务状态机。
+- S8 口径未批准时 KPI 值为 null，同时返回事实分子/分母和阻断原因；前端显示“待冻结”，不把缺失解释为 0。
+- 当前 OSM 开发底图只接受 verified WGS84 RoadContext；GCJ02、未验证或缺坐标记录只进入隔离计数/配置待办，避免坐标系误投。
+- 正式首页顶部范围、窗口和 as_of 来自聚合响应，不再使用 AppState 中的试点原型常量。I5-B 内部查询已支持风险/监测/质量、WGS84 bbox、搜索和 offset/limit，并将 road9 超时统一为 503；Console2 保留上一成功快照、有限重试，OSM 瓦片连续失败时降级为列表/KPI。项目范围/权限、正式底图、点位聚合/zoom、全局增量/断线 REST 缺口回补和容量仍属后续或外部门禁。
+
+### I6 本地目标栈与恢复边界
+
+- `docker-compose.road9.yaml` 是 ADR-019 本地目标拓扑，包含 `road9`/TimescaleDB、Apache Kafka 3.9.2 KRaft、Platform 和 Console2，不包含 Zookeeper、InfluxDB、Telegraf 或 Grafana；根 `docker-compose.yaml` 继续作为迁移回归库存，正式退役前两者不得混称。
+- Platform 目标镜像复制 `alembic.ini` 与全部 forward migration，基础依赖不再安装 InfluxDB 客户端；旧查询工具的客户端只存在于显式 `legacy-influx`/`dev` extra。Console2 只有在 Platform `/ready` 同时确认 database、Kafka、TimescaleDB 和 PipelineManager 就绪后才启动，`/health` 仅作为进程存活探针。
+- 完整目标栈证据 `docs/test_report_i6_target_stack.json` 已验证 migration `20260715_0009`、TimescaleDB 2.28.2、5 个 Hypertable、41 张 `uav_*` 表、canonical Kafka Topic、Console 代理认证和 Dashboard/System API、94 paths/110 operations；生产镜像 pin、秘密、TLS/SASL、HA 和容量仍未批准。
+- 短时稳定性证据 `docs/test_report_i6_local_readiness_soak.json` 在固定隔离端口连续 60 秒采集 13 个样本，依赖 readiness、Console 代理认证和 Dashboard/System API 全部成功；该巡检最多允许运行 300 秒，明确属于 `isolated_local_non_contract`，不定义生产 SLO 或批准正式观察期。
+- `20260715_0009` 使用数据库触发器维护 `uav_conflict_reviews → uav_conflict_events` 的存在性和删除级联。原因是 PostgreSQL 普通表直接外键指向 Timescale Hypertable 会展开 chunk 约束，无法被 `pg_dump/pg_restore` 可靠重建。
+- 恢复必须执行 `timescaledb_pre_restore()/post_restore()`，并核对 migration revision、扩展版本、Hypertable 数、`uav_*` 表计数和业务行计数。当前只证明本地工程可恢复，不代表生产 RPO/RTO、备份介质、加密、异地或 HA 已批准。
+- `scripts/validate_i6_local_performance.py` 是受 guard 保护的 localhost 只读烟测，只记录已认证 GET 的成功率和 p50/p95/max，不内置合同阈值。当前 80 请求/并发 8 全部返回 200，但证据固定标记 `local_non_contract` 与 `threshold_status=unverified`；生产硬件、负载模型、持续时长、阈值和签署仍由 S7-TBD-004 冻结。
+- `scripts/validate_i6_database_outage.py` 使用独立 Compose project、数据库端口和 Platform 端口执行断库恢复，不影响当前开发库。Dashboard 聚合边界将 `TimeoutError/OSError/SQLAlchemyError` 统一映射为 `503 dashboard_dependency_unavailable`；隔离演练已验证断库前 200、断库 503、恢复后 200，并自动清理临时资源。该行为只证明单实例依赖降级/恢复，不定义生产 RTO/RPO 或 HA。
 
 ### 事故测绘深模块（S3 当前实现）
 
@@ -451,6 +492,28 @@ Console2 /survey/**
 - 点、线、折线、面积和对象几何都由服务端基于帧变换计算并版本化，浏览器只提交图像坐标，不能自报米制结果。
 - 报告生成前重新校验证据对象的 SHA-256 与大小，输出 PDF、canonical JSON 和 GeoJSON；质量规则未批准或投递 URL 未配置时禁止外发。
 - 对外投递使用 `uav_ai_events(event_type=survey_result)`、`uav_event_outbox`、attempt 和 dead-letter 形成可靠投递链；批准阈值和主平台合同仍属外部验收阻断项。
+
+### 执法候选深模块（S4 当前实现）
+
+I4 将正式 `/enforcement/**` 从 React 内存 Mock 切换为 API 驱动的本地候选闭环：
+
+```text
+Console2 /enforcement/**
+  → JWT + revision REST /api/v1/enforcement/**
+  → EnforcementService
+     ├── candidate zone/rule + AuditLog
+     ├── uav_ai_events(event_type=enforcement_clue)
+     ├── uav_enforcement_clues + uav_evidence_*
+     └── append-only uav_enforcement_review_audits
+  → PostgreSQL road9
+  → disabled authority/main-platform adapters (503, no fake success)
+```
+
+- `EnforcementService` 是本地事务、幂等、质量门禁和状态转换的深模块；API 与 Console2 不直接拼接事件、证据、规则版本或审计表。
+- 本地围栏和规则只能是 `candidate/retired`，通过 `revision` 乐观并发更新；权威发布 Adapter 未冻结时返回 503，不能把本地保存解释为权威生效。
+- 执法线索事件真源仍是统一 `uav_ai_events`；执法表只保存车辆、围栏/规则快照和视频/雷达/融合等专属事实，证据和投递不复制状态机。
+- 技术复核只改变 review 摘要并追加审计，不改写原始线索事实，也不产生违法、案件、处罚或主平台成功状态。
+- 雷达与融合字段实行来源门禁：无真实设备、有效检定或独立测量时保持空值；本地验证样本明确标记 `validation_fixture/unverified`。
 
 ## 配置系统
 
@@ -476,6 +539,8 @@ Console2 /survey/**
 **决策**：使用特殊的 VideoEndBreakElement 类（继承 FrameElement）作为流结束信号，每个节点通过 `isinstance()` 检查来传递它。
 **原因**：在 multiprocessing.Queue 中，无法发送 Python 异常或关闭信号。哨兵对象可以被序列化通过队列，每个节点看到后执行清理并退出。
 **代价**：每个节点的 process() 方法开头都需要 isinstance 检查。
+
+三进程入口同样必须把 sentinel 判断放在任何普通帧字段和共享内存访问之前。2026-07-15 的真实 5GB EOF 验证发现检测进程先读取 `.frame` 会使 sentinel 以 `AttributeError` 退出；当前 `proc_frame_reader_and_detection` 已先把 `VideoEndBreakElement` 级联入队并退出，tracker/show 继续按既有节点契约完成清理。`test_main_optimized_eof.py` 是该顺序的最小回归，`docs/test_report_s9_inter_xqh_eof.json` 是重启恢复后自然 EOF 的原始链路证据。
 
 ### 3. ByteTrack 而非 DeepSORT
 
@@ -583,26 +648,29 @@ Console2 /survey/**
      → ws_manager.broadcast(uav_* channel, data)
      → WebSocket 客户端
 
-3. 时序数据查询流程（目标）：
+3. 时序数据查询流程（I3 当前实现）：
    GET /api/v1/trajectories?intersection_id=X&start=T1&end=T2
      → trajectories.py
      → PostgreSQL/Timescale repository
      → database `road9` 内的 `uav_track_events`，关联 `uav_track_points`
      → 返回轨迹列表
 
-4. 飞行计划执行流程（S9 目标）：
+4. 飞行计划执行流程（S9 当前实现）：
    POST /api/v1/flight-plans/{id}/enable
      → 校验 Drone、成对 Source、inter_id + road_data_version、权限和重叠窗口
      → PostgreSQL database=road9 持久化 uav_flight_plans
      → Scheduler 竞争 advisory lock 并扫描 due occurrence
      → 事务创建唯一 uav_missions 记录，状态 pending → starting
      → PipelineManager.start_pipeline()，保存 uav_pipelines 与 actual_started_at
-     → 状态 running；到时/本地 EOF 后停止并完成
+     → 状态 running；Scheduler 每个 tick 同步 Pipeline 运行时
+     → 本地零退出 EOF 写 completed/source_eof；异常退出或运行时丢失写 failed/pipeline_error
+     → 到达计划窗口写 completed/window_ended
      → 重启窗口内幂等恢复，已错过窗口写 skipped/window_missed
 ```
 
-目标态不包含 Telegraf、InfluxDB 或 Grafana。迁移完成前，当前实现仍可能从
-`influx_query.py` 查询旧数据；这只是过渡兼容，不得作为新增 API 的数据源。
+Platform 的正式历史 API 已不再实例化或查询 `InfluxQuery`；`influx_query.py` 及其测试仅保留为旧数据迁移库存。目标部署仍须在 I6 从 Compose、依赖和运维入口彻底移除 Telegraf、InfluxDB 与 Grafana。
+
+I3 的 `MetricStore` 是 Kafka 与存储之间的深模块边界：消费者只提交统一信封，模块内部完成 legacy 适配、schema/业务时间校验、payload hash、`uav_message_inbox` 判重、事实展开和同事务提交。数据库成功后才手动提交 Kafka offset；瞬态失败 seek 回原 offset，成功重放由 inbox 返回既有事实引用且不重复广播；永久性 schema/身份错误只有在 `uav_message_dead_letters` 隔离成功后才推进 offset。可变冲突复核单独进入 `uav_conflict_reviews`，不修改 `uav_conflict_events` 追加事实。
 
 ### 关键设计决策
 

@@ -1,90 +1,185 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useLocation, useNavigate } from 'react-router-dom'
-import { Check, Crosshair, DownloadSimple, Funnel, Gauge, MapPin, PencilSimple, Plus, ShieldCheck, Truck, Warning, X } from '@phosphor-icons/react'
+import { Check, Crosshair, Funnel, Gauge, MapPin, PencilSimple, Plus, ShieldCheck, Truck, Warning, X } from '@phosphor-icons/react'
 import { AppShell } from '../components/AppShell'
-import { CityMap } from '../components/CityMap'
 import { DataTable, DetailDrawer, FilterBar, InfoRow, KpiCard, PageHeader, Panel, QualityNotice, Segmented, StatusBadge } from '../components/Common'
-import { aiEvents, enforcementZones, intersections } from '../data/mockData'
-import { useAppState } from '../state/AppState'
+import { useAuth } from '../auth/AuthContext'
+import { apiErrorMessage, platformApi } from '../lib/api'
 
-const clues = [
-  { id: 'CLUE-0713-022', type: '货车限行', vehicle: 'truck', plate: '鲁A·8K2**', zone: '历下核心区货车限行', speed: '34 km/h', radar: '—', review: 'pending', delivery: 'delivery_failed', evidence: 'partial', quality: 'degraded', time: '10:41:05' },
-  { id: 'CLUE-0713-021', type: '疑似超速', vehicle: 'non_truck', plate: '鲁A·73F**', zone: '快速路速度观测区', speed: '72 km/h', radar: '74 km/h', review: 'pending', delivery: 'delivered', evidence: 'complete', quality: 'good', time: '10:32:48' },
-  { id: 'CLUE-0713-018', type: '禁停区域滞留', vehicle: 'unknown', plate: '待人工核验', zone: '学校周边禁停区', speed: '0 km/h', radar: '—', review: 'rejected', delivery: 'delivered', evidence: 'complete', quality: 'good', time: '09:58:21' },
-]
+const clueLabels = {
+  truck_restriction: '货车限行候选', speed_observation: '速度观测候选',
+  no_parking: '禁停候选', dwell: '区域滞留候选', occupation: '占道候选',
+}
+
+const zoneLabels = {
+  truck_restriction: '货车限行', speed_observation: '速度观测',
+  no_parking: '禁停', dwell: '区域滞留', occupation: '占道',
+}
+
+function displayTime(value) {
+  if (!value) return '—'
+  return new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', dateStyle: 'short', timeStyle: 'medium' }).format(new Date(value))
+}
 
 function EnforcementTabs() {
   const location = useLocation()
   const navigate = useNavigate()
   const active = location.pathname.endsWith('/zones') ? 'zones' : location.pathname.endsWith('/trucks') ? 'trucks' : 'events'
-  return <div className='page-tabs' aria-label='执法工作台视图'>{[
+  return <div className='page-tabs' role='tablist' aria-label='执法工作台视图'>{[
     ['events', '线索事件', '/enforcement'],
     ['trucks', '货车专题', '/enforcement/trucks'],
     ['zones', '区域与规则', '/enforcement/zones'],
-  ].map(([id, label, path]) => <button key={id} className={active === id ? 'active' : ''} onClick={() => navigate(path)}>{label}</button>)}</div>
+  ].map(([id, label, path]) => <button key={id} role='tab' aria-selected={active === id} className={active === id ? 'active' : ''} onClick={() => navigate(path)}>{label}</button>)}</div>
 }
 
 export function EnforcementEventsPage() {
-  const { dispatch } = useAppState()
+  const { platformRole } = useAuth()
   const location = useLocation()
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
   const initialId = new URLSearchParams(location.search).get('event_id')
-  const [clueRows, setClueRows] = useState(clues)
-  const [selected, setSelected] = useState(clues.find((item) => item.id === initialId) || null)
+  const [selectedId, setSelectedId] = useState(initialId)
   const [filter, setFilter] = useState('all')
   const [typeFilter, setTypeFilter] = useState('all')
   const [query, setQuery] = useState('')
-  const selectedClue = selected ? clueRows.find((item) => item.id === selected.id) || selected : null
-  const rows = useMemo(() => clueRows.filter((item) =>
-    (filter === 'all' || item.review === filter) &&
-    (typeFilter === 'all' || item.type === typeFilter) &&
-    (!query.trim() || `${item.id} ${item.plate}`.toLowerCase().includes(query.trim().toLowerCase()))
-  ), [clueRows, filter, typeFilter, query])
+  const [actionError, setActionError] = useState('')
+  const cluesQuery = useQuery({ queryKey: ['i4-enforcement-clues'], queryFn: () => platformApi.enforcementClues(), refetchInterval: 30_000 })
+  const detailQuery = useQuery({ queryKey: ['i4-enforcement-clue', selectedId], queryFn: () => platformApi.enforcementClue(selectedId), enabled: Boolean(selectedId) })
+  const clues = cluesQuery.data || []
+  const selectedClue = detailQuery.data || clues.find((item) => item.id === selectedId) || null
+  const rows = useMemo(() => clues.filter((item) =>
+    (filter === 'all' || item.review_status === filter) &&
+    (typeFilter === 'all' || item.clue_type === typeFilter) &&
+    (!query.trim() || `${item.id} ${item.source_event_id} ${item.track_id}`.toLowerCase().includes(query.trim().toLowerCase()))
+  ), [clues, filter, typeFilter, query])
   const openClue = (item) => {
-    setSelected(item)
+    const id = item?.id || null
+    setSelectedId(id)
     const params = new URLSearchParams(location.search)
-    if (item) params.set('event_id', item.id)
+    if (id) params.set('event_id', id)
     else params.delete('event_id')
     navigate(`${location.pathname}${params.size ? `?${params.toString()}` : ''}`, { replace: true })
   }
-  const reviewClue = (value) => {
-    setClueRows((items) => items.map((item) => item.id === selectedClue.id ? { ...item, review: value } : item))
-    dispatch({ type: 'TOAST', value: { tone: value === 'confirmed' ? 'success' : 'warning', text: value === 'confirmed' ? 'AI 线索已技术确认，等待主平台研判' : 'AI 线索已驳回；未生成违法认定状态' } })
-  }
+  const reviewMutation = useMutation({
+    mutationFn: ({ status, reason }) => platformApi.reviewEnforcementClue(selectedClue.id, { review_status: status, expected_revision: selectedClue.review_revision, reason }),
+    onSuccess: async () => {
+      setActionError('')
+      await queryClient.invalidateQueries({ predicate: (query) => String(query.queryKey[0]).startsWith('i4-enforcement') })
+    },
+    onError: (error) => setActionError(apiErrorMessage(error)),
+  })
+  const review = (status) => reviewMutation.mutate({
+    status,
+    reason: status === 'reviewed_confirmed' ? 'Console2 AI 技术事实确认；不构成违法认定' : 'Console2 AI 技术事实驳回',
+  })
+  const truckCount = clues.filter((item) => item.clue_type === 'truck_restriction').length
+  const speedCount = clues.filter((item) => item.clue_type === 'speed_observation').length
+  const pendingCount = clues.filter((item) => item.review_status === 'pending').length
+  const evidenceCount = clues.filter((item) => item.evidence_integrity_status === 'hash_verified').length
+  const loading = cluesQuery.isLoading
+  const error = cluesQuery.error
   return <AppShell pageTitle='执法工作台'>
-    <PageHeader eyebrow='S4 · AI 执法线索' title='执法工作台' description='在同一工作台复核线索事件、货车专题与区域规则；页面确认只表示 AI 线索复核，不代表违法认定。' meta='货车/非货车二分类 · 3 起待处理' actions={<button className='secondary-button' onClick={() => dispatch({ type: 'TOAST', value: { tone: 'success', text: '脱敏线索已导出；不包含处罚或案件状态' } })}><DownloadSimple size={15} /> 导出脱敏线索</button>} />
+    <PageHeader eyebrow='S4 · AI 执法线索' title='执法工作台' description='复核持久化 AI 事实线索；确认不代表违法认定、处罚或案件办结。' meta={`road9 · ${pendingCount} 起待复核`} />
     <EnforcementTabs />
-    <div className='kpi-grid four'><KpiCard icon={Truck} label='货车限行线索' value='12' unit='起' change='+3' tone='amber' /><KpiCard icon={Gauge} label='速度线索' value='8' unit='起' detail='视频/雷达分源' tone='red' /><KpiCard icon={MapPin} label='区域滞留' value='4' unit='起' detail='2 待复核' /><KpiCard icon={ShieldCheck} label='证据完整' value='21 / 24' unit='起' detail='3 不完整' tone='green' /></div>
-    <FilterBar result={`${rows.length} 起线索`} onReset={() => { setFilter('all'); setTypeFilter('all'); setQuery('') }}><Segmented value={filter} onChange={setFilter} options={[{ value: 'all', label: '全部' }, { value: 'pending', label: '待复核' }, { value: 'confirmed', label: '已确认' }, { value: 'rejected', label: '已驳回' }]} /><label>线索类型<select aria-label='线索类型' value={typeFilter} onChange={(event) => setTypeFilter(event.target.value)}><option value='all'>全部类型</option><option value='货车限行'>货车限行</option><option value='疑似超速'>疑似超速</option><option value='禁停区域滞留'>区域滞留</option></select></label><label className='search-field'><Funnel size={15} /><input aria-label='线索搜索' value={query} onChange={(event) => setQuery(event.target.value)} placeholder='线索 ID / 号牌' /></label></FilterBar>
-    <Panel title='AI 执法线索' subtitle='车辆类别仅显示 truck / non_truck / unknown'><DataTable rows={rows} onRowClick={openClue} columns={[{ key: 'review', label: 'AI 复核', render: (value) => <StatusBadge value={value} /> }, { key: 'id', label: '线索 ID' }, { key: 'type', label: '类型' }, { key: 'vehicle', label: '车辆类别' }, { key: 'plate', label: '脱敏号牌' }, { key: 'zone', label: '命中区域' }, { key: 'speed', label: '视频速度' }, { key: 'radar', label: '雷达速度' }, { key: 'evidence', label: '证据', render: (value) => <StatusBadge value={value} /> }, { key: 'delivery', label: '投递', render: (value) => <StatusBadge value={value} /> }, { key: 'time', label: '业务时间' }]} /></Panel>
-    {selectedClue && <DetailDrawer wide title={selectedClue.type} subtitle={selectedClue.id} onClose={() => openClue(null)} footer={<><button className='danger-button' onClick={() => reviewClue('rejected')}><X size={15} /> 驳回线索</button><button className='primary-button' onClick={() => reviewClue('confirmed')}><Check size={15} /> 确认 AI 线索</button></>}>
-      <div className='event-hero'><div className='event-snapshot'><img src='/assets/uav-intersection-night.png' alt='执法线索原始证据帧' /><span><Truck size={14} /> 证据帧 #20642 · 内容哈希已核验</span></div><div className='event-primary-metrics'><div><span>视频速度</span><strong>{selectedClue.speed}</strong></div><div><span>雷达速度</span><strong>{selectedClue.radar}</strong></div><div><span>分类</span><strong>{selectedClue.vehicle}</strong></div><div><span>置信度</span><strong>91%</strong></div></div></div>
-      <div className='detail-two-col'><Panel title='规则事实'><InfoRow label='围栏' value={selectedClue.zone} /><InfoRow label='围栏版本' value='ZONE-v12' /><InfoRow label='命中规则' value='truck-restriction-r4' /><InfoRow label='进入 / 停留' value='10:40:51 / 14s' /><InfoRow label='车辆分类' value={selectedClue.vehicle} /></Panel><Panel title='证据与质量'><InfoRow label='证据完整性' value={selectedClue.evidence} badge={selectedClue.evidence} /><InfoRow label='坐标质量' value='degraded · 3.4m' badge={selectedClue.quality} /><InfoRow label='雷达检定' value={selectedClue.radar === '—' ? '无雷达观测' : '有效至 2027-03'} /><InfoRow label='投递状态' value={selectedClue.delivery} badge={selectedClue.delivery} /><InfoRow label='复核状态' value={selectedClue.review} badge={selectedClue.review} /></Panel></div>
-      <QualityNotice tone='warning' title='事实与结论分离'>视频速度、雷达速度和融合结果不会互相覆盖；AI 线索确认不等于违法定案、处罚或案件办结。</QualityNotice>
+    <QualityNotice tone='warning' title='外部合同未关闭'>权威围栏、批准规则、雷达检定、法制证据和主平台投递仍为 blocked；页面不模拟成功。</QualityNotice>
+    <div className='kpi-grid four'><KpiCard icon={Truck} label='货车候选' value={truckCount} unit='起' /><KpiCard icon={Gauge} label='速度候选' value={speedCount} unit='起' detail='视频/雷达分源' /><KpiCard icon={MapPin} label='待复核' value={pendingCount} unit='起' tone='amber' /><KpiCard icon={ShieldCheck} label='哈希已核验' value={`${evidenceCount} / ${clues.length}`} unit='起' tone='green' /></div>
+    <FilterBar result={`${rows.length} 起线索`} onReset={() => { setFilter('all'); setTypeFilter('all'); setQuery('') }}><Segmented label='复核状态' value={filter} onChange={setFilter} options={[{ value: 'all', label: '全部' }, { value: 'pending', label: '待复核' }, { value: 'reviewed_confirmed', label: 'AI 已确认' }, { value: 'reviewed_rejected', label: 'AI 已驳回' }]} /><label>线索类型<select aria-label='线索类型' value={typeFilter} onChange={(event) => setTypeFilter(event.target.value)}><option value='all'>全部类型</option>{Object.entries(clueLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><label className='search-field'><Funnel size={15} /><input aria-label='线索搜索' value={query} onChange={(event) => setQuery(event.target.value)} placeholder='线索 / source / track' /></label></FilterBar>
+    {loading && <QualityNotice tone='info' title='正在加载'>正在从 road9 恢复 S4 线索事实与复核 revision。</QualityNotice>}
+    {error && <QualityNotice tone='danger' title='执法线索不可用'>{apiErrorMessage(error)}</QualityNotice>}
+    {!loading && !error && <Panel title='AI 执法线索' subtitle='车辆类别严格为 truck / non_truck / unknown'><DataTable rows={rows.map((item) => ({ ...item, type_label: clueLabels[item.clue_type] || item.clue_type, speed_label: item.video_speed_kmh == null ? '—' : `${item.video_speed_kmh.toFixed(1)} km/h`, radar_label: item.radar_speed_kmh == null ? '无雷达观测' : `${item.radar_speed_kmh.toFixed(1)} km/h`, time_label: displayTime(item.occurred_at) }))} onRowClick={openClue} empty='road9 当前没有 AI 执法线索；不会填充模拟线索' columns={[{ key: 'review_status', label: 'AI 复核', render: (value) => <StatusBadge value={value} /> }, { key: 'id', label: '线索 ID' }, { key: 'type_label', label: '类型' }, { key: 'vehicle_class', label: '车辆类别' }, { key: 'track_id', label: 'Track' }, { key: 'speed_label', label: '视频速度' }, { key: 'radar_label', label: '雷达速度' }, { key: 'evidence_integrity_status', label: '证据', render: (value) => <StatusBadge value={value} /> }, { key: 'delivery_status', label: '投递', render: (value) => <StatusBadge value={value} /> }, { key: 'time_label', label: '业务时间' }]} /></Panel>}
+    {selectedClue && <DetailDrawer wide title={clueLabels[selectedClue.clue_type] || selectedClue.clue_type} subtitle={selectedClue.id} onClose={() => openClue(null)} footer={<>{platformRole !== 'admin' && <span className='muted'>只读角色不可复核</span>}<button disabled={platformRole !== 'admin' || reviewMutation.isPending} className='danger-button' onClick={() => review('reviewed_rejected')}><X size={15} /> 驳回 AI 线索</button><button disabled={platformRole !== 'admin' || reviewMutation.isPending} className='primary-button' onClick={() => review('reviewed_confirmed')}><Check size={15} /> 确认 AI 线索</button></>}>
+      {actionError && <QualityNotice tone='danger' title='复核未保存'>{actionError}</QualityNotice>}
+      {detailQuery.isLoading && <QualityNotice tone='info' title='正在恢复证据'>正在读取证据清单与不可变引用。</QualityNotice>}
+      <div className='event-primary-metrics'><div><span>视频速度</span><strong>{selectedClue.video_speed_kmh == null ? '—' : `${selectedClue.video_speed_kmh.toFixed(1)} km/h`}</strong></div><div><span>雷达速度</span><strong>{selectedClue.radar_speed_kmh == null ? '无观测' : `${selectedClue.radar_speed_kmh.toFixed(1)} km/h`}</strong></div><div><span>分类</span><strong>{selectedClue.vehicle_class}</strong></div><div><span>置信度</span><strong>{selectedClue.class_confidence == null ? '—' : `${(selectedClue.class_confidence * 100).toFixed(1)}%`}</strong></div></div>
+      <div className='detail-two-col'><Panel title='规则事实'><InfoRow label='围栏' value={selectedClue.zone_id || '未绑定'} /><InfoRow label='围栏版本' value={selectedClue.zone_version || '未冻结'} /><InfoRow label='候选规则' value={selectedClue.rule_id || '未绑定'} /><InfoRow label='规则版本' value={selectedClue.rule_version || '未冻结'} /><InfoRow label='Track' value={selectedClue.track_id} /></Panel><Panel title='证据与质量'><InfoRow label='证据完整性' value={selectedClue.evidence_integrity_status} badge={selectedClue.evidence_integrity_status} /><InfoRow label='证据项' value={`${selectedClue.evidence_count || 0} 项`} /><InfoRow label='质量状态' value={selectedClue.quality_status} badge={selectedClue.quality_status} /><InfoRow label='投递状态' value={selectedClue.delivery_status} badge={selectedClue.delivery_status} /><InfoRow label='复核 revision' value={`r${selectedClue.review_revision}`} /></Panel></div>
+      <Panel title='不可变证据引用' subtitle='只展示对象引用和 SHA-256，不把通用夜景图冒充原始证据'>{selectedClue.evidence?.length ? selectedClue.evidence.map((item) => <div className='info-row' key={item.id}><span>{item.kind} · {item.media_type}</span><strong title={item.sha256}>{item.sha256.slice(0, 16)}… · {item.size_bytes} B</strong></div>) : <span className='muted'>当前线索没有证据项，状态不得显示为完整。</span>}</Panel>
+      {selectedClue.validation_fixture && <QualityNotice tone='warning' title='工程契约样本'>该记录使用真实材料哈希验证持久化流程，但不是管道检出的真实违法线索。</QualityNotice>}
+      <QualityNotice tone='warning' title='事实与结论分离'>视频、雷达和融合值不会相互覆盖；复核仅改变 AI 线索状态。</QualityNotice>
     </DetailDrawer>}
   </AppShell>
 }
 
+function ZoneDialog({ zone, onClose, onSave, pending, error }) {
+  const [name, setName] = useState(zone?.name || '')
+  const [type, setType] = useState(zone?.zone_type || 'truck_restriction')
+  const [coordinateSystem, setCoordinateSystem] = useState(zone?.coordinate_system || 'ENU')
+  const [roadVersion, setRoadVersion] = useState(zone?.road_data_version || '')
+  const [geometry, setGeometry] = useState(zone ? JSON.stringify(zone.geometry) : '')
+  const submit = () => {
+    try {
+      onSave({ name, zone_type: type, coordinate_system: coordinateSystem, road_data_version: roadVersion || null, geometry: JSON.parse(geometry), schedule: zone?.schedule || {} })
+    } catch {
+      onSave(null, '几何必须是闭合的 GeoJSON Polygon JSON')
+    }
+  }
+  return <div className='modal-backdrop'><div className='modal-card wide' role='dialog' aria-modal='true' aria-label={zone ? '编辑候选执法区域' : '新建候选执法区域'}><header><strong>{zone ? '编辑候选执法区域' : '新建候选执法区域'}</strong><button className='icon-action' aria-label='关闭候选区域表单' onClick={onClose}><X size={18} /></button></header><div className='form-grid'><label>区域名称<input aria-label='区域名称' value={name} onChange={(event) => setName(event.target.value)} /></label><label>区域类型<select aria-label='区域类型' value={type} onChange={(event) => setType(event.target.value)}>{Object.entries(zoneLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><label>坐标系统<select aria-label='坐标系统' value={coordinateSystem} onChange={(event) => setCoordinateSystem(event.target.value)}><option>ENU</option><option>GCJ02</option><option>WGS84</option></select></label><label>路网版本<input aria-label='路网版本' value={roadVersion} onChange={(event) => setRoadVersion(event.target.value)} /></label><label style={{ gridColumn: '1 / -1' }}>GeoJSON Polygon<textarea aria-label='区域几何' rows='5' value={geometry} onChange={(event) => setGeometry(event.target.value)} placeholder='{"type":"Polygon","coordinates":[[[0,0],[10,0],[10,10],[0,0]]]}' /></label></div>{error && <QualityNotice tone='danger' title='候选未保存'>{error}</QualityNotice>}<QualityNotice tone='info' title='只保存候选'>本地没有权威发布权限；保存后保持 candidate/unverified。</QualityNotice><footer><button className='secondary-button' onClick={onClose}>取消</button><button disabled={pending} className='primary-button' onClick={submit}>保存候选</button></footer></div></div>
+}
+
+function RuleDialog({ zones, onClose, onSave, pending, error }) {
+  const [name, setName] = useState('')
+  const [zoneId, setZoneId] = useState(zones[0]?.id || '')
+  const [type, setType] = useState('truck_restriction')
+  return <div className='modal-backdrop'><div className='modal-card wide' role='dialog' aria-modal='true' aria-label='新建候选执法规则'><header><strong>新建候选事实规则</strong><button className='icon-action' aria-label='关闭候选规则表单' onClick={onClose}><X size={18} /></button></header><div className='form-grid'><label>规则名称<input aria-label='规则名称' value={name} onChange={(event) => setName(event.target.value)} /></label><label>候选区域<select aria-label='候选区域' value={zoneId} onChange={(event) => setZoneId(event.target.value)}><option value=''>不绑定</option>{zones.map((zone) => <option key={zone.id} value={zone.id}>{zone.name}</option>)}</select></label><label>线索类型<select aria-label='规则线索类型' value={type} onChange={(event) => setType(event.target.value)}>{Object.entries(clueLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label></div>{error && <QualityNotice tone='danger' title='规则未保存'>{error}</QualityNotice>}<QualityNotice tone='warning' title='阈值与审批未冻结'>只保存候选事实 schema，不设置法定阈值、例外或处罚字段。</QualityNotice><footer><button className='secondary-button' onClick={onClose}>取消</button><button disabled={pending || !name} className='primary-button' onClick={() => onSave({ name, zone_id: zoneId || null, clue_type: type, definition: { mode: 'fact_only', vehicle_class: type === 'truck_restriction' ? 'truck' : 'unknown' } })}>保存候选规则</button></footer></div></div>
+}
+
 export function EnforcementZonesPage() {
-  const { state, dispatch } = useAppState()
-  const [selected, setSelected] = useState(state.zones[0])
-  const selectedZone = selected ? state.zones.find((item) => item.id === selected.id) || selected : null
+  const { platformRole } = useAuth()
+  const queryClient = useQueryClient()
+  const [selectedId, setSelectedId] = useState(null)
   const [editing, setEditing] = useState(false)
+  const [ruleEditing, setRuleEditing] = useState(false)
+  const [actionError, setActionError] = useState('')
+  const zonesQuery = useQuery({ queryKey: ['i4-enforcement-zones'], queryFn: platformApi.enforcementZones })
+  const rulesQuery = useQuery({ queryKey: ['i4-enforcement-rules'], queryFn: platformApi.enforcementRules })
+  const zones = zonesQuery.data || []
+  const rules = rulesQuery.data || []
+  const selectedZone = zones.find((item) => item.id === selectedId) || zones[0] || null
+  useEffect(() => { if (!selectedId && zones[0]) setSelectedId(zones[0].id) }, [selectedId, zones])
+  const saved = async () => {
+    setActionError('')
+    setEditing(false)
+    setRuleEditing(false)
+    await queryClient.invalidateQueries({ predicate: (query) => String(query.queryKey[0]).startsWith('i4-enforcement') })
+  }
+  const zoneMutation = useMutation({
+    mutationFn: (value) => value.id ? platformApi.updateEnforcementZone(value.id, value.body) : platformApi.createEnforcementZone(value.body),
+    onSuccess: saved,
+    onError: (error) => setActionError(apiErrorMessage(error)),
+  })
+  const ruleMutation = useMutation({ mutationFn: platformApi.createEnforcementRule, onSuccess: saved, onError: (error) => setActionError(apiErrorMessage(error)) })
+  const publishMutation = useMutation({ mutationFn: platformApi.publishEnforcementZone, onError: (error) => setActionError(apiErrorMessage(error)) })
+  const saveZone = (body, localError) => {
+    if (localError) return setActionError(localError)
+    setActionError('')
+    zoneMutation.mutate(editing === 'edit' ? { id: selectedZone.id, body: { ...body, revision: selectedZone.revision } } : { body })
+  }
+  const loading = zonesQuery.isLoading || rulesQuery.isLoading
+  const error = zonesQuery.error || rulesQuery.error
   return <AppShell pageTitle='区域与规则'>
-    <PageHeader eyebrow='S4 / S5 · 围栏与规则' title='区域与规则' description='查看权威围栏与本地候选版本；本地编辑只形成候选配置，不覆盖外部权威数据。' meta='GCJ02 · ZONE-v12 · 2026-07-13' actions={<button className='primary-button' onClick={() => setEditing(true)}><Plus size={15} /> 新建候选区域</button>} />
+    <PageHeader eyebrow='S4 / S5 · 候选围栏与规则' title='区域与规则' description='本地只管理 candidate/retired；权威发布 Adapter 不可用时拒绝发布。' meta={`${zones.length} 个候选区 · ${rules.length} 条候选规则`} actions={<>{platformRole === 'admin' && <button className='secondary-button' onClick={() => { setActionError(''); setRuleEditing(true) }}><Plus size={15} /> 新建候选规则</button>} {platformRole === 'admin' && <button className='primary-button' onClick={() => { setActionError(''); setEditing('new') }}><Plus size={15} /> 新建候选区域</button>}</>} />
     <EnforcementTabs />
-    <div className='zone-layout'><Panel title='区域地图' subtitle='候选多边形使用虚线，已发布版本使用实线'><CityMap points={intersections} selectedId={intersections[0].id} compact /><div className='zone-polygon zone-a'><span>历下核心区货车限行 · v12</span></div><div className='zone-polygon zone-b candidate'><span>学校周边禁停候选 · v3</span></div></Panel><Panel title='区域与规则'>{state.zones.map((zone) => <button key={zone.id} className={`zone-row ${selected?.id === zone.id ? 'active' : ''}`} onClick={() => setSelected(zone)}><div><strong>{zone.name}</strong><span>{zone.id} · {zone.version}</span></div><StatusBadge value={zone.status} /></button>)}</Panel></div>
-    {selectedZone && <Panel title={selectedZone.name} subtitle={`${selectedZone.id} · ${selectedZone.version}`} action={<button className='secondary-button' onClick={() => setEditing(true)}><PencilSimple size={15} /> 编辑候选</button>}><div className='zone-detail-grid'><InfoRow label='区域类型' value={selectedZone.type} /><InfoRow label='发布状态' value={selectedZone.status} badge={selectedZone.status} /><InfoRow label='有效时段' value={selectedZone.valid} /><InfoRow label='关联规则' value={`${selectedZone.rules} 条`} /><InfoRow label='坐标系统' value='GCJ02 · 语义待权威源冻结' /><InfoRow label='路网版本' value='ROAD-2026.07.1' /></div></Panel>}
-    {editing && <div className='modal-backdrop'><div className='modal-card wide'><header><strong>编辑候选执法区域</strong><button onClick={() => setEditing(false)}><X size={18} /></button></header><div className='form-grid'><label>区域名称<input defaultValue={selectedZone?.name} /></label><label>区域类型<select defaultValue={selectedZone?.type}><option value='truck_restriction'>货车限行</option><option value='no_parking'>禁停</option><option value='speed'>速度观测</option></select></label><label>有效时段<input defaultValue={selectedZone?.valid} /></label><label>关联规则<select><option>truck-restriction-r4</option><option>parking-r3</option></select></label></div><QualityNotice tone='info' title='候选版本'>保存后生成候选版本，未经过批准和发布流程不会进入运行任务。</QualityNotice><footer><button className='secondary-button' onClick={() => setEditing(false)}>取消</button><button className='primary-button' onClick={() => { dispatch({ type: 'SAVE_ZONE', id: selectedZone.id }); setEditing(false) }}>保存候选</button></footer></div></div>}
+    {loading && <QualityNotice tone='info' title='正在加载'>正在从 road9 读取候选版本。</QualityNotice>}
+    {error && <QualityNotice tone='danger' title='候选配置不可用'>{apiErrorMessage(error)}</QualityNotice>}
+    {actionError && !editing && !ruleEditing && <QualityNotice tone='warning' title='操作未完成'>{actionError}</QualityNotice>}
+    {!loading && !error && zones.length === 0 && <QualityNotice tone='info' title='暂无候选区域'>未配置任何本地候选；不会显示演示围栏或伪造已发布状态。</QualityNotice>}
+    {!loading && !error && <div className='zone-layout'><Panel title='空间语义状态' subtitle='权威几何合同未关闭'><QualityNotice tone='warning' title='地图发布视图已停用'>当前只展示候选 GeoJSON、坐标系统、checksum 和路网版本；不把本地几何绘成权威发布区。</QualityNotice>{selectedZone && <div className='zone-detail-grid'><InfoRow label='坐标系统' value={selectedZone.coordinate_system} /><InfoRow label='路网版本' value={selectedZone.road_data_version || '未绑定'} /><InfoRow label='checksum' value={`${selectedZone.checksum.slice(0, 16)}…`} /><InfoRow label='权威状态' value={selectedZone.authority_status} badge='blocked' /></div>}</Panel><Panel title='候选区域'>{zones.length === 0 ? <span className='muted'>无持久化候选区域</span> : zones.map((zone) => <button key={zone.id} className={`zone-row ${selectedZone?.id === zone.id ? 'active' : ''}`} onClick={() => setSelectedId(zone.id)}><div><strong>{zone.name}</strong><span>{zone.id} · r{zone.revision}</span></div><StatusBadge value={zone.status} /></button>)}</Panel></div>}
+    {selectedZone && <Panel title={selectedZone.name} subtitle={`${selectedZone.id} · revision ${selectedZone.revision}`} action={<>{platformRole === 'admin' && <button className='secondary-button' onClick={() => { setActionError(''); setEditing('edit') }}><PencilSimple size={15} /> 编辑候选</button>} {platformRole === 'admin' && <button className='secondary-button' onClick={() => publishMutation.mutate(selectedZone.id)}>尝试权威发布</button>}</>}><div className='zone-detail-grid'><InfoRow label='区域类型' value={zoneLabels[selectedZone.zone_type] || selectedZone.zone_type} /><InfoRow label='本地状态' value={selectedZone.status} badge={selectedZone.status} /><InfoRow label='来源' value={selectedZone.source} /><InfoRow label='关联规则' value={`${selectedZone.rule_count} 条`} /><InfoRow label='坐标系统' value={selectedZone.coordinate_system} /><InfoRow label='路网版本' value={selectedZone.road_data_version || '未冻结'} /></div></Panel>}
+    <Panel title='候选规则' subtitle='规则内容仍为 unverified，不能进入运行任务'><DataTable rows={rules} empty='暂无候选规则' columns={[{ key: 'status', label: '状态', render: (value) => <StatusBadge value={value} /> }, { key: 'id', label: '规则 ID' }, { key: 'name', label: '名称' }, { key: 'clue_type', label: '线索类型', render: (value) => clueLabels[value] || value }, { key: 'zone_id', label: '候选区域', render: (value) => value || '未绑定' }, { key: 'quality_status', label: '质量', render: (value) => <StatusBadge value={value} /> }, { key: 'approval_status', label: '审批', render: (value) => <StatusBadge value={value} /> }]} /></Panel>
+    {editing && <ZoneDialog zone={editing === 'edit' ? selectedZone : null} onClose={() => setEditing(false)} onSave={saveZone} pending={zoneMutation.isPending} error={actionError} />}
+    {ruleEditing && <RuleDialog zones={zones} onClose={() => setRuleEditing(false)} onSave={(body) => ruleMutation.mutate(body)} pending={ruleMutation.isPending} error={actionError} />}
   </AppShell>
 }
 
 export function TrucksPage() {
-  const [selected, setSelected] = useState(intersections[0])
+  const summaryQuery = useQuery({ queryKey: ['i4-enforcement-truck-summary'], queryFn: platformApi.enforcementTruckSummary, refetchInterval: 30_000 })
+  const summary = summaryQuery.data || { status: 'stale', active_count: 0, clue_count: 0, pending_review_count: 0, vehicles: [] }
   return <AppShell pageTitle='货车专题'>
-    <PageHeader eyebrow='S4 · truck / non_truck' title='货车专题' description='展示货车二分类、围栏进入事实和待复核线索；不扩展重/中/轻型货车或核定载质量识别。' meta='当前 18 辆 truck · 2 起区域命中' />
+    <PageHeader eyebrow='S4 · truck / non_truck' title='货车专题' description='仅展示持久化货车 AI 线索摘要；不扩展车型，也不以历史线索伪造实时车辆位置。' meta={summary.as_of ? `as_of ${displayTime(summary.as_of)}` : '尚无真实时间点'} />
     <EnforcementTabs />
-    <div className='kpi-grid four'><KpiCard icon={Truck} label='当前货车' value='18' unit='辆' change='+4' /><KpiCard icon={MapPin} label='围栏内' value='3' unit='辆' detail='2 起待复核' tone='amber' /><KpiCard icon={Gauge} label='平均视频速度' value='36.2' unit='km/h' detail='不含雷达值' tone='cyan' /><KpiCard icon={Warning} label='低置信候选' value='2' unit='辆' detail='转人工核验' tone='red' /></div>
-    <div className='truck-layout'><Panel title='实时空间位置' subtitle='最近位置过期时灰显并标注时间'><CityMap points={intersections} selectedId={selected.id} onSelect={setSelected} /></Panel><Panel title='围栏命中车辆'><div className='truck-list'>{[{ id: '#0971', confidence: '91%', speed: '34km/h', zone: '核心区限行', status: 'warning' }, { id: '#1264', confidence: '88%', speed: '41km/h', zone: '核心区限行', status: 'warning' }, { id: '#2038', confidence: '63%', speed: '28km/h', zone: '边界徘徊', status: 'unverified' }].map((truck) => <button key={truck.id}><span className='truck-icon'><Truck size={18} weight='fill' /></span><div><strong>{truck.id} · truck {truck.confidence}</strong><span>{truck.zone} · 视频速度 {truck.speed}</span></div><StatusBadge value={truck.status} /></button>)}</div><QualityNotice tone='info' title='模型范围冻结'>只输出 truck / non_truck / unknown；低置信候选不按货车规则生成高置信线索。</QualityNotice></Panel></div>
+    {summaryQuery.isLoading && <QualityNotice tone='info' title='正在加载'>正在从 S4 线索投影恢复货车摘要。</QualityNotice>}
+    {summaryQuery.error && <QualityNotice tone='danger' title='货车摘要不可用'>{apiErrorMessage(summaryQuery.error)}</QualityNotice>}
+    <div className='kpi-grid four'><KpiCard icon={Truck} label='当前实时货车' value={summary.active_count} unit='辆' detail='无实时事实时为 0' /><KpiCard icon={MapPin} label='历史候选线索' value={summary.clue_count} unit='起' /><KpiCard icon={Gauge} label='待复核' value={summary.pending_review_count} unit='起' tone='amber' /><KpiCard icon={Warning} label='数据新鲜度' value={summary.status} unit='' tone={summary.status === 'fresh' ? 'green' : 'amber'} /></div>
+    <div className='truck-layout'><Panel title='实时空间位置' subtitle='没有真实在线位置时保持空态'><QualityNotice tone='info' title='未绘制模拟车辆'>{summary.reason || '当前没有可用实时货车位置。'}</QualityNotice></Panel><Panel title='围栏命中车辆'>{summary.vehicles?.length ? summary.vehicles.map((truck) => <div className='info-row' key={truck.id}><span>{truck.id}</span><strong>{truck.status}</strong></div>) : <span className='muted'>当前没有实时车辆事实</span>}<QualityNotice tone='info' title='模型范围冻结'>只输出 truck / non_truck / unknown；低置信候选只能转人工复核。</QualityNotice></Panel></div>
   </AppShell>
 }

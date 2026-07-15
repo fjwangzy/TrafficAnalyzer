@@ -1,8 +1,8 @@
 # 无人机交通智能感知系统 PRD 分册索引
 
-本目录承接[总 PRD v2.1](../2026-06-29-uav-traffic-ai-prd.md)的板块级细化。总 PRD 管项目边界和跨板块原则，分册 PRD 管可实施、可测试、可验收的细节。
+本目录承接[总 PRD v2.2](../2026-06-29-uav-traffic-ai-prd.md)的板块级细化。总 PRD 管项目边界和跨板块原则，分册 PRD 管可实施、可测试、可验收的细节。
 
-所有分册共同遵守：PostgreSQL connection database=`road9`；UAV 内部 Topic、`msg_type`、WebSocket channel 和本项目自建表使用 `uav_` 前缀；时序指标使用 TimescaleDB；InfluxDB、Telegraf、Grafana 仅为待迁移退役的遗留链路。分册如与该基线冲突，应按总 PRD v2.1 修订，不得自行创建第二套命名。
+所有分册共同遵守：PostgreSQL connection database=`road9`；UAV 内部 Topic、`msg_type`、WebSocket channel 和本项目自建表使用 `uav_` 前缀；时序指标使用 TimescaleDB；InfluxDB、Telegraf、Grafana 仅为待迁移退役的遗留链路。分册如与该基线冲突，应按总 PRD v2.2 修订，不得自行创建第二套命名。
 
 ## 1. 分册清单
 
@@ -10,13 +10,13 @@
 | --- | --- | --- | --- |
 | S1 | [路口态势识别](S1-intersection-situation-prd.md) | 指标口径、统计粒度、态势事件及页面 | 详细评审草案 |
 | S2 | [换道与冲突识别](S2-conflict-prd.md) | 冲突规则、预测、风险分级及热区 | 详细评审草案 |
-| S3 | [事故测绘](S3-accident-survey-prd.md) | 作业流程、量算对象、误差和报告 | 详细评审草案 |
-| S4 | [执法检测](S4-enforcement-prd.md) | 线索规则、围栏、证据及人工复核 | 详细评审草案；范围冻结 |
-| S5 | [路网与共性能力](S5-road-and-common-capabilities-prd.md) | 权威主数据、坐标、绑定、规则和证据共性能力 | 详细评审草案；优先冻结 |
-| S6 | [智慧交通主平台集成](S6-main-platform-integration-prd.md) | 事件契约、回执、重试及反馈 | 详细评审草案；优先冻结 |
-| S7 | [质量验收与运营](S7-quality-acceptance-operations-prd.md) | 数据集、指标、试点、上线和持续运营 | 详细评审草案；汇总冻结 |
-| S8 | [全域态势工作台（首屏 Dashboard）](S8-dashboard-one-map-prd.md) | 城市地图背景下的无人机路口态势、核心指标、重点关注、待办任务、监测保障和数据可信度 | 信息架构已冻结；地图/口径/接口/视觉验收待冻结 |
-| S9 | [无人机对接与飞行计划管理](S9-drone-integration-flight-plan-prd.md) | 无人机档案、RTSP+MQTT/MP4+SRT 数据源、单次/周期计划、Mission 调度与本地回放 | 详细评审草案；设备/接口/DDL/权限/高可用待冻结 |
+| S3 | [事故测绘](S3-accident-survey-prd.md) | 作业流程、量算对象、误差和报告 | 工程闭环与真实材料验证已完成；正式精度、法制和主平台合同仍待冻结 |
+| S4 | [执法检测](S4-enforcement-prd.md) | 线索规则、围栏、证据及人工复核 | I4 本地候选闭环完成；权威规则/围栏、雷达、法制和主平台合同阻断 |
+| S5 | [路网与共性能力](S5-road-and-common-capabilities-prd.md) | 权威主数据、坐标、绑定、规则和证据共性能力 | 内部接口/DDL 已冻结；权威数据合同阻断 |
+| S6 | [智慧交通主平台集成](S6-main-platform-integration-prd.md) | 事件契约、回执、重试及反馈 | 内部接口/DDL 已冻结；外部主平台合同阻断 |
+| S7 | [质量验收与运营](S7-quality-acceptance-operations-prd.md) | 数据集、指标、试点、上线和持续运营 | I6 退役就绪审计已实现；正式指标/环境/迁移/试点仍阻断 |
+| S8 | [全域态势工作台（首屏 Dashboard）](S8-dashboard-one-map-prd.md) | 城市地图背景下的无人机路口态势、核心指标、重点关注、待办任务、监测保障和数据可信度 | I5 第一阶段读模型与真实阻断态已实现；项目范围/底图/口径/筛选回补/正式视觉验收待冻结 |
+| S9 | [无人机对接与飞行计划管理](S9-drone-integration-flight-plan-prd.md) | 无人机档案、RTSP+MQTT/MP4+SRT 数据源、单次/周期计划、Mission 调度与本地回放 | 工程闭环完成；生产设备/权限/容量/高可用阻断 |
 
 ## 2. 统一章节模板
 

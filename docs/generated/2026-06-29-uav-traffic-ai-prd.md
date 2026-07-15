@@ -7,7 +7,7 @@
 | 需求方 | 交通管理部门 / 投标项目组 |
 | PRD 编写人 | 【待补充：姓名/部门】 |
 | PRD 提交日期 | 2026-06-29 |
-| 当前版本 | v2.1（2026-07-14） |
+| 当前版本 | v2.2（2026-07-15） |
 | 项目定位 | 智慧交通整体项目下的无人机 AI 子项目 |
 
 ## PRD 修改记录
@@ -26,6 +26,7 @@
 | 2026-07-13 | 新增 S8 城市一图概览分册；以交通指挥中心主任为首要用户，将 `/` 重构为城市地图主导的项目首屏，突出全局态势、重点关注、变化趋势、无人机保障和数据可信度 | 首屏 Dashboard 专项需求 | 【待补充】 | 【待补充】 | v1.9 |
 | 2026-07-13 | 新增 S9 无人机对接与飞行计划管理分册；冻结无人机档案、RTSP+MQTT/MP4+SRT 成对数据源、单次/周期计划、Mission 执行、调度幂等及本地回放边界 | 无人机接入与任务排期专项需求 | 【待补充】 | 【待补充】 | v2.0 |
 | 2026-07-14 | 冻结 Console2 信息架构为六个工作域并切换为唯一发布前端；首页更名为“工作台首屏”，视频分析、风险热区、报告、执法子页、质量、证据和身份能力归并到正式工作台或页内视图，旧前端路由直接下线 | 页面与 PRD 裁剪归并、四模块迁移上线 | 【待补充】 | 【待补充】 | v2.1 |
+| 2026-07-15 | 完成 I4 执法候选线索本地工程闭环：candidate 围栏/规则、统一 AI 事件、通用证据、技术复核审计和 Console2 三视图真实化；权威发布、雷达、法制和主平台合同继续阻断正式验收 | PRD/UI 滚动实施 | 【待补充】 | 【待补充】 | v2.2 |
 
 ---
 
@@ -42,12 +43,12 @@
 | S1 | 路口态势识别 | 检测、跟踪、速度、转向、排队、拥堵及态势输出 | 指挥中心、算法、交通工程 | 详细评审草案；业务阈值待冻结 | [S1 路口态势识别 PRD](uav-traffic-ai-prd/S1-intersection-situation-prd.md) |
 | S2 | 换道与冲突识别 | 换道、TTC/PET、轨迹预测、风险分级、风险热区 | 指挥中心、算法、交安专家 | 详细评审草案；合同偏差待关闭 | [S2 换道与冲突识别 PRD](uav-traffic-ai-prd/S2-conflict-prd.md) |
 | S3 | 事故测绘 | 测绘任务、量算、误差、示意数据及证据管理 | 事故民警、测绘、法制 | 工程闭环与真实材料验证已完成；精度、法制和主平台合同仍待冻结 | [S3 事故测绘 PRD](uav-traffic-ai-prd/S3-accident-survey-prd.md) |
-| S4 | 执法检测 | 货车/非货车、围栏、规则、速度融合、违法线索证据 | 执法、法制、算法 | 详细评审草案；范围已冻结，外部依赖待关闭 | [S4 执法检测 PRD](uav-traffic-ai-prd/S4-enforcement-prd.md) |
-| S5 | 路网与共性能力 | 路网主数据、坐标、视觉车道绑定、质量状态、规则与证据共性能力 | 数据、GIS、算法、架构 | 详细评审草案；权威数据口径待冻结 | [S5 路网与共性能力 PRD](uav-traffic-ai-prd/S5-road-and-common-capabilities-prd.md) |
-| S6 | 智慧交通主平台集成 | AI 事件、幂等、回执、重试、复核反馈和责任边界 | 大项目平台方、架构、运维 | 详细评审草案；目标契约尚未实现/冻结 | [S6 主平台集成 PRD](uav-traffic-ai-prd/S6-main-platform-integration-prd.md) |
-| S7 | 质量验收与运营 | 数据集、指标、性能、试点、上线、监控和持续优化 | 甲方、监理、测试、运维 | 详细评审草案；阈值、样本与排期待冻结 | [S7 质量验收与运营 PRD](uav-traffic-ai-prd/S7-quality-acceptance-operations-prd.md) |
-| S8 | 全域态势工作台（首屏 Dashboard） | 城市地图背景下的无人机路口态势纵览、平台核心指标、待办任务、监测保障、数据可信度和专业下钻 | 指挥中心主任、产品、GIS、平台、前端 | 信息架构已冻结；地图、口径、接口和视觉验收仍待冻结 | [S8 全域态势工作台 PRD](uav-traffic-ai-prd/S8-dashboard-one-map-prd.md) |
-| S9 | 无人机对接与飞行计划管理 | 无人机档案、视频/遥测源、单次/周期计划、Mission 调度执行和本地 MP4+SRT 回放 | 无人机作业方、指挥中心、平台、运维、测试、网安 | 详细评审草案；设备权威、接口、DDL、权限和调度高可用待冻结 | [S9 无人机对接与飞行计划管理 PRD](uav-traffic-ai-prd/S9-drone-integration-flight-plan-prd.md) |
+| S4 | 执法检测 | 货车/非货车、围栏、规则、速度融合、违法线索证据 | 执法、法制、算法 | I4 本地候选闭环已实现；权威规则/围栏、雷达、法制和主平台合同仍阻断 | [S4 执法检测 PRD](uav-traffic-ai-prd/S4-enforcement-prd.md) |
+| S5 | 路网与共性能力 | 路网主数据、坐标、视觉车道绑定、质量状态、规则与证据共性能力 | 数据、GIS、算法、架构 | 内部 RoadContext/DDL 已冻结；权威数据合同待关闭 | [S5 路网与共性能力 PRD](uav-traffic-ai-prd/S5-road-and-common-capabilities-prd.md) |
+| S6 | 智慧交通主平台集成 | AI 事件、幂等、回执、重试、复核反馈和责任边界 | 大项目平台方、架构、运维 | 内部 EventDelivery/DDL 已冻结；外部主平台合同待关闭 | [S6 主平台集成 PRD](uav-traffic-ai-prd/S6-main-platform-integration-prd.md) |
+| S7 | 质量验收与运营 | 数据集、指标、性能、试点、上线、监控和持续优化 | 甲方、监理、测试、运维 | I6 ADR-019 就绪审计已实现；阈值、样本、性能、RPO/RTO、试点、迁移对账与退役批准待冻结 | [S7 质量验收与运营 PRD](uav-traffic-ai-prd/S7-quality-acceptance-operations-prd.md) |
+| S8 | 全域态势工作台（首屏 Dashboard） | 城市地图背景下的无人机路口态势纵览、平台核心指标、待办任务、监测保障、数据可信度和专业下钻 | 指挥中心主任、产品、GIS、平台、前端 | I5-A 真实读模型及 I5-B 内部查询/降级已实现；项目范围、正式底图/口径、全局增量回补和正式视觉验收仍待冻结 | [S8 全域态势工作台 PRD](uav-traffic-ai-prd/S8-dashboard-one-map-prd.md) |
+| S9 | 无人机对接与飞行计划管理 | 无人机档案、视频/遥测源、单次/周期计划、Mission 调度执行和本地 MP4+SRT 回放 | 无人机作业方、指挥中心、平台、运维、测试、网安 | 工程闭环完成；设备权威、生产接入、权限、容量与高可用待正式验收 | [S9 无人机对接与飞行计划管理 PRD](uav-traffic-ai-prd/S9-drone-integration-flight-plan-prd.md) |
 
 分册目录和统一模板见 [PRD 分册索引](uav-traffic-ai-prd/README.md)。原第 10 章保留各分册的概要需求和总体数据流，避免总 PRD 失去独立评审能力；字段级、规则级、页面级和测试用例级细节逐步下沉至对应分册。
 
@@ -466,7 +467,7 @@
 | --- | --- |
 | TimescaleDB hypertable | `uav_traffic_metrics`、`uav_system_metrics`、`uav_telemetry_metrics`、`uav_track_points`、`uav_conflict_events` |
 | 轨迹与 AI 事件 | `uav_track_events`、`uav_ai_events` |
-| 消息消费与可靠投递 | `uav_message_inbox`、`uav_event_outbox`、`uav_event_delivery_attempts`、`uav_event_feedback`、`uav_dead_letters` |
+| 消息消费与可靠投递 | `uav_message_inbox`、`uav_message_dead_letters`、`uav_event_outbox`、`uav_event_delivery_attempts`、`uav_event_feedback`、`uav_dead_letters` |
 | 无人机接入与调度 | `uav_drones`、`uav_video_sources`、`uav_telemetry_sources`、`uav_flight_plans`、`uav_missions`、`uav_pipelines` |
 | 测绘与执法 | `uav_survey_tasks`、`uav_capture_batches`、`uav_survey_measurements`、`uav_scene_annotations`、`uav_survey_reports`、`uav_enforcement_zones`、`uav_enforcement_rules`、`uav_enforcement_clues` |
 | 证据、路网与审计 | `uav_evidence_packages`、`uav_evidence_items`、`uav_road_context_snapshots`、`uav_visual_lane_bindings`、`uav_audit_logs` |
@@ -511,6 +512,7 @@
 - Topic 不得继续用字符串替换从统计 Topic 推导轨迹/冲突/遥测 Topic；必须由显式 `camera_id` 和统一 Topic builder 生成并做契约测试，避免加上 `uav_` 后产生错误后缀。
 - 消息可靠性按业务语义分级：`uav_track_complete/uav_conflict/uav_ai_event` 及证据引用不得因内存队列满或发送失败静默丢失，必须使用持久化 spool/outbox、确认和补发；允许采样/丢弃的周期指标也必须有批准策略、缺口/覆盖率和丢弃计数。
 - Kafka Consumer 禁止在事实落库前自动提交 offset；必须在 `uav_message_inbox` 与事实同事务成功后手动提交。数据库异常须让消息可重放，不得捕获异常后仍推进 offset。
+- schema/消息身份冲突等永久性入站错误必须先耐久写入 `uav_message_dead_letters` 再提交对应 offset；EventDelivery/outbox 的外发失败继续使用 `uav_dead_letters`，不共用状态机。
 - 迁移对账须识别 Telegraf 与 Platform 对同一统计的历史双写；`camera_*` 与 `intersection_stats` 不能直接相加，须按来源、消息/窗口和时间质量去重。
 - 旧 InfluxDB 的 `time` 不得批量直接映射为业务 `occurred_at`：统计/冲突历史可能仅有消费写入时刻，部分完成轨迹可能把视频流相对秒写成 Unix 秒并落在 epoch 附近。迁移必须按 Measurement/字段分支，保留 `source_time_raw`、`source_time_semantics`、`time_quality`；无法证明的时间只映射为 `ingested_at`，异常轨迹隔离后由业务决定丢弃或基于原视频/可信字段重建。
 - 回滚只允许在迁移观察期临时恢复旧读链路；新产生数据仍须可回灌 `road9`。旧链路停用后的历史查询统一走 PostgreSQL/TimescaleDB API。
@@ -961,21 +963,21 @@ stateDiagram-v2
 
 **统一页面框架：** Console 全部正式页面使用同一套两级导航壳层。左侧窄栏固定承载六个一级业务域，并按角色权限隐藏不可访问域；顶部只展示当前一级业务域下的二级页面并标识当前路由。`/` 工作台首屏与 `/monitoring` 实时监测共享品牌、一级导航、二级导航、项目范围、时间窗口、数据新鲜度、异常入口和角色预览，二者只在内容画布形态上不同：工作台使用可滚动城市 Dashboard，实时监测使用沉浸式固定画布。不得恢复宽二级侧栏、把其他业务域混入顶部导航，或为监测页维护独立菜单副本。
 
-**前端切换决策（2026-07-14）：** `console2/` 直接成为唯一发布前端，旧 `traffic-fly-console/` 不再构建、部署或提供跳转页。正式认证入口为 `/login`，JWT 使用 `sessionStorage:uav_access_token`；未登录业务路由跳转 `/login?redirect=...`，redirect 仅接受站内路径。登录、实时监测、标定中心、系统与身份已接入真实 Platform REST/WebSocket/MJPEG，失败时不得回退模拟数据；其他页面暂时保留契约化模拟数据。后端 `admin/operator/viewer` 是授权真源，管理员角色预览不参与授权。
+**前端切换决策（更新至 2026-07-15 I5 第一阶段）：** `console2/` 直接成为唯一发布前端，旧 `traffic-fly-console/` 不再构建、部署或提供跳转页。正式认证入口为 `/login`，JWT 使用 `sessionStorage:uav_access_token`；未登录业务路由跳转 `/login?redirect=...`，redirect 仅接受站内路径。工作台首屏、登录、实时监测、轨迹研判、AI 事件、事故测绘、执法候选线索、飞行任务、标定中心、系统与身份已接入真实 Platform REST/WebSocket/MJPEG，失败时不得回退模拟数据；集成治理仍含原型数据，须在 I6 移除。工作台未冻结 KPI 返回 `null/待冻结`，无权威坐标时不绘制示例点。后端 `admin/operator/viewer` 是授权真源，管理员角色预览不参与授权。
 
 **01 全域态势**
 
 | 序号 | 页面/功能 | 正式路由 | 状态 | 说明 |
 | --- | --- | --- | --- | --- |
-| 1 | 工作台首屏 | `/` | ✅ 原型已覆盖 / 🔧 生产待联调 | 以城市地图为背景，从 Dashboard 视角展示无人机覆盖下的路口态势纵览、平台核心指标、重点路口、待办任务、保障状态和数据可信度，详见 S8 |
+| 1 | 工作台首屏 | `/` | 🔧 I5 第一阶段真实化 / ⚠️ 正式验收阻断 | DashboardReadModel 与真实 empty/blocked 状态已实现；项目范围/底图/KPI、筛选回补、正常态和 5 秒/30 秒正式验收待关闭 |
 | 2 | 实时监测 | `/monitoring` | ✅ 已接入真实 REST/WS/MJPEG | 检测器输出与 BEV 轨迹投放可互换主次；提供轨迹/车道/风险/原始画面，以及高度、航向、俯仰、横滚、云台、链路和推理性能 |
-| 3 | 轨迹研判 | `/gis` | ✅ 原型已覆盖 / 🔧 真实地图待联调 | 以页内视图承载历史轨迹、风险热区和事件时空回放；使用权威坐标，不与工作台首屏重复承担城市级值守总览 |
+| 3 | 轨迹研判 | `/gis` | ✅ I3 真实 API/TimescaleDB 已接入 / 🔧 权威路网待联调 | 以页内视图承载真实历史轨迹与冲突；无权威坐标时显示空态，不生成示意点。权威路网绑定、热区聚合与正式地图匹配仍受 S5 阻断 |
 
 **02 智能研判**
 
 | 序号 | 页面/功能 | 正式路由 | 状态 | 说明 |
 | --- | --- | --- | --- | --- |
-| 4 | AI 事件中心 | `/events` | ✅ 原型已覆盖 / 🔧 生产待联调 | 统一查看冲突风险、拥堵排队和异常行为；提供证据质量、主平台投递和 AI 技术复核，不承载派警处置 |
+| 4 | AI 事件中心 | `/events` | ✅ I3 冲突事实与技术复核已接入 / 🔧 统一事件投递待 I4 | 当前真实展示 TimescaleDB 冲突事实并持久化管理员技术复核 revision；拥堵/换道统一事件、证据包和主平台投递在 I4 扩展，不承载派警处置 |
 
 **03 事故测绘**
 
@@ -987,13 +989,13 @@ stateDiagram-v2
 
 | 序号 | 页面/功能 | 正式路由 | 状态 | 说明 |
 | --- | --- | --- | --- | --- |
-| 6 | 执法工作台 | `/enforcement` | ✅ 原型已覆盖 / 🆕 生产待开发 | 使用“线索事件、货车专题、区域与规则”三个页内视图承载执法线索复核、货车二分类专题和电子围栏候选配置 |
+| 6 | 执法工作台 | `/enforcement` | ✅ I4 本地工程闭环 / ⚠️ 正式验收阻断 | “线索事件、货车专题、区域与规则”三个页内视图已接真实 API；只支持 candidate/unverified、技术复核和证据引用，权威发布/雷达/法制/主平台仍 blocked |
 
 **05 飞行任务**
 
 | 序号 | 页面/功能 | 正式路由 | 状态 | 说明 |
 | --- | --- | --- | --- | --- |
-| 7 | 无人机与计划 | `/drones` | ✅ 原型已覆盖 / 🔧 生产待增强 | 使用“无人机、数据源、飞行计划、执行记录”四个页签；支持 RTSP+MQTT、服务器 MP4+SRT、自动启停和调度审计，详见 S9 |
+| 7 | 无人机与计划 | `/drones` | ✅ 生产工程闭环已实现并用真实材料验证 | 四个真实 API 页签；支持持久化档案/源/计划/Mission、自动启停、恢复和审计；生产 RTSP/MQTT、权限、容量和 HA 仍受阻断项约束 |
 
 **06 平台治理（管理员）**
 
@@ -1038,7 +1040,7 @@ stateDiagram-v2
 
 ##### 10.2.0.1 工作台首屏（`/`）
 
-**当前实现基线：**
+**当前实现基线（2026-07-15）：**
 - **KPI 卡片**：活跃路口数、总流量（辆/分钟）、拥堵指数、异常事件数
 - **24h 流量趋势图**：当前实现硬编码查询 `INT_camera_1`，不能作为项目级趋势口径，须移除硬编码
 - **系统状态**：无人机在线数、活跃管道数、端到端延迟
@@ -1172,17 +1174,17 @@ stateDiagram-v2
 - **飞行轨迹可视化**：无人机历史飞行路径
 - **3 秒遥测刷新**：自动轮询最新遥测数据
 
-当前无人机和 Mission 主要保存在内存 `DRONES/MISSIONS`；`POST /missions` 创建后立即调用 PipelineManager，尚无持久化 FlightPlan、周期排期、数据源验证、调度幂等和重启恢复。该能力只作为迁移基线，不代表 S9 目标完成。
+Drone/Source/FlightPlan/Mission/Pipeline 已持久化到 `road9`；MissionOrchestrator 每 5 秒扫描并使用 PostgreSQL advisory lock 与窗口唯一约束防重，支持 once/weekly、跨午夜、例外日、停止/重试和窗口内重启恢复。`POST /missions` 继续兼容旧原始源字段，但会规范化为持久化 manual Mission 快照；`DRONES` 仅作为最新遥测缓存。
 
 **API 端点**：`GET /drones`、`GET /drones/{id}`、`GET /telemetry/{id}`、`GET /telemetry/{id}/history`、`GET /drones/{id}/trajectory`
 
 **与 AI 模型集成增强点：**
 - 🔧 遥测数据与 GCJ02 坐标转换关联
 - 🔧 新增飞行模式与 AI 模型运行模式对应关系
-- 🆕 页面扩展为“无人机、数据源、飞行计划、执行记录”四个页签
-- 🆕 支持 RTSP+MQTT 实时源与服务器 MP4+DJI `.srt` 遥测字幕本地回放；SRT 不表示视频传输协议
-- 🆕 支持单次/每周周期计划、例外日期、跨午夜、冲突预览、自动启停、重启恢复和多实例幂等
-- 🆕 FlightPlan 只启停 AI 检测 Pipeline，不执行航点规划、起降、返航或其他飞控动作
+- ✅ 页面已扩展为“无人机、数据源、飞行计划、执行记录”四个真实 API 页签
+- ✅ 支持 RTSP+MQTT 契约与服务器 MP4+DJI `.srt` 本地回放校验；SRT 不表示视频传输协议
+- ✅ 支持单次/每周周期计划、例外日期、跨午夜、冲突预览、自动启停、重启恢复和多实例幂等
+- ✅ FlightPlan 只启停 AI 检测 Pipeline，不执行航点规划、起降、返航或其他飞控动作
 
 字段级、状态机、API、权限、异常和验收用例详见 [S9 无人机对接与飞行计划管理分册 PRD](uav-traffic-ai-prd/S9-drone-integration-flight-plan-prd.md)。
 

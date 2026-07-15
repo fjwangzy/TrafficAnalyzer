@@ -34,7 +34,7 @@ function isSectionActive(pathname, path) {
   return pathname.startsWith(path)
 }
 
-export function ConsoleFrame({ children, pageTitle, immersive = false }) {
+export function ConsoleFrame({ children, pageTitle, immersive = false, topContext = null }) {
   const location = useLocation()
   const navigate = useNavigate()
   const { state, dispatch } = useAppState()
@@ -72,15 +72,15 @@ export function ConsoleFrame({ children, pageTitle, immersive = false }) {
           {visibleSections.map(([path, label]) => <Link key={path} to={path} className={isSectionActive(location.pathname, path) ? 'active' : ''}>{label}</Link>)}
         </nav>
         <div className='shell-actions'>
-          <button className='scope-button' onClick={() => { setScopeOpen(!scopeOpen); setTimeOpen(false); setExceptionOpen(false) }}><MapTrifold size={16} weight='fill' /><span>{state.scope}</span><CaretDown size={13} /></button>
-          <button className='time-button' onClick={() => { setTimeOpen(!timeOpen); setScopeOpen(false); setExceptionOpen(false) }}><Clock size={15} /><span>{state.window}</span><CaretDown size={12} /></button>
-          <span className='freshness'><i /> 数据截至 {asOf.split(' ')[1]}</span>
-          <button className='circle-button alert-dot' aria-label='异常状态' aria-expanded={exceptionOpen} onClick={() => { setExceptionOpen(!exceptionOpen); setScopeOpen(false); setTimeOpen(false) }}><Bell size={18} /></button>
+          <button className='scope-button' disabled={Boolean(topContext)} onClick={() => { setScopeOpen(!scopeOpen); setTimeOpen(false); setExceptionOpen(false) }}><MapTrifold size={16} weight='fill' /><span>{topContext?.scope || state.scope}</span>{!topContext && <CaretDown size={13} />}</button>
+          <button className='time-button' disabled={Boolean(topContext)} onClick={() => { setTimeOpen(!timeOpen); setScopeOpen(false); setExceptionOpen(false) }}><Clock size={15} /><span>{topContext?.window || state.window}</span>{!topContext && <CaretDown size={12} />}</button>
+          <span className='freshness'><i /> 数据截至 {topContext?.asOf || asOf.split(' ')[1]}</span>
+          {!topContext && <button className='circle-button alert-dot' aria-label='异常状态' aria-expanded={exceptionOpen} onClick={() => { setExceptionOpen(!exceptionOpen); setScopeOpen(false); setTimeOpen(false) }}><Bell size={18} /></button>}
           <button className='circle-button' aria-label='帮助'><Question size={18} /></button>
           <button className='role-button' aria-label='当前用户' onClick={() => setRoleOpen(!roleOpen)}><User size={17} weight='fill' /><span>{user?.username || role.label}</span><CaretDown size={12} /></button>
         </div>
-        {scopeOpen && <div className='top-popover scope-popover'><strong>项目范围</strong>{scopeOptions.map((value) => <button key={value.id} onClick={() => { dispatch({ type: 'SET_SCOPE', value }); updateQuery('scope', value.id); setScopeOpen(false) }}><CheckCircle size={15} weight={state.scopeId === value.id ? 'fill' : 'regular'} />{value.label}</button>)}</div>}
-        {timeOpen && <div className='top-popover time-popover'><strong>全局时间窗口</strong>{windowOptions.map((value) => <button key={value.id} onClick={() => { dispatch({ type: 'SET_WINDOW', value }); updateQuery('window', value.id); setTimeOpen(false) }}><Clock size={15} weight={state.windowId === value.id ? 'fill' : 'regular'} />{value.label}</button>)}</div>}
+        {!topContext && scopeOpen && <div className='top-popover scope-popover'><strong>项目范围</strong>{scopeOptions.map((value) => <button key={value.id} onClick={() => { dispatch({ type: 'SET_SCOPE', value }); updateQuery('scope', value.id); setScopeOpen(false) }}><CheckCircle size={15} weight={state.scopeId === value.id ? 'fill' : 'regular'} />{value.label}</button>)}</div>}
+        {!topContext && timeOpen && <div className='top-popover time-popover'><strong>全局时间窗口</strong>{windowOptions.map((value) => <button key={value.id} onClick={() => { dispatch({ type: 'SET_WINDOW', value }); updateQuery('window', value.id); setTimeOpen(false) }}><Clock size={15} weight={state.windowId === value.id ? 'fill' : 'regular'} />{value.label}</button>)}</div>}
         {exceptionOpen && <div className='top-popover exception-popover'><strong>影响监测保障 · 3 项</strong><button onClick={() => navigate('/admin/calibration?tab=coordinates')}><Pulse size={16} /><div><b>候选路网同步中</b><span>loading · 保持最近验证快照</span></div><em className='exception-state loading'>加载中</em></button><button onClick={() => navigate('/drones?tab=fleet&drone_id=UAV-M300-03')}><Drone size={16} /><div><b>UAV-M300-03 遥测过期</b><span>stale · 1 分 10 秒未更新</span></div><em className='exception-state stale'>已过期</em></button><button onClick={() => navigate('/admin/integration')}><Warning size={16} /><div><b>主平台存在死信</b><span>error · 2 条待处理</span></div><em className='exception-state error'>异常</em></button></div>}
         {roleOpen && <div className='top-popover role-popover'><strong>{platformRole === 'admin' ? '管理员角色预览' : role.label}</strong>{platformRole === 'admin' && roles.map((item) => <button key={item.id} onClick={() => { dispatch({ type: 'SET_ROLE', value: item.id, label: item.label }); setRoleOpen(false); navigate('/') }}><User size={15} weight={state.role === item.id ? 'fill' : 'regular'} />{item.label}</button>)}<button onClick={() => { logout(); setRoleOpen(false); navigate('/login', { replace: true }) }}><SignOut size={15} />退出登录</button></div>}
       </header>
@@ -102,8 +102,8 @@ export function ConsoleFrame({ children, pageTitle, immersive = false }) {
   )
 }
 
-export function AppShell({ children, pageTitle }) {
-  return <ConsoleFrame pageTitle={pageTitle}>{children}</ConsoleFrame>
+export function AppShell({ children, pageTitle, topContext }) {
+  return <ConsoleFrame pageTitle={pageTitle} topContext={topContext}>{children}</ConsoleFrame>
 }
 
 export const routeAccess = {

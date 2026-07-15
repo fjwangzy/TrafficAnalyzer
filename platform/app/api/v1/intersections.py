@@ -155,10 +155,12 @@ async def get_stats(
     period: str = Query("1h"),
     granularity: str = Query("1m"),
 ):
-    """Get historical stats from InfluxDB."""
-    influx = request.app.state.influx
-    if influx:
-        return influx.query_stats(intersection_id, period, granularity)
+    """Get historical intersection metrics from road9."""
+    metric_store = getattr(request.app.state, "metric_store", None)
+    if metric_store:
+        rows = await metric_store.query_traffic(intersection_id, period, grain_type="intersection")
+        if rows:
+            return rows
     # Fallback: return latest from Kafka cache
     kafka = request.app.state.kafka_service
     if kafka:
@@ -174,8 +176,6 @@ async def get_lane_stats(
     period: str = Query("10m"),
     granularity: str = Query("1s"),
 ):
-    """Get lane-level stats from InfluxDB."""
-    influx = request.app.state.influx
-    if influx:
-        return influx.query_lane_stats(intersection_id, period, granularity)
-    return []
+    """Get lane-level metrics from road9."""
+    metric_store = getattr(request.app.state, "metric_store", None)
+    return await metric_store.query_traffic(intersection_id, period, grain_type="lane") if metric_store else []

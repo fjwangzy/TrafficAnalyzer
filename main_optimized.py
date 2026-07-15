@@ -148,6 +148,13 @@ def proc_frame_reader_and_detection(
         frame_element = detection_node.process(frame_element)
         ts1 = time()
         ts1 = time()
+
+        # EOF is a control-plane sentinel, not a frame payload. Forward it
+        # before shared-memory handling because VideoEndBreakElement deliberately
+        # does not initialize FrameElement.frame.
+        if isinstance(frame_element, VideoEndBreakElement):
+            queue_out.put(frame_element)
+            break
         
         # ── 新增：共享内存优化，避免 4K 帧 pickle 序列化 ──
         if frame_element.frame is not None:
@@ -182,8 +189,6 @@ def proc_frame_reader_and_detection(
                 + f"detection_node {(ts1-ts0) * 1000:.0f} | "
                 + f"put {(time()-ts1) * 1000:.0f}"
             )
-        if isinstance(frame_element, VideoEndBreakElement):
-            break
 
 
 def proc_tracker_update_and_calc(

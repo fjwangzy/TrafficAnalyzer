@@ -1,11 +1,4 @@
-"""Kafka consumer service — consumes pipeline messages, persists to InfluxDB,
-and broadcasts via WebSocket.
-
-改进点（审查报告 T-102 / T-403 / T-201）:
-  T-102: track_complete / conflict 事件持久化到 InfluxDB
-  T-403: 降级模式下指数退避自动重连
-  T-201: 动态道路数兼容（consumer 已接收 roads 数组）
-"""
+"""Kafka consumer with transactionally durable PostgreSQL/TimescaleDB writes."""
 import asyncio
 import json
 import logging
@@ -13,10 +6,12 @@ import re
 import time
 from typing import Any
 
-from aiokafka import AIOKafkaConsumer
+from aiokafka import AIOKafkaConsumer, TopicPartition
+from aiokafka.structs import OffsetAndMetadata
 
 from app.kafka.ws_manager import WSManager
 from app.models.drone_store import update_drone_telemetry, update_drone_from_stats
+from app.services.metric_store import MessageEnvelope, MetricContractError, MetricStorePort
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +27,7 @@ class KafkaConsumerService:
         ws_manager: WSManager,
         alert_engine: Any = None,
         lane_annotation_store: Any = None,
-        influx_client: Any = None,
+        metric_store: MetricStorePort | None = None,
     ):
         self._bootstrap = bootstrap_servers
         self._group_id = group_id
@@ -40,7 +35,7 @@ class KafkaConsumerService:
         self._ws = ws_manager
         self._alert_engine = alert_engine
         self._lane_annotation_store = lane_annotation_store
-        self._influx = influx_client  # T-102: InfluxDB 写入客户端
+        self._metric_store = metric_store
         self._consumer: AIOKafkaConsumer | None = None
         self._task: asyncio.Task | None = None
         self._running = False
@@ -78,7 +73,7 @@ class KafkaConsumerService:
             bootstrap_servers=self._bootstrap,
             group_id=self._group_id,
             auto_offset_reset="latest",
-            enable_auto_commit=True,
+            enable_auto_commit=False,
             value_deserializer=lambda v: json.loads(v.decode("utf-8")),
             request_timeout_ms=10000,
             retry_backoff_ms=500,
@@ -171,10 +166,18 @@ class KafkaConsumerService:
                     if not self._running:
                         break
                     try:
-                        await self._process_message(msg.value, msg.topic)
+                        await self._process_message(msg.value, msg.topic, msg.partition, msg.offset)
+                        await self._consumer.commit({
+                            TopicPartition(msg.topic, msg.partition): OffsetAndMetadata(msg.offset + 1, "")
+                        })
                         consecutive_errors = 0
                     except Exception as e:
                         logger.error(f"Error processing Kafka message: {e}")
+                        # Do not advance past a failed record: a later successful
+                        # commit would otherwise skip this offset permanently.
+                        self._consumer.seek(TopicPartition(msg.topic, msg.partition), msg.offset)
+                        await asyncio.sleep(1)
+                        break
             except asyncio.CancelledError:
                 break
             except Exception as e:
@@ -193,27 +196,57 @@ class KafkaConsumerService:
                 else:
                     await asyncio.sleep(2)
 
-    async def _process_message(self, data: dict, topic: str):
-        """Route a Kafka message to the appropriate handler."""
-        msg_type = data.get("msg_type", "stats")
-        intersection_id = data.get("intersection_id", self._extract_intersection(topic))
+    async def _process_message(self, data: dict, topic: str, partition: int = -1, offset: int = -1):
+        """Persist first, then route one non-duplicate canonical message."""
+        if self._metric_store is None:
+            raise RuntimeError("MetricStore is required before Kafka consumption")
+        envelope = MessageEnvelope(data, topic, partition, offset)
+        try:
+            result = await self._metric_store.persist(envelope)
+        except MetricContractError as error:
+            dead_letter_id = await self._metric_store.quarantine(envelope, error)
+            logger.error(
+                "Kafka record quarantined: dead_letter_id=%s topic=%s partition=%s offset=%s reason=%s",
+                dead_letter_id,
+                topic,
+                partition,
+                offset,
+                type(error).__name__,
+            )
+            return
+        if result.duplicate:
+            return
+        normalized = result.normalized_payload
+        business_data = normalized.get("data")
+        if isinstance(business_data, dict):
+            data = {
+                **business_data,
+                "msg_type": result.msg_type,
+                "message_id": result.message_id,
+                "intersection_id": normalized.get("intersection_id") or business_data.get("intersection_id"),
+                "inter_id": normalized.get("inter_id") or business_data.get("inter_id"),
+                "road_data_version": normalized.get("road_data_version") or business_data.get("road_data_version"),
+                "time_quality": normalized.get("time_quality") or business_data.get("time_quality"),
+            }
+        msg_type = result.msg_type
+        intersection_id = data.get("inter_id") or data.get("intersection_id") or self._extract_intersection(topic)
 
-        if msg_type == "stats":
+        if msg_type == "uav_stats":
             await self._handle_stats(data, intersection_id)
-        elif msg_type == "detections":
+        elif msg_type == "uav_detections":
             await self._handle_detections(data, intersection_id)
-        elif msg_type == "track_complete":
+        elif msg_type == "uav_track_complete":
             await self._handle_track_complete(data, intersection_id)
-        elif msg_type == "conflict":
+        elif msg_type == "uav_conflict":
             await self._handle_conflict(data, intersection_id)
-        elif msg_type == "vlm_analysis":
+        elif msg_type == "uav_vlm_analysis":
             await self._handle_vlm(data, intersection_id)
-        elif msg_type == "system_metrics":
+        elif msg_type == "uav_system_metrics":
             await self._handle_system_metrics(data)
-        elif msg_type == "telemetry":
+        elif msg_type == "uav_telemetry":
             await self._handle_telemetry(data)
         else:
-            await self._handle_legacy_stats(data, topic)
+            raise ValueError(f"Unsupported persisted msg_type: {msg_type}")
 
     async def _handle_stats(self, data: dict, intersection_id: str):
         """Handle stats message."""
@@ -237,10 +270,10 @@ class KafkaConsumerService:
                 if task:
                     data["lane_annotation_task_id"] = task["task_id"]
                     await self._ws.broadcast(
-                        "calibration",
+                        "uav_calibration",
                         {
-                            "channel": "calibration",
-                            "type": "lane_annotation_task",
+                            "channel": "uav_calibration",
+                            "type": "uav_lane_annotation_task",
                             "data": task,
                             "ts": time.time(),
                         },
@@ -260,20 +293,13 @@ class KafkaConsumerService:
                     lanes_arr.append(entry)
                 data["lanes"] = lanes_arr
 
-        # T-102: 持久化 stats 到 InfluxDB
-        if self._influx:
-            try:
-                self._influx.write_stats(data)
-            except Exception as e:
-                logger.error(f"InfluxDB write_stats error: {e}")
-
         ws_msg = {
-            "channel": f"intersection:{intersection_id}",
-            "type": "stats",
+            "channel": f"uav_intersection:{intersection_id}",
+            "type": "uav_stats",
             "data": data,
             "ts": time.time(),
         }
-        await self._ws.broadcast(f"intersection:{intersection_id}", ws_msg)
+        await self._ws.broadcast(f"uav_intersection:{intersection_id}", ws_msg)
 
         # Check alert rules
         if self._alert_engine:
@@ -287,32 +313,22 @@ class KafkaConsumerService:
             buf.pop(0)
 
         ws_msg = {
-            "channel": f"intersection:{intersection_id}",
-            "type": "detections",
+            "channel": f"uav_intersection:{intersection_id}",
+            "type": "uav_detections",
             "data": data,
             "ts": time.time(),
         }
-        await self._ws.broadcast(f"intersection:{intersection_id}", ws_msg)
+        await self._ws.broadcast(f"uav_intersection:{intersection_id}", ws_msg)
 
     async def _handle_track_complete(self, data: dict, intersection_id: str):
-        """Handle track complete message.
-
-        T-102: 新增 InfluxDB 持久化。
-        """
-        # T-102: 写入 InfluxDB track_events measurement
-        if self._influx:
-            try:
-                self._influx.write_track_event(data)
-            except Exception as e:
-                logger.error(f"InfluxDB write_track_event error: {e}")
-
+        """Handle a track already committed by MetricStore."""
         ws_msg = {
-            "channel": f"intersection:{intersection_id}",
-            "type": "track_complete",
+            "channel": f"uav_intersection:{intersection_id}",
+            "type": "uav_track_complete",
             "data": data,
             "ts": time.time(),
         }
-        await self._ws.broadcast(f"intersection:{intersection_id}", ws_msg)
+        await self._ws.broadcast(f"uav_intersection:{intersection_id}", ws_msg)
 
         # Check anomaly alert
         if self._alert_engine and data.get("is_anomaly"):
@@ -321,12 +337,12 @@ class KafkaConsumerService:
     async def _handle_vlm(self, data: dict, intersection_id: str):
         """Handle VLM analysis message."""
         ws_msg = {
-            "channel": f"intersection:{intersection_id}",
-            "type": "vlm_analysis",
+            "channel": f"uav_intersection:{intersection_id}",
+            "type": "uav_vlm_analysis",
             "data": data,
             "ts": time.time(),
         }
-        await self._ws.broadcast(f"intersection:{intersection_id}", ws_msg)
+        await self._ws.broadcast(f"uav_intersection:{intersection_id}", ws_msg)
 
         if self._alert_engine and (data.get("accident") or data.get("anomaly_detected")):
             await self._alert_engine.on_vlm_alert(intersection_id, data)
@@ -336,37 +352,27 @@ class KafkaConsumerService:
         self._latest_system = data
 
         ws_msg = {
-            "channel": "system",
-            "type": "system_metrics",
+            "channel": "uav_system",
+            "type": "uav_system_metrics",
             "data": data,
             "ts": time.time(),
         }
-        await self._ws.broadcast("system", ws_msg)
+        await self._ws.broadcast("uav_system", ws_msg)
 
     async def _handle_conflict(self, data: dict, intersection_id: str):
-        """Handle conflict event from the detection pipeline.
-
-        T-102: 新增 InfluxDB 持久化。
-        """
+        """Handle a conflict already committed by MetricStore."""
         # Keep one visible event per motor/non_motor pair. Duplicate same-severity
         # messages are dropped; a warning can still upgrade to critical.
         if not self._upsert_latest_conflict(data, intersection_id):
             return
 
-        # T-102: 写入 InfluxDB conflict_events measurement
-        if self._influx:
-            try:
-                self._influx.write_conflict_event(data)
-            except Exception as e:
-                logger.error(f"InfluxDB write_conflict_event error: {e}")
-
         ws_msg = {
-            "channel": f"intersection:{intersection_id}",
-            "type": "conflict",
+            "channel": f"uav_intersection:{intersection_id}",
+            "type": "uav_conflict",
             "data": data,
             "ts": time.time(),
         }
-        await self._ws.broadcast(f"intersection:{intersection_id}", ws_msg)
+        await self._ws.broadcast(f"uav_intersection:{intersection_id}", ws_msg)
 
         # T-104: 记录冲突事件并检查冲突频率
         if self._alert_engine:
@@ -442,12 +448,12 @@ class KafkaConsumerService:
             update_drone_telemetry(drone_id, data)
 
         ws_msg = {
-            "channel": f"telemetry:{drone_id}",
-            "type": "telemetry",
+            "channel": f"uav_telemetry:{drone_id}",
+            "type": "uav_telemetry",
             "data": data,
             "ts": time.time(),
         }
-        await self._ws.broadcast(f"telemetry:{drone_id}", ws_msg)
+        await self._ws.broadcast(f"uav_telemetry:{drone_id}", ws_msg)
 
     async def _handle_legacy_stats(self, data: dict, topic: str):
         """Handle legacy Kafka messages (old format: camera_id, cars, road_1..5)."""
@@ -482,12 +488,16 @@ class KafkaConsumerService:
 
     def _extract_intersection(self, topic: str) -> str:
         """Extract intersection ID from topic name."""
-        for prefix in ("statistics_", "track_complete_", "conflicts_"):
+        for prefix in (
+            "uav_statistics_", "uav_track_complete_", "uav_conflicts_",
+            "statistics_", "track_complete_", "conflicts_",
+        ):
             if topic.startswith(prefix):
                 cam_id = topic[len(prefix):]
                 return f"INT_camera_{cam_id}"
-        if topic.startswith("telemetry_"):
-            return topic.replace("telemetry_", "")
+        for prefix in ("uav_telemetry_", "telemetry_"):
+            if topic.startswith(prefix):
+                return topic[len(prefix):]
         if "intersection_" in topic:
             return topic.split("intersection_")[-1]
         return topic

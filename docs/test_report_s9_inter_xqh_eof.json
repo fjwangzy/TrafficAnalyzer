@@ -1,0 +1,19 @@
+{
+  "schema_version": "uav.s9-inter-xqh-eof/v1",
+  "generated_at": "2026-07-15T07:50:28.000000Z",
+  "environment": "isolated_local_non_contract",
+  "drone_id": "UAV-XQH-D31F2C",
+  "source_profile_id": "SRC-8D56ECB08A44",
+  "flight_plan_id": "PLAN-DCDE70AE8766",
+  "mission_id": "MSN-995CEBE0415E",
+  "initial_pipeline_id": "pipe-d3e0cd3b",
+  "recovered_pipeline_id": "pipe-fc39f315",
+  "mission_status": "completed",
+  "reason_code": "source_eof",
+  "topic_name": "uav_statistics_10",
+  "source_validation": "valid",
+  "road_quality": "unverified",
+  "verification_mode": "recovery_eof",
+  "terminal_observation_sec": 392.918,
+  "passed": true
+}

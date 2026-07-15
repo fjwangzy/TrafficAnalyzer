@@ -1,6 +1,8 @@
 """Traffic Platform Monolith — main FastAPI application."""
 import logging
+import hashlib
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -14,8 +16,18 @@ from app.services.alert_engine import AlertEngine, SqlAlertStore
 from app.services.lane_annotation_store import LaneAnnotationStore
 from app.services.pipeline_manager import PipelineManager
 from app.services.survey_worker import SurveyWorker
-from app.utils.influx_query import InfluxQuery
-from app.api.v1 import intersections, alerts, system, trajectories, video, calibration, auth, users, survey
+from app.services.mission_orchestrator import MissionOrchestrator, PipelineManagerAdapter
+from app.services.metric_store import PostgresMetricStoreAdapter
+from app.services.enforcement_service import EnforcementService
+from app.services.dashboard_read_model import DashboardReadModel
+from app.services.road_context import (
+    FallbackRoadContextAdapter,
+    FixtureRoadContextAdapter,
+    Road9RoadContextAdapter,
+    RoadContext,
+    RoadContextResult,
+)
+from app.api.v1 import intersections, alerts, system, trajectories, video, calibration, auth, users, survey, enforcement, dashboard
 from app.api.v1.drones import router as drones_router
 from app.api.v1.drones import telemetry_router
 from app.api.v1.pipelines import router as pipelines_router
@@ -48,23 +60,15 @@ async def lifespan(app: FastAPI):
         hover_radius_m=settings.lane_annotation_hover_radius_m,
     )
 
-    # InfluxDB (optional — graceful fallback if unavailable)
-    influx = None
-    try:
-        influx = InfluxQuery(
-            host=settings.influx_host,
-            port=settings.influx_port,
-            database=settings.influx_db,
-            user=settings.influx_user,
-            password=settings.influx_pass,
-        )
-        logger.info(f"InfluxDB connected: {settings.influx_host}:{settings.influx_port}")
-    except Exception as e:
-        logger.warning(f"InfluxDB unavailable (historical queries disabled): {e}")
+    metric_store = PostgresMetricStoreAdapter(async_session_maker) if db_available else None
+    enforcement_service = EnforcementService(async_session_maker) if db_available else None
+    dashboard_read_model = DashboardReadModel(async_session_maker) if db_available else None
 
     # Kafka consumer (optional — graceful fallback if unavailable)
     kafka_service = None
     try:
+        if metric_store is None:
+            raise RuntimeError("database-backed MetricStore is unavailable")
         kafka_service = KafkaConsumerService(
             bootstrap_servers=settings.kafka_bootstrap,
             group_id=settings.kafka_consumer_group,
@@ -72,7 +76,7 @@ async def lifespan(app: FastAPI):
             ws_manager=ws_manager,
             alert_engine=alert_engine,
             lane_annotation_store=lane_annotation_store,
-            influx_client=influx,  # T-102: 注入 InfluxDB 客户端用于持久化
+            metric_store=metric_store,
         )
         await kafka_service.start()
         if kafka_service._consumer is not None:
@@ -88,36 +92,78 @@ async def lifespan(app: FastAPI):
         pipeline_python=settings.pipeline_python,
         frame_stride=settings.pipeline_frame_stride,
     )
+    mission_orchestrator = None
+    if db_available:
+        fixture_values = {}
+        if settings.local_road_fixture_enabled:
+            project_root = Path(__file__).resolve().parents[2]
+            roads_path = (project_root / settings.local_road_fixture_roads_json).resolve()
+            checksum = hashlib.sha256(roads_path.read_bytes()).hexdigest() if roads_path.is_file() else "unavailable"
+            fixture_values[(settings.local_road_fixture_inter_id, settings.local_road_fixture_version)] = RoadContextResult(
+                inter_id=settings.local_road_fixture_inter_id,
+                road_data_version=settings.local_road_fixture_version,
+                source="local_fixture",
+                checksum=checksum,
+                coordinate_reference={"metric": "ENU", "display": "GCJ02", "status": "unverified"},
+                intersection={"roads_json": settings.local_road_fixture_roads_json},
+                links=(),
+                lanes=(),
+                visual_bindings=({
+                    "local_lane_id": "fixture",
+                    "canonical_link_id": None,
+                    "canonical_lane_id": None,
+                    "roads_json": settings.local_road_fixture_roads_json,
+                    "status": "candidate",
+                },),
+                quality_status="unverified",
+            )
+        road_context = RoadContext(
+            FallbackRoadContextAdapter(
+                Road9RoadContextAdapter(async_session_maker),
+                FixtureRoadContextAdapter(fixture_values),
+            )
+        )
+        mission_orchestrator = MissionOrchestrator(
+            async_session_maker,
+            PipelineManagerAdapter(pipeline_manager),
+            road_context,
+            poll_sec=settings.mission_scheduler_poll_sec,
+        )
     survey_worker = SurveyWorker()
     if db_available:
         await survey_worker.start()
+        await mission_orchestrator.start()
 
     # Store on app state
     app.state.ws_manager = ws_manager
     app.state.alert_engine = alert_engine
     app.state.lane_annotation_store = lane_annotation_store
-    app.state.influx = influx
+    app.state.metric_store = metric_store
+    app.state.enforcement_service = enforcement_service
+    app.state.dashboard_read_model = dashboard_read_model
     app.state.kafka_service = kafka_service
     app.state.pipeline_manager = pipeline_manager
     app.state.survey_worker = survey_worker
+    app.state.mission_orchestrator = mission_orchestrator
     app.state.settings = settings
     app.state.db_available = db_available
 
     logger.info(f"🚀 Traffic Platform started on port {settings.service_port}")
     logger.info(f"   - Database: {settings.db_host}:{settings.db_port}")
     logger.info(f"   - Kafka: {settings.kafka_bootstrap}")
-    logger.info(f"   - InfluxDB: {settings.influx_host}:{settings.influx_port}")
+    if metric_store:
+        logger.info("   - MetricStore: PostgreSQL/TimescaleDB")
 
     yield
 
     # ── Shutdown ──
+    if mission_orchestrator:
+        await mission_orchestrator.stop()
     await pipeline_manager.stop_all()
     await survey_worker.stop()
     if kafka_service:
         await kafka_service.stop()
     await ws_manager.close_all()
-    if influx:
-        influx.close()
     await close_db()
     logger.info("🛑 Traffic Platform stopped")
 
@@ -156,6 +202,8 @@ app.include_router(pipelines_router, prefix="/api/v1")
 app.include_router(users.router, prefix="/api/v1")
 app.include_router(survey.router, prefix="/api/v1")
 app.include_router(survey.evidence_router, prefix="/api/v1")
+app.include_router(enforcement.router, prefix="/api/v1")
+app.include_router(dashboard.router, prefix="/api/v1")
 
 
 @app.get("/")
@@ -179,7 +227,7 @@ async def readiness_check():
     services = {
         "database": "healthy" if getattr(app.state, "db_available", False) else "degraded",
         "kafka": "unknown",
-        "influxdb": "unknown",
+        "timescaledb": "unknown",
         "pipeline_manager": "healthy",
     }
 
@@ -192,12 +240,15 @@ async def readiness_check():
     else:
         services["kafka"] = "not_configured"
 
-    # Check InfluxDB
-    influx = app.state.influx if hasattr(app.state, "influx") else None
-    if influx:
-        services["influxdb"] = "healthy"
+    metric_store = getattr(app.state, "metric_store", None)
+    if metric_store:
+        try:
+            capabilities = await metric_store.capabilities()
+            services["timescaledb"] = "healthy" if capabilities["timescaledb"] else "degraded"
+        except Exception:
+            services["timescaledb"] = "degraded"
     else:
-        services["influxdb"] = "not_configured"
+        services["timescaledb"] = "not_configured"
 
     # Pipeline manager
     pm = getattr(app.state, "pipeline_manager", None)

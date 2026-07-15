@@ -1,0 +1,72 @@
+{
+  "schema_version": "uav.i6-local-performance-smoke/v1",
+  "generated_at": "2026-07-15T06:49:05.960839Z",
+  "environment": "local_non_contract",
+  "base_url": "http://127.0.0.1:18004",
+  "method": "authenticated_read_only_get",
+  "threshold_status": "unverified",
+  "execution_complete": true,
+  "all_requests_http_200": true,
+  "summary": {
+    "requests": 80,
+    "concurrency": 8,
+    "successes": 80,
+    "errors": 0,
+    "elapsed_sec": 0.379,
+    "throughput_requests_per_sec": 211.095
+  },
+  "endpoints": [
+    {
+      "endpoint": "/api/v1/dashboard/overview",
+      "requests": 20,
+      "successes": 20,
+      "errors": 0,
+      "p50_ms": 27.002,
+      "p95_ms": 194.91,
+      "max_ms": 196.946,
+      "statuses": {
+        "200": 20
+      }
+    },
+    {
+      "endpoint": "/api/v1/dashboard/intersections",
+      "requests": 20,
+      "successes": 20,
+      "errors": 0,
+      "p50_ms": 27.203,
+      "p95_ms": 193.895,
+      "max_ms": 197.513,
+      "statuses": {
+        "200": 20
+      }
+    },
+    {
+      "endpoint": "/api/v1/dashboard/drones",
+      "requests": 20,
+      "successes": 20,
+      "errors": 0,
+      "p50_ms": 27.095,
+      "p95_ms": 196.948,
+      "max_ms": 197.334,
+      "statuses": {
+        "200": 20
+      }
+    },
+    {
+      "endpoint": "/api/v1/system/health",
+      "requests": 20,
+      "successes": 20,
+      "errors": 0,
+      "p50_ms": 1.861,
+      "p95_ms": 3.091,
+      "max_ms": 5.41,
+      "statuses": {
+        "200": 20
+      }
+    }
+  ],
+  "acceptance": {
+    "status": "blocked_external",
+    "detail": "Production hardware, workload, duration, latency/error thresholds and sign-off are not approved; this local smoke is diagnostic evidence only."
+  }
+}

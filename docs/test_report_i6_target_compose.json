@@ -1,0 +1,17 @@
+{
+  "schema_version": "uav.road9-target-compose/v1",
+  "executed_at": "2026-07-15",
+  "compose_file": "docker-compose.road9.yaml",
+  "project": "traffic_analyzer_road9",
+  "service": "road9",
+  "published_port": 6544,
+  "health": "healthy",
+  "alembic_revision": "20260715_0009",
+  "timescaledb_version": "2.28.2",
+  "hypertables": 5,
+  "uav_tables": 41,
+  "legacy_services_present": false,
+  "temporary_containers_networks_volumes_removed": true,
+  "passed": true,
+  "scope": "local target topology runtime validation; production image pin, secrets, capacity and HA remain blocked"
+}

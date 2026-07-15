@@ -16,6 +16,8 @@ WORKDIR /app
 # Copy dependency files
 COPY pyproject.toml ./
 COPY app/ ./app/
+COPY alembic.ini ./
+COPY alembic/ ./alembic/
 COPY pipeline-requirements.txt ./
 COPY pipeline-constraints.txt ./
 

@@ -67,11 +67,14 @@ async def get_gpu_history(
     period: str = Query("30m"),
     granularity: str = Query("5s"),
 ):
-    """Get GPU metrics history from InfluxDB."""
-    influx = request.app.state.influx
-    if influx:
-        return influx.query_system_metrics(period, granularity)
-    return []
+    """Get GPU metrics history from road9."""
+    metric_store = getattr(request.app.state, "metric_store", None)
+    if not metric_store:
+        return []
+    return await metric_store.query_system_metrics(period, [
+        "gpu_util_pct", "gpu_utilization", "gpu_vram_used_mb", "gpu_memory_used_mb",
+        "gpu_temp_c", "gpu_temperature", "fps", "inference_ms", "tracking_ms",
+    ])
 
 
 @router.get("/kafka/topics")
@@ -84,7 +87,7 @@ async def get_kafka_topics(request: Request):
         for data in latest.values():
             camera_id = str(data.get("camera_id", "")).replace("id_", "")
             if camera_id:
-                topics.append({"name": f"statistics_{camera_id}", "partitions": 1, "tps": 0, "lag": 0})
+                topics.append({"name": f"uav_statistics_{camera_id}", "partitions": 1, "tps": 0, "lag": 0})
         return {
             "topics": topics,
             "consumer_group": kafka._group_id,

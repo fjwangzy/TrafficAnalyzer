@@ -152,7 +152,7 @@ class PipelineManager:
         port = video_port if video_port is not None else self._next_video_port
         if video_port is None:
             self._next_video_port += 1
-        topic = topic_name or f"statistics_{cid}"
+        topic = topic_name or f"uav_statistics_{cid}"
 
         pipeline = PipelineInstance(
             pipeline_id=pipeline_id,
@@ -182,7 +182,10 @@ class PipelineManager:
         roads_json: str = "configs/entry_exit_lanes.json",
         telemetry_source: str | None = None,
         telemetry_file_path: str | None = None,
+        telemetry_time_offset_sec: float | None = None,
+        telemetry_sync_tolerance_sec: float | None = None,
         kafka_bootstrap: str | None = None,
+        topic_name: str | None = None,
     ) -> PipelineInstance:
         """Start a new detection pipeline process.
 
@@ -203,7 +206,7 @@ class PipelineManager:
         self._next_camera_id += 1
         video_port = self._next_video_port
         self._next_video_port += 1
-        topic_name = f"statistics_{camera_id}"
+        topic_name = topic_name or f"uav_statistics_{camera_id}"
 
         pipeline = PipelineInstance(
             pipeline_id=pipeline_id,
@@ -246,6 +249,10 @@ class PipelineManager:
                 ])
             if telemetry_file_path:
                 cmd.append(f"telemetry.file_path={telemetry_file_path}")
+            if telemetry_time_offset_sec is not None:
+                cmd.append(f"telemetry.time_offset_sec={telemetry_time_offset_sec}")
+            if telemetry_sync_tolerance_sec is not None:
+                cmd.append(f"telemetry.sync_tolerance_sec={telemetry_sync_tolerance_sec}")
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
                 cwd=str(self._root),

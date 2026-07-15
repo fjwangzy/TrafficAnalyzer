@@ -32,6 +32,8 @@ class PipelineCreateRequest(BaseModel):
         default=None,
         description="Telemetry file path for offline replay",
     )
+    telemetry_time_offset_sec: float | None = Field(default=None, ge=-86400, le=86400)
+    telemetry_sync_tolerance_sec: float | None = Field(default=None, gt=0, le=60)
 
 
 class PipelineResponse(BaseModel):
@@ -138,6 +140,8 @@ async def start_pipeline(body: PipelineCreateRequest, request: Request):
         roads_json=_resolve_roads_json(request, body.intersection_id, body.roads_json),
         telemetry_source=body.telemetry_source,
         telemetry_file_path=body.telemetry_file_path,
+        telemetry_time_offset_sec=body.telemetry_time_offset_sec,
+        telemetry_sync_tolerance_sec=body.telemetry_sync_tolerance_sec,
     )
     return pipeline.to_dict()
 

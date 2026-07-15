@@ -3,6 +3,14 @@
 > 当前实现说明基于 commit `84c6bd6` 的真实代码分析；标记为“目标态”的消息命名与
 > 持久化逻辑依据 ADR-019（2026-07-13），尚未完成代码、数据库和 Compose 迁移。
 
+## S4 执法候选业务边界（I4 本地工程实现）
+
+- 当前实现支持本地 candidate 围栏/规则、AI 待复核线索事实、证据不可变引用/哈希、技术确认/驳回和追加审计；不执行未经批准的生产执法规则，不自动形成违法或处罚结论。
+- 车辆分类契约仅为 `truck/non_truck/unknown`。unknown 或低质量事实不能被规则升级为高置信货车线索，也不能推导重/中/轻型、核载或法定车型。
+- 视频、雷达和融合速度是三个独立来源字段。没有真实雷达设备 ID 和有效检定元数据时雷达值为空；没有独立视频/雷达测量和融合方法时融合值为空，禁止相互回填。
+- 本地围栏与规则只保存版本化候选配置。权威 RoadContext、围栏发布和业务审批合同未冻结时，发布请求返回 503，页面必须明确 `unverified/blocked`。
+- `platform/scripts/validate_i4_inter_xqh.py` 使用真实 MP4/SRT 的字节数和 SHA-256 验证证据/幂等/复核接缝，但固定 `validation_fixture=true`、`detected_enforcement_clue=false`；该样本不是检测算法产生的执法线索。
+
 ## 核心业务流程
 
 ### 0. 视频读取与跳帧
@@ -495,3 +503,9 @@ near-miss 证据：
   `lane_id`；后续补映射不得无审计地改写历史版本。
 - PostgreSQL/TimescaleDB 是目标态唯一统计与事件查询源。InfluxDB 仅允许在迁移核验期
   只读对账或短期影子写入，完成切换后必须停止生产写入并下线 Grafana/Telegraf/InfluxDB。
+### S9 Mission 与 Pipeline 终态同步
+
+- Mission 与 Pipeline 是两个状态机：PipelineManager 负责识别子进程 `running/stopped/error`，MissionOrchestrator 在 5 秒调度 tick 中持久化业务终态。
+- 本地视频自然 EOF 必须先由三进程管道完整级联 `VideoEndBreakElement` 并以零退出码结束，随后 Mission 写 `completed/source_eof`；不得仅因时间窗口结束而伪造 EOF。
+- 非零退出写 `failed/pipeline_error` 并保存脱敏错误尾部；运行窗口内找不到运行时写 `failed/pipeline_runtime_missing`。Pipeline 期望状态同步为 `stopped`，观察状态保留真实 `stopped/error`。
+- 平台重启处于有效窗口时优先按持久化 Mission 恢复新 Pipeline；恢复流程不把旧进程句柄当业务真源。

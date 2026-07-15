@@ -111,11 +111,11 @@ class RealtimeChannelTest(unittest.IsolatedAsyncioTestCase):
         await service._handle_system_metrics({"msg_type": "system_metrics", "fps": 14.0})
 
         broadcasts = [(channel, message["type"]) for channel, message in ws.messages]
-        self.assertIn(("intersection:INT_camera_1", "stats"), broadcasts)
-        self.assertIn(("intersection:INT_camera_1", "track_complete"), broadcasts)
-        self.assertIn(("intersection:INT_camera_1", "conflict"), broadcasts)
-        self.assertIn(("telemetry:drone_001", "telemetry"), broadcasts)
-        self.assertIn(("system", "system_metrics"), broadcasts)
+        self.assertIn(("uav_intersection:INT_camera_1", "uav_stats"), broadcasts)
+        self.assertIn(("uav_intersection:INT_camera_1", "uav_track_complete"), broadcasts)
+        self.assertIn(("uav_intersection:INT_camera_1", "uav_conflict"), broadcasts)
+        self.assertIn(("uav_telemetry:drone_001", "uav_telemetry"), broadcasts)
+        self.assertIn(("uav_system", "uav_system_metrics"), broadcasts)
 
     async def test_alert_engine_broadcasts_alerts_channel(self):
         ws = _RecordingWS()

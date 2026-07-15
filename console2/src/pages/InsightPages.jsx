@@ -1,17 +1,68 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { ArrowsClockwise, ArrowSquareOut, CalendarBlank, Camera, ChartLineUp, Check, Clock, Crosshair, DownloadSimple, Funnel, Gauge, ListBullets, MapPin, Pause, Play, RoadHorizon, ShieldWarning, Stack, Truck, VideoCamera, Warning, X } from '@phosphor-icons/react'
 import { AppShell } from '../components/AppShell'
 import { CityMap } from '../components/CityMap'
 import { DataTable, DetailDrawer, FilterBar, InfoRow, KpiCard, PageHeader, Panel, QualityNotice, Segmented, StatusBadge } from '../components/Common'
-import { aiEvents, intersections } from '../data/mockData'
+import { aiEvents, intersections as prototypeIntersections } from '../data/mockData'
 import { useAppState } from '../state/AppState'
+import { useAuth } from '../auth/AuthContext'
+import { apiErrorMessage, platformApi } from '../lib/api'
+
+const intersections = prototypeIntersections
 
 const trafficSeries = [
   { time: '06:00', flow: 382, congestion: 2.1, speed: 42 }, { time: '08:00', flow: 768, congestion: 6.2, speed: 26 }, { time: '10:00', flow: 842, congestion: 7.2, speed: 24 },
   { time: '12:00', flow: 611, congestion: 4.5, speed: 34 }, { time: '14:00', flow: 584, congestion: 3.8, speed: 37 }, { time: '16:00', flow: 723, congestion: 5.9, speed: 29 }, { time: '18:00', flow: 891, congestion: 7.7, speed: 22 },
 ]
+
+function mapIntersection(item) {
+  return {
+    ...item,
+    id: item.id,
+    name: item.name || item.id,
+    lat: Number(item.center_lat ?? item.lat),
+    lon: Number(item.center_lon ?? item.lon),
+    quality: item.quality_status || 'unverified',
+    risk: item.status === 'active' ? 'normal' : 'warning',
+  }
+}
+
+function conflictEvent(item) {
+  const ttc = Number(item.ttc_sec)
+  const severity = ['critical', 'warning'].includes(item.severity) ? item.severity : 'warning'
+  return {
+    ...item,
+    id: item.id,
+    severity,
+    title: item.conflict_scene || '机非冲突候选',
+    type: 'conflict',
+    metric: Number.isFinite(ttc) ? `TTC ${ttc.toFixed(1)}s` : 'TTC —',
+    delivery: 'not_queued',
+    review: item.review_status || 'pending',
+    quality: item.quality_status || 'unverified',
+    occurredAt: item.occurred_at || '—',
+    intersectionId: item.inter_id || item.intersection_id,
+  }
+}
+
+function alertEvent(item) {
+  return {
+    ...item,
+    id: item.id,
+    severity: item.severity === 'P1' ? 'critical' : 'warning',
+    type: item.alert_type || 'alert',
+    metric: item.description || '告警规则触发',
+    delivery: 'not_queued',
+    review: item.status === 'acknowledged' ? 'confirmed' : 'pending',
+    quality: 'unverified',
+    occurredAt: item.timestamp || item.created_at || '—',
+    intersectionId: item.intersection_id,
+    isAlert: true,
+  }
+}
 
 function eventColumns(onOpen) {
   return [
@@ -28,14 +79,30 @@ function eventColumns(onOpen) {
 export function GisPage() {
   const location = useLocation()
   const navigate = useNavigate()
-  const { dispatch } = useAppState()
   const initialId = new URLSearchParams(location.search).get('intersection_id')
-  const [selected, setSelected] = useState(intersections.find((item) => item.id === initialId) || intersections[0])
+  const [selectedId, setSelectedId] = useState(initialId)
   const initialLayer = new URLSearchParams(location.search).get('layer')
-  const [layer, setLayer] = useState(['trajectory', 'conflict', 'hotspot', 'zone'].includes(initialLayer) ? initialLayer : 'trajectory')
-  const [playing, setPlaying] = useState(true)
+  const [layer, setLayer] = useState(['trajectory', 'conflict', 'hotspot'].includes(initialLayer) ? initialLayer : 'trajectory')
+  const intersectionsQuery = useQuery({ queryKey: ['i3-intersections'], queryFn: platformApi.intersections, refetchInterval: 30_000 })
+  const projectIntersections = (intersectionsQuery.data || []).map(mapIntersection).filter((item) => Number.isFinite(item.lat) && Number.isFinite(item.lon))
+  const selected = projectIntersections.find((item) => item.id === selectedId) || projectIntersections[0] || null
+  useEffect(() => { if (!selectedId && selected) setSelectedId(selected.id) }, [selectedId, selected])
+  const trajectoriesQuery = useQuery({
+    queryKey: ['i3-trajectories', selected?.id],
+    queryFn: () => platformApi.trajectories(selected.id, { period: '1h', limit: 200 }),
+    enabled: Boolean(selected?.id),
+    refetchInterval: 30_000,
+  })
+  const conflictsQuery = useQuery({
+    queryKey: ['i3-conflicts', selected?.id],
+    queryFn: () => platformApi.conflicts(selected.id, { period: '1h', limit: 200 }),
+    enabled: Boolean(selected?.id),
+    refetchInterval: 30_000,
+  })
+  const trajectories = trajectoriesQuery.data || []
+  const conflicts = conflictsQuery.data || []
   const selectIntersection = (item) => {
-    setSelected(item)
+    setSelectedId(item.id)
     const params = new URLSearchParams(location.search)
     params.set('intersection_id', item.id)
     navigate(`${location.pathname}?${params.toString()}`, { replace: true })
@@ -44,14 +111,19 @@ export function GisPage() {
     setLayer(value)
     const params = new URLSearchParams(location.search)
     params.set('layer', value)
-    params.set('intersection_id', selected.id)
+    if (selected) params.set('intersection_id', selected.id)
     navigate(`${location.pathname}?${params.toString()}`, { replace: true })
   }
+  const loading = intersectionsQuery.isLoading || trajectoriesQuery.isLoading || conflictsQuery.isLoading
+  const error = intersectionsQuery.error || trajectoriesQuery.error || conflictsQuery.error
   return <AppShell pageTitle='轨迹研判'>
-    <PageHeader eyebrow='S1 / S2 / S5' title='轨迹研判' description='在权威路网版本上研判历史轨迹、冲突点、风险热区和事件时间线；不承担城市级值守总览。' meta='ROAD-2026.07.1 · 10:00–10:55' actions={<button className='secondary-button' onClick={() => dispatch({ type: 'TOAST', value: { tone: 'success', text: '当前轨迹视图已导出，包含路网与质量版本' } })}><DownloadSimple size={15} /> 导出当前视图</button>} />
-    <FilterBar result='5 个项目路口 · 27 条有效轨迹'><label>路口<select value={selected.id} onChange={(event) => selectIntersection(intersections.find((item) => item.id === event.target.value))}>{intersections.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label>时间窗口<select><option>最近 1 小时</option><option>今天</option><option>自定义</option></select></label><Segmented value={layer} onChange={selectLayer} options={[{ value: 'trajectory', label: '历史轨迹' }, { value: 'conflict', label: '事件回放' }, { value: 'hotspot', label: '风险热区' }, { value: 'zone', label: '执法区域' }]} /></FilterBar>
-    <div className='gis-layout'><Panel className='gis-map-panel' title={selected.name} subtitle={`inter_id ${selected.id} · GCJ02 · 数据质量 ${selected.quality}`}><CityMap points={intersections} selectedId={selected.id} onSelect={selectIntersection} showHeat={layer === 'hotspot'} /><div className={`spatial-overlay overlay-${layer}`}><span className='path path-a' /><span className='path path-b' /><span className='conflict-node'><ShieldWarning size={16} weight='fill' /> TTC 1.2s</span></div><div className='replay-bar'><button onClick={() => setPlaying(!playing)}>{playing ? <Pause size={15} weight='fill' /> : <Play size={15} weight='fill' />}</button><strong>{playing ? '回放中' : '已暂停'}</strong><div className='replay-track'><i style={{ width: playing ? '78%' : '52%' }} /></div><span>10:41:20 / 10:55:28</span></div></Panel>
-      <div className='gis-sidebar'><Panel title='空间对象摘要'><div className='summary-quad'><div><strong>27</strong><span>有效轨迹</span></div><div><strong>3</strong><span>冲突点</span></div><div><strong>2</strong><span>热区簇</span></div><div><strong>1.8%</strong><span>unmapped</span></div></div></Panel><Panel title='路口空间上下文'><InfoRow label='进口 Link' value='4 / 4 已映射' /><InfoRow label='视觉车道绑定' value='11 / 12' badge='degraded' /><InfoRow label='坐标质量' value='2.1m 估计误差' badge='good' /><InfoRow label='有效覆盖' value='94.7%' /></Panel><Panel title='关键空间事件'>{aiEvents.slice(0, 3).map((event) => <button className='compact-event' key={event.id} onClick={() => navigate(`/events?event_id=${event.id}`)}><StatusBadge value={event.severity} /><div><strong>{event.title}</strong><span>{event.metric} · {event.occurredAt}</span></div></button>)}</Panel></div></div>
+    <PageHeader eyebrow='S1 / S2 / S5' title='轨迹研判' description='从 road9 查询历史轨迹与冲突事实；权威路网合同未关闭时保持 unverified。' meta='最近 1 小时 · REST 恢复基线' />
+    <FilterBar result={`${projectIntersections.length} 个项目路口 · ${trajectories.length} 条轨迹`}><label>路口<select aria-label='路口' value={selected?.id || ''} onChange={(event) => selectIntersection(projectIntersections.find((item) => item.id === event.target.value))}>{projectIntersections.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label>时间窗口<select disabled><option>最近 1 小时</option></select></label><Segmented value={layer} onChange={selectLayer} options={[{ value: 'trajectory', label: '历史轨迹' }, { value: 'conflict', label: '事件回放' }, { value: 'hotspot', label: '风险热区' }]} /></FilterBar>
+    {loading && <QualityNotice tone='info' title='正在加载'>正在从 road9 恢复轨迹与冲突事实。</QualityNotice>}
+    {error && <QualityNotice tone='warning' title='历史数据不可用'>{apiErrorMessage(error)}</QualityNotice>}
+    {!loading && !error && !selected && <QualityNotice tone='info' title='暂无路口'>尚未登记可定位的项目路口，不生成模拟点位。</QualityNotice>}
+    {selected && <div className='gis-layout'><Panel className='gis-map-panel' title={selected.name} subtitle={`inter_id ${selected.id} · 数据质量 ${selected.quality}`}><CityMap points={projectIntersections} selectedId={selected.id} onSelect={selectIntersection} showHeat={layer === 'hotspot' && conflicts.length > 0} />{layer === 'hotspot' && conflicts.length === 0 && <QualityNotice tone='info' title='无热区输入'>当前窗口没有冲突事实，不绘制模拟热区。</QualityNotice>}</Panel>
+      <div className='gis-sidebar'><Panel title='空间对象摘要'><div className='summary-quad'><div><strong>{trajectories.length}</strong><span>历史轨迹</span></div><div><strong>{conflicts.length}</strong><span>冲突事实</span></div><div><strong>{conflicts.filter((item) => item.review_status === 'confirmed').length}</strong><span>已确认</span></div><div><strong>{conflicts.filter((item) => item.quality_status !== 'verified').length}</strong><span>unverified</span></div></div></Panel><Panel title='路口空间上下文'><InfoRow label='路网版本' value={conflicts[0]?.road_data_version || '未匹配'} badge={conflicts[0]?.road_data_version ? 'good' : 'degraded'} /><InfoRow label='坐标/时间质量' value={conflicts[0]?.time_quality || '无数据'} badge={conflicts[0]?.time_quality === 'verified' ? 'good' : 'degraded'} /><InfoRow label='事实来源' value='road9 / TimescaleDB' /></Panel><Panel title='关键空间事件'>{conflicts.length === 0 ? <span className='muted'>当前窗口无冲突事实</span> : conflicts.slice(0, 5).map((item) => { const event = conflictEvent(item); return <button className='compact-event' key={event.id} onClick={() => navigate(`/events?event_id=${event.id}`)}><StatusBadge value={event.severity} /><div><strong>{event.title}</strong><span>{event.metric} · {event.occurredAt}</span></div></button> })}</Panel></div></div>}
   </AppShell>
 }
 
@@ -69,21 +141,50 @@ export function RiskHotspotsPage() {
 export function AlertsPage() {
   const location = useLocation()
   const navigate = useNavigate()
-  const { state, dispatch } = useAppState()
+  const { dispatch } = useAppState()
+  const { platformRole } = useAuth()
+  const queryClient = useQueryClient()
   const initialParams = new URLSearchParams(location.search)
   const initialId = initialParams.get('event_id')
-  const [selected, setSelected] = useState(state.events.find((item) => item.id === initialId) || null)
+  const [selected, setSelected] = useState(null)
+  const [actionError, setActionError] = useState('')
   const [severity, setSeverity] = useState(['critical', 'warning'].includes(initialParams.get('severity')) ? initialParams.get('severity') : 'all')
-  const [delivery, setDelivery] = useState(['delivery_failed', 'delivered'].includes(initialParams.get('delivery')) ? initialParams.get('delivery') : 'all')
+  const [delivery, setDelivery] = useState(['not_queued', 'blocked'].includes(initialParams.get('delivery')) ? initialParams.get('delivery') : 'all')
   const [intersection, setIntersection] = useState(initialParams.get('intersection_id') || 'all')
   const [query, setQuery] = useState('')
-  const rows = useMemo(() => state.events.filter((item) =>
+  const intersectionsQuery = useQuery({ queryKey: ['i3-intersections'], queryFn: platformApi.intersections, refetchInterval: 30_000 })
+  const projectIntersections = (intersectionsQuery.data || []).map(mapIntersection)
+  const conflictsQuery = useQuery({
+    queryKey: ['i3-all-conflicts', projectIntersections.map((item) => item.id)],
+    queryFn: async () => (await Promise.all(projectIntersections.map((item) => platformApi.conflicts(item.id, { period: '24h', limit: 200 })))).flat(),
+    enabled: projectIntersections.length > 0,
+    refetchInterval: 30_000,
+  })
+  const alertsQuery = useQuery({ queryKey: ['i3-alerts'], queryFn: () => platformApi.alerts({ limit: 200 }), refetchInterval: 30_000 })
+  const events = useMemo(() => [
+    ...(conflictsQuery.data || []).map(conflictEvent),
+    ...(alertsQuery.data || []).map(alertEvent),
+  ].sort((a, b) => String(b.occurredAt).localeCompare(String(a.occurredAt))), [conflictsQuery.data, alertsQuery.data])
+  useEffect(() => {
+    if (initialId && !selected) setSelected(events.find((item) => item.id === initialId) || null)
+  }, [events, initialId, selected])
+  const rows = useMemo(() => events.filter((item) =>
     (severity === 'all' || item.severity === severity) &&
     (delivery === 'all' || item.delivery === delivery) &&
     (intersection === 'all' || item.intersectionId === intersection) &&
     (!query.trim() || `${item.id} ${item.title}`.toLowerCase().includes(query.trim().toLowerCase()))
-  ), [state.events, severity, delivery, intersection, query])
-  const selectedEvent = selected ? state.events.find((item) => item.id === selected.id) || selected : null
+  ), [events, severity, delivery, intersection, query])
+  const selectedEvent = selected ? events.find((item) => item.id === selected.id) || selected : null
+  const reviewMutation = useMutation({
+    mutationFn: ({ event, reviewStatus }) => platformApi.reviewConflict(event.intersectionId, event.id, { review_status: reviewStatus, expected_revision: event.review_revision, reason: 'Console2 technical review' }),
+    onSuccess: (value) => {
+      setActionError('')
+      setSelected(conflictEvent(value))
+      queryClient.invalidateQueries({ queryKey: ['i3-all-conflicts'] })
+      dispatch({ type: 'TOAST', value: { tone: 'success', text: value.review_status === 'confirmed' ? 'AI 结果已技术确认' : 'AI 结果已驳回并记录原因' } })
+    },
+    onError: (error) => setActionError(apiErrorMessage(error, '技术复核失败')),
+  })
   const openEvent = (item) => {
     setSelected(item)
     const params = new URLSearchParams(location.search)
@@ -91,14 +192,19 @@ export function AlertsPage() {
     else params.delete('event_id')
     navigate(`${location.pathname}${params.size ? `?${params.toString()}` : ''}`, { replace: true })
   }
+  const loading = intersectionsQuery.isLoading || conflictsQuery.isLoading || alertsQuery.isLoading
+  const loadError = intersectionsQuery.error || conflictsQuery.error || alertsQuery.error
   return <AppShell pageTitle='AI 事件中心'>
-    <PageHeader eyebrow='S2 / S4 / S6' title='AI 事件中心' description='统一查看 AI 事件、证据质量、主平台投递和技术复核；复核结果不代表警情处置或违法认定。' meta={`${state.events.length} 起事件 · 2 起待复核`} actions={<button className='secondary-button' onClick={() => dispatch({ type: 'TOAST', value: { tone: 'success', text: '技术台账已导出，隐私字段保持脱敏' } })}><DownloadSimple size={15} /> 导出技术台账</button>} />
-    <FilterBar result={`显示 ${rows.length} / ${state.events.length} 起`} onReset={() => { setSeverity('all'); setDelivery('all'); setIntersection('all'); setQuery('') }}><Segmented value={severity} onChange={setSeverity} options={[{ value: 'all', label: '全部' }, { value: 'critical', label: '高风险' }, { value: 'warning', label: '关注' }]} /><label>投递状态<select aria-label='投递状态' value={delivery} onChange={(event) => setDelivery(event.target.value)}><option value='all'>全部状态</option><option value='delivery_failed'>投递失败</option><option value='delivered'>已投递</option></select></label><label>路口<select aria-label='事件路口' value={intersection} onChange={(event) => setIntersection(event.target.value)}><option value='all'>全部项目路口</option>{intersections.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label className='search-field'><Funnel size={15} /><input aria-label='事件搜索' value={query} onChange={(event) => setQuery(event.target.value)} placeholder='事件 ID / 标题' /></label></FilterBar>
-    <Panel title='实时 AI 事件' subtitle='业务时间排序 · WebSocket 增量仅用于体验，REST 快照为恢复基线'><DataTable columns={eventColumns(openEvent)} rows={rows} onRowClick={openEvent} /></Panel>
-    {selectedEvent && <DetailDrawer wide title={selectedEvent.title} subtitle={selectedEvent.id} onClose={() => openEvent(null)} footer={<><button className='danger-button' onClick={() => dispatch({ type: 'REVIEW_EVENT', id: selectedEvent.id, value: 'rejected' })}><X size={15} /> 驳回 AI 结果</button><button className='primary-button' onClick={() => dispatch({ type: 'REVIEW_EVENT', id: selectedEvent.id, value: 'confirmed' })}><Check size={15} /> 技术确认</button></>}>
-      <div className='event-hero'><div className='event-snapshot'><img src='/assets/uav-intersection-night.png' alt='AI 事件关联视频帧' /><span><VideoCamera size={14} /> 原始帧 #18274 · 10:52:16.208</span></div><div className='event-primary-metrics'><div><span>TTC</span><strong>1.2s</strong></div><div><span>PET</span><strong>0.8s</strong></div><div><span>风险分</span><strong>86</strong></div><div><span>置信度</span><strong>94%</strong></div></div></div>
-      <div className='detail-two-col'><Panel title='事件与质量'><InfoRow label='业务时间' value={`2026-07-13 ${selectedEvent.occurredAt}`} /><InfoRow label='路口' value={intersections.find((item) => item.id === selectedEvent.intersectionId)?.name} /><InfoRow label='证据完整性' value={selectedEvent.evidence} badge={selectedEvent.evidence} /><InfoRow label='坐标质量' value='GCJ02 · 2.1m 估计误差' badge={selectedEvent.quality} /><InfoRow label='模型 / 规则' value={`conflict-v11 / ${selectedEvent.ruleVersion}`} /></Panel><Panel title='投递与反馈'><InfoRow label='投递状态' value={selectedEvent.delivery} badge={selectedEvent.delivery} /><InfoRow label='主平台映射' value={selectedEvent.delivery === 'delivered' ? 'PLT-AI-804182' : '待获取'} /><InfoRow label='Schema' value={selectedEvent.schemaVersion} /><InfoRow label='幂等键' value='sha256:b281…91dd' /><InfoRow label='技术复核' value={selectedEvent.review} badge={selectedEvent.review} /></Panel></div>
-      <Panel title='证据与状态时间线'><div className='state-timeline'>{['AI 结果生成 10:52:16.208', '证据包完整性校验 10:52:16.419', '持久化出站队列 10:52:16.721', '主平台回执 10:52:17.604', selectedEvent.review === 'pending' ? '等待技术复核' : `技术复核：${selectedEvent.review}`].map((item, index) => <div key={item} className={index === 4 ? 'current' : ''}><i /><span>{item}</span></div>)}</div></Panel>
+    <PageHeader eyebrow='S2 / S4 / S6' title='AI 事件中心' description='统一查看 road9 冲突事实、告警和技术复核；复核结果不代表警情处置或违法认定。' meta={`${events.length} 起事件 · ${events.filter((item) => item.review === 'pending').length} 起待复核`} />
+    <FilterBar result={`显示 ${rows.length} / ${events.length} 起`} onReset={() => { setSeverity('all'); setDelivery('all'); setIntersection('all'); setQuery('') }}><Segmented value={severity} onChange={setSeverity} options={[{ value: 'all', label: '全部' }, { value: 'critical', label: '高风险' }, { value: 'warning', label: '关注' }]} /><label>投递状态<select aria-label='投递状态' value={delivery} onChange={(event) => setDelivery(event.target.value)}><option value='all'>全部状态</option><option value='not_queued'>未投递</option><option value='blocked'>已阻断</option></select></label><label>路口<select aria-label='事件路口' value={intersection} onChange={(event) => setIntersection(event.target.value)}><option value='all'>全部项目路口</option>{projectIntersections.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label className='search-field'><Funnel size={15} /><input aria-label='事件搜索' value={query} onChange={(event) => setQuery(event.target.value)} placeholder='事件 ID / 标题' /></label></FilterBar>
+    {loading && <QualityNotice tone='info' title='正在恢复事件台账'>从 road9 加载冲突事实与告警。</QualityNotice>}
+    {loadError && <QualityNotice tone='warning' title='事件台账不可用'>{apiErrorMessage(loadError)}</QualityNotice>}
+    {!loading && !loadError && <Panel title='AI 事件事实' subtitle='业务时间排序 · REST 为页面刷新后的恢复基线'><DataTable columns={eventColumns(openEvent)} rows={rows} onRowClick={openEvent} /></Panel>}
+    {selectedEvent && <DetailDrawer wide title={selectedEvent.title} subtitle={selectedEvent.id} onClose={() => openEvent(null)} footer={!selectedEvent.isAlert && platformRole === 'admin' ? <><button className='danger-button' disabled={reviewMutation.isPending} onClick={() => reviewMutation.mutate({ event: selectedEvent, reviewStatus: 'rejected' })}><X size={15} /> 驳回 AI 结果</button><button className='primary-button' disabled={reviewMutation.isPending} onClick={() => reviewMutation.mutate({ event: selectedEvent, reviewStatus: 'confirmed' })}><Check size={15} /> 技术确认</button></> : <span className='muted'>{selectedEvent.isAlert ? '告警使用确认接口处理' : '仅管理员可执行技术复核'}</span>}>
+      <div className='event-hero'><div className='event-primary-metrics'><div><span>TTC</span><strong>{selectedEvent.ttc_sec ?? '—'}s</strong></div><div><span>PET</span><strong>{selectedEvent.pet_sec ?? '—'}s</strong></div><div><span>风险分</span><strong>{selectedEvent.risk_score ?? '—'}</strong></div><div><span>最小距离</span><strong>{selectedEvent.distance_m ?? '—'}m</strong></div></div></div>
+      {actionError && <QualityNotice tone='warning' title='技术复核失败'>{actionError}</QualityNotice>}
+      <div className='detail-two-col'><Panel title='事件与质量'><InfoRow label='业务时间' value={selectedEvent.occurredAt} /><InfoRow label='路口' value={projectIntersections.find((item) => item.id === selectedEvent.intersectionId)?.name || selectedEvent.intersectionId || '未匹配'} /><InfoRow label='证据' value={Array.isArray(selectedEvent.evidence) ? selectedEvent.evidence.join(', ') : '未提供'} /><InfoRow label='质量' value={selectedEvent.quality} badge={selectedEvent.quality === 'verified' ? 'good' : 'degraded'} /><InfoRow label='时间质量' value={selectedEvent.time_quality || 'unverified'} /></Panel><Panel title='投递与复核'><InfoRow label='投递状态' value={selectedEvent.delivery} badge='blocked' /><InfoRow label='主平台映射' value='合同未冻结' /><InfoRow label='事实来源' value={selectedEvent.isAlert ? 'uav_alerts' : 'uav_conflict_events'} /><InfoRow label='复核 revision' value={selectedEvent.review_revision || '—'} /><InfoRow label='技术复核' value={selectedEvent.review} badge={selectedEvent.review} /></Panel></div>
+      <Panel title='事实状态时间线'><div className='state-timeline'>{[`事实入库 ${selectedEvent.occurredAt}`, selectedEvent.delivery === 'not_queued' ? '主平台投递未启用' : `投递：${selectedEvent.delivery}`, selectedEvent.review === 'pending' ? '等待技术复核' : `技术复核：${selectedEvent.review}`].map((item, index) => <div key={item} className={index === 2 ? 'current' : ''}><i /><span>{item}</span></div>)}</div></Panel>
       <QualityNotice tone='warning' title='责任边界'>“确认/驳回”仅表示 AI 识别结果技术或业务复核，不生成派警、处罚或案件办结状态。</QualityNotice>
     </DetailDrawer>}
   </AppShell>

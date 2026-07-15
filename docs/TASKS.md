@@ -1,6 +1,21 @@
 # TASKS.md — TrafficAnalyzer 任务追踪
 
-> 最后更新：2026-07-14（已纳入无人机 AI PRD v2.1、S8 全域态势工作台、S9 无人机对接与飞行计划、Console2 六域信息架构、`road9`/TimescaleDB 目标架构及 `uav_` 统一命名）
+> 最后更新：2026-07-15（I1～I4、I5-A 与 I5-B 内部查询/降级能力已完成；生产与外部合同阻断保持开放）
+
+## PRD/UI 滚动交付
+
+执行计划见 [`docs/superpowers/plans/2026-07-15-prd-ui-rolling-delivery.md`](superpowers/plans/2026-07-15-prd-ui-rolling-delivery.md)。当前按单一主迭代滚动推进：
+
+- [x] I0：统一分册上位 PRD v2.1 引用，建立 S1～S9 追踪矩阵、模块接口和退出门禁。
+- [x] I1：冻结 RoadContext、EventDelivery、MissionOrchestrator、S9 DDL/API/状态机内部工程契约；外部权威路网、主平台和生产参数继续 blocked。
+- [x] I2：完成 S9 PostgreSQL 持久化、调度防重/恢复、Console2 四页签、真实 MP4+SRT 与关键截图验收。
+- [x] I3：完成隔离 TimescaleDB、MetricStore、S1/S2 指标/轨迹/冲突持久化、输入死信、技术复核及 `/gis`、`/events` 真实切读。
+- [ ] I3 生产门禁：冻结生产扩展/容量/保留/压缩/HA，完成历史 Influx 迁移对账、多实例故障注入和正式业务指标验收。
+- [x] I4：完成 S4 本地 candidate 围栏/规则、统一 AI 线索、证据引用/哈希、技术复核审计和 Console2 三视图真实化；权威发布与主平台投递保持 503/blocked。
+- [ ] I4 正式门禁：冻结权威围栏/规则、执法类型与阈值、雷达设备/检定/融合、法制证据、统一身份与主平台合同，完成批准验收集和性能容量验收。
+- [x] I5-A：完成 DashboardReadModel、4 个真实聚合 API、正式 `/` Mock 清除、未冻结 KPI null 门禁、权威坐标隔离和 empty/blocked 视觉验收。
+- [ ] I5-B：内部风险/监测/质量筛选、WGS84 bbox、搜索、offset/limit、422/503、REST 保留快照/有限重试和底图失败降级已实现；项目范围/底图/KPI/权限、点位聚合/zoom、全局增量/断线缺口回补、获批正常/混合质量数据及 5 秒/30 秒正式验收仍待外部冻结。
+- [ ] I6：已实现独立 `docker-compose.road9.yaml`、`uav.adr019-retirement-audit/v1` strict 门禁、完整目标栈、空库/回滚迁移、真实 Timescale-aware 备份恢复、遗留 Influx 只读盘点、受保护的本地性能烟测、隔离断库恢复演练和短时 readiness 巡检；`20260715_0009` 修复 regular→Hypertable FK 恢复缺陷，Dashboard 断库从空体 500 修复为结构化 503。目标栈已从不兼容 ARM 的旧 Zookeeper/Kafka 切为 Apache Kafka 3.9.2 KRaft，Platform 镜像携带 migration、移除 Influx 生产依赖并启用依赖级 readiness；Console 构建上下文从约 486MB 降至约 370KB。60 秒/13 次巡检中 Road9、TimescaleDB、Kafka、Platform、Console 代理认证和 Dashboard/System API 全程健康，当前本地审计 12 pass / 6 blocked；但正式映射/对账、生产镜像/秘密/TLS/SASL/HA、批准时长的持续运行、主平台联调、RPO/RTO、试点和旧链路安全退役仍待批准执行。
 
 ## 技术债清单
 
@@ -68,11 +83,10 @@
 - **状态**：✅ 已修复（2026-06-09）
 - **修复内容**：使用 supervision 库重构，拆分为 10 个聚焦子方法（`_draw_detections`、`_draw_tracked`、`_draw_roads`、`_draw_fps`、`_draw_stats_panel` 等），新增圆角边框、轨迹尾迹、标签背景等功能，去除 `random` 依赖改用 `ColorPalette` 确定性着色
 
-#### TD-007: VideoEndBreakElement 未初始化父类
+#### TD-007: VideoEndBreakElement 控制信号字段访问 → ✅ 已解决
 - **位置**：`elements/VideoEndBreakElement.py`
-- **问题**：继承 FrameElement 但只设置了 `video_source` 和 `timestamp`，其他字段（`frame`、`source` 等）未初始化
-- **影响**：如果某个节点忘记 isinstance 检查就访问 FrameElement 字段，会抛出 AttributeError
-- **建议**：调用 `super().__init__()` 传入空值，或不继承 FrameElement
+- **状态**：✅ 已修复（2026-07-15）
+- **修复内容**：保留 sentinel 不携带普通帧字段的控制信号语义；`main_optimized.py` 检测进程在共享内存/`.frame` 访问前先识别并级联 `VideoEndBreakElement`。`test_main_optimized_eof.py` 固化首元素即 EOF 的回归，5GB `inter_xqh` + DJI SRT 在重启恢复后自然 EOF，Mission 持久化为 `completed/source_eof`。
 
 #### TD-008: TrackerInfoUpdateNode 假设字典有序 → ✅ 已解决
 - **状态**：✅ 已修复（2026-05-31）
@@ -175,6 +189,8 @@
 | T-445 | Console2 BEV 真实地图底图修复 | ✅ | `console2/src/components/MonitoringBevMap.jsx` + `console2/src/App.jsx` — 复用 Console 1.0 OpenLayers/OSM 地图模式替换静态 BEV 图片，按轨迹锚点将 ENU 世界坐标投放到主视图和右侧预览；无轨迹时保留真实路口地图且不生成模拟轨迹；`MonitoringBevMap.test.jsx` 覆盖 ENU 转换、路口中心回退和无效零坐标；使用 `inter_xqh` MP4+SRT、`ROADS_JSON=""` 启动 Pipeline `statistics_12`，浏览器验证检测器/BEV 主次切换和真实 MJPEG 输出；`test_pipeline_inter_xqh.py` 为 `56 PASS / 0 FAIL / 0 WARN`、100/100 帧检测与遥测有效 |
 | T-446 | Console2 检测画面红蓝轨迹误叠加修复 | ✅ | `console2/src/App.jsx` — 删除把前两条活动/完成轨迹按 Y 轴归一化后覆盖到 MJPEG 上的 Recharts 红蓝曲线，世界坐标轨迹只交给 OpenLayers BEV；风险标记仅在检测器风险模式显示，原始画面保持无前端 AI 叠层；`LiveModules.test.jsx` 覆盖完成轨迹不进入检测画面且仍投放 BEV。Console2 `42/42` tests 与 production build 通过；浏览器实页验收轨迹图层、Recharts 线和红蓝 stroke 均为 0，证据见 `.design-qa/2026-07-15-monitoring-detector-red-blue-lines-fixed.jpg` |
 | T-447 | Console2 监控侧栏自动收缩与研判浮条精简 | ✅ | `console2/src/App.jsx` / `styles.css` — 左侧实时态势、右侧 BEV/实时事件面板使用 40% alpha 背景，默认收缩为 36px 边缘控制条，鼠标或键盘进入时展开、离开时自动收起，并可分别锁定保持展开；收缩时检测状态和地图工具同步贴边，不保留空占位；删除底部“AI 事件研判”浮条及其监控页确认逻辑，事件详情和复核统一从“全部事件”进入。`LiveModules.test.jsx` 覆盖左右收缩、展开、锁定、解锁、工具贴边和浮条缺席；Console2 `43/43` tests、production build、`git diff --check` 与本地 HTTP 200 检查通过。 |
+| T-448 | S9 自然 EOF 与 Mission/Pipeline 终态同步 | ✅ | `platform/app/services/mission_orchestrator.py` 在正常 tick 中把 Pipeline `stopped/error/missing` 持久化为 Mission `completed/source_eof`、`failed/pipeline_error`、`failed/pipeline_runtime_missing`；`main_optimized.py` 在共享内存帧访问前级联 `VideoEndBreakElement`。最小回归红→绿，显式 PG integration 2/2；5GB `inter_xqh` + DJI SRT 在重启恢复后自然 EOF，证据 `docs/test_report_s9_inter_xqh_eof.json`；全管道仍为 56/0/0。 |
+| T-449 | S9 从 Console2 页面触发 `road9` 真实验收 | ✅ | 隔离链路 `4179 → 18005 → road9@20260715_0009`；页面登记 `UAV-PAGE-0715` / `SRC-C74D6FA9EA35`，创建并启用 `PLAN-6C3102938EBB`，调度器 `+2s` 创建 `MSN-5A61F57DA1D7` / `pipe-ec14fc26`。使用 5GB `inter_xqh` MP4 + DJI SRT、`frame_stride=300` 运行 396.663 秒自然 EOF，刷新后持久化为 `completed / stopped / source_eof`，截图见 `console2/.design-qa/2026-07-15-s9-{source-registered,page-mission-completed}.jpg`。生产默认帧步长未修改，权威 RoadContext、RTSP/MQTT、容量与 HA 仍为外部验收阻断。 |
 | T-438 | GIS 历史轨迹与冲突复盘 | ✅ | `traffic-fly-console/src/features/gis/index.tsx` — 选中路口后调用 `/api/v1/trajectories/{intersection_id}?period=1h&limit=200` 和 `/api/v1/trajectories/{intersection_id}/conflicts?period=1h&limit=200`，显示历史轨迹数量、Track ID、转向、车辆类型、均速、时长、轨迹点数，以及历史冲突 pair、TTC/PET、场景、证据和风险分；`traffic-fly-console/src/features/gis/index.test.tsx` 覆盖 `INT_camera_1` 历史轨迹与冲突证据复盘详情 |
 | T-439 | Dashboard pipelines_active 真实数据 | ✅ | `traffic-fly-console/src/features/dashboard/index.tsx` — 首页活跃管道数优先使用 `system_metrics.pipelines_active` WebSocket 实时值，列表未加载时回退 `/intersections/summary.pipelines_active`，列表加载后使用 `/pipelines` running 数；`traffic-fly-console/src/features/dashboard/index.test.tsx` 覆盖 WebSocket 更新和 summary fallback；当前前端回归 `npm test` 通过 27 个测试文件 / 160 个测试，`npm run build` 通过 |
 | T-430 | PipelineManager 正常结束状态修正 | ✅ | `platform/app/services/pipeline_manager.py` — 子进程 `return_code == 0` 时标记为 `stopped` 且清空 `error_message`，非零退出才标记 `error` 并保留 stderr 尾部；`platform/tests/test_pipeline_manager.py` 覆盖正常结束与异常退出两个状态分支 |
@@ -257,27 +273,33 @@
 - [x] 使用 `inter_xqh` 5.0GB 原始 4K MP4（992.358s）+原始 SRT 完成 S3 全量真实测绘：批次 `BATCH-7E8061819ABA`，worker 报告 29,741 帧、遥测覆盖 99.9967%、6/6 关键帧可量算；服务端线段量算 79.51m，报告 `RPT-5BECE3A9C5A6` 的 PDF 为 3137 bytes/`%PDF`，内容哈希 `39a0740d…778b3`，投递门禁按预期 422。测试同时修复采集导入后 revision 未刷新和报告生成后页面未立即更新两个前端缺陷，Console2 回归 38/38、构建通过；截图保存在 `console2/.design-qa/survey-full-inter-xqh-*-20260715.png`。该验证仍不关闭精度/法制/主平台合同阻断项（2026-07-15）
 - [x] 完成 S9 无人机对接与飞行计划管理详细评审草案：冻结 RTSP+MQTT/服务器 MP4+DJI `.srt` 成对源、once/weekly FlightPlan、Mission 状态机、调度幂等和飞控边界（2026-07-13）
 - [ ] 冻结无人机设备权威编码、RTSP/MQTT 支持矩阵、secret reference、服务器本地资产 allowlist 及 MP4/SRT 时间覆盖校验口径
-- [ ] 冻结并实现 Drone/Source/FlightPlan/Mission API、`uav_drones/uav_video_sources/uav_telemetry_sources/uav_flight_plans/uav_missions/uav_pipelines` migration 和现有内存状态迁移
-- [ ] 在 FastAPI 单体中实现 FlightPlan Scheduler：≤5 秒扫描、PostgreSQL advisory lock/租约、`(flight_plan_id,scheduled_start_at)` 唯一、窗口内恢复和 `skipped/window_missed`
-- [ ] 将 `/drones` 增强为无人机、数据源、飞行计划、执行记录四页签，完成管理员写权限、指挥员/分析员只读和敏感字段脱敏
-- [ ] 使用 `inter_xqh` MP4+SRT 完成 S9 API 端到端验收；覆盖 once/weekly、跨午夜、例外日、重叠拒绝、重启、多实例、EOF、失败、停止/重试和非管理员 403
+- [x] 冻结并实现 Drone/Source/FlightPlan/Mission API、`uav_drones/uav_video_sources/uav_telemetry_sources/uav_flight_plans/uav_missions/uav_pipelines` migration 和现有内存状态迁移（Alembic `20260715_0003`）
+- [x] 在 FastAPI 单体中实现 MissionOrchestrator：5 秒扫描、PostgreSQL advisory lock、`(flight_plan_id,scheduled_start_at)` 唯一、窗口内恢复和 `skipped/window_missed`
+- [x] 将 `/drones` 增强为无人机、数据源、飞行计划、执行记录四页签，完成管理员写权限、非管理员只读和敏感字段脱敏
+- [x] 使用 `inter_xqh` MP4+SRT 完成 S9 工程端到端验收；自动化覆盖 once/weekly、跨午夜、例外日、重叠拒绝、重启、多实例防重、停止/重试和非管理员 403；另以 5GB 原视频 `frame_stride=300` 完成重启恢复后自然 EOF，Mission `MSN-995CEBE0415E` 为 `completed/source_eof`，证据见 `docs/test_report_s9_inter_xqh_eof.json`。正式 RTSP/MQTT、容量长跑和权限矩阵仍按外部门禁验收
+- [x] 在隔离 `road9_i2_test` 完成空库/升级迁移、真实 PG 集成及 `20260715_0003 → 20260714_0002 → 20260715_0003` 回滚恢复演练
 - [ ] 由指挥中心冻结 S8 项目路口、具备监控条件、正在监测、监测降级、无人机保障和重点关注榜口径；未冻结前不得继续使用未定义的单一 `active` 作为主任结论
-- [ ] 将 `/` 从 KPI/趋势卡片重构为真实城市地图主导的项目一图概览；移除 `INT_camera_1` 趋势硬编码，按当前权限/辖区/项目范围聚合
-- [ ] 使用权威 `inter_id + road_data_version` 和经验证坐标替换 `/gis` 当前按数组序号生成的网格示意点位；底图失败时降级为列表，不得模拟真实位置
-- [ ] 冻结并实现 Dashboard overview/intersections/detail/drones 聚合 API、bbox/点位聚合、统一 `as_of`、可比时段、coverage、关注项入榜原因、缓存和断线 REST 回补
+- [x] 将 `/` 重构为真实城市地图主导的项目一图概览；移除 `INT_camera_1` 趋势硬编码，使用 DashboardReadModel 按服务端范围聚合；未批准项目范围和 KPI 继续显示待冻结
+- [x] `/gis` 正式路由已删除按数组序号生成的网格示意点位，仅展示 API 返回的有效坐标；无坐标/无轨迹/无冲突时展示真实空态，不生成模拟位置。权威 `inter_id + road_data_version` 与坐标合同仍是 S5 外部阻断
+- [x] 实现 Dashboard overview/intersections/detail/drones 聚合 API、服务端筛选/bbox/分页、统一 `as_of/window/coverage/quality`、关注项原因和 503 降级；正式项目范围、可比时段、缓存/全局增量回补策略仍待批准
 - [ ] 完成 S8 主任首屏视觉原型及大屏/办公端适配，重点验证 5 秒全局辨识、30 秒重点定位、非颜色状态编码、空态/过期/断线/无权限状态
 - [x] 冻结目标数据架构：PostgreSQL connection database=`road9`，UAV Topic/`msg_type`/WebSocket/自建表统一 `uav_`，指标采用 TimescaleDB，InfluxDB/Telegraf/Grafana 迁移后退役（ADR-019）
-- [ ] 盘点 `road9` 的 schema、现有平台表、权威路网只读视图和扩展状态；确认 `road9` 是 database 名而非默认 schema，并输出对象归属/迁移矩阵
+- [x] 盘点本地 `road9` database/public schema、平台表与扩展状态并输出对象归属/迁移矩阵；权威路网只读视图仍待数据方提供和确认
+- [x] 在隔离本地 TimescaleDB 2.28.2/PostgreSQL 17 完成 `20260715_0004`～`0007` migration、5 张 hypertable、回滚恢复及真实 PG 集成验证；既有 5432 普通 PostgreSQL 保持 degraded 且未清库
 - [ ] 在 `road9` 安装并验收 TimescaleDB，冻结扩展版本/许可、目标 schema、chunk、索引、压缩、保留、连续聚合、容量、备份恢复、高可用和 RPO/RTO
 - [ ] 将 PostgreSQL 部署镜像/托管实例切换为兼容的 TimescaleDB 发行形态；当前镜像不含扩展，必须在目标环境做安装、升级和恢复演练
-- [ ] 冻结并评审全部 `uav_*` DDL：核心 Hypertable、无人机/视频源/遥测源/FlightPlan/Mission/Pipeline、长期消费幂等 `uav_message_inbox`、AI 事件/outbox/attempt/feedback/dead-letter、证据、测绘、执法、路网上下文、绑定、审计及现有平台表迁移；同一实体不得重复建表或双真源
-- [ ] 引入受控 Alembic migrations 并设置版本表 `uav_alembic_version`；生产环境停止依赖 `Base.metadata.create_all()` 隐式建表
+- [x] 实现 `MetricStore` 深模块：legacy/canonical 适配、绝对/相对时间语义、`uav_message_inbox` 全局幂等、事实同事务展开、同 ID 异 hash 隔离、官方历史 API 查询
+- [x] Kafka Consumer 关闭 auto commit；数据库成功后精确提交 partition offset，瞬态失败 seek 重放，永久性 schema/身份错误耐久进入 `uav_message_dead_letters` 后才推进 offset
+- [x] canonical Producer 使用显式 Topic builder 生成 `uav_statistics/uav_track_complete/uav_conflicts/uav_telemetry_*`，并修复 camera 10 后缀字符串替换错误；迁移期 Consumer 双读旧/新 Topic
+- [x] `/events` 使用 `uav_conflict_events + uav_conflict_reviews` 展示并持久化管理员技术复核 revision；该状态不等同主平台处置或违法认定
+- [x] 冻结并实现本地工程所需 `uav_*` DDL：核心 Hypertable、S9、消费幂等、事件投递、证据、测绘、执法、路网上下文、绑定和审计由 `0001`～`0009` 前向 migration 管理；生产 schema/权限/保留/容量仍待外部批准
+- [x] 引入受控 Alembic migrations 并设置版本表 `uav_alembic_version`；Platform 启动按 migration head 升级，不再依赖 `Base.metadata.create_all()` 隐式建表
 - [ ] 统一生产者/消费者/API/前端消息为 `uav_statistics_*`、`uav_track_complete_*`、`uav_conflicts_*`、`uav_telemetry_*`、`uav_ai_events` 等目标 Topic，以及 `uav_*` msg_type/WebSocket channel；制定旧名兼容窗口与强制退役日期
-- [ ] 重构 Kafka Topic builder，禁止以字符串替换从统计 Topic 推导其他 Topic；以 `camera_id` 显式生成并覆盖全量契约测试
+- [x] 重构 Kafka Topic builder，禁止以字符串替换从统计 Topic 推导其他 Topic；以 `camera_id` 显式生成 canonical Topic 并覆盖 camera 10 回归测试
 - [ ] 按消息等级建设可靠发送：轨迹/冲突/AI事件/证据引用使用持久化 spool/outbox 和补发；周期指标允许丢弃时记录覆盖率、缺口与丢弃计数
-- [ ] Consumer 关闭 auto commit，按 `uav_message_inbox` + 事实同事务成功后手动提交 offset；增加数据库异常、崩溃点、同 ID 不同 hash 和重放测试
-- [ ] 将 Platform 的 InfluxDB writer/query repository 替换为 PostgreSQL/TimescaleDB 写读层，API、WebSocket、告警、轨迹、冲突和报表统一从 `road9` 查询
-- [ ] 制定旧 InfluxDB 分 measurement 历史迁移规则：不得把旧 `time` 一律映射 `occurred_at`；保留 `source_time_raw/source_time_semantics/time_quality`，统计/冲突消费时刻只能映射 `ingested_at`，epoch 附近轨迹须隔离并决定丢弃或按原视频/业务字段重建
+- [x] Consumer 关闭 auto commit，按 `uav_message_inbox` + 事实同事务成功后手动提交 offset；已覆盖数据库异常、永久错误死信、同 ID 不同 hash 和重放语义
+- [x] Platform 正式历史 API、Dashboard、轨迹和冲突查询已替换为 PostgreSQL/TimescaleDB 读写层；旧 `influx_query.py` 仅作为迁移库存保留，待正式对账和退役批准后删除
+- [ ] 制定旧 InfluxDB 分 measurement 历史迁移规则：`scripts/inventory_legacy_influx.py` 已只读盘点 `intersection_stats` 30,370 点、`track_events` 8,789 点、`conflict_events` 219 点及字段/标签/边界；不得把旧 `time` 一律映射 `occurred_at`，需保留 `source_time_raw/source_time_semantics/time_quality`，统计/冲突消费时刻只能映射 `ingested_at`，已确认 epoch 附近轨迹须隔离并决定丢弃或按原视频/业务字段重建
 - [ ] 执行可回滚双写与对账：比较记录数、时间边界、关键聚合、空值/类型、幂等、抽样事件和查询结果；冻结阈值、责任人、观察期及差异补偿方案
 - [ ] 对账时单独识别 Telegraf `camera_*` 与 Platform `intersection_stats` 的历史重复，按来源/窗口/指纹去重；不允许简单相加
 - [ ] 迁移现有用户/告警时保留密码哈希、主外键和 sequence，验证认证、授权、告警状态及服务重启恢复

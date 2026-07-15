@@ -32,4 +32,5 @@ runs
 data
 cache
 demo-videos
-./test_videos/
+test_videos/**
+test_videos/mp4**

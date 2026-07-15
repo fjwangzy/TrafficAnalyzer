@@ -72,8 +72,8 @@ class KafkaConsumerStatsTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(len(ws.messages), 1)
         channel, message = ws.messages[0]
-        self.assertEqual(channel, "intersection:INT_camera_1")
-        self.assertEqual(message["type"], "stats")
+        self.assertEqual(channel, "uav_intersection:INT_camera_1")
+        self.assertEqual(message["type"], "uav_stats")
         self.assertEqual(message["data"]["active_trajectories"][0]["track_id"], 7)
         self.assertEqual(message["data"]["lanes"][0]["vehicle_count"], 2)
 

@@ -1,0 +1,266 @@
+{
+  "schema_version": "uav.legacy-influx-inventory/v1",
+  "generated_at": "2026-07-15T06:44:39.891460Z",
+  "mode": "read_only",
+  "inventory_complete": true,
+  "source": {
+    "container": "traffic_influxdb",
+    "database": "influx"
+  },
+  "measurements": [
+    {
+      "measurement": "intersection_stats",
+      "candidate_target_table": "uav_traffic_metrics",
+      "mapping_status": "unverified",
+      "point_count_estimate": 30370,
+      "count_basis": "maximum non-null field count returned by InfluxQL COUNT(*)",
+      "series_cardinality": 6,
+      "first_time": "2026-07-01T18:12:58.564872Z",
+      "last_time": "2026-07-15T02:22:55.228556Z",
+      "time_semantics": {
+        "status": "unverified",
+        "classification": "absolute_utc_candidate",
+        "detail": "The boundary resembles UTC, but source clock and timezone semantics still require approval."
+      },
+      "tag_keys": [
+        "camera_id",
+        "intersection_id"
+      ],
+      "field_keys": [
+        {
+          "name": "active_tracks",
+          "type": "integer"
+        },
+        {
+          "name": "avg_speed_kmh",
+          "type": "float"
+        },
+        {
+          "name": "cars",
+          "type": "float"
+        },
+        {
+          "name": "congestion_index",
+          "type": "float"
+        },
+        {
+          "name": "dir_left_turn_avg_speed",
+          "type": "float"
+        },
+        {
+          "name": "dir_left_turn_count",
+          "type": "integer"
+        },
+        {
+          "name": "dir_right_turn_avg_speed",
+          "type": "float"
+        },
+        {
+          "name": "dir_right_turn_count",
+          "type": "integer"
+        },
+        {
+          "name": "dir_straight_avg_speed",
+          "type": "float"
+        },
+        {
+          "name": "dir_straight_count",
+          "type": "integer"
+        },
+        {
+          "name": "dir_u_turn_avg_speed",
+          "type": "float"
+        },
+        {
+          "name": "dir_u_turn_count",
+          "type": "integer"
+        },
+        {
+          "name": "fps",
+          "type": "float"
+        },
+        {
+          "name": "queue_count",
+          "type": "integer"
+        },
+        {
+          "name": "road_1",
+          "type": "float"
+        },
+        {
+          "name": "total_vehicles",
+          "type": "integer"
+        }
+      ]
+    },
+    {
+      "measurement": "track_events",
+      "candidate_target_table": "uav_track_events",
+      "mapping_status": "unverified",
+      "point_count_estimate": 8789,
+      "count_basis": "maximum non-null field count returned by InfluxQL COUNT(*)",
+      "series_cardinality": 10,
+      "first_time": "1970-01-01T00:00:02.002000Z",
+      "last_time": "1970-01-01T00:16:14.306667Z",
+      "time_semantics": {
+        "status": "blocked_external",
+        "classification": "relative_or_invalid_epoch",
+        "detail": "Source time is relative or invalid as UTC; an approved reconstruction rule is required before backfill."
+      },
+      "tag_keys": [
+        "intersection_id",
+        "turn_behavior",
+        "vehicle_class"
+      ],
+      "field_keys": [
+        {
+          "name": "avg_speed_kmh",
+          "type": "float"
+        },
+        {
+          "name": "duration_sec",
+          "type": "float"
+        },
+        {
+          "name": "entry_point_m",
+          "type": "string"
+        },
+        {
+          "name": "exit_point_m",
+          "type": "string"
+        },
+        {
+          "name": "max_speed_kmh",
+          "type": "float"
+        },
+        {
+          "name": "track_id",
+          "type": "integer"
+        },
+        {
+          "name": "trajectory_px",
+          "type": "string"
+        },
+        {
+          "name": "trajectory_world_m",
+          "type": "string"
+        },
+        {
+          "name": "world_anchor_lat_lon",
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "measurement": "conflict_events",
+      "candidate_target_table": "uav_conflict_events",
+      "mapping_status": "unverified",
+      "point_count_estimate": 219,
+      "count_basis": "maximum non-null field count returned by InfluxQL COUNT(*)",
+      "series_cardinality": 7,
+      "first_time": "2026-07-01T23:55:47.536624Z",
+      "last_time": "2026-07-15T02:20:29.885382Z",
+      "time_semantics": {
+        "status": "unverified",
+        "classification": "absolute_utc_candidate",
+        "detail": "The boundary resembles UTC, but source clock and timezone semantics still require approval."
+      },
+      "tag_keys": [
+        "conflict_scene",
+        "intersection_id",
+        "prediction_type",
+        "severity"
+      ],
+      "field_keys": [
+        {
+          "name": "arrival_time_delta_sec",
+          "type": "float"
+        },
+        {
+          "name": "conflict_angle_deg",
+          "type": "float"
+        },
+        {
+          "name": "distance_m",
+          "type": "float"
+        },
+        {
+          "name": "evidence",
+          "type": "string"
+        },
+        {
+          "name": "motor_arrival_ttc_sec",
+          "type": "float"
+        },
+        {
+          "name": "motor_id",
+          "type": "integer"
+        },
+        {
+          "name": "motor_position_m",
+          "type": "string"
+        },
+        {
+          "name": "motor_speed_kmh",
+          "type": "float"
+        },
+        {
+          "name": "non_motor_arrival_ttc_sec",
+          "type": "float"
+        },
+        {
+          "name": "non_motor_id",
+          "type": "integer"
+        },
+        {
+          "name": "non_motor_position_m",
+          "type": "string"
+        },
+        {
+          "name": "pet_sec",
+          "type": "float"
+        },
+        {
+          "name": "risk_score",
+          "type": "integer"
+        },
+        {
+          "name": "ttc_sec",
+          "type": "float"
+        },
+        {
+          "name": "world_anchor_lat_lon",
+          "type": "string"
+        }
+      ]
+    }
+  ],
+  "target_snapshot": {
+    "container": "traffic_timescaledb_local",
+    "database": "road9",
+    "tables": [
+      {
+        "table": "uav_conflict_events",
+        "row_count": 1,
+        "first_time": "2026-07-15 04:30:00+00",
+        "last_time": "2026-07-15 04:30:00+00"
+      },
+      {
+        "table": "uav_track_events",
+        "row_count": 1,
+        "first_time": "2026-07-15 04:30:00+00",
+        "last_time": "2026-07-15 04:30:00+00"
+      },
+      {
+        "table": "uav_traffic_metrics",
+        "row_count": 1,
+        "first_time": "2026-07-15 04:30:00+00",
+        "last_time": "2026-07-15 04:30:00+00"
+      }
+    ]
+  },
+  "reconciliation": {
+    "status": "blocked_external",
+    "detail": "Inventory is not a backfill approval. Field mapping, source-time reconstruction, thresholds, observation window and rollback require written approval."
+  }
+}

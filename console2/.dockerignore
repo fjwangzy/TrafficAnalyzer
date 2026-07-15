@@ -1,0 +1,6 @@
+node_modules
+dist
+.design-qa
+coverage
+.git
+*.log

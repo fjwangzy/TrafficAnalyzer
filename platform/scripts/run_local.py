@@ -24,12 +24,10 @@ def main():
     # Kafka (local)
     os.environ.setdefault("KAFKA_BOOTSTRAP", "localhost:9092")
     os.environ.setdefault("KAFKA_CONSUMER_GROUP", "platform-consumer")
-    os.environ.setdefault("KAFKA_TOPICS_PATTERN", "((statistics|track_complete|conflicts|telemetry)_.*|system_metrics)")
-
-    # InfluxDB (local)
-    os.environ.setdefault("INFLUX_HOST", "localhost")
-    os.environ.setdefault("INFLUX_PORT", "8086")
-    os.environ.setdefault("INFLUX_DB", "traffic")
+    os.environ.setdefault(
+        "KAFKA_TOPICS_PATTERN",
+        "((uav_)?(statistics|track_complete|conflicts|telemetry)_.*|(uav_)?system_metrics)",
+    )
 
     # JWT
     os.environ.setdefault("JWT_SECRET_KEY", "your-secret-key-change-in-production")
@@ -48,7 +46,6 @@ def main():
     print("Environment:")
     print(f"  - Database: {os.environ['DB_HOST']}:{os.environ['DB_PORT']}")
     print(f"  - Kafka: {os.environ['KAFKA_BOOTSTRAP']}")
-    print(f"  - InfluxDB: {os.environ['INFLUX_HOST']}:{os.environ['INFLUX_PORT']}")
     print(f"  - Port: {os.environ['SERVICE_PORT']}")
     print()
 

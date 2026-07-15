@@ -35,7 +35,7 @@ class Settings(BaseSettings):
     # ── Kafka ──
     kafka_bootstrap: str = "kafka:9092"
     kafka_consumer_group: str = "vision-service"
-    kafka_topics_pattern: str = "((statistics|track_complete|conflicts|telemetry)_.*|system_metrics)"
+    kafka_topics_pattern: str = "((uav_)?(statistics|track_complete|conflicts|telemetry)_.*|(uav_)?system_metrics)"
 
     # ── InfluxDB ──
     influx_host: str = "influxdb"
@@ -60,6 +60,14 @@ class Settings(BaseSettings):
     pipeline_video_base: str = "http://traffic_analyzer_camera_1:8100/video"
     pipeline_python: str = "python"
     pipeline_frame_stride: int | None = None
+
+    # ── S9 Mission orchestration ──
+    uav_local_asset_roots: list[str] = ["test_videos", "/project/test_videos"]
+    mission_scheduler_poll_sec: float = 5.0
+    local_road_fixture_enabled: bool = True
+    local_road_fixture_inter_id: str = "INT_camera_1"
+    local_road_fixture_version: str = "ROAD-LOCAL-INTER-XQH"
+    local_road_fixture_roads_json: str = "configs/bak/inter_xqh_lanes.json"
 
     # ── Calibration ──
     calibration_db_path: str = "/calibration/calibration_db.json"

@@ -1,0 +1,71 @@
+{
+  "schema_version": "uav.i6-target-stack/v1",
+  "generated_at": "2026-07-15T07:12:19.845880Z",
+  "environment": "isolated_local_non_contract",
+  "project": "traffic_analyzer_i6_target_full",
+  "containers": {
+    "road9": {
+      "status": "running",
+      "health": "healthy"
+    },
+    "kafka": {
+      "status": "running",
+      "health": "healthy"
+    },
+    "platform": {
+      "status": "running",
+      "health": "healthy"
+    },
+    "console2": {
+      "status": "running",
+      "health": "none"
+    }
+  },
+  "database": {
+    "name": "road9",
+    "alembic_revision": "20260715_0009",
+    "timescaledb_version": "2.28.2",
+    "hypertables": 5,
+    "uav_tables": 41
+  },
+  "api": {
+    "ready": {
+      "status": "ready",
+      "services": {
+        "database": "healthy",
+        "kafka": "healthy",
+        "timescaledb": "healthy",
+        "pipeline_manager": "healthy"
+      },
+      "pipelines_active": 0
+    },
+    "openapi_paths": 94,
+    "openapi_operations": 110,
+    "dashboard_quality_status": null
+  },
+  "kafka": {
+    "image_mode": "apache_kraft",
+    "canonical_probe_topic": "uav_statistics_i6_probe"
+  },
+  "target_image": {
+    "influxdb_module": null
+  },
+  "checks": {
+    "containers_running": true,
+    "dependency_health": true,
+    "platform_ready": true,
+    "console_proxy_login": true,
+    "dashboard_via_console": true,
+    "system_health_via_console": true,
+    "openapi_available": true,
+    "target_image_without_influx_client": true,
+    "road9_at_head": true,
+    "timescaledb_hypertables": true,
+    "canonical_kafka_topic": true
+  },
+  "passed": true,
+  "acceptance": {
+    "status": "blocked_external",
+    "detail": "Local full-stack startup does not approve production image pins, secrets, TLS/SASL, HA, capacity, RPO/RTO or retirement."
+  }
+}

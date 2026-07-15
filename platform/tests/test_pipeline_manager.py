@@ -55,6 +55,8 @@ class PipelineManagerTest(unittest.IsolatedAsyncioTestCase):
                 roads_json="",
                 telemetry_source="srt",
                 telemetry_file_path="test_videos/inter_xqh/telemetry.srt",
+                telemetry_time_offset_sec=12.25,
+                telemetry_sync_tolerance_sec=2.5,
                 kafka_bootstrap="kafka:29092",
             )
 
@@ -73,11 +75,13 @@ class PipelineManagerTest(unittest.IsolatedAsyncioTestCase):
                 "telemetry.enabled=True",
                 "telemetry.source=srt",
                 "telemetry.file_path=test_videos/inter_xqh/telemetry.srt",
+                "telemetry.time_offset_sec=12.25",
+                "telemetry.sync_tolerance_sec=2.5",
             ),
         )
         self.assertEqual(captured["env"]["VIDEO_SRC"], "test_videos/inter_xqh/demo.mp4")
         self.assertEqual(captured["env"]["ROADS_JSON"], "")
-        self.assertEqual(captured["env"]["TOPIC_NAME"], "statistics_10")
+        self.assertEqual(captured["env"]["TOPIC_NAME"], "uav_statistics_10")
         self.assertEqual(captured["env"]["CAMERA_ID"], "10")
         self.assertEqual(captured["env"]["INTERSECTION_ID"], "INT_camera_1")
         self.assertEqual(captured["env"]["VIDEO_PORT"], "8101")

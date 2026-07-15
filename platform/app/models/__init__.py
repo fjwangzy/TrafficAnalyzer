@@ -18,10 +18,44 @@ from app.models.survey import (
     SurveyTask,
 )
 from app.models.user import User
+from app.models.mission import (
+    DeviceIntersectionBinding,
+    DroneRecord,
+    EventFeedback,
+    FlightPlanRecord,
+    MessageDeadLetter,
+    MessageInbox,
+    MissionRecord,
+    PipelineRecord,
+    RoadContextSnapshot,
+    TelemetrySourceRecord,
+    VideoSourceRecord,
+    VisualLaneBinding,
+)
+from app.models.metrics import (
+    ConflictEvent,
+    ConflictReview,
+    SystemMetric,
+    TelemetryMetric,
+    TrackEvent,
+    TrackPoint,
+    TrafficMetric,
+)
+from app.models.enforcement import (
+    EnforcementClue,
+    EnforcementReviewAudit,
+    EnforcementRule,
+    EnforcementZone,
+)
 
 __all__ = [
     "User", "AlertRecord", "SurveyTask", "SurveyCaptureBatch", "SurveyFrame",
     "SurveyMeasurement", "SceneAnnotation", "SurveyReport", "EvidencePackage",
     "EvidenceItem", "AuditLog", "CaptureIngestionJob", "AiEvent", "EventOutbox", "EventDeliveryAttempt",
-    "DeadLetter", "RuleVersion",
+    "DeadLetter", "RuleVersion", "RoadContextSnapshot", "VisualLaneBinding",
+    "DeviceIntersectionBinding", "DroneRecord", "VideoSourceRecord",
+    "TelemetrySourceRecord", "FlightPlanRecord", "MissionRecord", "PipelineRecord",
+    "EventFeedback", "MessageInbox", "MessageDeadLetter", "TrafficMetric", "TrackEvent", "TrackPoint",
+    "ConflictEvent", "ConflictReview", "TelemetryMetric", "SystemMetric",
+    "EnforcementZone", "EnforcementRule", "EnforcementClue", "EnforcementReviewAudit",
 ]

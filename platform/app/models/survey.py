@@ -51,7 +51,11 @@ class EvidencePackage(Base):
     __tablename__ = "uav_evidence_packages"
 
     id: Mapped[str] = mapped_column(String(40), primary_key=True)
-    task_id: Mapped[str] = mapped_column(ForeignKey("uav_survey_tasks.id", ondelete="CASCADE"), index=True)
+    task_id: Mapped[str | None] = mapped_column(ForeignKey("uav_survey_tasks.id", ondelete="CASCADE"), nullable=True, index=True)
+    owner_type: Mapped[str] = mapped_column(String(40), nullable=False, default="survey_task")
+    owner_id: Mapped[str | None] = mapped_column(String(80), nullable=True, index=True)
+    source_system: Mapped[str] = mapped_column(String(80), nullable=False, default="uav_traffic_analyzer_ai")
+    source_event_id: Mapped[str | None] = mapped_column(String(80), nullable=True, index=True)
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     integrity_status: Mapped[str] = mapped_column(String(24), nullable=False, default="unverified")
     manifest_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
@@ -65,7 +69,7 @@ class EvidenceItem(Base):
 
     id: Mapped[str] = mapped_column(String(40), primary_key=True)
     package_id: Mapped[str] = mapped_column(ForeignKey("uav_evidence_packages.id", ondelete="CASCADE"), index=True)
-    task_id: Mapped[str] = mapped_column(ForeignKey("uav_survey_tasks.id", ondelete="CASCADE"), index=True)
+    task_id: Mapped[str | None] = mapped_column(ForeignKey("uav_survey_tasks.id", ondelete="CASCADE"), nullable=True, index=True)
     kind: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
     storage_key: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     sha256: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
@@ -222,6 +226,16 @@ class AiEvent(Base):
     event_type: Mapped[str] = mapped_column(String(40), nullable=False)
     task_id: Mapped[str | None] = mapped_column(ForeignKey("uav_survey_tasks.id"), nullable=True)
     review_status: Mapped[str] = mapped_column(String(24), nullable=False, default="technical_reviewed")
+    review_revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    review_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reviewed_by: Mapped[int | None] = mapped_column(ForeignKey("uav_users.id"), nullable=True)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    occurred_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    inter_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    road_data_version: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    quality_status: Mapped[str] = mapped_column(String(24), nullable=False, default="unverified")
+    payload_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    delivery_status: Mapped[str] = mapped_column(String(24), nullable=False, default="not_queued")
     payload: Mapped[dict] = mapped_column(JSON, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
@@ -237,12 +251,16 @@ class EventOutbox(Base):
     id: Mapped[str] = mapped_column(String(40), primary_key=True)
     event_id: Mapped[str] = mapped_column(ForeignKey("uav_ai_events.id"), index=True)
     destination: Mapped[str] = mapped_column(String(300), nullable=False)
+    source_system: Mapped[str] = mapped_column(String(80), nullable=False, default="uav_traffic_analyzer_ai")
+    message_id: Mapped[str | None] = mapped_column(String(80), nullable=True)
     idempotency_key: Mapped[str] = mapped_column(String(128), nullable=False)
     payload_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     payload: Mapped[dict] = mapped_column(JSON, nullable=False)
     status: Mapped[str] = mapped_column(String(24), nullable=False, default="pending", index=True)
     attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    next_retry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    locked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
@@ -256,6 +274,8 @@ class EventDeliveryAttempt(Base):
     outbox_id: Mapped[str] = mapped_column(ForeignKey("uav_event_outbox.id", ondelete="CASCADE"), index=True)
     success: Mapped[bool] = mapped_column(Boolean, nullable=False)
     response_status: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    platform_event_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    receipt_payload: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     error_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
@@ -268,6 +288,7 @@ class DeadLetter(Base):
     reason: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(String(24), nullable=False, default="open")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class RuleVersion(Base):

@@ -1,0 +1,16 @@
+{
+  "schema_version": "uav.road9-migration-drill/v1",
+  "executed_at": "2026-07-15",
+  "database": "road9_i6_empty",
+  "checks": {
+    "empty_to_head": "20260715_0009",
+    "hypertables_after_empty_upgrade": 5,
+    "integrity_triggers_after_empty_upgrade": 2,
+    "downgrade_target": "20260715_0008",
+    "upgrade_after_downgrade": "20260715_0009",
+    "integrity_triggers_after_reupgrade": 2,
+    "temporary_database_removed": true
+  },
+  "passed": true,
+  "scope": "local PostgreSQL 17 and TimescaleDB 2.28.2 migration/rollback engineering drill"
+}

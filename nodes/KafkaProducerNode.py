@@ -10,6 +10,9 @@ import logging
 import os
 import time
 import base64
+import re
+import uuid
+from datetime import UTC, datetime
 from queue import Queue, Full
 from threading import Thread
 
@@ -31,9 +34,11 @@ class KafkaProducerNode:
     def __init__(self, config) -> None:
         config_kafka = config["kafka_producer_node"]
         bootstrap_servers = config_kafka["bootstrap_servers"]
-        self.topic_name = config_kafka["topic_name"]
-        self.how_often_sec = config_kafka["how_often_sec"]
         self.camera_id = config_kafka["camera_id"]
+        self.topic_name, self.track_complete_topic, self.conflicts_topic, self.telemetry_topic = (
+            self._canonical_topics(self.camera_id)
+        )
+        self.how_often_sec = config_kafka["how_often_sec"]
         self.last_send_time = None
         self.kafka_producer = KafkaProducer(
             bootstrap_servers=bootstrap_servers,
@@ -51,12 +56,6 @@ class KafkaProducerNode:
         self._fps_window_sec = 2.0
         self._fps_timestamps = []
 
-        # 扩展topic（用于轨迹和冲突事件）
-        base_topic = self.topic_name  # e.g., "statistics_1"
-        camera_suffix = base_topic.replace("statistics", "")  # e.g., "_1"
-        self.track_complete_topic = f"track_complete{camera_suffix}"
-        self.conflicts_topic = f"conflicts{camera_suffix}"
-
         # intersection_id: use INTERSECTION_ID env var if set (from PipelineManager),
         # otherwise derive from camera_id (legacy mode for Docker camera containers)
         env_intersection_id = os.environ.get("INTERSECTION_ID")
@@ -66,7 +65,6 @@ class KafkaProducerNode:
             self.intersection_id = f"INT_camera_{self.camera_id}"
 
         # ── T-103: 遥测发布 ──
-        self.telemetry_topic = f"telemetry{camera_suffix}"
         self._telemetry_interval = 0.2  # 5Hz 节流
         self._last_telemetry_time = 0.0
 
@@ -101,6 +99,57 @@ class KafkaProducerNode:
         self._active_trajectory_tail_points = int(
             config.get("kafka_producer_node", {}).get("active_trajectory_tail_points", 30)
         )
+
+    @staticmethod
+    def _canonical_topics(camera_id) -> tuple[str, str, str, str]:
+        """Build the frozen camera-scoped Topic set without string derivation."""
+        value = str(camera_id)
+        if not value or len(value) > 64 or not re.fullmatch(r"[A-Za-z0-9_-]+", value):
+            raise ValueError("camera_id contains unsupported Topic characters")
+        return (
+            f"uav_statistics_{value}",
+            f"uav_track_complete_{value}",
+            f"uav_conflicts_{value}",
+            f"uav_telemetry_{value}",
+        )
+
+    def _canonical_envelope(
+        self,
+        msg_type: str,
+        data: dict,
+        frame_element: FrameElement,
+    ) -> dict:
+        """Wrap business data in the ADR-019 v1 message envelope."""
+        produced_at = datetime.now(UTC)
+        telemetry = getattr(frame_element, "telemetry", None) or {}
+        recorded_at = telemetry.get("recorded_at")
+        occurred_at = recorded_at or produced_at.isoformat()
+        if recorded_at:
+            semantics = "reconstructed"
+            time_quality = "reconstructed"
+        else:
+            semantics = "consumer_time"
+            time_quality = "ingest_only"
+        return {
+            "message_id": str(uuid.uuid4()),
+            "msg_type": msg_type,
+            "schema_version": f"{msg_type}/v1",
+            "occurred_at": occurred_at,
+            "produced_at": produced_at.isoformat(),
+            "source_system": "uav_traffic_analyzer_ai",
+            "camera_id": f"id_{self.camera_id}",
+            "drone_id": f"drone_{self.camera_id}",
+            "intersection_id": self.intersection_id,
+            "inter_id": None,
+            "road_data_version": None,
+            "road_context_status": "missing",
+            "trace_id": str(uuid.uuid4()),
+            "source_time_raw": {"frame_timestamp_sec": frame_element.timestamp},
+            "source_time_semantics": semantics,
+            "time_quality": time_quality,
+            "quality_status": "unverified",
+            "data": data,
+        }
 
     def _send_loop(self):
         """后台发送线程：从有界队列取消息并发送到 Kafka。
@@ -335,7 +384,6 @@ class KafkaProducerNode:
             data = {
                 "camera_id": f"id_{self.camera_id}",
                 "cars": cars_amount,
-                "msg_type": "stats",
                 "intersection_id": self.intersection_id,
                 # ── 前端所需字段：FPS / 推理 / 跟踪 / 累计 ──
                 "fps": current_fps,
@@ -447,7 +495,7 @@ class KafkaProducerNode:
                     data.update(snapshot)
 
             # T-101: 异步发送（替代同步 .get(timeout=1)）
-            self._enqueue(self.topic_name, data)
+            self._enqueue(self.topic_name, self._canonical_envelope("uav_stats", data, frame_element))
             logger.info(f"KAFKA enqueued stats: topic={self.topic_name} cars={cars_amount}")
             self.last_send_time = current_time
             frame_element.send_to_kafka = True
@@ -456,11 +504,8 @@ class KafkaProducerNode:
         completed_tracks = getattr(frame_element, "completed_tracks", None)
         if completed_tracks:
             for ct in completed_tracks:
-                ct_msg = {
-                    "msg_type": "track_complete",
-                    "intersection_id": self.intersection_id,
-                    **ct,
-                }
+                ct_msg = {"intersection_id": self.intersection_id, **ct}
+                ct_msg = self._canonical_envelope("uav_track_complete", ct_msg, frame_element)
                 self._enqueue(self.track_complete_topic, ct_msg)
                 logger.info(f"KAFKA enqueued track_complete: id={ct.get('track_id')} topic={self.track_complete_topic}")
 
@@ -468,23 +513,16 @@ class KafkaProducerNode:
         conflict_events = getattr(frame_element, "conflict_events", None)
         if conflict_events:
             for event in conflict_events:
-                event_msg = {
-                    "msg_type": "conflict",
-                    "intersection_id": self.intersection_id,
-                    **event,
-                }
+                event_msg = {"intersection_id": self.intersection_id, **event}
+                event_msg = self._canonical_envelope("uav_conflict", event_msg, frame_element)
                 self._enqueue(self.conflicts_topic, event_msg)
                 logger.info(f"KAFKA enqueued conflict: {event.get('severity')} topic={self.conflicts_topic}")
 
         # ── T-103: 遥测发布（5Hz 节流） ──
         telemetry = getattr(frame_element, "telemetry", None)
         if telemetry and (current_time - self._last_telemetry_time > self._telemetry_interval):
-            tel_msg = {
-                "msg_type": "telemetry",
-                "drone_id": f"drone_{self.camera_id}",
-                "intersection_id": self.intersection_id,
-                **telemetry,
-            }
+            tel_msg = {"drone_id": f"drone_{self.camera_id}", "intersection_id": self.intersection_id, **telemetry}
+            tel_msg = self._canonical_envelope("uav_telemetry", tel_msg, frame_element)
             self._enqueue(self.telemetry_topic, tel_msg)
             self._last_telemetry_time = current_time
             logger.debug(f"KAFKA enqueued telemetry: topic={self.telemetry_topic}")

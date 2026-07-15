@@ -5,10 +5,12 @@
 | 文档定位 | S1–S4 的路网、坐标、版本、规则元数据和证据引用共性分册 |
 | 版本/日期 | v0.3 / 2026-07-13 |
 | 评审对象 | 路网数据负责人、GIS、交通业务、算法、平台、测试、运维、网安 |
-| 当前状态 | `road9` 数据库已选定；库内权威路网 schema/视图、字段、SRID/坐标语义和服务契约待冻结 |
+| 当前状态 | RoadContext 内部接口、snapshot/绑定 DDL 与 road9/fixture Adapter 已实现；权威路网 schema/视图、SRID/坐标和版本合同待外部冻结 |
 | 关键门禁 | S5-TBD-001～003/013 未关闭前不得将任何历史调查结构视为 `road9` 生产契约 |
 
 > 本分册优先于业务分册冻结。本子项目复用智慧交通大项目既有路网主数据，不重复建设或维护权威路网底库。
+
+> 2026-07-15 工程基线：Alembic `20260715_0003` 已创建 `uav_road_context_snapshots`、`uav_visual_lane_bindings` 与 `uav_device_intersection_bindings`；`RoadContext` 按 `inter_id + road_data_version` 返回不可变快照、checksum、坐标参考、路口/Link/车道、视觉绑定和质量状态。开发 fixture 明确返回 `unverified`，不能替代权威数据批准。
 
 ## 1. 目标、原则与非目标
 ### 1.1 目标

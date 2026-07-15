@@ -116,6 +116,162 @@ prior result: conditional pass; production acceptance blocked by P1 Kafka health
 
 final result: passed
 
+## 2026-07-15 I5-A S8 主任首屏真实读模型与权威坐标阻断态
+
+### Implementation
+
+- `/` 已移除固定 `14/18`、风险/拥堵/无人机百分比、示例路口、模拟待办和模拟健康状态，改为读取 `road9` 聚合的 `uav.dashboard/v1` 读模型。
+- 首页共享顶栏改为服务端授权范围、固定 30 分钟工程窗口和实时 `as_of`；不再显示固定辖区、固定路口数或固定时间。
+- KPI 正式口径未批准时返回并展示 `value=null + numerator/denominator + unverified reason`，不把待冻结口径显示成 0 或伪百分比。
+- OSM 开发底图仅接收已验证 WGS84 RoadContext；未验证、GCJ02、缺坐标或无权威项目清单的路口进入隔离计数和配置待办。
+- 无人机位置和电量读取 TimescaleDB 遥测事实的归一化列；只有 2 分钟内的新鲜遥测才向页面返回坐标和电量。
+
+### Runtime verification
+
+- 隔离链路：Console2 `127.0.0.1:4176` → Platform `127.0.0.1:18004` → PostgreSQL/TimescaleDB `127.0.0.1:6543/road9`。
+- 当前 `road9` 没有获批的项目 RoadContext 快照；页面如实显示“暂无可上图的权威路口坐标”、5 个 KPI 待冻结和 1 项项目配置核验，而不是回退到示例路口。
+- 新标签完成真实登录与首页加载；控制台 `0 error / 0 warn`。长期 Vite 会话曾在热更新时留下历史 AuthProvider 日志，该历史日志不作为本次干净标签验收结果。
+
+### Retained evidence
+
+- `.design-qa/2026-07-15-i5-dashboard-road9-authority-blocked.png`：最终全屏权威坐标阻断态。
+- `.design-qa/2026-07-15-i5-dashboard-before-after.jpg`：I5 同一页面初始状态与最终状态对照；用于核对顶栏、空态和信息密度，不冒充外部 UI 原型基准图。
+- Dashboard API 定向测试、真实 PostgreSQL WGS84 分支、Platform/Console2 全量回归、生产构建、OpenAPI 和 diff 门禁的最终数字见本阶段回归记录。
+
+### Acceptance boundary
+
+- I5-A 工程读模型和 truthful empty/blocked 状态完成。
+- 项目/辖区清单、正式地图 Adapter、S8-TBD-001 至 006、正常态权威数据、全局增量和 5 秒/30 秒主任任务仍属于 I5-B 或外部书面批准门禁。
+
+final result: I5-A engineering passed; I5-B external authority and full-state acceptance pending
+
+## 2026-07-15 I5-B 内部筛选、依赖降级与底图失败状态
+
+### Implementation
+
+- `GET /api/v1/dashboard/intersections` 已支持 `risk/monitor/quality`、WGS84 `bbox`、`q`、`offset/limit`；响应提供 `project_total/total/has_more/filters`。
+- 无效 bbox 返回 `422 invalid_bbox`；road9 超时或 SQLAlchemy 依赖异常返回 `503 dashboard_dependency_unavailable`。
+- Dashboard 的“全部/高风险/降级”控件改为服务端查询，切换时保留上一成功快照并执行有限重试；401 仍交给统一会话失效流程，不循环重试。
+- OSM 连续 3 个瓦片加载错误后明确显示“城市底图服务不可用”，保留 KPI、关注榜和任务列表，并提供重试；不生成随机或示意点位。
+
+### Verification
+
+- Platform：`58 passed, 4 skipped`，另 `11 subtests passed`。
+- Dashboard API 定向：`3 passed`；真实 PostgreSQL/TimescaleDB I3～I5 集成：`4 passed`。
+- Console2：`45/45 passed`，production build passed；其中 CityMap 回归实际触发 3 次瓦片错误、验证降级和重试恢复。
+- OpenAPI：`94 paths / 110 operations`；Dashboard 路口参数为 `risk, monitor, quality, bbox, q, offset, limit`。
+- 干净浏览器标签完成真实登录，点击“高风险”后控件为 active、阻断态保持稳定；控制台 `0 error / 0 warn`。
+- 截图：`.design-qa/2026-07-15-i5b-dashboard-server-filter.jpg`。
+
+### Remaining acceptance boundary
+
+- 项目/辖区权限清单、正式地图供应商/坐标 Adapter、批准 KPI 与状态阈值仍为外部阻断。
+- 点位聚合/zoom、全局增量、断线期间缺口 REST 回补、部分依赖故障注入、批准正常/混合质量数据和 5 秒/30 秒主任任务尚未完成，不以本地工程测试替代正式验收。
+
+final result: internal query and degradation behaviors passed; external I5-B acceptance remains blocked
+
+## 2026-07-15 I3 TimescaleDB 轨迹研判与事件复核验收
+
+### Runtime evidence
+
+- 隔离链路：Console2 `127.0.0.1:4176` → Platform `127.0.0.1:18004` → TimescaleDB `2.28.2` / PostgreSQL 17 `road9`，migration head `20260715_0007`。
+- migration 确认 5 张 hypertable：`uav_traffic_metrics`、`uav_track_points`、`uav_conflict_events`、`uav_telemetry_metrics`、`uav_system_metrics`；入站永久错误使用普通表 `uav_message_dead_letters`。
+- `/gis` 从正式 REST/MetricStore 查询 `INT_camera_1` 最近 1 小时事实，显示 1 条轨迹、1 条冲突、`ROAD-LOCAL-INTER-XQH`、`time_quality=ingest_only`、`quality_status=unverified`；未生成模拟热区或无依据坐标。
+- `/events` 展示事件 `791e509f3acfac14cfc80ceb1977bc9d1d567777`，标题明确为“I3 工程复核样本（非真实冲突）”，证据包含 `engineering_contract_fixture` 和 `inter_xqh_56_pass`；主平台投递保持 `not_queued/合同未冻结`。
+- 管理员执行技术确认后 revision 从 1 增至 2；新标签页重新登录和刷新后仍显示 `confirmed`，证明复核状态来自 `uav_conflict_reviews` 持久化而非 React 内存。
+- 浏览器控制台：0 error / 0 warn。
+
+### Truth boundary
+
+- `test_pipeline_inter_xqh.py` 本轮真实 100 帧仍为 `56 PASS / 0 FAIL / 0 WARN`，累计 8051 个检测目标、100/100 遥测与 H 矩阵、90/100 运动补偿、冲突事件 0。
+- 为验证冲突详情与 revision 交互，`platform/scripts/validate_i3_inter_xqh.py` 使用真实 SRT 首条时间/锚点写入受控契约样本，并强制标记 `validation_fixture=true`、`unverified`、`ingest_only`；该样本不得表述为真实检测冲突或合同精度证据。
+- 权威路网、正式 S1/S2 指标阈值、生产 TimescaleDB 版本/容量/保留/压缩/HA、历史 Influx 对账及主平台合同仍保持 `blocked`。
+
+### Retained screenshots
+
+- `.design-qa/2026-07-15-i3-gis-timescale.png`：真实 `road9` 轨迹/冲突数量、路网版本、时间质量和 TimescaleDB 来源。
+- `.design-qa/2026-07-15-i3-events-unverified.png`：复核前 `unverified/ingest_only/not_queued` 事实及责任边界。
+- `.design-qa/2026-07-15-i3-events-review-confirmed.png`：技术确认后持久化 revision 2；不产生派警、违法认定或主平台成功状态。
+
+final result: I3 local engineering passed; production and contract acceptance blocked
+
+## 2026-07-15 I4 执法候选线索真实 API 验收
+
+### Runtime evidence
+
+- 隔离链路：Console2 `127.0.0.1:4176` → Platform `127.0.0.1:18004` → TimescaleDB `2.28.2` / PostgreSQL 17 `road9`，migration head `20260715_0008`。
+- candidate 围栏 `ZONE-B70E59BD248A`、candidate 规则 `RULE-D5279B1C5CCE`、线索 `CLUE-3236A895FFBF` 均来自真实 REST/PostgreSQL；刷新后技术复核仍为 `reviewed_confirmed` revision 2，不依赖 React 内存。
+- 真实材料为 `test_videos/inter_xqh/` 原始 5,395,860,937-byte MP4 和 29,741 条 DJI SRT。MP4 SHA-256 为 `342dea78baf9acdb526a969333ec1c319b6aa39dc92a010548194b5c99b3fcbc`，SRT SHA-256 为 `12ea683bafe9b69066438e02211de30dcb1780924b406e35e63dcb90188010ac`；两个引用和哈希均从线索详情 API 展示。
+- 线索显式为 `validation_fixture=true`、`detected_enforcement_clue=false`、车辆 `unknown`、无视频/雷达/融合速度、质量 `unverified`；页面没有模拟证据图、雷达值、在线货车位置或违法结论。
+- 权威发布按钮调用真实接口并返回 503，页面显示“仅为本地候选；权威发布 Adapter 和审批合同尚未冻结”；没有写入 published/approved 或伪造主平台成功。
+- 浏览器控制台：0 error / 0 warn；页面延续 Console2 既有导航、卡片、标签和表单设计语言。
+
+### Retained screenshots
+
+- `.design-qa/i4-audit/01-clues.png`～`04-zone-form.png`：I4 改造前 Mock 基线。
+- `.design-qa/2026-07-15-i4-enforcement-clue-unverified.png`：真实线索事实、空值、证据哈希、质量和外部阻断。
+- `.design-qa/2026-07-15-i4-enforcement-review-confirmed.png`：技术确认 revision 2；不表示违法认定或处罚。
+- `.design-qa/2026-07-15-i4-candidate-authority-blocked.png`：candidate 围栏/规则和真实 503 权威发布门禁。
+- `.design-qa/i4-audit-clues-before-after.jpg`、`.design-qa/i4-audit-zones-before-after.jpg`：同视口前后对比；移除伪证据、伪雷达、伪地图发布和无依据 KPI。
+
+### Automated gates
+
+- Platform：`55 passed, 3 skipped`，另 `11 subtests passed`；I2/I3/I4 三套真实 PostgreSQL integration 合并运行 `3 passed`。
+- Console2：`43/43` tests passed，production build passed；仅保留既有的大 chunk 提示。
+- 根目录轻量回归：`9 passed`。
+- `test_pipeline_inter_xqh.py`：`56 PASS / 0 FAIL / 0 WARN`；100/100 检测、100/100 遥测、100/100 H 矩阵、90/100 运动补偿、累计 8051 个目标。
+- OpenAPI：`90 paths / 106 operations`；`git diff --check` passed。
+
+### Truth boundary
+
+- `platform/scripts/validate_i4_inter_xqh.py` 验证真实材料的文件身份、证据、幂等、技术复核和刷新持久化接缝，不运行或伪造执法规则命中；不得把该 fixture 表述为真实检测违法线索。
+- 权威 RoadContext/围栏、批准执法规则、货车二分类验收集、雷达设备/检定/融合、法制证据、统一身份和主平台 EventDelivery 仍为 `unverified/blocked`。
+
+final result: I4 local candidate engineering passed; legal and external production acceptance blocked
+
+## 2026-07-15 S9 `road9` 飞行任务四页签真实验收
+
+### Runtime evidence
+
+- 隔离验收链路：Console2 `127.0.0.1:4175` → 当前 Platform `127.0.0.1:18001` → 本地 PostgreSQL `road9` migration `20260715_0003`；未连接占用 8000 的遗留 Docker Platform。
+- 真实材料：`test_videos/inter_xqh/` 5.0GB 4K MP4 + DJI `telemetry.srt`；数据源 `SRC-9CAB4266AFA5` 校验为 valid，响应仅展示文件名。
+- FlightPlan `PLAN-C67C8E8EE329` 由调度器生成 Mission `MSN-01110B561F66`；初始 Pipeline `pipe-91b8a836`，模拟 Platform 重启后恢复为 `pipe-b6bdbd68`，canonical Topic 为 `uav_statistics_10`。
+- 页面分别显示无人机离线（无新鲜遥测）、数据源有效、once 计划已启用/revision 2、Mission completed 与 Pipeline stopped；业务状态和进程状态未混写。
+- 浏览器控制台 `0 error / 0 warn`；页面使用真实 API 数据，没有 S9 Mock fallback。
+
+### Retained screenshots
+
+- `.design-qa/2026-07-15-s9-drones-road9.png`：无人机档案及真实离线状态。
+- `.design-qa/2026-07-15-s9-sources-inter-xqh.png`：MP4+SRT 配对、脱敏及 valid 状态。
+- `.design-qa/2026-07-15-s9-flight-plan.png`：once 窗口、Asia/Shanghai 和 revision。
+- `.design-qa/2026-07-15-s9-mission-completed.png`：Mission/Pipeline 分离状态及 window_ended 原因。
+
+### Natural EOF addendum
+
+- 完成审计发现 MissionOrchestrator 未在正常 tick 同步 Pipeline EOF/error，且真实 5GB 视频首次跑到末尾时暴露 `main_optimized.py` 在 sentinel 判断前访问 `.frame` 的异常。
+- 当前已增加 Pipeline `stopped/error/missing` → Mission `completed/source_eof`、`failed/pipeline_error`、`failed/pipeline_runtime_missing` 的 PostgreSQL 持久化同步，并将 `VideoEndBreakElement` 在共享内存处理前级联。
+- 使用同一 5GB MP4 + DJI SRT、`frame_stride=300`、15 分钟窗口重新执行“计划触发 → 主动停止旧 Pipeline 模拟 Platform 重启 → 恢复新 Pipeline → 自然 EOF”。Mission `MSN-995CEBE0415E`、恢复 Pipeline `pipe-fc39f315`、Topic `uav_statistics_10`，终态为 `completed/source_eof`，观察 392.918 秒；证据见 `docs/test_report_s9_inter_xqh_eof.json`。
+- 补充完成纯页面触发的本地 `road9` 验收：Console2 `127.0.0.1:4179` → Platform `127.0.0.1:18005` → migration `20260715_0009`。页面登记无人机 `UAV-PAGE-0715`、有效数据源 `SRC-C74D6FA9EA35`，创建并启用 once 计划 `PLAN-6C3102938EBB`；5 秒调度器在计划时间 `+2s` 创建 Mission `MSN-5A61F57DA1D7` 和 Pipeline `pipe-ec14fc26`。同一 5GB MP4 + DJI SRT 在 `frame_stride=300` 下运行 396.663 秒后自然结束，页面刷新后持久化显示 `Mission completed / Pipeline stopped / source_eof`，运行中与失败计数均为 0。
+- 首次页面运行连接到临时 `18004` 实例且沿用生产默认 `frame_stride=None`，已从页面执行 `停止 Mission` 并得到 `stopped/manual_stop`；该运行只作为停止门禁和配置诊断证据，不计入最终通过结果，也未修改生产默认参数。
+- RoadContext 继续保持 `unverified`；该验证不关闭生产容量、RTSP/MQTT、设备权威或 HA 门禁。
+
+### Page-triggered retained screenshots
+
+- `.design-qa/2026-07-15-s9-source-registered.jpg`：正式本地 `road9` 中的 MP4+SRT 配对、脱敏摘要和 valid 状态。
+- `.design-qa/2026-07-15-s9-page-mission-completed.jpg`：页面触发 Mission 的 `completed/source_eof` 与 Pipeline `stopped` 分离终态。
+
+### Automated gates
+
+- Platform `76 passed, 5 skipped`，另 11 个 subtests passed；显式 PostgreSQL Mission integration `2 passed`，覆盖并发/重启/停止及 EOF/error/missing-runtime 持久化。
+- 隔离 `road9_i2_test` 完成 `20260715_0003 → 20260714_0002 → 20260715_0003` 回滚恢复演练。
+- Console2 `45/45` tests passed，production build passed。
+- 根目录轻量与 EOF sentinel 回归 `10 passed`。
+- `test_pipeline_inter_xqh.py`: `56 PASS / 0 FAIL / 0 WARN`；100/100 检测与遥测，100/100 H 矩阵，90/100 运动补偿，累计 8051 个目标。
+
+正式设备主数据、RTSP/MQTT 生产网络、统一身份权限矩阵、容量/高可用和权威 RoadContext 仍为 `unverified/blocked`。
+
+final result: engineering passed; external production acceptance blocked
+
 ## 2026-07-15 监控侧栏透明收缩与研判浮条精简
 
 ### Implementation

@@ -1,6 +1,6 @@
 # DATABASE_SCHEMA.md — TrafficAnalyzer 数据库结构
 
-> 本文同时记录目标数据架构与迁移前现状。除明确标记为“当前实现/遗留”的内容外，目标结构均为待实施契约，不能据此宣称数据库、TimescaleDB 扩展或数据迁移已经完成。
+> 本文同时记录目标数据架构与滚动迁移现状。I3 时序事实与 I4 执法候选闭环已在本地实现并验证；生产 TimescaleDB 参数、权威围栏/规则、法制证据和主平台合同仍须书面批准，不能用本地测试替代生产验收。
 
 ## 1. 已冻结的数据架构决策（目标态）
 
@@ -25,7 +25,19 @@
 - 生产数据量、chunk 大小、压缩/列式存储能力、保留期和历史迁移窗口；
 - InfluxDB 历史数据是否回迁、回迁范围和数据对账口径。
 
-## 2. 目标 PostgreSQL/TimescaleDB 逻辑架构（待实现）
+### 1.1 本地开发库实况（2026-07-15，I4 验证后）
+
+- 当前连接 database 为 `road9`，应用对象位于 `public`；这只是本地开发现状，不代表生产目标 schema 已冻结。
+- 当前 migration head 为 `20260715_0009`，版本表为 `uav_alembic_version`；已验证空库升级、既有 `20260714_0002` 前向升级、隔离库 `0009 → 0008 → 0009` 回滚恢复，以及 Timescale-aware `pg_dump/pg_restore`。
+- 既有 5432 `road9` 是普通 PostgreSQL 16，已创建同构时序表但 readiness 如实为 `timescaledb=degraded`；未替换或清空既有数据。
+- 隔离本地 6543 使用 TimescaleDB `2.28.2` / PostgreSQL 17，已由 migration 自动启用扩展并确认 5 张 `uav_*` hypertable。
+- `uav_traffic_metrics`、`uav_track_points`、`uav_conflict_events`、`uav_telemetry_metrics`、`uav_system_metrics`、普通表 `uav_track_events` 及长期 `uav_message_inbox` 已实现。永久性输入错误进入独立的 `uav_message_dead_letters`；可变技术复核状态位于普通表 `uav_conflict_reviews`，两者都不更新追加型冲突事实。
+- I4 已创建候选围栏、候选规则、执法线索详情和追加型复核审计表；执法线索仍以 `uav_ai_events(event_type=enforcement_clue)` 为唯一事件主记录，证据复用通用 `uav_evidence_*`，没有复制事件或投递状态机。
+- 本地扩展版本仅是工程验证基线；生产版本、许可、chunk、压缩、保留、连续聚合、容量、备份恢复和 HA 参数仍为验收阻断项。
+
+对象归属、迁移波次和待冻结责任见 [`docs/superpowers/plans/2026-07-15-road9-contract-freeze-matrix.md`](superpowers/plans/2026-07-15-road9-contract-freeze-matrix.md)。
+
+## 2. PostgreSQL/TimescaleDB 逻辑架构（I3 工程实现）
 
 ```text
 uav_* Kafka topics / Platform APIs
@@ -56,7 +68,7 @@ CREATE EXTENSION IF NOT EXISTS timescaledb;
 - 应用运行账户不应拥有扩展安装、database 创建或路网主表 DDL 权限；安装/升级由 DBA 账户执行。
 - 所有 DDL、hypertable 转换、策略创建和回滚脚本必须纳入版本化迁移，不依赖运行时 `create_all()` 隐式建表。
 
-## 3. 表职责总览（目标契约，待实现）
+## 3. 表职责总览（I1 契约；普通表按 migration 实现）
 
 ### 3.1 TimescaleDB hypertable
 
@@ -84,11 +96,17 @@ CREATE EXTENSION IF NOT EXISTS timescaledb;
 | `uav_pipelines` | `id` | 分析管道实例与运行状态 |
 | `uav_audit_logs` | `id`；主体/业务对象/发生时间索引 | 配置、启停、自动执行、失败、停止、重试和敏感操作审计 |
 | `uav_track_events` | `id`；`(source_system, source_message_id)` 唯一 | 完成轨迹业务主记录、摘要和轨迹点父对象 |
+| `uav_conflict_reviews` | `event_id` | 冲突事实的可变技术复核状态与 revision；不代表警情处置或违法认定。`20260715_0009` 以 existence guard + delete cascade trigger 替代不可可靠恢复的 regular→Hypertable FK |
+| `uav_enforcement_zones` | `id`；候选配置 revision | 本地候选电子围栏及几何快照；权威 Adapter 未冻结时不能发布为权威配置 |
+| `uav_enforcement_rules` | `id`；`rule_version_id` | 执法候选规则领域内容，引用 `uav_rule_versions`，不得保存违法或处罚结论 |
+| `uav_enforcement_clues` | `event_id`；`source_event_id` 唯一 | `uav_ai_events(event_type=enforcement_clue)` 的执法专属事实，不复制事件状态机 |
+| `uav_enforcement_review_audits` | `id`；`event_id/revision` 索引 | AI 线索技术确认/驳回的追加型审计；不代表违法认定、案件或处罚状态 |
 | `uav_ai_events` | `(source_system, source_event_id)`；`(source_system, idempotency_key)` 唯一 | 向智慧交通主平台交付的 AI 事件主记录 |
 | `uav_event_outbox` | `id`；`(source_system, message_id, destination)` 唯一；外发幂等键另设条件唯一 | 待投递消息、下一次重试时间和当前投递状态 |
 | `uav_event_delivery_attempts` | `id` | 每次投递尝试和响应摘要 |
 | `uav_event_feedback` | `id`；`(source_system, feedback_idempotency_key)` 唯一 | 主平台确认/驳回和结果反馈审计 |
-| `uav_dead_letters` | `id` | 超过重试上限或不可解析消息的人工补偿入口 |
+| `uav_dead_letters` | `id` | EventDelivery/outbox 对外投递超过重试上限后的人工补偿入口 |
+| `uav_message_dead_letters` | `(topic, partition, offset)` 唯一 | 入站 Kafka schema/身份冲突等永久错误的耐久隔离；成功写入后才可推进对应 offset |
 | `uav_evidence_packages` | `id`；`(source_system, source_event_id)` 索引 | 事件证据清单、对象存储引用、哈希和完整性元数据 |
 | `uav_evidence_items` | `id`；`package_id` 索引 | 单个图片/视频/测绘/结构化证据项 |
 | `uav_message_inbox` | `(source_system, message_id)` 唯一 | 长期 canonical 消费幂等、消息身份校验、处理状态与事实引用审计 |
@@ -113,11 +131,12 @@ CREATE EXTENSION IF NOT EXISTS timescaledb;
 | 事故测绘 | `uav_survey_measurements` | 普通表候选 | 隶属 `uav_survey_tasks`，保存点/线/面量算值和误差 | 几何/数值类型、坐标系、单位、修订版本、唯一键 |
 | 事故测绘 | `uav_scene_annotations` | 普通表/PostGIS 候选 | 隶属 capture batch/测绘任务，保存事故车辆、痕迹和散落物的版本化标注 | category、geometry/SRID、来源、置信度、review_state、版本链 |
 | 事故测绘 | `uav_survey_reports` | 普通表 | 报告元数据；证据材料引用 `uav_evidence_packages`、`uav_evidence_items` | 报告版本、签章/导出引用、不可变状态和保留期 |
-| 执法 | `uav_enforcement_zones` | 普通表 | 电子围栏配置，不复制权威路网几何 | PostGIS 类型/SRID、有效期、审批、路网版本引用 |
-| 执法 | `uav_enforcement_rules` | 普通表 | 执法领域规则内容，引用共性 `uav_rule_versions` | 规则 schema、适用区、时段、生效/回滚和审批 |
-| 执法 | `uav_enforcement_clues` | 一对一详情表候选 | 仅保存 `uav_ai_events(event_type=enforcement_clue)` 专属字段，不另建事件主表或状态机 | 与事件组合唯一键、雷达/视频速度字段、复核边界 |
-| 证据 | `uav_evidence_packages` | canonical 普通表 | 第 3.2 节既有基线；所有测绘/执法事件共用 | 包版本、事件关联、内容哈希、存储状态、保留策略 |
-| 证据 | `uav_evidence_items` | canonical 普通表 | 第 3.2 节既有基线；保存单个材料的不可变引用 | 材料类型、父子派生、哈希、对象引用、访问控制 |
+| 执法 | `uav_enforcement_zones` | 已实现普通表 | 只保存本地候选电子围栏，不复制或覆盖权威路网几何 | authority_status、geometry/checksum、road_data_version、revision、retired |
+| 执法 | `uav_enforcement_rules` | 已实现普通表 | 执法候选规则内容，引用共性 `uav_rule_versions` | 候选事实 schema、适用区、revision、retired；权威发布保持 503 |
+| 执法 | `uav_enforcement_clues` | 已实现一对一详情表 | 仅保存 `uav_ai_events(event_type=enforcement_clue)` 专属事实，不另建事件主表或状态机 | 车辆二分类、视频/雷达/融合字段隔离、规则/围栏快照、质量边界 |
+| 执法复核 | `uav_enforcement_review_audits` | 已实现追加型普通表 | 记录技术确认/驳回及 revision，不改写线索事实 | actor、reason、from/to status、reviewed_at；不含处罚状态 |
+| 证据 | `uav_evidence_packages` | 已实现 canonical 普通表 | 第 3.2 节既有基线；`owner_type/owner_id` 支持测绘与执法事件共用 | 包版本、事件关联、内容哈希、存储状态、保留策略 |
+| 证据 | `uav_evidence_items` | 已实现 canonical 普通表 | 第 3.2 节既有基线；保存执法原视频/SRT/帧/片段等不可变引用 | 材料类型、父子派生、哈希、对象引用、访问控制 |
 | 审计 | `uav_audit_logs` | canonical 追加型普通表/分区表候选 | 第 3.2 节既有基线；统一记录同步、发布、绑定、调阅、导出、删除、调度和回滚 | 审计主体、前后值、trace_id、防篡改、归档分区 |
 | 路网上下文 | `uav_road_context_snapshots` | canonical 普通表 | 第 3.2 节既有基线；缓存 manifest/校验值，不复制权威路网库 | 快照内容边界、校验、发布/退役、保留和回滚 |
 | 设备绑定 | `uav_device_intersection_bindings` | 普通表 | 无人机/相机/任务到权威路口的有效期映射 | 设备类型、有效期排他约束、任务优先级、审计 |
@@ -141,6 +160,20 @@ CREATE EXTENSION IF NOT EXISTS timescaledb;
 - S3 已创建 `uav_survey_tasks`、`uav_capture_batches`、`uav_capture_frames`、`uav_capture_ingestion_jobs`、`uav_survey_measurements`、`uav_scene_annotations`、`uav_survey_reports`，并复用 `uav_evidence_*`、`uav_ai_events`、`uav_event_outbox`、attempt、dead-letter、rule 和 audit 表。
 - 本地启动默认连接 `road9`；若仅存在历史 `traffic_ai`，启动程序会创建 `road9`、执行迁移并复制遗留 users/alerts 到 `uav_users/uav_alerts`，不删除原表。
 - 当前开发机 PostgreSQL 未安装 TimescaleDB 时，S3 普通业务表仍可开发和回归；这不代表 ADR-019 整体 TimescaleDB、指标迁移和退役旧链路验收已完成。
+
+#### S5/S6/S9 本地开发迁移基线（2026-07-15）
+
+- Alembic `20260715_0003` 以前向方式增加 `uav_road_context_snapshots`、`uav_visual_lane_bindings`、`uav_device_intersection_bindings`、`uav_event_feedback`、`uav_message_inbox` 和六张 S9 普通表，并扩展统一事件投递字段；历史 migration 未修改。
+- `uav_video_sources` 与 `uav_telemetry_sources` 共享 `profile_id` 形成 SourceProfile API 聚合，不创建第三张重复真源表。
+- `uav_flight_plans.revision` 用于乐观并发；`uav_missions` 对非空 `(flight_plan_id, scheduled_start_at)` 建唯一约束；Mission 与 Pipeline 使用独立主键和状态字段。
+- 已验证隔离空库迁移、`20260714_0002` 升级、`0003 → 0002 → 0003` 回滚恢复演练、真实 PostgreSQL revision 冲突及双调度实例防重。生产 schema、备份恢复、保留期和 TimescaleDB 参数仍须 DBA 书面批准。
+
+#### S4 本地执法候选迁移基线（2026-07-15）
+
+- Alembic `20260715_0008` 以前向方式创建 `uav_enforcement_zones`、`uav_enforcement_rules`、`uav_enforcement_clues`、`uav_enforcement_review_audits`，并为通用证据所有权和 `uav_ai_events` 技术复核摘要增加字段；历史 migration 未修改。
+- 已验证空库 `0001 → 0008`、既有 S3 `20260714_0002 → 0008`、隔离库 `0008 → 0007 → 0008`、围栏/规则 revision 冲突、线索幂等和复核 revision。
+- 本地围栏与规则始终为 `candidate/unverified`；权威发布接口在 Adapter 和审批合同未冻结时返回 503，不写入伪造的 approved/published 状态。
+- `inter_xqh` 工程契约样本只验证真实 MP4/SRT 哈希、证据引用、质量空值、技术复核和持久化；`validation_fixture=true` 且 `detected_enforcement_clue=false`，不得表述为真实违法检测或法制验收。
 
 目录收敛规则：
 
@@ -254,7 +287,7 @@ CREATE EXTENSION IF NOT EXISTS timescaledb;
 | `error_code` / `error_detail` | TEXT/NULL | 失败/隔离原因；详情必须脱敏 |
 
 - canonical 事实写入和 inbox `status=processed + fact_refs` 更新必须在 `road9` 的同一事务提交；事实失败时不得留下已处理标记。
-- 收到相同 `(source_system,message_id)` 且 hash 相同时返回既有结果，不重复写入；hash 不同时隔离到 `uav_migration_quarantine`/`uav_dead_letters` 并告警，不覆盖原消息或事实。
+- 收到相同 `(source_system,message_id)` 且 hash 相同时返回既有结果，不重复写入；hash 不同时隔离到 `uav_message_dead_letters` 并告警，不覆盖原消息或事实。历史批量迁移中无法判定时间语义的记录仍使用独立 migration quarantine 口径。
 - inbox 不是迁移期临时表。保留期至少覆盖 Kafka 最大重放窗口、离线回迁窗口和审计追溯窗口；在正式期限冻结前不得早于其关联事实删除。
 
 ### 4.3 Kafka consumer 事务与 offset 边界（目标契约）
@@ -262,7 +295,7 @@ CREATE EXTENSION IF NOT EXISTS timescaledb;
 - Consumer 配置必须 `enable_auto_commit=false`。
 - 单条/单批消息按“校验 → 开启数据库事务 → inbox 去重/身份校验 → 写事实 → inbox 标记 processed/fact_refs → 提交数据库 → 手动提交 Kafka offset”执行。
 - 数据库事务失败时回滚且不提交 offset；消息由 Kafka 重放。数据库已提交但 offset 未提交的崩溃窗口由 inbox 幂等吸收。
-- 不可重试消息必须先把 `uav_dead_letters` 或 `uav_migration_quarantine` 记录耐久提交，再手动提交 offset；日志不是耐久隔离。
+- 不可重试入站消息必须先把 `uav_message_dead_letters` 记录耐久提交，再手动提交 offset；日志不是耐久隔离。`uav_dead_letters` 继续只处理 EventDelivery/outbox 对外投递失败，二者不得混用。
 - Kafka offset 不属于 PostgreSQL 事务，目标是 at-least-once delivery + exactly-once business effect，不能在验收材料中误称为跨系统 exactly-once transaction。
 
 ### 4.4 chunk 与索引候选
@@ -337,7 +370,7 @@ CREATE EXTENSION IF NOT EXISTS timescaledb;
 - `uav_event_outbox` 保存事件类消息的待投递 payload、`generated/delivering/delivered/delivery_failed` 状态和下次重试时间；既可承载内部 Kafka 事件 spool，也可承载智慧交通主平台外发 outbox，必须用 destination/type 区分。
 - `uav_event_delivery_attempts` 保存尝试时间、目标、耗时、响应码和脱敏错误摘要。
 - `uav_event_feedback` 保存主平台 `confirmed/rejected`、原因和可用结果，反馈消费以平台反馈 ID/幂等键去重。
-- `uav_dead_letters` 保存超过重试上限或不可解析的消息及人工处理状态；不得仅在日志中记录后丢弃。
+- `uav_dead_letters` 保存 EventDelivery/outbox 超过重试上限的外发记录及人工处理状态；入站 Kafka schema/身份错误由 `uav_message_dead_letters` 保存。两类失败都不得仅在日志中记录后丢弃。
 - `uav_evidence_packages`/`uav_evidence_items` 保存证据包与证据项元数据、哈希和外部对象引用；大视频/图片不直接写入 PostgreSQL 大字段，具体对象存储由大项目确认。
 - 业务事务与 outbox 写入必须原子提交；网络投递不得阻塞视频逐帧处理。
 

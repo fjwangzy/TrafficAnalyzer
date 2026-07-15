@@ -1,9 +1,18 @@
 """Trajectory API endpoints."""
-from fastapi import APIRouter, Request, Query
+from fastapi import APIRouter, HTTPException, Request, Query
+from pydantic import BaseModel, Field
 from typing import Optional
+
+from app.services.metric_store import MessageIdentityConflict, MetricContractError
 
 
 router = APIRouter(prefix="/trajectories", tags=["trajectories"])
+
+
+class ConflictReviewRequest(BaseModel):
+    review_status: str
+    expected_revision: int = Field(ge=1)
+    reason: str | None = Field(default=None, max_length=1000)
 
 
 @router.get("/{intersection_id}")
@@ -16,12 +25,10 @@ async def get_trajectories(
     turn_behavior: Optional[str] = Query(None),
 ):
     """Get track events for an intersection."""
-    influx = request.app.state.influx
-    if influx:
-        return influx.query_track_events(
-            intersection_id, period, limit, turn_behavior, class_name
-        )
-    return []
+    metric_store = getattr(request.app.state, "metric_store", None)
+    return await metric_store.query_tracks(
+        intersection_id, period, limit, class_name, turn_behavior
+    ) if metric_store else []
 
 
 @router.get("/{intersection_id}/conflicts")
@@ -32,10 +39,41 @@ async def get_conflict_history(
     limit: int = Query(200, le=2000),
 ):
     """Get historical conflict events for an intersection."""
-    influx = request.app.state.influx
-    if influx:
-        return influx.query_conflict_events(intersection_id, period, limit)
-    return []
+    metric_store = getattr(request.app.state, "metric_store", None)
+    return await metric_store.query_conflicts(intersection_id, period, limit) if metric_store else []
+
+
+@router.post("/{intersection_id}/conflicts/{event_id}/review")
+async def review_conflict(
+    intersection_id: str,
+    event_id: str,
+    payload: ConflictReviewRequest,
+    request: Request,
+):
+    """Persist a technical AI-result review; it is not a police disposition."""
+    user = getattr(request.state, "user", None)
+    if user is not None and user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Administrator role required")
+    reviewed_by = None
+    if user:
+        try:
+            reviewed_by = int(user.get("sub"))
+        except (TypeError, ValueError):
+            pass
+    metric_store = getattr(request.app.state, "metric_store", None)
+    if not metric_store:
+        raise HTTPException(status_code=503, detail="MetricStore unavailable")
+    try:
+        return await metric_store.review_conflict(
+            intersection_id, event_id, payload.review_status,
+            payload.expected_revision, reviewed_by, payload.reason,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except MessageIdentityConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    except MetricContractError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
 
 
 @router.get("/{intersection_id}/heatmap")
@@ -45,31 +83,19 @@ async def get_trajectory_heatmap(
     period: str = Query("1h"),
 ):
     """Get trajectory heatmap data."""
-    influx = request.app.state.influx
-    if influx:
-        tracks = influx.query_track_events(intersection_id, period, limit=2000)
-        # Aggregate positions into grid cells
-        grid: dict[str, int] = {}
-        for t in tracks:
-            # T-404: 统一使用 trajectory_world_m（与 Kafka 消息和 InfluxDB 字段一致）
-            positions = t.get("trajectory_world_m") or t.get("positions_bev", "[]")
-            if isinstance(positions, str):
-                import json
-                try:
-                    positions = json.loads(positions)
-                except Exception:
-                    continue
-            for pos in positions:
-                if len(pos) >= 2:
-                    # Grid cell: 1m resolution
-                    key = f"{int(pos[0])},{int(pos[1])}"
-                    grid[key] = grid.get(key, 0) + 1
-
-        return [
-            {"bev_x": float(k.split(",")[0]), "bev_y": float(k.split(",")[1]), "density": v}
-            for k, v in sorted(grid.items(), key=lambda x: -x[1])[:200]
-        ]
-    return []
+    metric_store = getattr(request.app.state, "metric_store", None)
+    tracks = await metric_store.query_tracks(intersection_id, period, 2000) if metric_store else []
+    grid: dict[str, int] = {}
+    for track in tracks:
+        positions = track.get("trajectory_world_m") or track.get("positions_bev") or []
+        for position in positions if isinstance(positions, list) else []:
+            if isinstance(position, list) and len(position) >= 2:
+                key = f"{int(position[0])},{int(position[1])}"
+                grid[key] = grid.get(key, 0) + 1
+    return [
+        {"bev_x": float(key.split(",")[0]), "bev_y": float(key.split(",")[1]), "density": density}
+        for key, density in sorted(grid.items(), key=lambda item: -item[1])[:200]
+    ]
 
 
 @router.get("/{intersection_id}/turn-summary")
@@ -79,10 +105,13 @@ async def get_turn_summary(
     period: str = Query("1h"),
 ):
     """Get turn behavior distribution."""
-    influx = request.app.state.influx
-    if influx:
-        return influx.query_turn_summary(intersection_id, period)
-    return []
+    metric_store = getattr(request.app.state, "metric_store", None)
+    tracks = await metric_store.query_tracks(intersection_id, period, 2000) if metric_store else []
+    counts: dict[str, int] = {}
+    for track in tracks:
+        behavior = str(track.get("turn_behavior") or "unknown")
+        counts[behavior] = counts.get(behavior, 0) + 1
+    return [{"turn_behavior": behavior, "count": count} for behavior, count in sorted(counts.items())]
 
 
 @router.get("/{intersection_id}/lane-change-heatmap")
@@ -92,7 +121,11 @@ async def get_lane_change_heatmap(
     period: str = Query("1h"),
 ):
     """Get lane change position heatmap."""
-    influx = request.app.state.influx
-    if influx:
-        return influx.query_lane_changes(intersection_id, period)
-    return []
+    metric_store = getattr(request.app.state, "metric_store", None)
+    tracks = await metric_store.query_tracks(intersection_id, period, 2000) if metric_store else []
+    changes = []
+    for track in tracks:
+        for change in track.get("lane_changes") or []:
+            if isinstance(change, dict):
+                changes.append(change)
+    return changes

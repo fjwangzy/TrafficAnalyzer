@@ -24,7 +24,9 @@ class Settings(BaseSettings):
     db_port: int = 5432
     db_user: str = "traffic"
     db_password: str = "traffic123"
-    db_name: str = "traffic_platform"
+    db_name: str = "road9"
+    db_bootstrap_database: str = "postgres"
+    db_legacy_name: str = "traffic_platform"
 
     @property
     def database_url(self) -> str:
@@ -64,6 +66,20 @@ class Settings(BaseSettings):
     lane_annotation_db_path: str = "/calibration/lane_annotation_db.json"
     lane_annotation_hover_seconds: float = 30.0
     lane_annotation_hover_radius_m: float = 1.5
+
+    # ── Accident survey ──
+    survey_storage_dir: str = "/tmp/traffic-survey-data"
+    survey_asset_roots: list[str] = ["../test_videos", "/project/test_videos"]
+    survey_max_upload_mb: int = 8192
+    survey_keyframe_count: int = 6
+    survey_report_font_path: str = ""
+    survey_delivery_url: str = ""
+    survey_worker_poll_sec: float = 1.0
+    survey_delivery_max_attempts: int = 5
+
+    @property
+    def survey_upload_max_bytes(self) -> int:
+        return self.survey_max_upload_mb * 1024 * 1024
 
 
 @lru_cache()

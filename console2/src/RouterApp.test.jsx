@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -20,11 +20,35 @@ vi.mock('./auth/AuthContext', () => ({
 
 vi.mock('./hooks/useWebSocket', () => ({ useWebSocket: () => 'connected' }))
 
+vi.mock('./lib/api', async (importOriginal) => {
+  const actual = await importOriginal()
+  const task = { id: 'SVY-20260713-006', title: '测试测绘', location: '小清河路口', owner: '事故处理一组', status: 'measuring', quality: 'unverified', delivery: 'not_generated', version: 'v4', revision: 4, selected_batch_id: 'BATCH-01' }
+  const frame = { id: 'FRM-01', task_id: task.id, batch_id: 'BATCH-01', frame_number: 18236, timestamp_sec: 10, has_metric_transform: true, image_url: '/api/v1/survey-evidence/EVI-IMAGE/content', bev_url: '/api/v1/survey-evidence/EVI-BEV/content', quality: {}, telemetry: {} }
+  const measurement = { id: 'M-01', revision: 1, frame_id: frame.id, geometry_type: 'line', category: '刹车痕迹', image_geometry: [[10, 10], [40, 40]], display_value: '12.48m', quality_status: 'unverified', source: 'manual' }
+  const report = { id: 'RPT-01', task_id: task.id, version: 1, status: 'generated', schema_version: 'uav.survey-result.v1', content_hash: 'a'.repeat(64), payload: {}, pdf_url: '/api/v1/survey-evidence/EVI-PDF/content', delivery_blocked_reason: 'survey quality thresholds are not approved' }
+  return {
+    ...actual,
+    platformApi: {
+      ...actual.platformApi,
+      surveyTask: vi.fn().mockResolvedValue(task),
+      surveyBatches: vi.fn().mockResolvedValue([{ id: 'BATCH-01', status: 'ready', telemetry_coverage: 0.94, quality_checks: { keyframes_extracted: 1, homography_available: 1 } }]),
+      surveyFrames: vi.fn().mockResolvedValue([frame]),
+      surveyMeasurements: vi.fn().mockResolvedValue([measurement]),
+      surveyAction: vi.fn().mockImplementation((_id, body) => Promise.resolve({ ...task, status: body.action === 'submit_review' ? 'pending_review' : task.status, revision: 5, version: 'v5' })),
+      surveyEvidence: vi.fn().mockResolvedValue(new Blob(['image'])),
+      importSurveyBatch: vi.fn().mockResolvedValue({ id: 'BATCH-01', status: 'queued' }),
+      surveyReports: vi.fn().mockResolvedValue([]),
+      generateSurveyReport: vi.fn().mockResolvedValue(report),
+    },
+  }
+})
+
 vi.mock('./components/CityMap', () => ({
   CityMap: ({ offline = false }) => <div data-testid='city-map'>{offline ? '城市底图服务不可用' : '演示地图'}</div>,
 }))
 
 import { RouterApp } from './RouterApp'
+import { platformApi } from './lib/api'
 
 function open(path) {
   window.history.pushState({}, '', path)
@@ -114,22 +138,34 @@ describe('Console2 full prototype', () => {
     expect(screen.getAllByText('stopped').length).toBeGreaterThan(0)
   })
 
-  it('keeps the survey workflow deep-linkable', () => {
+  it('keeps the survey workflow deep-linkable', async () => {
     open('/survey/SVY-20260713-006/capture?task_id=SVY-20260713-006')
-    expect(screen.getByRole('heading', { name: '采集与质量预检' })).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: '采集与质量预检' })).toBeInTheDocument()
     expect(screen.getByText('点线面量算')).toBeInTheDocument()
   })
 
-  it('supports measurement undo, redo, and submission state flow', () => {
+  it('refreshes the survey revision after importing capture material', async () => {
+    open('/survey/SVY-20260713-006/capture')
+    expect(await screen.findByRole('heading', { name: '采集与质量预检' })).toBeInTheDocument()
+    const taskReadsBeforeImport = platformApi.surveyTask.mock.calls.length
+    fireEvent.click(screen.getByRole('button', { name: '导入 inter_xqh 真实材料' }))
+    await waitFor(() => expect(platformApi.importSurveyBatch).toHaveBeenCalled())
+    await waitFor(() => expect(platformApi.surveyTask.mock.calls.length).toBeGreaterThan(taskReadsBeforeImport))
+  })
+
+  it('loads persisted measurements and submits the real review transition', async () => {
     open('/survey/SVY-20260713-006/measure?task_id=SVY-20260713-006')
-    fireEvent.click(screen.getByRole('button', { name: '+ 新增' }))
-    expect(screen.getByText('M-04')).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: '撤销' }))
-    expect(screen.queryByText('M-04')).not.toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: '重做' }))
-    expect(screen.getByText('M-04')).toBeInTheDocument()
+    expect(await screen.findByText('12.48m')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: '提交技术复核' }))
-    expect(screen.getByRole('heading', { name: '技术复核' })).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: '技术复核' })).toBeInTheDocument()
+  })
+
+  it('renders a generated survey report without requiring a page reload', async () => {
+    open('/survey/SVY-20260713-006/report')
+    const generate = await screen.findByRole('button', { name: '生成成果包' })
+    fireEvent.click(generate)
+    expect(await screen.findByRole('button', { name: '打开真实 PDF' })).toBeInTheDocument()
+    expect(screen.getByText(/aaaaaaaaaaaaaaaa/)).toBeInTheDocument()
   })
 
   it('updates the enforcement clue list after technical confirmation', () => {

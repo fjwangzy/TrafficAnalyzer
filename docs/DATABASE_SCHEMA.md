@@ -108,6 +108,8 @@ CREATE EXTENSION IF NOT EXISTS timescaledb;
 | --- | --- | --- | --- | --- |
 | 事故测绘 | `uav_survey_tasks` | 普通表 | 测绘任务主对象；结果事件统一关联 `uav_ai_events(event_type=survey_result)` | 状态机、任务分配、任务/事件唯一关系、软删除 |
 | 事故测绘 | `uav_capture_batches` | 普通表 | 隶属测绘任务，组织视频/帧引用、遥测、标定和质量检查；原始材料仍由证据表引用 | batch 唯一键、时间范围、coverage、版本、内容哈希 |
+| 事故测绘 | `uav_capture_frames` | 普通表 | 已实现的关键帧事实，关联原始帧/BEV 证据、遥测、质量和帧变换 | 帧号与 batch 唯一、派生证据完整性 |
+| 事故测绘 | `uav_capture_ingestion_jobs` | 普通表 | 已实现的 MP4+SRT 后台处理任务 | batch 唯一、状态、attempt/max_attempts、错误与完成时间 |
 | 事故测绘 | `uav_survey_measurements` | 普通表候选 | 隶属 `uav_survey_tasks`，保存点/线/面量算值和误差 | 几何/数值类型、坐标系、单位、修订版本、唯一键 |
 | 事故测绘 | `uav_scene_annotations` | 普通表/PostGIS 候选 | 隶属 capture batch/测绘任务，保存事故车辆、痕迹和散落物的版本化标注 | category、geometry/SRID、来源、置信度、review_state、版本链 |
 | 事故测绘 | `uav_survey_reports` | 普通表 | 报告元数据；证据材料引用 `uav_evidence_packages`、`uav_evidence_items` | 报告版本、签章/导出引用、不可变状态和保留期 |
@@ -132,6 +134,13 @@ CREATE EXTENSION IF NOT EXISTS timescaledb;
 | 车道标注任务 | `uav_lane_annotation_tasks` | 普通表 | 承接现有 JSON/文件任务状态；确认结果关联 `uav_visual_lane_bindings` | 任务状态、图片引用、标注版本、幂等和迁移校验 |
 | 身份角色 | `uav_roles` | 普通表候选 | 是否从 `uav_users.role` 拆出取决于统一身份/RBAC 模型 | 角色来源、权限关系、同步权威和迁移策略 |
 | 数据迁移 | `uav_migration_quarantine` | 普通表候选 | 隔离无法证明业务时间、epoch 异常或 schema 不可解析的遗留记录，不属于业务事实主表 | 原始 measurement/Topic、raw payload、`ingested_at`、判定原因、重建/丢弃审批 |
+
+#### S3 本地开发迁移基线（2026-07-14）
+
+- Alembic `20260714_0001` → `20260714_0002` 已可在空 PostgreSQL database 上顺序执行，版本表为 `uav_alembic_version`。
+- S3 已创建 `uav_survey_tasks`、`uav_capture_batches`、`uav_capture_frames`、`uav_capture_ingestion_jobs`、`uav_survey_measurements`、`uav_scene_annotations`、`uav_survey_reports`，并复用 `uav_evidence_*`、`uav_ai_events`、`uav_event_outbox`、attempt、dead-letter、rule 和 audit 表。
+- 本地启动默认连接 `road9`；若仅存在历史 `traffic_ai`，启动程序会创建 `road9`、执行迁移并复制遗留 users/alerts 到 `uav_users/uav_alerts`，不删除原表。
+- 当前开发机 PostgreSQL 未安装 TimescaleDB 时，S3 普通业务表仍可开发和回归；这不代表 ADR-019 整体 TimescaleDB、指标迁移和退役旧链路验收已完成。
 
 目录收敛规则：
 

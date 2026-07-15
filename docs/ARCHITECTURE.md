@@ -336,6 +336,17 @@ Browser <img src="/camera_10">
 `/api/v1/video/camera/{camera_id}` 是公开只读 MJPEG 端点，未运行对应管道时返回
 `camera_not_running`。这保证前端 `<img>` 不需要 Bearer token 也能显示检测画面。
 
+### Console2 BEV 地图投放
+
+Console2 实时监测的 BEV 主视图和右侧预览复用 Console 1.0 的 OpenLayers/OSM 地图方式，
+不再把静态夜景图片冒充地图。`trajectory_world_m` 按轨迹自身
+`world_anchor_lat_lon` 转换到经纬度；缺少轨迹锚点时仅回退到路口中心点，并在地图上
+叠加实时/完成轨迹和当前位置。没有轨迹时仍显示路口地图与 ENU 原点，不生成模拟轨迹。
+
+道路标注参数与 BEV 地图底图是两个独立边界：`ROADS_JSON=""` 只表示检测管道没有人工
+道路 ROI，不能关闭地图底图或把像素轨迹伪装为世界坐标。只有
+`trajectory_world_m` 才进入 BEV 世界坐标图层，`trajectory_px` 仍留在视频坐标语义内。
+
 ### Nginx 视频流聚合
 
 ```
@@ -420,6 +431,26 @@ PipelineManager → main_optimized.py → Kafka uav_* → road9/TimescaleDB + We
 - 本地路径经 realpath 规范化并限制在批准的 allowlist 根目录；RTSP/MQTT 凭据只保存 secret reference，API、日志和审计不得回显明文。
 - 平台启动时从数据库恢复当前窗口和 Pipeline 期望状态；进程句柄无法恢复，只能核对现存进程或幂等拉起。
 - 计划触发的是 AI 检测 Pipeline，不调用无人机航点、起降、返航或其他飞控接口。
+
+### 事故测绘深模块（S3 当前实现）
+
+S3 已在 Platform 单体和 Console2 中形成可运行闭环，开发与回归使用本地 PostgreSQL
+`database=road9`，不经过 InfluxDB：
+
+```text
+Console2 /survey/**
+  → JWT + 幂等 REST /api/v1/survey-*
+  → SurveyService（任务状态机、服务端量算、复核、报告、投递门禁）
+  → PostgreSQL road9 / uav_* 普通表
+  → ContentAddressedStore（SHA-256 不可变材料）
+  → SurveyWorker（MP4+DJI SRT 关键帧处理、outbox 重试/死信）
+```
+
+- 采集材料可采用受 allowlist 约束的服务器 MP4+DJI `.srt`，或通过 multipart 流式上传；请求只创建可恢复的 ingestion job，视频处理不阻塞 API worker。
+- 后台提取 6 个关键帧，保存原始帧、BEV 图、遥测、质量观测和像素到 ENU 的变换；未冻结的 RTK、覆盖和精度阈值始终标记 `unverified`。
+- 点、线、折线、面积和对象几何都由服务端基于帧变换计算并版本化，浏览器只提交图像坐标，不能自报米制结果。
+- 报告生成前重新校验证据对象的 SHA-256 与大小，输出 PDF、canonical JSON 和 GeoJSON；质量规则未批准或投递 URL 未配置时禁止外发。
+- 对外投递使用 `uav_ai_events(event_type=survey_result)`、`uav_event_outbox`、attempt 和 dead-letter 形成可靠投递链；批准阈值和主平台合同仍属外部验收阻断项。
 
 ## 配置系统
 

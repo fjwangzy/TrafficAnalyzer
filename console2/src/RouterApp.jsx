@@ -5,7 +5,8 @@ import { AuthProvider, useAuth } from './auth/AuthContext'
 import { AppStateProvider } from './state/AppState'
 import { DashboardPage } from './pages/DashboardPage'
 import { AlertsPage, GisPage } from './pages/InsightPages'
-import { DronesPage, SurveyCapturePage, SurveyListPage, SurveyMeasurePage, SurveyReportPage, SurveyReviewPage } from './pages/MissionSurveyPages'
+import { DronesPage } from './pages/MissionSurveyPages'
+import { SurveyCapturePage, SurveyListPage, SurveyMeasurePage, SurveyPrecheckPage, SurveyReportPage, SurveyReviewPage } from './pages/SurveyPages'
 import { EnforcementEventsPage, EnforcementZonesPage, TrucksPage } from './pages/EnforcementPages'
 import { CalibrationPage, IntegrationPage, SystemPage } from './pages/AdminPages'
 import { LoginPage } from './pages/LoginPage'
@@ -29,6 +30,7 @@ function ProtectedRoutes() {
     <Route path='/events' element={<AlertsPage />} />
     <Route path='/drones' element={<DronesPage />} />
     <Route path='/survey' element={<SurveyListPage />} />
+    <Route path='/survey/:id/precheck' element={<SurveyPrecheckPage />} />
     <Route path='/survey/:id/capture' element={<SurveyCapturePage />} />
     <Route path='/survey/:id/measure' element={<SurveyMeasurePage />} />
     <Route path='/survey/:id/review' element={<SurveyReviewPage />} />

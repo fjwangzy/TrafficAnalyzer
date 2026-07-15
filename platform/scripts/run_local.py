@@ -19,7 +19,7 @@ def main():
     os.environ.setdefault("DB_PORT", "5432")
     os.environ.setdefault("DB_USER", "traffic")
     os.environ.setdefault("DB_PASSWORD", "traffic123")
-    os.environ.setdefault("DB_NAME", "traffic_platform")
+    os.environ.setdefault("DB_NAME", "road9")
 
     # Kafka (local)
     os.environ.setdefault("KAFKA_BOOTSTRAP", "localhost:9092")
@@ -42,6 +42,8 @@ def main():
 
     # Calibration
     os.environ.setdefault("CALIBRATION_DB_PATH", "../../configs/calibration_db.json")
+    os.environ.setdefault("SURVEY_STORAGE_DIR", "/tmp/traffic-survey-data")
+    os.environ.setdefault("SURVEY_ASSET_ROOTS", '["../test_videos"]')
 
     print("Environment:")
     print(f"  - Database: {os.environ['DB_HOST']}:{os.environ['DB_PORT']}")
@@ -59,8 +61,9 @@ def main():
         "app.main:app",
         "--host", "0.0.0.0",
         "--port", os.environ["SERVICE_PORT"],
-        "--reload" if os.environ.get("DEBUG") == "true" else "--no-reload",
     ]
+    if os.environ.get("DEBUG") == "true":
+        cmd.append("--reload")
 
     print(f"Running: {' '.join(cmd)}")
     print()

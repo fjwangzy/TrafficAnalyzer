@@ -44,7 +44,7 @@ python test_pipeline_inter_xqh.py
 cd platform
 pip install -e .
 python scripts/run_local.py
-# 访问 http://localhost:8000 — OpenAPI 55 paths / 58 operations
+# 访问 http://localhost:8000 — OpenAPI 67 paths / 74 operations
 # /api/v1/pipelines — 管道管理
 # /api/v1/drones — 无人机管理
 # /api/v1/intersections — 路口管理
@@ -230,7 +230,7 @@ platform/
 │   ├── core/
 │   │   ├── config.py             # Unified Settings (Pydantic)
 │   │   └── database.py           # SQLAlchemy async engine
-│   ├── api/v1/                   # REST endpoints (43 routes)
+│   ├── api/v1/                   # REST endpoints (74 operations)
 │   │   ├── auth.py               # JWT authentication
 │   │   ├── intersections.py      # Intersection management + drone enrichment
 │   │   ├── drones.py             # Drone fleet management

@@ -425,6 +425,16 @@ near-miss 证据：
 
 `ttc_sec` 表示预测冲突时间；`pet_sec` 表示双方到达冲突点的时间差近似值；路径交叉点场景下同时输出 `motor_arrival_ttc_sec` / `non_motor_arrival_ttc_sec` 和 `arrival_time_delta_sec`。事件附加输出 `conflict_scene`、`conflict_angle_deg`、`evidence`、`risk_score`。`motor_id` / `non_motor_id` 轨迹对同级别事件不重复上报，但允许从 `warning` 升级为 `critical` 再次上报；直到任一轨迹从 `buffer_tracks` 清理后释放状态。
 
+## 事故测绘业务闭环（S3）
+
+1. 任务先完成任务上下文、作业授权、现场指挥、设备和存储五项前置核验；缺项进入 `precheck_failed`，不能开始采集。
+2. MP4 与 DJI `.srt` 以内容寻址方式写入本地证据存储，保存 SHA-256、字节数和父子派生关系；服务器材料导入还必须通过 realpath allowlist。
+3. `SurveyWorker` 从 `uav_capture_ingestion_jobs` 取出任务，提取 6 个关键帧，生成原始帧/BEV、遥测覆盖和清晰度/曝光观测；失败按可配置次数重试并保留错误。
+4. 用户选择可用批次后进入量算。浏览器只提交图像像素几何，服务端使用该帧变换计算 ENU 米制点、长度、折线长度、面积和周长，并把每次修订保存为版本链。
+5. 提交复核至少需要一项带 metric geometry 的当前量算；复核可通过或带原因退回“补拍/修订量算”。技术复核通过不等于法定事故认定。
+6. 报告生成前重新计算全部引用材料的 SHA-256 和大小，输出 PDF、canonical JSON、GeoJSON 与 manifest hash；重复请求用 `Idempotency-Key` 返回同一业务结果。
+7. 报告只有在 `survey_quality` 规则已批准且配置主平台 URL 后才创建 `survey_result` 事件和 outbox；worker 记录每次 HTTP 尝试，超过上限进入 dead letter。当前未冻结阈值保持 `unverified`，不得伪造“质量通过”或成功回执。
+
 ## 统计数据的完整生命周期
 
 ### 当前实现（待迁移）

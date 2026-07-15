@@ -952,6 +952,31 @@ Content-Type: application/json
 }
 ```
 
+### 事故测绘 REST API（S3 当前实现）
+
+除证据下载外，所有接口使用 `/api/v1` 前缀和 Bearer JWT；证据下载同样要求 JWT。
+事故民警只能访问分配给自己的任务，管理员可查看全部任务；服务器资产导入和对外投递仅管理员可用。
+创建、状态动作、采集、量算、报告和投递写接口接受 `Idempotency-Key`，同键重试返回原业务结果。
+状态修订不一致返回 `409`，状态机或质量门禁不满足返回 `422`。
+
+| 方法 | 路径 | 用途 |
+| --- | --- | --- |
+| GET/POST | `/survey-tasks` | 查询/创建测绘任务 |
+| GET | `/survey-tasks/{task_id}` | 读取任务、状态、质量和版本 |
+| POST | `/survey-tasks/{task_id}/actions` | 前置核验、选择批次、提交/退回/技术复核、取消 |
+| GET/POST | `/survey-tasks/{task_id}/capture-batches` | 查询批次/流式上传 MP4+SRT 并入队 |
+| POST | `/survey-tasks/{task_id}/capture-batches/import` | 从服务器 allowlist 导入真实 MP4+DJI SRT 并入队 |
+| GET | `/survey-tasks/{task_id}/frames` | 查询原始帧、BEV、遥测和测量变换摘要 |
+| GET/POST | `/survey-tasks/{task_id}/measurements` | 查询/创建服务端 ENU 点线面量算 |
+| DELETE | `/survey-tasks/{task_id}/measurements/{measurement_id}` | 按 revision 删除当前量算版本 |
+| GET/POST | `/survey-tasks/{task_id}/reports` | 查询/生成 PDF+JSON+GeoJSON 成果包 |
+| POST | `/survey-tasks/{task_id}/reports/{report_id}/deliver` | 经批准质量规则、URL 和 outbox 投递主平台 |
+| GET | `/survey-evidence/{evidence_id}/content` | 鉴权读取不可变证据或报告对象 |
+
+测绘结果 canonical schema 为 `uav.survey-result.v1`，事件固定
+`msg_type=uav_ai_event`、`event_type=survey_result`、
+`source_system=uav_traffic_analyzer_ai`。当前 S3 API 已实现本地闭环；主平台最终 URL、鉴权、回执、签章、归档和正式误差阈值仍由 S3/S6 评审冻结。
+
 ### WebSocket 端点
 
 > 以下无前缀 channel 和 `type` 仅是遗留/迁移期兼容，非目标契约。目标值以第 0.5 节为准：`uav_intersection:*`、全局 `uav_alerts`、路口级 `uav_alerts:*`、`uav_system`、`uav_telemetry:*`、`uav_calibration` 以及对应 `uav_*` type。

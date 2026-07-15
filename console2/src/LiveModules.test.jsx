@@ -59,6 +59,10 @@ vi.mock('./components/CityMap', () => ({
   CityMap: () => <div data-testid='city-map'>城市地图</div>,
 }))
 
+vi.mock('./components/MonitoringBevMap', () => ({
+  MonitoringBevMap: ({ compact, label, trajectories = [] }) => <div role='img' aria-label={label} data-compact={compact ? 'true' : 'false'} data-trajectory-count={trajectories.length}>OpenLayers BEV 地图</div>,
+}))
+
 import { RouterApp } from './RouterApp'
 
 function open(path) {
@@ -120,11 +124,55 @@ describe('Console2 live module migration', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /切为主视图/ }))
     expect(window.location.search).toContain('view=bev')
-    expect(await screen.findByAltText('BEV 鸟瞰轨迹主视图')).toBeInTheDocument()
+    expect(await screen.findByRole('img', { name: 'BEV 地图轨迹主视图' })).toBeInTheDocument()
+    expect(screen.queryByAltText('BEV 鸟瞰轨迹投放图')).not.toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: /机非冲突风险升高/ }))
-    fireEvent.click(screen.getByRole('button', { name: '标记已复核' }))
-    await waitFor(() => expect(liveMocks.api.acknowledgeAlert).toHaveBeenCalledWith('A-1'))
+    expect(screen.queryByText('AI 事件研判')).not.toBeInTheDocument()
+  })
+
+  it('auto-collapses translucent monitoring side panels and lets operators lock them open', async () => {
+    open('/monitoring?intersection_id=INT-1&view=detector')
+    await screen.findByAltText('检测器输出视频流')
+
+    const leftPanel = screen.getByLabelText('实时态势面板')
+    const rightPanel = screen.getByLabelText('BEV 与实时事件面板')
+    expect(leftPanel).toHaveAttribute('data-state', 'collapsed')
+    expect(rightPanel).toHaveAttribute('data-state', 'collapsed')
+    expect(leftPanel).toHaveAttribute('data-transparency', '40')
+    expect(rightPanel).toHaveAttribute('data-transparency', '40')
+    expect(document.querySelector('.main-feed-status')).toHaveClass('side-collapsed')
+    expect(document.querySelector('.map-tools')).toHaveClass('side-collapsed')
+
+    fireEvent.mouseEnter(leftPanel)
+    expect(leftPanel).toHaveAttribute('data-state', 'expanded')
+    expect(document.querySelector('.main-feed-status')).not.toHaveClass('side-collapsed')
+    fireEvent.click(screen.getByRole('button', { name: '锁定实时态势面板' }))
+    fireEvent.mouseLeave(leftPanel)
+    expect(leftPanel).toHaveAttribute('data-state', 'expanded')
+    expect(screen.getByRole('button', { name: '取消锁定实时态势面板' })).toHaveAttribute('aria-pressed', 'true')
+
+    fireEvent.click(screen.getByRole('button', { name: '取消锁定实时态势面板' }))
+    fireEvent.mouseLeave(leftPanel)
+    expect(leftPanel).toHaveAttribute('data-state', 'collapsed')
+
+    fireEvent.mouseEnter(rightPanel)
+    expect(rightPanel).toHaveAttribute('data-state', 'expanded')
+    expect(document.querySelector('.map-tools')).not.toHaveClass('side-collapsed')
+    fireEvent.mouseLeave(rightPanel)
+    expect(rightPanel).toHaveAttribute('data-state', 'collapsed')
+  })
+
+  it('keeps world-coordinate tracks off the detector video and renders them only on the BEV map', async () => {
+    open('/monitoring?intersection_id=INT-1&view=detector')
+    expect(await screen.findByAltText('检测器输出视频流')).toBeInTheDocument()
+
+    act(() => liveMocks.wsCallback({ type: 'uav_track_complete', data: { track_id: 101, trajectory_world_m: [[0, 0], [10, 8], [20, 12]] } }))
+    act(() => liveMocks.wsCallback({ type: 'uav_track_complete', data: { track_id: 102, trajectory_world_m: [[2, 1], [12, 5], [22, 9]] } }))
+
+    expect(screen.queryByLabelText('车辆轨迹图层')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /切为主视图/ }))
+    expect(await screen.findByRole('img', { name: 'BEV 地图轨迹主视图' })).toHaveAttribute('data-trajectory-count', '2')
   })
 
   it('retries a failed MJPEG stream on the fixed three-second interval', async () => {

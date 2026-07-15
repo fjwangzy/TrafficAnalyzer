@@ -13,8 +13,9 @@ from app.kafka.consumer import KafkaConsumerService
 from app.services.alert_engine import AlertEngine, SqlAlertStore
 from app.services.lane_annotation_store import LaneAnnotationStore
 from app.services.pipeline_manager import PipelineManager
+from app.services.survey_worker import SurveyWorker
 from app.utils.influx_query import InfluxQuery
-from app.api.v1 import intersections, alerts, system, trajectories, video, calibration, auth, users
+from app.api.v1 import intersections, alerts, system, trajectories, video, calibration, auth, users, survey
 from app.api.v1.drones import router as drones_router
 from app.api.v1.drones import telemetry_router
 from app.api.v1.pipelines import router as pipelines_router
@@ -87,6 +88,9 @@ async def lifespan(app: FastAPI):
         pipeline_python=settings.pipeline_python,
         frame_stride=settings.pipeline_frame_stride,
     )
+    survey_worker = SurveyWorker()
+    if db_available:
+        await survey_worker.start()
 
     # Store on app state
     app.state.ws_manager = ws_manager
@@ -95,6 +99,7 @@ async def lifespan(app: FastAPI):
     app.state.influx = influx
     app.state.kafka_service = kafka_service
     app.state.pipeline_manager = pipeline_manager
+    app.state.survey_worker = survey_worker
     app.state.settings = settings
     app.state.db_available = db_available
 
@@ -107,6 +112,7 @@ async def lifespan(app: FastAPI):
 
     # ── Shutdown ──
     await pipeline_manager.stop_all()
+    await survey_worker.stop()
     if kafka_service:
         await kafka_service.stop()
     await ws_manager.close_all()
@@ -148,6 +154,8 @@ app.include_router(drones_router, prefix="/api/v1")
 app.include_router(telemetry_router, prefix="/api/v1")
 app.include_router(pipelines_router, prefix="/api/v1")
 app.include_router(users.router, prefix="/api/v1")
+app.include_router(survey.router, prefix="/api/v1")
+app.include_router(survey.evidence_router, prefix="/api/v1")
 
 
 @app.get("/")

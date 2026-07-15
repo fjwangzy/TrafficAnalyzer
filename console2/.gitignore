@@ -36,3 +36,4 @@ dist-ssr
 **/__screenshots__/
 .vitest-attachments/
 src/routeTree.gen.ts
+.design**

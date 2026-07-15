@@ -1,5 +1,5 @@
 """Authentication schemas."""
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, model_validator
 from typing import Optional
 from datetime import datetime
 
@@ -28,9 +28,20 @@ class UserResponse(UserBase):
     is_active: bool
     created_at: datetime
     updated_at: datetime
+    capabilities: list[str] = Field(default_factory=list)
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
+
+    @model_validator(mode="after")
+    def populate_capabilities(self):
+        if not self.capabilities:
+            mapping = {
+                "admin": ["survey.read", "survey.write", "survey.review", "survey.deliver", "governance.admin"],
+                "operator": ["survey.read", "survey.write", "survey.review"],
+                "viewer": ["survey.read"],
+            }
+            self.capabilities = mapping.get(self.role, [])
+        return self
 
 
 class Token(BaseModel):

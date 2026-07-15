@@ -10,7 +10,7 @@ from app.core.database import Base
 class AlertRecord(Base):
     """Persisted alert record for event handling and replay."""
 
-    __tablename__ = "alerts"
+    __tablename__ = "uav_alerts"
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True)
     intersection_id: Mapped[str] = mapped_column(String(80), index=True, nullable=False)

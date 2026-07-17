@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from scripts.bootstrap_mp4new_sources import MP4NEW_CATALOG
+from scripts.bootstrap_mp4new_sources import LOCAL_REPLAY_CATALOG, MP4NEW_CATALOG
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -26,3 +26,24 @@ def test_mp4new_catalog_preserves_known_offsets_and_degradation():
     assert sources["SRC-MP4NEW-LS-0625-AM"]["time_offset_sec"] == 132.032
     assert sources["SRC-MP4NEW-CH-0625-AM"]["time_offset_sec"] == 247.096
     assert sources["SRC-MP4NEW-LS-0624-PM"]["known_degradation"] == "telemetry_gap_34s"
+
+
+def test_local_replay_catalog_has_four_intersections_and_six_pairs():
+    sources = [source for item in LOCAL_REPLAY_CATALOG for source in item["sources"]]
+    assert len(LOCAL_REPLAY_CATALOG) == 4
+    assert len(sources) == 6
+    assert len({item["drone_id"] for item in LOCAL_REPLAY_CATALOG}) == 4
+    inter_xqh = next(source for source in sources if source["profile_id"] == "SRC-INTER-XQH-0403-PM")
+    assert inter_xqh["telemetry_type"] == "srt"
+    assert inter_xqh["time_offset_sec"] == 0
+    for source in sources:
+        assert (ROOT / source["video"]).is_file()
+        assert (ROOT / source["telemetry"]).is_file()
+
+
+def test_local_replay_catalog_has_traceable_test_coordinates_for_map_acceptance():
+    for item in LOCAL_REPLAY_CATALOG:
+        coordinate = item["test_coordinate"]
+        assert 36.6 < coordinate["lat"] < 36.8
+        assert 117.0 < coordinate["lon"] < 117.2
+        assert "telemetry_median" in coordinate["source"]

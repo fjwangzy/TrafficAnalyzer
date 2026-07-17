@@ -38,6 +38,12 @@ logger = logging.getLogger(__name__)
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 
 
+def _hydra_string(value: str) -> str:
+    """Quote a path/URL as one Hydra override value, including spaces and CJK."""
+    escaped = value.replace("\\", "\\\\").replace("'", "\\'")
+    return f"'{escaped}'"
+
+
 class PipelineStatus(str, Enum):
     PENDING = "pending"
     RUNNING = "running"
@@ -57,6 +63,12 @@ class PipelineInstance:
     topic_name: str
     camera_id: int
     video_port: int = 8100  # MJPEG server port
+    mission_id: str | None = None
+    source_profile_id: str | None = None
+    inter_id: str | None = None
+    road_data_version: str | None = None
+    road_context_status: str = "missing"
+    quality_status: str = "unverified"
     status: PipelineStatus = PipelineStatus.PENDING
     process: Any = field(default=None, repr=False)
     started_at: float = 0.0
@@ -76,6 +88,12 @@ class PipelineInstance:
             "topic_name": self.topic_name,
             "camera_id": self.camera_id,
             "video_port": self.video_port,
+            "mission_id": self.mission_id,
+            "source_profile_id": self.source_profile_id,
+            "inter_id": self.inter_id,
+            "road_data_version": self.road_data_version,
+            "road_context_status": self.road_context_status,
+            "quality_status": self.quality_status,
             "status": self.status.value,
             "started_at": self.started_at,
             "stopped_at": self.stopped_at,
@@ -186,6 +204,12 @@ class PipelineManager:
         telemetry_sync_tolerance_sec: float | None = None,
         kafka_bootstrap: str | None = None,
         topic_name: str | None = None,
+        mission_id: str | None = None,
+        source_profile_id: str | None = None,
+        inter_id: str | None = None,
+        road_data_version: str | None = None,
+        road_context_status: str = "missing",
+        quality_status: str = "unverified",
     ) -> PipelineInstance:
         """Start a new detection pipeline process.
 
@@ -217,6 +241,12 @@ class PipelineManager:
             topic_name=topic_name,
             camera_id=camera_id,
             video_port=video_port,
+            mission_id=mission_id,
+            source_profile_id=source_profile_id,
+            inter_id=inter_id or intersection_id,
+            road_data_version=road_data_version,
+            road_context_status=road_context_status,
+            quality_status=quality_status,
         )
 
         # Build environment for the child process
@@ -226,7 +256,16 @@ class PipelineManager:
             "ROADS_JSON": str(self._root / roads_json) if roads_json else "",
             "TOPIC_NAME": topic_name,
             "CAMERA_ID": str(camera_id),
+            "DRONE_ID": drone_id,
             "INTERSECTION_ID": intersection_id,  # pass real intersection ID (e.g. INT_camera_1)
+            "INTER_ID": inter_id or intersection_id,
+            "MISSION_ID": mission_id or "",
+            "PIPELINE_ID": pipeline_id,
+            "RUN_ID": pipeline_id,
+            "SOURCE_PROFILE_ID": source_profile_id or "",
+            "ROAD_DATA_VERSION": road_data_version or "",
+            "ROAD_CONTEXT_STATUS": road_context_status,
+            "QUALITY_STATUS": quality_status,
             "VIDEO_PORT": str(video_port),  # unique MJPEG port per pipeline
         }
         if self._frame_stride is not None:
@@ -248,7 +287,7 @@ class PipelineManager:
                     f"telemetry.source={telemetry_source}",
                 ])
             if telemetry_file_path:
-                cmd.append(f"telemetry.file_path={telemetry_file_path}")
+                cmd.append(f"telemetry.file_path={_hydra_string(telemetry_file_path)}")
             if telemetry_time_offset_sec is not None:
                 cmd.append(f"telemetry.time_offset_sec={telemetry_time_offset_sec}")
             if telemetry_sync_tolerance_sec is not None:

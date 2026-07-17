@@ -25,6 +25,7 @@ from app.models.mission import (  # noqa: E402
     TelemetrySourceRecord,
     VideoSourceRecord,
 )
+from app.models.survey import EvidenceItem, SurveyCaptureBatch  # noqa: E402
 from app.services.mission_orchestrator import SourceValidator  # noqa: E402
 
 
@@ -35,6 +36,11 @@ MP4NEW_CATALOG = (
         "intersection_name": "解放东路-海右路",
         "drone_id": "UAV-MP4NEW-HY",
         "drone_name": "回放摄像头 · 解放东路-海右路",
+        "test_coordinate": {
+            "lat": 36.6628016,
+            "lon": 117.0930902,
+            "source": "SRC-MP4NEW-HY-0625-AM telemetry_median",
+        },
         "sources": (
             {
                 "profile_id": "SRC-MP4NEW-HY-0624-PM",
@@ -57,6 +63,11 @@ MP4NEW_CATALOG = (
         "intersection_name": "解放东路-礼士路",
         "drone_id": "UAV-MP4NEW-LS",
         "drone_name": "回放摄像头 · 解放东路-礼士路",
+        "test_coordinate": {
+            "lat": 36.6627830,
+            "lon": 117.0953953,
+            "source": "SRC-MP4NEW-LS-0625-AM telemetry_median",
+        },
         "sources": (
             {
                 "profile_id": "SRC-MP4NEW-LS-0624-PM",
@@ -80,6 +91,11 @@ MP4NEW_CATALOG = (
         "intersection_name": "新泺大街-崇华路",
         "drone_id": "UAV-MP4NEW-CH",
         "drone_name": "回放摄像头 · 新泺大街-崇华路",
+        "test_coordinate": {
+            "lat": 36.6729919,
+            "lon": 117.1210255,
+            "source": "SRC-MP4NEW-CH-0625-AM telemetry_median",
+        },
         "sources": (
             {
                 "profile_id": "SRC-MP4NEW-CH-0625-AM",
@@ -92,21 +108,67 @@ MP4NEW_CATALOG = (
     },
 )
 
+INTER_XQH_CATALOG = (
+    {
+        "inter_id": "INT_camera_1",
+        "road_data_version": "ROAD-LOCAL-INTER-XQH",
+        "intersection_name": "小清河北路与水屯路路口",
+        "drone_id": "UAV-INTER-XQH",
+        "drone_name": "回放无人机 · 小清河北路与水屯路",
+        "roads_json": "configs/bak/inter_xqh_lanes.json",
+        "test_coordinate": {
+            "lat": 36.7029090,
+            "lon": 117.0223260,
+            "source": "SRC-INTER-XQH-0403-PM telemetry_median",
+        },
+        "sources": (
+            {
+                "profile_id": "SRC-INTER-XQH-0403-PM",
+                "video": "test_videos/inter_xqh/DJI_20260403142902_0001_V小清河北路与水屯路路口.mp4",
+                "telemetry": "test_videos/inter_xqh/telemetry.srt",
+                "telemetry_type": "srt",
+                "time_offset_sec": 0.0,
+                "sync_tolerance_sec": 0.033,
+                "default": True,
+            },
+        ),
+    },
+)
+
+LOCAL_REPLAY_CATALOG = INTER_XQH_CATALOG + MP4NEW_CATALOG
+
 
 def _source_id(prefix: str, profile_id: str) -> str:
     return f"{prefix}-{profile_id.removeprefix('SRC-')}"
 
 
 def _context_payload(item: dict) -> dict:
+    test_coordinate = item.get("test_coordinate") or {}
     return {
         "intersection": {
             "name": item["intersection_name"],
-            "roads_json": "",
-            "calibration_status": "not_started",
+            "roads_json": item.get("roads_json", ""),
+            "calibration_status": "candidate" if item.get("roads_json") else "not_started",
+            "center_lat": test_coordinate.get("lat"),
+            "center_lon": test_coordinate.get("lon"),
+            "coordinate_usage": "local_acceptance_only" if test_coordinate else "unavailable",
         },
         "links": [],
         "lanes": [],
-        "acceptance_scope": "detection_tracking_telemetry_only",
+        "acceptance_scope": "local_replay_full_flow" if item.get("roads_json") else "detection_tracking_telemetry_only",
+    }
+
+
+def _coordinate_reference(item: dict) -> dict:
+    test_coordinate = item.get("test_coordinate")
+    if not test_coordinate:
+        return {"status": "unverified", "display": "unknown", "metric": "ENU"}
+    return {
+        "status": "test",
+        "display": "WGS84",
+        "metric": "ENU",
+        "source": test_coordinate["source"],
+        "usage": "local_acceptance_only",
     }
 
 
@@ -117,7 +179,7 @@ async def bootstrap(check_only: bool = False) -> dict:
     changed = 0
     checked = 0
     async with async_session_maker() as session:
-        for item in MP4NEW_CATALOG:
+        for item in LOCAL_REPLAY_CATALOG:
             payload = _context_payload(item)
             checksum = hashlib.sha256(
                 json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
@@ -137,9 +199,9 @@ async def bootstrap(check_only: bool = False) -> dict:
                     id=f"CTX-{item['drone_id'].removeprefix('UAV-')}",
                     inter_id=item["inter_id"],
                     road_data_version=item["road_data_version"],
-                    source="mp4new_local_fixture",
+                    source="local_replay_fixture",
                     checksum=checksum,
-                    coordinate_reference={"status": "unverified", "display": "unknown", "metric": "ENU"},
+                    coordinate_reference=_coordinate_reference(item),
                     payload=payload,
                     quality_status="unverified",
                     effective_at=datetime.now(UTC),
@@ -147,9 +209,9 @@ async def bootstrap(check_only: bool = False) -> dict:
                 session.add(context)
                 changed += 1
             elif not check_only:
-                context.source = "mp4new_local_fixture"
+                context.source = "local_replay_fixture"
                 context.checksum = checksum
-                context.coordinate_reference = {"status": "unverified", "display": "unknown", "metric": "ENU"}
+                context.coordinate_reference = _coordinate_reference(item)
                 context.payload = payload
                 context.quality_status = "unverified"
 
@@ -195,7 +257,7 @@ async def bootstrap(check_only: bool = False) -> dict:
                 if telemetry is None:
                     telemetry = TelemetrySourceRecord(
                         id=_source_id("TEL", profile_id), profile_id=profile_id,
-                        drone_id=item["drone_id"], mode="local", source_type="file",
+                        drone_id=item["drone_id"], mode="local", source_type=source.get("telemetry_type", "file"),
                         location=source["telemetry"], enabled=True, config={},
                     )
                     session.add(telemetry)
@@ -205,11 +267,12 @@ async def bootstrap(check_only: bool = False) -> dict:
                     video.mode = telemetry.mode = "local"
                     video.source_type = "mp4"
                     video.location = source["video"]
-                    telemetry.source_type = "file"
+                    telemetry.source_type = source.get("telemetry_type", "file")
                     telemetry.location = source["telemetry"]
                     telemetry.config = {
+                        "format": "dji_srt" if source.get("telemetry_type") == "srt" else "dji_cloud_json",
                         "time_offset_sec": source["time_offset_sec"],
-                        "sync_tolerance_sec": 2.5,
+                        "sync_tolerance_sec": source.get("sync_tolerance_sec", 2.5),
                         "known_degradation": source.get("known_degradation"),
                     }
                     video.enabled = telemetry.enabled = True
@@ -224,6 +287,26 @@ async def bootstrap(check_only: bool = False) -> dict:
                         drone.default_video_source_id = video.id
                         drone.default_telemetry_source_id = telemetry.id
                 checked += 1
+        if not check_only:
+            formats = {
+                source["profile_id"]: ("dji_srt" if source.get("telemetry_type") == "srt" else "dji_cloud_json")
+                for item in LOCAL_REPLAY_CATALOG
+                for source in item["sources"]
+            }
+            evidence_rows = (
+                await session.execute(select(EvidenceItem).where(EvidenceItem.kind == "original_telemetry"))
+            ).scalars().all()
+            for evidence in evidence_rows:
+                metadata = dict(evidence.item_metadata or {})
+                profile_id = metadata.get("source_profile_id")
+                if profile_id in formats and metadata.get("telemetry_type") != formats[profile_id]:
+                    metadata["telemetry_type"] = formats[profile_id]
+                    evidence.item_metadata = metadata
+            batch_rows = (
+                await session.execute(select(SurveyCaptureBatch).where(SurveyCaptureBatch.source_profile_id.in_(formats)))
+            ).scalars().all()
+            for batch in batch_rows:
+                batch.source_type = f"mp4_{formats[batch.source_profile_id]}"
         if check_only:
             await session.rollback()
         else:
@@ -232,7 +315,7 @@ async def bootstrap(check_only: bool = False) -> dict:
     return {
         "schema_version": "uav.mp4new-bootstrap/v1",
         "mode": "check" if check_only else "upsert",
-        "intersections": len(MP4NEW_CATALOG),
+        "intersections": len(LOCAL_REPLAY_CATALOG),
         "sources": checked,
         "changed": changed,
         "passed": True,

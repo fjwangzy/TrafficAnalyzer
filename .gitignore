@@ -14,11 +14,8 @@ test.ipynb
 .env
 secrets.txt
 services/pg_data_wh
-services/grafana/alerting/1
-services/grafana/plugins
 services/triton
 services/influxdb_data
-services/grafana/grafana.db
 .superpowers
 **.playwright**
 node_modules

@@ -25,12 +25,18 @@ async def list_streams():
 async def _proxy_mjpeg_stream(source_url: str):
     """Stream MJPEG bytes from a detector process reachable inside Platform."""
     timeout = httpx.Timeout(connect=2.0, read=None, write=5.0, pool=5.0)
-    async with httpx.AsyncClient(timeout=timeout) as client:
-        async with client.stream("GET", source_url) as response:
-            response.raise_for_status()
-            async for chunk in response.aiter_bytes():
-                if chunk:
-                    yield chunk
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            async with client.stream("GET", source_url) as response:
+                response.raise_for_status()
+                async for chunk in response.aiter_bytes():
+                    if chunk:
+                        yield chunk
+    except httpx.HTTPError:
+        # The pipeline record becomes running just before its MJPEG listener is
+        # ready. End this attempt cleanly so clients can retry without an ASGI
+        # stack trace or a leaked upstream connection.
+        return
 
 
 @router.get("/camera/{camera_id}")

@@ -116,6 +116,40 @@ prior result: conditional pass; production acceptance blocked by P1 Kafka health
 
 final result: passed
 
+## 2026-07-16 MP4 + SRT 真实数据深度展示
+
+- Viewport：1440 x 900，Console2 本机容器，`admin` 真实登录态。
+- 事件中心：真实拥堵 9.2，连续样本 30，覆盖 100%，丢弃 0，关联检测关键帧；截图 `output/playwright/event-center-real-evidence-1440x900.png`。
+- 轨迹研判：Mission `MSN-3421232DD4B9`，页面加载 149 条可见世界坐标折线、Source/Road/Quality lineage 和真实冲突 0 空态；2026-07-17 已以本机在应用浏览器重新可视验收。
+- 事故测绘：真实 road9 任务的 4 项量算、技术复核、内容哈希、PDF 预览和投递门禁；截图 `output/playwright/accident-survey-real-report-1440x900.png`。
+- 交互：全新 Playwright 会话依次访问 `/events` -> `/gis` -> `/survey`，三页 console 0 error / 0 warning。
+- 修复：离线轨迹默认 1h 不可见、MJPEG 首帧竞态、测绘成果版本 `vv7` 重复前缀。
+
+final result: passed
+
+## 2026-07-17 GIS 历史轨迹真实投放修复
+
+- 用户可见问题：筛选条显示 500 条历史轨迹，但 OpenLayers 地图只有散点，看不到可研判折线。
+- 根因一：查询先执行 `ended_at DESC LIMIT 500`，最新 500 条恰好没有世界坐标；实际 `INT_camera_1` 有 6,397 条带世界坐标轨迹。
+- 根因二：只要求两个世界点后，最新命中仍全部为 5 点短片段，移动长度中位数约 0.68m，折线被 4.5px 终点标记覆盖。库内 `MSN-3421232DD4B9` / `MSN-768382706790` 共 285 条至少 6 点轨迹，点数中位数 50、最大 99、最大首尾跨度约 117m。
+- 修复：Platform 支持 `spatial_ready=true&min_world_points=6` 并在 PostgreSQL LIMIT 前过滤；GIS 固定使用空间投放筛选；嵌入式地图 fit padding 改为四边 32px，避免原主监控页左右面板 padding 超过 GIS 地图宽度。
+- 实际接口：`INT_camera_1` 返回 285/285 条具有世界锚点且至少 6 点的轨迹，点数中位数 50、最大 99。
+- 可视验收：真实任务 `MSN-3421232DD4B9` 页面显示 149 条历史轨迹、149 条世界坐标，地图清楚绘出贯穿路口四向的彩色折线；浏览器 console 0 error / 0 warning。
+- 自动化：Platform 104 passed、5 skipped、10 subtests；Console2 8 files / 56 tests passed；production build passed。
+
+final result: passed
+
+## 2026-07-17 轨迹研判首次加载真实数据修复
+
+- 用户可见问题：首次进入 `/gis` 时，项目路口聚合尚未返回，筛选条先显示“0 个路口 · 0 条轨迹”，容易被理解为 `road9` 没数据。
+- 根因：`DashboardReadModel._facts()` 每次读取最多 5,000 条交通指标和 5,000 条遥测完整 ORM/JSON 记录，再在 Python 侧选择最新值；实测 `/api/v1/dashboard/intersections` 为 2.46–2.93s，而 500 条轨迹接口仅 24–25ms。
+- 修复：PostgreSQL 侧使用 `DISTINCT ON` 按 RoadContext 路口、指标路口和遥测无人机直接选择最新事实；Console2 在请求未完成时显示“路口加载中 · 轨迹等待路口”，请求失败显示“加载失败”并提供“重新加载真实数据”，不再用 0 表达未知状态。
+- 性能复验：重建正式本机容器后，路口聚合 5 次为 9.2–16.4ms；500 条轨迹 5 次为 24.0–60.9ms。
+- 浏览器复验：真实 `admin` 会话强制刷新 `/gis`，3.97s 内出现“4 个路口 · 500 条轨迹”；页面不包含“0 个路口 · 0 条轨迹”，console 0 error / 0 warning。
+- 自动化：Platform 103 passed、5 skipped、10 subtests；Console2 8 files / 55 tests passed；production build passed，保留既有大 chunk 提示。
+
+final result: passed
+
 ## 2026-07-15 I5-A S8 主任首屏真实读模型与权威坐标阻断态
 
 ### Implementation
@@ -169,6 +203,22 @@ final result: I5-A engineering passed; I5-B external authority and full-state ac
 - 点位聚合/zoom、全局增量、断线期间缺口 REST 回补、部分依赖故障注入、批准正常/混合质量数据和 5 秒/30 秒主任任务尚未完成，不以本地工程测试替代正式验收。
 
 final result: internal query and degradation behaviors passed; external I5-B acceptance remains blocked
+
+## 2026-07-16 四路口验收测试坐标与无人机图标
+
+### Implementation
+
+- 首页地图从 road9 的四个 `local_acceptance_only` WGS84 遥测中位点读取坐标，不使用随机或手工示意点。
+- 四个测试点以四旋翼无人机 SVG 图标展示，颜色继续表达风险状态；初始视野取四点几何中心。礼士路与海右路近邻图标对称避让，底层 Feature 经纬度不变，确保四路口同屏且可辨识。
+- 页面明确标注“验收测试坐标”，Dashboard 健康保持 degraded，正式道路坐标仍为 unverified。
+
+### Verification
+
+- Platform 定向测试覆盖 test 坐标可上图、普通 unverified 坐标仍隔离和目录幂等坐标来源。
+- Console2 组件测试覆盖无人机 SVG、近邻避让不改经纬度、四点中心视野和底图失败边界；全量 `53 passed`，production build 通过。
+- 最终 Docker 页面在 1357×912 本机浏览器显示四个可辨识无人机图标、4 个可上图路口和 4 个验收测试坐标；控制台 `0 error / 0 warning`。
+
+final result: local acceptance coordinates passed; authoritative road coordinates remain unverified
 
 ## 2026-07-15 I3 TimescaleDB 轨迹研判与事件复核验收
 
@@ -351,5 +401,83 @@ final result: passed; live page preserved truthful stale-data state during 4K Do
 - `.design-qa/survey-full-inter-xqh-report-20260715.png`：报告哈希、PDF 摘要、generated 状态与真实投递门禁。
 
 本次仍只证明全量材料工程闭环；RTK/空间覆盖显示 unavailable，正式精度阈值未批准，因此质量保持 unverified。
+
+final result: passed
+
+## 2026-07-16 浏览器批注：研判导航与页面标题栏收敛
+
+### Comparison target
+
+- Source visual truth：`.design-qa/2026-07-16-browser-comments-source.png`。
+- Implementation screenshots：`.design-qa/2026-07-16-browser-comments-home-after-1197x912.png`、`.design-qa/2026-07-16-browser-comments-gis-after-1197x912.png`。
+- Viewport：1197 × 912，深色主题，管理员已登录；首页与 `/gis` 使用同一 Console2/Platform 本机运行态。
+- Full-view comparison：同一首页、同一视口对比确认 `page-heading` 可见标题栏已消失，告警、KPI、地图、侧栏卡片和“进入值守模式”操作保持既有布局与内容，仅按需求整体上移。
+- Focused comparison：`/gis` 截图确认顶部二级导航的 ARIA 域名为“智能研判二级导航”，顺序为“AI 事件中心 / 轨迹研判”，且“轨迹研判”保持 active；该路由状态与首页源图不同是本条导航迁移批注的验收目标。
+
+### Findings
+
+- 无剩余 P0/P1/P2：两条浏览器批注均已落实，未发现标题栏残留、导航错域、内容溢出或交互失效。
+- 字体与排版：保留既有字体、字号、字重和导航层级；普通页面标题改为 `.sr-only` `h1`，视觉标题不再占位。
+- 间距与布局节奏：删除 76px 标题栏目后业务内容自然上移；有页面级操作时只保留 10px 底边距的右对齐紧凑操作行，没有新增空白标题区。
+- 色彩与视觉 token：背景、边框、状态色、选中态和阴影均未改动。
+- 图像质量与资产：未新增或替换图片、图标、地图或品牌资产；首页地图空态和 GIS OpenLayers 底图保持原实现。
+- 文案与内容：仅移除各页 eyebrow、可见标题、说明和 meta；页面级业务按钮、面包屑、筛选器和事实内容保留。
+
+### Comparison history
+
+- 首轮自动化回归发现 P1：共享标题组件被整体删除时，测绘页“提交技术复核”和“生成成果包”随操作区消失。
+- 修复：`PageHeader` 保留屏幕阅读器 `h1`，并把 `actions` 迁到独立 `.page-actions` 行；标题、说明和 meta 不再渲染。
+- Post-fix evidence：`RouterApp.test.jsx` 29/29、Console2 全量 50/50、production build 均通过；首页截图保留“进入值守模式”，浏览器中“AI 事件中心 → 轨迹研判”导航往返成功，最终 URL 为 `/gis`，console error/warn 为 0。
+
+### Implementation checklist
+
+- [x] `/gis` 从“全域态势”移动到“智能研判”。
+- [x] 所有普通页面移除可见标题栏目。
+- [x] 保留每页可访问标题和页面级核心操作。
+- [x] 同视口全图与聚焦截图对比。
+- [x] 自动化测试、生产构建、真实容器和浏览器交互验证。
+
+### Follow-up polish
+
+- 无阻断性或 P3 跟进项。
+
+final result: passed
+
+## 2026-07-16 浏览器批注：开发态提示与顶部操作行收敛
+
+### Comparison target
+
+- Source visual truth：本轮 1357 × 912 浏览器批注截图；同类首页结构复用留存基准 `.design-qa/2026-07-16-browser-comments-source.png`。
+- Implementation screenshots：`.design-qa/2026-07-16-browser-comments-home-toolbar-after-1357x912.png`、`.design-qa/2026-07-16-browser-comments-enforcement-after-1357x912.png`。
+- Viewport：1357 × 912，深色主题，管理员登录态；首页、`/drones`、`/survey`、`/enforcement/zones` 使用同一 Console2/Platform 本机运行态。
+- Full-view comparison：首页保留 KPI、地图、侧栏和底部状态条，删除 `I5 内部工程口径` 开发态横幅；“进入值守模式”与左侧面包屑进入同一顶部行。
+- Focused comparison：浏览器量测首页、飞行任务、事故测绘和执法配置的 `.breadcrumb` 与 `.page-actions` 均为 `top=82px`、`height=32px`、`center=98px`；执法配置页不再显示合同冻结、工程契约样本或地图停用等开发说明。
+
+### Findings
+
+- 无剩余 P0/P1/P2：所查业务页未发现内部阶段码、blocked 标识、Mock/fallback、验证样本或开发接入说明残留。
+- 字体与排版：沿用既有字号、字重、按钮和面包屑样式；页面操作区只改变定位，不改变控件视觉 token。
+- 间距与布局节奏：共享 `.page-actions` 绝对定位到主内容顶部，带操作页面的面包屑预留右侧 320px，1357px 宽度下无碰撞或折行。
+- 色彩与视觉 token：背景、边框、状态色、选中态和阴影未改动；真实加载、错误、权限、质量、交付门禁继续使用原 `QualityNotice` 体系。
+- 文案与内容：开发过程解释改为面向业务的加载、空态和能力边界文案；“待冻结”等真实数据状态继续保留。
+- 图像质量与资产：未新增或替换图片、图标、地图或品牌资产。
+
+### Comparison history
+
+- 首轮自动化回归发现 3 条旧断言仍要求显示 Mock 回退、工程契约样本和长坐标隔离说明；另有 1 条身份同步测试仍依赖旧开发态文案。
+- 修复：更新断言验证开发态提示缺席，同时保留 Mission 冲突、线索复核 API、坐标隔离和只读身份源的业务行为验证。
+- Post-fix evidence：Console2 全量 50/50 测试通过，production build 通过；本机容器重建后，4 个代表页面顶部操作区量测一致；当前验收标签页 console error/warn 为 0。
+
+### Implementation checklist
+
+- [x] 首页移除 I5/blocked 开发态横幅。
+- [x] 页面级操作与左侧面包屑同排对齐。
+- [x] 飞行任务、事故测绘、执法配置等同类页面统一处理。
+- [x] 隐藏 Mock/fallback、工程契约和后续接入说明，保留真实运行状态。
+- [x] 自动化测试、生产构建、真实容器和浏览器同尺寸验证。
+
+### Follow-up polish
+
+- 无阻断性或 P3 跟进项。
 
 final result: passed

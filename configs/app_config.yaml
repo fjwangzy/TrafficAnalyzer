@@ -147,7 +147,7 @@ telemetry:
   buffer_size: 100           # 遥测缓冲区大小（条）
   sync_tolerance_sec: 0.05   # 帧↔遥测时间戳同步容忍窗口(秒)
   file_path: ""              # source="file/srt"时的遥测文件路径
-  # time_offset_sec: 0.0     # source="file"时视频t=0对应的遥测相对时间偏移(秒)
+  time_offset_sec: 0.0       # source="file"时视频t=0对应的遥测相对时间偏移(秒)
 
 speed_estimation:
   enabled: true
@@ -233,7 +233,7 @@ conflict_detection:
 
 geojson_export:
   enabled: true                      # 启用 BEV 轨迹 GeoJSON 导出
-  output_dir: "output"               # 输出目录
+  output_dir: "${oc.env:GEOJSON_OUTPUT_DIR,output}"  # Compose 使用持久卷；本地保持 output
   filename: null                     # null=自动生成带时间戳文件名
   export_interval_sec: 0             # 定期导出间隔(秒)，0=仅流结束时导出
   use_gps: true                      # 有世界锚点时转为 WGS84 经纬度

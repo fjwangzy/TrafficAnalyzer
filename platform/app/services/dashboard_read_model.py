@@ -47,23 +47,19 @@ class DashboardReadModel:
         window_start = now - self.window
         async with self._session_factory() as session:
             snapshots = (await session.execute(
-                select(RoadContextSnapshot).order_by(
-                    RoadContextSnapshot.inter_id, RoadContextSnapshot.created_at.desc()
-                )
+                select(RoadContextSnapshot)
+                .distinct(RoadContextSnapshot.inter_id)
+                .order_by(RoadContextSnapshot.inter_id, RoadContextSnapshot.created_at.desc())
             )).scalars().all()
-            latest_snapshots: dict[str, RoadContextSnapshot] = {}
-            for row in snapshots:
-                latest_snapshots.setdefault(row.inter_id, row)
+            latest_snapshots = {row.inter_id: row for row in snapshots}
 
             metrics = (await session.execute(
                 select(TrafficMetric)
                 .where(TrafficMetric.grain_type == "intersection", TrafficMetric.observed_at <= now)
-                .order_by(TrafficMetric.observed_at.desc())
-                .limit(5000)
+                .distinct(TrafficMetric.inter_id)
+                .order_by(TrafficMetric.inter_id, TrafficMetric.observed_at.desc())
             )).scalars().all()
-            latest_metrics: dict[str, TrafficMetric] = {}
-            for row in metrics:
-                latest_metrics.setdefault(row.inter_id, row)
+            latest_metrics = {row.inter_id: row for row in metrics}
 
             conflicts = (await session.execute(
                 select(ConflictEvent)
@@ -87,13 +83,10 @@ class DashboardReadModel:
             telemetry = (await session.execute(
                 select(TelemetryMetric)
                 .where(TelemetryMetric.observed_at <= now)
-                .order_by(TelemetryMetric.observed_at.desc())
-                .limit(5000)
+                .distinct(TelemetryMetric.drone_id)
+                .order_by(TelemetryMetric.drone_id, TelemetryMetric.observed_at.desc())
             )).scalars().all()
-            latest_telemetry: dict[str, TelemetryMetric] = {}
-            for row in telemetry:
-                if row.drone_id:
-                    latest_telemetry.setdefault(row.drone_id, row)
+            latest_telemetry = {row.drone_id: row for row in telemetry if row.drone_id}
 
             survey_tasks = (await session.execute(
                 select(SurveyTask).order_by(SurveyTask.updated_at.desc()).limit(500)
@@ -161,6 +154,11 @@ class DashboardReadModel:
                 coordinate_reference.get("status") == "verified"
                 and coordinate_reference.get("display") == "WGS84"
             )
+            coordinate_test = (
+                coordinate_reference.get("status") == "test"
+                and coordinate_reference.get("display") == "WGS84"
+                and coordinate_reference.get("usage") == "local_acceptance_only"
+            )
             monitor = "running" if fresh_metric and mission and pipeline_running and road_verified else (
                 "degraded" if fresh_metric or mission or pipeline_running else "standby"
             )
@@ -171,7 +169,10 @@ class DashboardReadModel:
                 "warning" if verified_conflicts else "unknown"
             )
             lat, lon = self._coordinates(snapshot)
-            map_eligible = road_verified and coordinate_verified and lat is not None and lon is not None
+            map_coordinate_status = "verified" if road_verified and coordinate_verified else (
+                "test" if coordinate_test else "unavailable"
+            )
+            map_eligible = map_coordinate_status != "unavailable" and lat is not None and lon is not None
             quality = "verified" if road_verified and fresh_metric else (
                 "stale" if metric_at and not fresh_metric else "unverified"
             )
@@ -182,9 +183,10 @@ class DashboardReadModel:
                 "lat": lat if map_eligible else None,
                 "lon": lon if map_eligible else None,
                 "map_eligible": map_eligible,
+                "map_coordinate_status": map_coordinate_status,
                 "map_exclusion_reason": None if map_eligible else (
-                    "road_context_unverified" if not road_verified else (
-                        "coordinate_reference_unverified" if not coordinate_verified else "coordinate_missing"
+                    "coordinate_missing" if lat is None or lon is None else (
+                        "coordinate_reference_unverified" if not coordinate_verified else "road_context_unverified"
                     )
                 ),
                 "road_data_version": snapshot.road_data_version,
@@ -235,6 +237,7 @@ class DashboardReadModel:
         )
         verified_risk = sum(1 for row in intersections if row["risk"] in {"critical", "warning"})
         isolated = sum(1 for row in intersections if not row["map_eligible"])
+        test_coordinates = sum(1 for row in intersections if row["map_coordinate_status"] == "test")
         pending_review = [event for event in facts["ai_events"] if event.review_status in {"generated", "pending_review"}]
         pending_survey = [task for task in facts["survey_tasks"] if task.delivery_status not in {"delivered"} and task.state in {"technical_reviewed", "reported"}]
         tasks = []
@@ -291,10 +294,11 @@ class DashboardReadModel:
             "attention": attention[:10],
             "pending_tasks": tasks,
             "health": {
-                "status": "degraded" if not intersections or isolated or delivery_count else "healthy",
+                "status": "degraded" if not intersections or isolated or test_coordinates or delivery_count else "healthy",
                 "database": "healthy",
                 "project_intersections": len(intersections),
                 "map_eligible_intersections": len(intersections) - isolated,
+                "test_coordinate_intersections": test_coordinates,
                 "isolated_intersections": isolated,
                 "failed_delivery_items": delivery_count,
             },
@@ -346,6 +350,7 @@ class DashboardReadModel:
             "limit": limit,
             "has_more": offset + len(page) < filtered_total,
             "map_eligible": sum(1 for row in rows if row["map_eligible"]),
+            "test_coordinates": sum(1 for row in rows if row["map_coordinate_status"] == "test"),
             "isolated": sum(1 for row in rows if not row["map_eligible"]),
             "filters": {
                 "risk": risk,

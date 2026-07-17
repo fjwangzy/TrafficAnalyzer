@@ -1,8 +1,8 @@
 # API_CONTRACTS.md — TrafficAnalyzer API 契约
 
-> 本文分为“目标契约”和“当前实现/遗留契约”两层。目标契约是后续开发与验收基线，但尚未完成代码与数据迁移；带有旧 Topic、旧 `msg_type`、InfluxDB 或 Grafana 的章节仅用于描述当前代码和迁移兼容，不能作为新接口继续扩展。
+> 2026-07-16 本机运行时已切到 canonical 契约。带有旧 Topic、旧 `msg_type` 或旧观测链路的后续章节仅是历史快照，不再存在运行时兼容；REST 路径保持不变。
 
-## 0. 目标消息与持久化契约（已决策，待实现）
+## 0. canonical 消息与持久化契约（本机已实施）
 
 ### 0.1 已冻结决策
 
@@ -16,7 +16,7 @@
 | 指标查询权威源 | `road9` 中的 `uav_*` 普通表与 TimescaleDB hypertable |
 | 废弃目标链路 | Grafana、Telegraf、InfluxDB 不进入目标部署和验收 |
 
-当前代码尚未完成上述迁移。`road9` 连接、TimescaleDB 扩展可用性/版本/权限、目标 schema、迁移窗口、历史数据回迁和路网字段仍需确认。
+本机新库最初由 Alembic `20260715_0010` 从空库创建，当前 head 为 `20260716_0011`，不回迁任何旧数据；生产连接、权限、容量、HA 和路网外部合同仍需确认。
 
 ### 0.2 canonical Topic 与 `msg_type`
 
@@ -27,15 +27,15 @@
 | `uav_conflicts_{camera_id}` | `uav_conflict` | 换道/机非冲突事件 |
 | `uav_telemetry_{camera_id}` | `uav_telemetry` | 无人机遥测 |
 | `uav_system_metrics` | `uav_system_metrics` | GPU、CPU、管道和消息链路指标 |
-| `uav_ai_events` | `uav_ai_event` | 向智慧交通主平台交付的 AI 事件 |
-| `uav_ai_event_feedback` | `uav_ai_event_feedback` | 主平台审核/结果反馈 |
 
 Topic 的单复数按上表固定。`msg_type` 必须与 Topic 映射一致；业务字段 `event_type` 使用 `conflict/congestion/survey_result/enforcement_clue` 等领域枚举，不因消息前缀规则改写。事故测绘跨系统结果的唯一 canonical 枚举为 `survey_result`。
 
-目标订阅正则：
+`uav_ai_events` / `uav_ai_event_feedback` 是待主平台合同冻结的外部集成候选，不属于本机 Platform 当前订阅范围，也不能借此扩展本次只含上述五类 Topic 的运行时。
+
+当前 Platform 订阅正则：
 
 ```text
-^(uav_statistics_|uav_track_complete_|uav_conflicts_|uav_telemetry_).+$|^uav_(system_metrics|ai_events|ai_event_feedback)$
+^(uav_statistics_|uav_track_complete_|uav_conflicts_|uav_telemetry_).+$|^uav_system_metrics$
 ```
 
 #### Topic builder 实施约束
@@ -94,7 +94,7 @@ Topic 的单复数按上表固定。`msg_type` 必须与 Topic 映射一致；�
 
 ### 0.4 各消息 `data` 边界
 
-- `uav_stats`：保留车辆数、活跃轨迹、速度、排队、方向流量、动态 `roads[]`、`lane_stats[]`、路网和质量字段。旧 `road_1`～`road_N` 仅由迁移适配器读取，不进入 canonical 主结构。
+- `uav_stats`：保留车辆数、活跃轨迹、速度、排队、方向流量、动态 `roads[]`、`lane_stats[]`、路网和质量字段。旧 `road_1`～`road_N` 不进入 canonical 主结构，也没有运行时迁移适配器。
 - `uav_track_complete`：保留轨迹 ID、车辆类别、转向、起止时间、速度、ENU/像素轨迹、入口/出口 Link/车道、地图匹配与质量字段。
 - `uav_conflict`：保留双方轨迹 ID、TTC/PET、最小距离、冲突角、场景、风险分、证据和预测位置；当前 near-miss 判定口径不因消息改名而变化。
 - `uav_telemetry`：保留无人机定位、姿态、云台、速度、悬停、任务/管道和定位质量。
@@ -128,7 +128,7 @@ Topic 的单复数按上表固定。`msg_type` 必须与 Topic 映射一致；�
 | `uav_telemetry:{drone_id}` | `uav_telemetry` | 无人机遥测 |
 | `uav_calibration` | `uav_lane_annotation_task` | 车道标注/标定任务创建与状态更新 |
 
-WebSocket 推送可沿用 `{channel, type, data, ts}` 外壳，但 `type` 和 UAV 平台 channel 必须使用上述 `uav_` canonical 名称。同一告警可同时投放全局与路口级频道，必须复用同一告警 ID，前端按 ID 去重，不能形成两个业务告警。迁移期旧 channel 只能由适配层并行发布，并设置明确下线日期。
+WebSocket 推送沿用 `{channel, type, data, ts}` 外壳，但 `type` 和 UAV 平台 channel 必须使用上述 `uav_` canonical 名称。同一告警可同时投放全局与路口级频道，必须复用同一告警 ID，前端按 ID 去重，不能形成两个业务告警。旧 channel 已下线，运行时直接拒绝，不存在并行发布适配层。
 
 `subscribe`、`unsubscribe`、`ping`、`pong` 是 WebSocket 传输控制动作，不属于 UAV 业务消息 `type`，无需增加 `uav_` 前缀；控制动作中的业务 `channel` 仍必须使用上表 canonical 名称。
 
@@ -150,19 +150,22 @@ WebSocket 推送可沿用 `{channel, type, data, ts}` 外壳，但 `type` 和 UA
 
 历史 API 路径可保持不变，但目标实现必须改为查询 PostgreSQL/TimescaleDB。具体表字段、hypertable 分区、唯一键、压缩和保留候选见 `docs/DATABASE_SCHEMA.md`。
 
-### 0.7 新旧兼容与切换规则
+### 0.7 已退役旧契约
 
-| 旧 Topic / `msg_type` | canonical Topic / `msg_type` | 兼容规则 |
+下表只保留切换前后名称对照。Platform、Console2 和检测器运行时只接受右侧 canonical 值，
+不再适配、双投或 fallback；历史数据不迁移。
+
+| 已退役 Topic / `msg_type` | canonical Topic / `msg_type` | 当前规则 |
 | --- | --- | --- |
-| `statistics_{n}` / `stats` | `uav_statistics_{camera_id}` / `uav_stats` | 适配旧平铺 payload 为统一信封 |
-| `track_complete_{n}` / `track_complete` | `uav_track_complete_{camera_id}` / `uav_track_complete` | 保留完整轨迹字段 |
-| `conflicts_{n}` / `conflict` | `uav_conflicts_{camera_id}` / `uav_conflict` | 不改变冲突业务判定口径 |
-| `telemetry_{n}` / `telemetry` | `uav_telemetry_{camera_id}` / `uav_telemetry` | 补充消息 ID 和业务时间 |
-| `system_metrics` / `system_metrics` | `uav_system_metrics` / `uav_system_metrics` | 统一指标 envelope |
+| `statistics_{n}` / `stats` | `uav_statistics_{camera_id}` / `uav_stats` | 拒绝左侧 |
+| `track_complete_{n}` / `track_complete` | `uav_track_complete_{camera_id}` / `uav_track_complete` | 拒绝左侧 |
+| `conflicts_{n}` / `conflict` | `uav_conflicts_{camera_id}` / `uav_conflict` | 拒绝左侧 |
+| `telemetry_{n}` / `telemetry` | `uav_telemetry_{camera_id}` / `uav_telemetry` | 拒绝左侧 |
+| `system_metrics` / `system_metrics` | `uav_system_metrics` / `uav_system_metrics` | 拒绝左侧 |
 
-当前代码/环境若仍存在 `detections_*`、`vlm_analysis` 或场景专用的 `lane_change/risk_events/survey/enforcement` Topic，只能作为迁移输入：有交付价值的事件规范化到 `uav_ai_events`，纯调试/中间推理消息退出生产订阅。是否保留原始检测/VLM 调试流及其保留期属于 `【待确认】`，但任何保留后的名称也必须以 `uav_` 开头。
+`detections_*`、`vlm_analysis` 或场景专用的 `lane_change/risk_events/survey/enforcement` 旧 Topic 不属于当前订阅范围，运行时拒绝；未来若正式增加检测/VLM 调试流，必须另行冻结 `uav_` Topic、保留期和 schema，不能借迁移输入恢复旧名称。
 
-事故测绘遗留事件类型 `accident_survey` 只允许迁移适配器读取，并必须在进入 canonical schema 前转换为 `survey_result`，同时在兼容审计字段中保留原始值。目标生产者、`uav_ai_event/v1` schema 校验、数据库约束和主平台接口必须拒绝 `event_type=accident_survey`；不得把二者作为两个可并存枚举。
+事故测绘遗留事件类型 `accident_survey` 已退役且无迁移适配器。生产者、`uav_ai_event/v1` schema 校验、数据库约束和主平台接口必须拒绝它；唯一 canonical 枚举为 `survey_result`。
 
 #### 遗留时间迁移约束（P0）
 
@@ -191,7 +194,7 @@ WebSocket 推送可沿用 `{channel, type, data, ts}` 外壳，但 `type` 和 UA
 - 无法确认是否同源时分组隔离并保留 `legacy_source_path/measurement/raw_time/payload_hash`，不得以“总量更完整”为由合并。
 - 对账报告分别列出 Telegraf 分支数、Platform 分支数、确认重复数、择源/合并数、歧义数和最终迁移数；双写原始行数不能直接作为业务样本数。
 
-迁移原则：
+以下迁移方案已取消，不用于本机切换；本机采用空库初始化和旧资产 7 天不挂载保留：
 
 1. 消费端先兼容新旧消息并统一写入 `road9` 的 `uav_*` 表；旧消息按 Topic partition/offset 生成稳定 `message_id`，新旧消息均进入长期 `uav_message_inbox`。
 2. 生产端再切换 canonical Topic/`msg_type`；若短期双投，必须复用 `message_id` 并在数据库侧去重。
@@ -199,7 +202,7 @@ WebSocket 推送可沿用 `{channel, type, data, ts}` 外壳，但 `type` 和 UA
 4. 观察期结束后停止 Telegraf/InfluxDB 新写入，并移除 Grafana、Telegraf、InfluxDB 部署；历史数据回迁或归档范围仍待确认。
 5. 旧 Topic、旧 WebSocket channel、旧无前缀表的下线窗口须与全部生产者、消费者和智慧交通主平台联调方共同冻结。
 
-切换门禁：Topic builder 路由单测通过；事件在断网、队列满、进程崩溃/重启场景无静默丢失；指标 coverage/drop 可核算；数据库失败时 offset 未提交且重放成功；提交数据库后崩溃的重放未重复写事实；Telegraf/Platform 双写已去重/择源且未相加。任一门禁未通过不得关闭旧链路或宣称迁移完成。
+当前本机门禁是 canonical Topic/msg_type/channel 拒绝旧值、空库 migration、数据库断开恢复、健康探测和旧资产未挂载。生产可靠性门禁仍独立保留。
 
 ### 0.8 路网引用边界
 
@@ -222,7 +225,7 @@ WebSocket 推送可沿用 `{channel, type, data, ts}` 外壳，但 `type` 和 UA
 
 接口路径不属于消息/自建表 `uav_` 前缀规则，但响应中的业务消息类型、事件引用和后端自建物理对象仍须遵守第 0 节 canonical 契约。overview 与地图摘要必须在同一权限和可比较时间口径下返回；缺失数据使用明确的 `stale/missing/unknown`，不得以 `0` 代替。S8-TBD-001/005 未关闭时，覆盖、拥堵、保障和综合可信度使用 `value=null + numerator/denominator + unverified reason`。
 
-当前 OSM 开发底图只接受 `RoadContext` 与 `coordinate_reference` 均为 verified、`display=WGS84` 且坐标有效的路口。GCJ02 或未验证记录进入 `isolated/map_exclusion_reason`，直至正式瓦片/坐标 Adapter 冻结；禁止将 GCJ02 数值直接投放到 WGS84 OSM。
+当前 OSM 开发底图接受两类有效 WGS84 坐标：正式 `RoadContext` 与 `coordinate_reference` 均为 `verified`；或本机验收素材目录明确登记的 `status=test + usage=local_acceptance_only` 遥测中位点。测试坐标返回 `map_coordinate_status=test`、计入 `test_coordinate_intersections`，但 RoadContext 仍保持 `unverified`，整体健康不得因此升级为健康或宣称权威坐标已冻结。其他 GCJ02、未验证或缺坐标记录进入 `isolated/map_exclusion_reason`；禁止将 GCJ02 数值直接投放到 WGS84 OSM。
 
 `bbox` 非 4 个数、经纬度越界或最小值不小于最大值返回 `422 invalid_bbox`。`limit` 为 1～1000，默认 200；`offset` 不小于 0。road9 查询超时或 SQLAlchemy 依赖异常返回 `503 dashboard_dependency_unavailable`，前端可保留最后成功快照并重试，不得回退 Mock。此内部查询契约解决实现者选择项，但正式项目范围、权限过滤、点位聚合/zoom、缓存、SLA 和错误预算仍由 S8-TBD-002/006/007/009 书面冻结。
 
@@ -239,7 +242,7 @@ WebSocket 推送可沿用 `{channel, type, data, ts}` 外壳，但 `type` 和 UA
 #### 0.10.1 术语与状态
 
 - SRT 固定指 DJI `.srt` 遥测字幕，不指 Secure Reliable Transport 视频协议。
-- 实时源固定配对为 RTSP 视频 + MQTT 遥测；本地回放固定配对为服务器 MP4 文件 + `.srt` 遥测文件。
+- 实时源固定配对为 RTSP 视频 + MQTT 遥测；本地回放支持服务器 MP4 + DJI `.srt` 字幕遥测，或 MP4 + DJI Cloud API JSON 导出（`.json`/`.txt`，`source_type=file`）。
 - `FlightPlan` 是排期定义，状态为 `draft/enabled/paused/completed/retired`。
 - `Mission` 是一次执行，状态为 `pending/starting/running/completed/failed/skipped/cancelled`。
 - FlightPlan 保存 canonical `inter_id + road_data_version`；当前 Pipeline 所需 `intersection_id` 由兼容适配器生成，不能替代权威路口 ID。
@@ -254,7 +257,7 @@ WebSocket 推送可沿用 `{channel, type, data, ts}` 外壳，但 `type` 和 UA
 | GET/POST | `/api/v1/drones/{drone_id}/sources` | 查询脱敏源配置/创建成对数据源 |
 | GET | `/api/v1/sources` | 查询授权范围内全部脱敏 SourceProfile 聚合 |
 | PATCH | `/api/v1/drones/{drone_id}/sources/{source_profile_id}` | 编辑、启停或设为默认 |
-| POST | `/api/v1/drones/{drone_id}/sources/{source_profile_id}/validate` | 校验 RTSP+MQTT 或 MP4+SRT |
+| POST | `/api/v1/drones/{drone_id}/sources/{source_profile_id}/validate` | 校验 RTSP+MQTT、MP4+SRT 或 MP4+DJI Cloud JSON |
 | GET/POST | `/api/v1/flight-plans` | 查询/创建 FlightPlan |
 | GET/PATCH/DELETE | `/api/v1/flight-plans/{flight_plan_id}` | 查询/编辑；仅 draft 且无 Mission 时可删除 |
 | POST | `/api/v1/flight-plans/{flight_plan_id}/enable` | 校验设备、源、路网、排期和权限后启用 |
@@ -319,7 +322,7 @@ WebSocket 推送可沿用 `{channel, type, data, ts}` 外壳，但 `type` 和 UA
 }
 ```
 
-本地回放使用 `mode=local_replay`、`video.type=file`、`telemetry.type=srt_file`。保存前对服务器路径做 realpath 规范化并限制在批准的 `UAV_LOCAL_ASSET_ROOTS` 内；响应只返回授权后的脱敏/相对显示值。校验至少包含 MP4 存在/可读/可解码、SRT 存在/可读/可解析以及时间或帧覆盖匹配。
+本地回放使用 `mode=local`、`video.source_type=mp4`；遥测可为 `source_type=srt` 或 `source_type=file`。`file` 只接受 allowlist 内可解析的 DJI Cloud API JSON `.json/.txt`，并可携带 `time_offset_sec` 与 `sync_tolerance_sec`；两者持久化到 `uav_telemetry_sources.config`，由 PipelineManager 传给生产入口。偏移后的最近记录超过容忍窗口时必须返回无有效遥测，不得沿用旧记录或插值。响应只返回文件名、同步参数和验证摘要，不返回服务器完整路径。
 
 #### 0.10.4 FlightPlan 与 Mission 最小 shape
 
@@ -357,6 +360,7 @@ Mission 至少返回 `mission_id/flight_plan_id/trigger_type/scheduled_start_at/
 - 平台重启时，当前时间仍在窗口内则幂等恢复；窗口已结束则 `status=skipped, reason_code=window_missed`，不自动补跑。
 - 编辑计划只影响未来执行；已生成/运行 Mission 保留原计划和数据源快照。
 - 本地视频 EOF 正常完成并返回 `reason_code=source_eof`；Pipeline 非零退出返回 `reason_code=pipeline_error`，窗口内运行时丢失返回 `reason_code=pipeline_runtime_missing`，错误摘要必须脱敏。调度 tick 将 Pipeline `stopped/error` 同步到 Mission 和 `uav_pipelines`，不得等到窗口结束才掩盖真实终态。
+- 同一无人机已有 `pending/starting/running` Mission 时，手动启动返回 HTTP `409` 和 `code=drone_mission_active`；不同无人机/路口可独立启动。
 - 统一错误至少包含 `validation_error`、`forbidden`、`not_found`、`state_conflict`、`schedule_overlap`、`source_invalid`、`road_context_invalid`、`pipeline_start_failed` 和 `scheduler_unavailable`。
 
 验收接缝固定为：创建无人机/数据源 → 创建并启用 FlightPlan → 调度生成 Mission 并调用 PipelineManager → 查询视频/SRT 同步与遥测 → 到时或 EOF 停止 → 查询 Mission/审计。当前本地 PostgreSQL、双调度实例、重启恢复、停止/重试和 `inter_xqh` MP4+SRT 已通过工程验证；`docs/test_report_s9_inter_xqh_eof.json` 进一步证明 5GB 原视频在恢复新 Pipeline 后自然 EOF并写入 `completed/source_eof`。计划到 Pipeline running 的 P95 偏差目标 ≤10 秒及生产容量仍需在批准环境验收，同一窗口重复 Mission/Pipeline 数必须为 0。
@@ -386,9 +390,9 @@ I4 通过 `EnforcementService` 将候选围栏、候选规则、统一 AI 事件
 
 `platform/scripts/validate_i4_inter_xqh.py` 只创建带 `validation_fixture=true`、`detected_enforcement_clue=false` 的工程契约样本，使用真实 MP4/SRT 哈希验证证据和持久化；它不是检测器生成的违法线索，也不构成精度、法制或生产验收。
 
-## 1. Kafka 消息契约（当前实现/遗留，待迁移）
+## 1. Kafka 旧消息快照（历史，运行时已拒绝）
 
-> 本节基于 commit `e69acee` 的代码现状。以下无 `uav_` 前缀名称只允许迁移兼容，不得用于新增生产者或正式目标验收。
+> 本节基于 commit `e69acee` 的历史代码。以下无 `uav_` 前缀名称仅用于理解旧快照；当前运行时拒绝，不能作为迁移兼容、生产者输入或正式验收契约。
 
 ### Topic 命名
 - 统计：`statistics_{camera_id}`（如 `statistics_1`）
@@ -554,12 +558,12 @@ lon = anchor_lon + easting_m / (111320 × cos(radians(anchor_lat)))
 - 异步发送：主线程只调用 `_enqueue(topic, data)` 写入有界队列；后台 `kafka_sender` 线程调用 `KafkaProducer.send()`，Kafka 阻塞或短暂失败不会阻塞检测管道。
 
 ### 消费者
-- 当前消费者包含 Telegraf `[[inputs.kafka_consumer]]`，配置在 `services/telegraf/telegraf.conf`。该消费者属于待退役旧链路；目标消费者由 Platform/TimescaleDB writer 直接写入 `road9`。
+- 本段描述的旧消费者已删除。当前由 Platform/TimescaleDB writer 直接写入 `road9`。
 
-### ⚠️ 契约约束
-- **迁移期不得直接破坏旧消费者**：旧 `road_1`~`road_N` 和旧 Topic 只由兼容适配器接收；目标消息使用动态 `roads[]` 和 `uav_*` canonical Topic。
-- **禁止为旧 Grafana/InfluxQL 继续扩展契约**：新增道路、车道和指标只进入 canonical 消息及 PostgreSQL/TimescaleDB 模型。
-- **旧 Topic 必须下线**：切换窗口内可兼容或受控双投，但最终只保留第 0 节冻结的 `uav_*` Topic。
+### ⚠️ 当前约束
+- **拒绝旧契约**：旧 `road_1`~`road_N`、旧 Topic 和旧 `msg_type` 不由运行时接收；消息必须使用动态 `roads[]` 和第 0 节冻结的 `uav_*` canonical 契约。
+- **禁止恢复旧 Grafana/InfluxQL**：新增道路、车道和指标只进入 canonical 消息及 PostgreSQL/TimescaleDB 模型。
+- **禁止双投/fallback**：本机切换窗口已经结束，只保留第 0 节冻结的 `uav_*` Topic。
 
 ### 规划中：智慧交通主平台 AI 事件联动契约（PRD v1.7，尚未实现）
 
@@ -681,9 +685,9 @@ location ~ ^/camera_(\d+)$ {
 - Nginx 使用 Docker 内部 DNS（`127.0.0.11`）解析容器名
 - 只代理 `/video` 端点，不代理 `/`
 
-## 4. InfluxDB 数据模型（当前遗留，目标废弃）
+## 4. 旧时序数据模型（历史快照，已退役）
 
-> 本节仅用于迁移对账和定位当前代码。目标平台不再向 InfluxDB 写入或查询；新的指标字段不得加入此模型。
+> 本节仅保存历史快照，不再用于迁移对账或当前代码定位。目标平台不向旧时序库写入或查询，历史数据明确不迁移；新的指标字段不得加入此模型。
 
 ### 数据库
 - 名称：`influx`
@@ -753,7 +757,7 @@ def process(self, frame_element: FrameElement) -> None:
     """更新帧缓冲区，Flask 线程持续推送"""
 ```
 
-## 6. Grafana API（当前遗留，目标废弃）
+## 6. 旧 Dashboard API（历史快照，已退役）
 
 > 以下接口仅供清点/导出旧看板。目标部署移除 Grafana，不得把这些 API 纳入新平台验收。
 
@@ -788,7 +792,7 @@ Content-Type: application/json
 
 ## 7. 平台 Web 服务 API（platform/app/api/v1/）
 
-> 2026-05-29 从微服务重构为单体架构。除第 0 节明确的目标变更外，本节响应是当前代码现状；含 `influxdb`、旧 Topic 或旧 WebSocket 名称的示例尚待迁移。
+> 2026-05-29 从微服务重构为单体架构。含旧 Topic 或旧 WebSocket 名称的示例仅是历史快照；当前契约以第 0 节为准。
 
 ### 基础 URL
 - 本地开发：`http://localhost:8000`
@@ -956,28 +960,29 @@ Content-Type: application/json
 - 返回（201）：创建的无人机对象
 
 #### `GET /api/v1/system/health`
-- 下例为当前实现；目标实现使用 `timescaledb_connected` 替代 `influxdb_connected`。
 - 请求头：`Authorization: Bearer <token>`
 - 返回（200）：
 ```json
 {
   "status": "healthy",
-  "uptime_seconds": 3600,
+  "service": "platform",
   "kafka_connected": true,
-  "influxdb_connected": true
+  "ws_connections": 0,
+  "ws_channels": {},
+  "pipelines_active": 0
 }
 ```
 
 #### `GET /ready`
-- 公开端点，用于平台依赖就绪检查。下例为当前实现；目标依赖字段按本章前述 `database/timescaledb/kafka/websocket` 返回，不再暴露 `influxdb`。
+- 公开端点，用于平台依赖就绪检查；只返回 canonical 依赖。
 - 返回（200）：
 ```json
 {
-  "status": "degraded",
+  "status": "ready",
   "services": {
-    "database": "degraded",
-    "kafka": "degraded",
-    "influxdb": "healthy",
+    "database": "healthy",
+    "kafka": "healthy",
+    "timescaledb": "healthy",
     "pipeline_manager": "healthy"
   },
   "pipelines_active": 0
@@ -997,13 +1002,15 @@ Content-Type: application/json
 | GET | `/survey-tasks/{task_id}` | 读取任务、状态、质量和版本 |
 | POST | `/survey-tasks/{task_id}/actions` | 前置核验、选择批次、提交/退回/技术复核、取消 |
 | GET/POST | `/survey-tasks/{task_id}/capture-batches` | 查询批次/流式上传 MP4+SRT 并入队 |
-| POST | `/survey-tasks/{task_id}/capture-batches/import` | 从服务器 allowlist 导入真实 MP4+DJI SRT 并入队 |
+| POST | `/survey-tasks/{task_id}/capture-batches/import` | 以 `source_profile_id` 引用已登记 MP4+DJI SRT/Cloud JSON，或兼容显式 allowlist 资产键；响应含遥测类型、同步配置和原始引用状态 |
 | GET | `/survey-tasks/{task_id}/frames` | 查询原始帧、BEV、遥测和测量变换摘要 |
 | GET/POST | `/survey-tasks/{task_id}/measurements` | 查询/创建服务端 ENU 点线面量算 |
 | DELETE | `/survey-tasks/{task_id}/measurements/{measurement_id}` | 按 revision 删除当前量算版本 |
-| GET/POST | `/survey-tasks/{task_id}/reports` | 查询/生成 PDF+JSON+GeoJSON 成果包 |
+| GET/POST | `/survey-tasks/{task_id}/annotations` | 查询/创建关联持久关键帧的场景标注 |
+| PATCH/DELETE | `/survey-tasks/{task_id}/annotations/{annotation_id}` | 按 revision 修改/删除车辆、痕迹、散落物或其他对象标注并写审计 |
+| GET/POST | `/survey-tasks/{task_id}/reports` | 查询/生成 PDF+JSON+GeoJSON 成果包；列表与生成响应均返回 `pdf_url/json_url/geojson_url` |
 | POST | `/survey-tasks/{task_id}/reports/{report_id}/deliver` | 经批准质量规则、URL 和 outbox 投递主平台 |
-| GET | `/survey-evidence/{evidence_id}/content` | 鉴权读取不可变证据或报告对象 |
+| GET | `/survey-evidence/{evidence_id}/content` | 鉴权读取 managed 对象或 allowlist server asset，支持原视频 HTTP Range；拒绝绝对路径、路径穿越、缺失和哈希不一致引用；返回 `ETag`、`X-Content-SHA256`、`X-Storage-Backend`。server asset 首次登记或快速指纹变化时完整校验 SHA-256，未变化时以已持久化 size/mtime/ctime 快速确认，避免批次列表反复扫描大文件 |
 
 测绘结果 canonical schema 为 `uav.survey-result.v1`，事件固定
 `msg_type=uav_ai_event`、`event_type=survey_result`、
@@ -1011,7 +1018,7 @@ Content-Type: application/json
 
 ### WebSocket 端点
 
-> 以下无前缀 channel 和 `type` 仅是遗留/迁移期兼容，非目标契约。目标值以第 0.5 节为准：`uav_intersection:*`、全局 `uav_alerts`、路口级 `uav_alerts:*`、`uav_system`、`uav_telemetry:*`、`uav_calibration` 以及对应 `uav_*` type。
+> 当前运行时只接受第 0.5 节的 canonical channel 和 `uav_*` 业务消息 `type`。
 
 #### `WS /ws/realtime`
 - 连接 URL：`/ws/realtime?access_token=<JWT>`。缺失或无效 Token 在握手阶段以 `4401` 关闭；WebSocket 不读取 Cookie。
@@ -1019,18 +1026,18 @@ Content-Type: application/json
 ```json
 {
   "action": "subscribe",
-  "channels": ["intersection:INT_camera_1", "alerts", "telemetry:drone_001"]
+  "channels": ["uav_intersection:INT_camera_1", "uav_alerts", "uav_telemetry:drone_001"]
 }
 ```
 也兼容单频道格式：
 ```json
-{"action": "subscribe", "channel": "system"}
+{"action": "subscribe", "channel": "uav_system"}
 ```
 - 服务端推送消息格式：
 ```json
 {
-  "channel": "intersection:INT_camera_1",
-  "type": "stats",
+  "channel": "uav_intersection:INT_camera_1",
+  "type": "uav_stats",
   "data": {
     "intersection_id": "INT_camera_1",
     "cars": 12,
@@ -1041,16 +1048,15 @@ Content-Type: application/json
 }
 ```
 - Channel 命名（已对齐 Kafka topic）：
-  - `intersection:{intersection_id}` — 实时统计 + 轨迹完成 + 冲突事件
-  - `alerts` — 系统级告警（AlertEngine 触发）
-  - `telemetry:{drone_id}` — 无人机实时遥测
-- `system` — GPU/系统指标
+  - `uav_intersection:{intersection_id}` — 实时统计 + 轨迹完成 + 冲突事件
+  - `uav_alerts` / `uav_alerts:{intersection_id}` — 全局/路口级告警
+  - `uav_telemetry:{drone_id}` — 无人机实时遥测
+  - `uav_system` — GPU/系统指标
+  - `uav_calibration` — 标定/车道标注任务
 - Platform Kafka consumer 默认订阅 topic pattern：
 ```text
-((statistics|track_complete|conflicts|telemetry)_.*|system_metrics)
+^(uav_statistics_|uav_track_complete_|uav_conflicts_|uav_telemetry_).+$|^uav_system_metrics$
 ```
-
-该正则是当前代码现状；目标订阅正则见第 0.2 节。
 
 ### 认证机制
 - JWT token 在 `Authorization: Bearer <token>` 头中传递
@@ -1130,7 +1136,7 @@ file handler 并降级到 console，避免 reader/tracker/show worker 因同一�
 }
 ```
 
-新建 Pipeline 当前返回 canonical `topic_name=uav_statistics_10`。consumer 在迁移期继续接收 `statistics_10` 等旧 Topic，但新生产者不得再生成旧命名消息。
+新建 Pipeline 返回 canonical `topic_name=uav_statistics_10`；consumer 不接收无前缀 Topic。
 
 ### 路口管理 `/api/v1/intersections`
 
@@ -1152,6 +1158,7 @@ file handler 并降级到 console，避免 reader/tracker/show worker 因同一�
 | GET/PATCH | `/api/v1/drones/{id}` | 查询/按 revision 更新无人机档案 |
 | GET/POST | `/api/v1/drones/{id}/sources` | 查询/创建脱敏 SourceProfile |
 | GET | `/api/v1/sources` | 查询授权范围内全部 SourceProfile |
+| GET | `/api/v1/sources/{profile_id}/results` | 汇总该来源关联的 Mission、态势/轨迹/冲突计数、测绘批次、关键帧、场景/车道标注、报告和 Console2 深链 |
 | PATCH/POST | `/api/v1/drones/{id}/sources/{profile_id}` | 更新或校验成对数据源 |
 | GET | `/api/v1/drones/{id}/trajectory` | 无人机飞行轨迹 |
 | GET | `/api/v1/drones/{id}/hover-points` | 悬停点位列表 |
@@ -1188,12 +1195,12 @@ file handler 并降级到 console，避免 reader/tracker/show worker 因同一�
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/api/v1/trajectories/{intersection_id}` | 查询路口历史轨迹，支持 `period` / `limit` |
+| GET | `/api/v1/trajectories/{intersection_id}` | 查询路口历史轨迹，支持 `period` / `limit`、任务、数据源、车型、方向以及空间投放筛选 |
 | GET | `/api/v1/trajectories/{intersection_id}/conflicts` | 查询路口历史冲突事件，支持 `period` / `limit`，返回 TTC/PET、场景、证据、风险分和预测位置 |
 | POST | `/api/v1/trajectories/{intersection_id}/conflicts/{event_id}/review` | 管理员按 `expected_revision` 技术确认/驳回；409 表示 revision 冲突，结果不等同警情处置 |
 | GET | `/api/v1/trajectories/{intersection_id}/turn-summary` | 查询转向行为汇总 |
 
-Console GIS 页会在选中路口后调用 `GET /api/v1/trajectories/{intersection_id}?period=1h&limit=200`，展示最近历史轨迹数量、轨迹 ID、转向、车辆类型、均速、时长和轨迹点数，用于复盘 `track_complete` 写入后的路线形态。
+Console GIS 页会在选中路口后调用 `GET /api/v1/trajectories/{intersection_id}?period=all&limit=500&spatial_ready=true&min_world_points=6`，展示历史轨迹数量、轨迹 ID、转向、车辆类型、均速、时长和轨迹点数，用于复盘 `track_complete` 写入后的路线形态。`spatial_ready=true` 要求 `trajectory_world_m` 点数达到 `min_world_points` 且 `world_anchor_lat_lon` 非空；过滤必须在 PostgreSQL 的 `ORDER BY/LIMIT` 前执行，避免最新的降级短片段挤掉库内可投放轨迹。通用查询默认 `spatial_ready=false`，不会隐式丢弃事实。
 同一页面还会调用 `GET /api/v1/trajectories/{intersection_id}/conflicts?period=1h&limit=200`，展示历史冲突 pair、TTC/PET、业务场景、证据和风险分。I3 当前实现查询 TimescaleDB hypertable `uav_conflict_events`，并从普通表 `uav_conflict_reviews` 合并复核状态；正式 `/gis`、`/events` 路由不再读取轨迹/事件 Mock。
 
 ### 告警中心 `/api/v1/alerts`
@@ -1205,9 +1212,9 @@ Console GIS 页会在选中路口后调用 `GET /api/v1/trajectories/{intersecti
 | POST | `/api/v1/alerts/{id}/acknowledge` | 确认告警 |
 | GET | `/api/v1/alerts/{id}/push-logs` | 告警推送记录 |
 
-当前 AlertEngine 创建告警和确认告警时会写入 PostgreSQL `alerts` 表；目标迁移到 `road9` connection database 中的 `uav_alerts`（实际 schema 待确认）。Platform 启动时会加载已持久化告警，
+AlertEngine 创建告警和确认告警时写入 `road9` 中的 `uav_alerts`。Platform 启动时会加载已持久化告警，
 因此告警列表、详情和确认状态可跨服务重启保留。PostgreSQL 不可用时，平台降级为内存告警，
-实时 WebSocket `alerts` 推送仍继续工作，但历史告警不可跨重启恢复。
+实时 WebSocket 使用 `uav_alerts` / `uav_alerts:{intersection_id}`；数据库不可用时历史告警不可跨重启恢复。
 
 ### 系统监控 `/api/v1/system`
 
@@ -1227,12 +1234,13 @@ Console GIS 页会在选中路口后调用 `GET /api/v1/trajectories/{intersecti
 | GET | `/api/v1/calibration/summary` | 标定参数摘要 |
 | GET | `/api/v1/calibration/records` | 标定参数记录 |
 | GET | `/api/v1/calibration/lane-tasks` | 车道标注任务列表 |
+| POST | `/api/v1/calibration/lane-tasks/from-survey-frame` | 管理员从已持久化真实测绘关键帧幂等创建可恢复车道标注任务；不替代实时悬停触发 |
 | GET | `/api/v1/calibration/lane-tasks/{task_id}/image` | 管理员 Bearer 鉴权后返回车道标注任务 JPEG；Console2 以 Blob URL 注入画布，不公开直链 |
 | GET | `/api/v1/calibration/lane-annotations` | 已保存车道标注参数列表 |
 | GET | `/api/v1/calibration/lane-annotations/{intersection_id}` | 查询某路口可复用车道参数 |
 | POST | `/api/v1/calibration/lane-tasks/{task_id}/annotation` | 保存人工车道标注结果 |
 
-当前车道标注任务由 Kafka `stats` 消息触发；目标迁移后触发类型为 `uav_stats`。同一路口 `is_hovering=true` 且 `drone_position.easting_m/northing_m` 在 `lane_annotation_hover_radius_m` 半径内持续超过 `lane_annotation_hover_seconds`（默认 30 秒），并且该路口没有已保存人工车道参数时，平台生成一个 `pending` 任务。悬停统计消息会携带压缩 JPEG 快照字段 `annotation_snapshot_jpeg` 以及 `annotation_snapshot_width/height`；平台收到后落盘为任务图片，并通过 `image_url` 返回给 console 车道标注画布。
+当前车道标注任务由 Kafka `uav_stats` 消息触发。同一路口 `is_hovering=true` 且 `drone_position.easting_m/northing_m` 在 `lane_annotation_hover_radius_m` 半径内持续超过 `lane_annotation_hover_seconds`（默认 30 秒），并且该路口没有已保存人工车道参数时，平台生成一个 `pending` 任务。悬停统计消息会携带压缩 JPEG 快照字段 `annotation_snapshot_jpeg` 以及 `annotation_snapshot_width/height`；平台收到后落盘为任务图片，并通过 `image_url` 返回给 console 车道标注画布。
 
 保存请求：
 
@@ -1274,7 +1282,7 @@ Console GIS 页会在选中路口后调用 `GET /api/v1/trajectories/{intersecti
 
 ### 就绪检查 `/ready`
 
-> 下例为当前实现。目标响应移除 `influxdb`，增加 `timescaledb`，详见第 7 节健康检查约束。
+> 当前响应只包含 canonical 依赖，详见第 7 节健康检查约束。
 
 ```json
 {
@@ -1282,16 +1290,16 @@ Console GIS 页会在选中路口后调用 `GET /api/v1/trajectories/{intersecti
   "services": {
     "database": "healthy",
     "kafka": "healthy",
-    "influxdb": "healthy",
+    "timescaledb": "healthy",
     "pipeline_manager": "healthy"
   },
   "pipelines_active": 2
 }
 ```
 
-## 9. WebSocket 消息类型（遗留/迁移期兼容，非目标契约）
+## 9. WebSocket 旧消息类型（历史快照，运行时已拒绝）
 
-> 本章所有无 `uav_` 前缀的 channel 和 `type` 只用于当前代码识别与迁移，不得作为目标接口继续开发；目标契约见第 0.5 节。
+> 本章所有无 `uav_` 前缀的 channel 和 `type` 仅保存历史快照；当前代码不识别、不迁移并直接拒绝。当前契约见第 0.5 节。
 
 ### `stats` 消息
 通过 `intersection:{id}` 频道推送，与 Kafka statistics topic 格式一致（含 direction_flow, drone_position, lane_stats）。
@@ -1326,8 +1334,8 @@ Console GIS 页会在选中路口后调用 `GET /api/v1/trajectories/{intersecti
 }
 ```
 
-Drones 页面会根据 `/api/v1/drones` 返回的无人机 ID 动态订阅
-`telemetry:{drone_id}`，收到 WebSocket 消息后立即覆盖轮询得到的最新遥测值；
+历史 Drones 页面曾根据 `/api/v1/drones` 返回的无人机 ID 订阅
+`telemetry:{drone_id}`；当前页面只订阅第 0.5 节的 `uav_telemetry:{drone_id}`。收到 WebSocket 消息后立即覆盖轮询得到的最新遥测值；
 `GET /api/v1/telemetry/{id}` 仍保留为首屏加载和断线兜底。
 
 ### `alert_new` 消息
@@ -1348,3 +1356,10 @@ Drones 页面会根据 `/api/v1/drones` 返回的无人机 ID 动态订阅
   "ts": 1234567890.789
 }
 ```
+
+## 2026-07-16 真实事件与轨迹查询补充
+
+- `GET /api/v1/events`：统一返回 `congestion`、`quality_degradation`、`survey_result` 和 `conflict`，保留 `mission_id` / `pipeline_id` / `source_profile_id` / `inter_id` / `road_data_version` / `quality_status` 与 `evidence_refs`。
+- `GET /api/v1/events/{event_id}`：返回规则指标、关联轨迹和内容寻址证据；`PUT /api/v1/events/{event_id}/review` 使用 `expected_revision` 实现技术复核乐观锁。
+- `GET /api/v1/trajectories/{intersection_id}` 支持 `period=all|1h|24h`、`mission_id`、`source_profile_id`、车型和方向筛选；`all` 专用于离线验收的历史业务时间。地图投放可显式使用 `spatial_ready=true&min_world_points=N`，先在 PostgreSQL 过滤具有锚点且至少 N 个世界坐标点的轨迹，再应用 `limit`。
+- 持续拥堵证据在第 30 个连续超阈值样本定格；页面不得以打开详情时的当前画面替换历史证据。

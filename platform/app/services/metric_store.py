@@ -1,12 +1,13 @@
 """Deep persistence module for canonical UAV metric messages.
 
 `MetricStore.persist` is the only Kafka-to-database write interface.  It hides
-legacy-envelope adaptation, identity validation, inbox idempotency, fact
-expansion and the single-transaction boundary required by ADR-019.
+identity validation, inbox idempotency, fact expansion and the
+single-transaction boundary required by ADR-019.
 """
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import re
@@ -29,6 +30,9 @@ from app.models.metrics import (
     TrafficMetric,
 )
 from app.models.mission import MessageDeadLetter, MessageInbox
+from app.models.survey import EvidenceItem, EvidencePackage
+from app.core.config import settings
+from app.services.survey_storage import ContentAddressedStore
 
 
 SOURCE_SYSTEM = "uav_traffic_analyzer_ai"
@@ -39,17 +43,17 @@ CANONICAL_TYPES = {
     "uav_telemetry",
     "uav_system_metrics",
 }
-LEGACY_TYPES = {
-    "stats": "uav_stats",
-    "track_complete": "uav_track_complete",
-    "conflict": "uav_conflict",
-    "telemetry": "uav_telemetry",
-    "system_metrics": "uav_system_metrics",
+CANONICAL_TOPIC_PATTERNS = {
+    "uav_stats": r"uav_statistics_[A-Za-z0-9._-]+",
+    "uav_track_complete": r"uav_track_complete_[A-Za-z0-9._-]+",
+    "uav_conflict": r"uav_conflicts_[A-Za-z0-9._-]+",
+    "uav_telemetry": r"uav_telemetry_[A-Za-z0-9._-]+",
+    "uav_system_metrics": r"uav_system_metrics",
 }
 
 
 class MetricContractError(ValueError):
-    """Message does not satisfy the frozen canonical/legacy adapter contract."""
+    """Message does not satisfy the frozen canonical contract."""
 
 
 class MessageIdentityConflict(MetricContractError):
@@ -117,6 +121,8 @@ def _parse_datetime(value: Any) -> datetime | None:
 
 
 def _period_start(period: str) -> datetime:
+    if period == "all":
+        return datetime.min.replace(tzinfo=UTC)
     match = re.fullmatch(r"(\d+)([smhd])", period)
     if not match:
         raise MetricContractError("period must match <number><s|m|h|d>")
@@ -256,45 +262,29 @@ class PostgresMetricStoreAdapter:
 
     def _normalize(self, envelope: MessageEnvelope) -> dict[str, Any]:
         raw = envelope.payload
-        raw_type = str(raw.get("msg_type") or "stats")
-        is_canonical = raw_type in CANONICAL_TYPES
-        if is_canonical:
-            source_system = raw.get("source_system")
-            message_id = raw.get("message_id")
-            schema_version = raw.get("schema_version")
-            occurred_at = _parse_datetime(raw.get("occurred_at"))
-            if source_system != SOURCE_SYSTEM:
-                raise MetricContractError("canonical source_system is invalid")
-            if not message_id or schema_version != f"{raw_type}/v1" or not occurred_at:
-                raise MetricContractError("canonical message_id/schema_version/occurred_at is invalid")
-            data = raw.get("data")
-            if not isinstance(data, dict):
-                raise MetricContractError("canonical data must be an object")
-            produced_at = _parse_datetime(raw.get("produced_at"))
-            if not produced_at:
-                raise MetricContractError("canonical produced_at is invalid")
-            time_quality = str(raw.get("time_quality") or "verified")
-            source_time_semantics = str(raw.get("source_time_semantics") or "event_time")
-        else:
-            canonical_type = LEGACY_TYPES.get(raw_type)
-            if not canonical_type:
-                raise MetricContractError(f"unsupported msg_type: {raw_type}")
-            raw_type = canonical_type
-            source_system = SOURCE_SYSTEM
-            transport_id = f"{envelope.topic}:{envelope.partition}:{envelope.offset}"
-            message_id = str(raw.get("message_id") or f"legacy:{transport_id}:{_json_hash(raw)[:16]}")
-            schema_version = f"{raw_type}/v1"
-            data = dict(raw)
-            source_value = raw.get("occurred_at", raw.get("timestamp", raw.get("timestamp_last")))
-            occurred_at = _parse_datetime(source_value)
-            if occurred_at:
-                time_quality = "verified"
-                source_time_semantics = "event_time"
-            else:
-                occurred_at = datetime.now(UTC)
-                time_quality = "ingest_only"
-                source_time_semantics = "consumer_time"
-            produced_at = occurred_at
+        raw_type = str(raw.get("msg_type") or "")
+        if raw_type not in CANONICAL_TYPES:
+            raise MetricContractError(f"unsupported canonical msg_type: {raw_type or '<missing>'}")
+        if not re.fullmatch(CANONICAL_TOPIC_PATTERNS[raw_type], envelope.topic):
+            raise MetricContractError(
+                f"unsupported canonical topic for {raw_type}: {envelope.topic or '<missing>'}"
+            )
+        source_system = raw.get("source_system")
+        message_id = raw.get("message_id")
+        schema_version = raw.get("schema_version")
+        occurred_at = _parse_datetime(raw.get("occurred_at"))
+        if source_system != SOURCE_SYSTEM:
+            raise MetricContractError("canonical source_system is invalid")
+        if not message_id or schema_version != f"{raw_type}/v1" or not occurred_at:
+            raise MetricContractError("canonical message_id/schema_version/occurred_at is invalid")
+        data = raw.get("data")
+        if not isinstance(data, dict):
+            raise MetricContractError("canonical data must be an object")
+        produced_at = _parse_datetime(raw.get("produced_at"))
+        if not produced_at:
+            raise MetricContractError("canonical produced_at is invalid")
+        time_quality = str(raw.get("time_quality") or "verified")
+        source_time_semantics = str(raw.get("source_time_semantics") or "event_time")
 
         normalized = {
             **raw,
@@ -311,7 +301,7 @@ class PostgresMetricStoreAdapter:
             "inter_id": raw.get("inter_id", data.get("inter_id")),
             "road_data_version": raw.get("road_data_version", data.get("road_data_version")),
             "road_context_status": raw.get("road_context_status", data.get("road_context_status", "missing")),
-            "source_time_raw": raw.get("source_time_raw") or ({"value": source_value} if not is_canonical else None),
+            "source_time_raw": raw.get("source_time_raw"),
             "source_time_semantics": source_time_semantics,
             "time_quality": time_quality,
             "quality_status": str(raw.get("quality_status", data.get("quality_status", "unverified"))),
@@ -340,6 +330,14 @@ class PostgresMetricStoreAdapter:
             "payload": _json_safe(value),
         }
 
+    @staticmethod
+    def _lineage(data: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "mission_id": data.get("mission_id"),
+            "pipeline_id": data.get("pipeline_id") or data.get("run_id"),
+            "source_profile_id": data.get("source_profile_id"),
+        }
+
     def _add_facts(
         self, session: AsyncSession, envelope: MessageEnvelope, value: dict[str, Any]
     ) -> list[str]:
@@ -354,7 +352,53 @@ class PostgresMetricStoreAdapter:
 
     def _add_stats(self, session: AsyncSession, envelope: MessageEnvelope, value: dict[str, Any]) -> list[str]:
         data = value["data"]
+        snapshot_encoded = data.pop("event_snapshot_jpeg", None)
+        snapshot_width = data.pop("event_snapshot_width", None)
+        snapshot_height = data.pop("event_snapshot_height", None)
+        evidence_references: list[str] = []
+        if snapshot_encoded:
+            try:
+                snapshot = base64.b64decode(snapshot_encoded, validate=True)
+                stored = ContentAddressedStore(settings.survey_storage_dir).ingest_bytes(snapshot)
+                candidate_id = hashlib.sha256(
+                    f"stats-evidence:{value['message_id']}".encode()
+                ).hexdigest()[:40]
+                package_id = hashlib.sha256(
+                    f"stats-package:{value['message_id']}".encode()
+                ).hexdigest()[:40]
+                package = EvidencePackage(
+                    id=package_id,
+                    task_id=None,
+                    owner_type="ai_event_candidate",
+                    owner_id=value["message_id"],
+                    source_event_id=value["message_id"],
+                    integrity_status="hash_verified",
+                    manifest_hash=stored.sha256,
+                )
+                session.add(EvidenceItem(
+                    id=candidate_id,
+                    package_id=package_id,
+                    package=package,
+                    task_id=None,
+                    kind="event_keyframe",
+                    storage_backend="managed",
+                    storage_key=stored.storage_key,
+                    sha256=stored.sha256,
+                    media_type="image/jpeg",
+                    size_bytes=stored.size_bytes,
+                    item_metadata={"width": snapshot_width, "height": snapshot_height},
+                ))
+                data["evidence_refs"] = [{
+                    "id": candidate_id,
+                    "kind": "event_keyframe",
+                    "url": f"/api/v1/survey-evidence/{candidate_id}/content",
+                    "sha256": stored.sha256,
+                }]
+                evidence_references.append(f"uav_evidence_items:{candidate_id}")
+            except (ValueError, TypeError):
+                data["evidence_status"] = "snapshot_decode_failed"
         common = self._common(envelope, value)
+        lineage = self._lineage(data)
         observed_at = value["occurred_at"]
         inter_id = value.get("inter_id") or value.get("intersection_id") or "unmatched"
         rows: list[tuple[str, str, dict[str, Any]]] = [("intersection", str(inter_id), data)]
@@ -395,10 +439,11 @@ class PostgresMetricStoreAdapter:
                 dropped_samples=_int(data.get("dropped_samples")),
                 coverage_ratio=_float(data.get("coverage_ratio")),
                 drop_reason=data.get("drop_reason"),
+                **lineage,
                 **common,
             ))
             references.append(f"uav_traffic_metrics:{fact_id}:{observed_at.isoformat()}")
-        return references
+        return [*references, *evidence_references]
 
     def _add_track(self, session: AsyncSession, envelope: MessageEnvelope, value: dict[str, Any]) -> list[str]:
         data = value["data"]
@@ -408,6 +453,12 @@ class PostgresMetricStoreAdapter:
         event_id = hashlib.sha256(f"track:{value['message_id']}".encode()).hexdigest()[:40]
         trajectory_world = data.get("trajectory_world_m") or data.get("positions_bev") or []
         trajectory_px = data.get("trajectory_px") or []
+        time_offsets = data.get("trajectory_time_offsets_sec") or []
+        duration_sec = _float(data.get("duration_sec"))
+        started_at = _parse_datetime(data.get("started_at"))
+        if started_at is None and duration_sec is not None:
+            started_at = ended_at - timedelta(seconds=max(duration_sec, 0.0))
+        lineage = self._lineage(data)
         session.add(TrackEvent(
             id=event_id,
             inter_id=str(value.get("inter_id") or value.get("intersection_id") or "unmatched"),
@@ -415,7 +466,7 @@ class PostgresMetricStoreAdapter:
             track_id=track_id,
             vehicle_class=data.get("vehicle_class", data.get("class_name")),
             turn_behavior=data.get("turn_behavior"),
-            started_at=_parse_datetime(data.get("started_at", data.get("timestamp_first"))),
+            started_at=started_at,
             ended_at=ended_at,
             duration_sec=_float(data.get("duration_sec")),
             avg_speed_kmh=_float(data.get("avg_speed_kmh")),
@@ -430,6 +481,7 @@ class PostgresMetricStoreAdapter:
             end_lane_id=str(data["end_lane"]) if data.get("end_lane") is not None else data.get("end_lane_id"),
             world_anchor_lat_lon=data.get("world_anchor_lat_lon"),
             map_match_quality=data.get("map_match_quality"),
+            **lineage,
             **common,
         ))
         refs = [f"uav_track_events:{event_id}"]
@@ -438,6 +490,10 @@ class PostgresMetricStoreAdapter:
             world = trajectory_world[index] if index < len(trajectory_world) else None
             pixel = trajectory_px[index] if index < len(trajectory_px) else None
             point_time = _parse_datetime(world[2]) if isinstance(world, list) and len(world) > 2 else None
+            if point_time is None and index < len(time_offsets):
+                offset = _float(time_offsets[index])
+                if offset is not None and duration_sec is not None:
+                    point_time = ended_at - timedelta(seconds=max(duration_sec - offset, 0.0))
             point_time = point_time or ended_at
             point_id = hashlib.sha256(f"{event_id}:{index}".encode()).hexdigest()[:40]
             session.add(TrackPoint(
@@ -451,6 +507,7 @@ class PostgresMetricStoreAdapter:
                 pixel_y=_float(pixel[1]) if isinstance(pixel, list) and len(pixel) > 1 else None,
                 world_x_m=_float(world[0]) if isinstance(world, list) and len(world) > 1 else None,
                 world_y_m=_float(world[1]) if isinstance(world, list) and len(world) > 1 else None,
+                **lineage,
                 **common,
             ))
             refs.append(f"uav_track_points:{point_id}:{point_time.isoformat()}")
@@ -458,9 +515,51 @@ class PostgresMetricStoreAdapter:
 
     def _add_conflict(self, session: AsyncSession, envelope: MessageEnvelope, value: dict[str, Any]) -> list[str]:
         data = value["data"]
-        common = self._common(envelope, value)
         occurred_at = value["occurred_at"]
         fact_id = hashlib.sha256(f"conflict:{value['message_id']}".encode()).hexdigest()[:40]
+        snapshot_encoded = data.pop("evidence_snapshot_jpeg", None)
+        snapshot_width = data.pop("evidence_snapshot_width", None)
+        snapshot_height = data.pop("evidence_snapshot_height", None)
+        references: list[str] = []
+        if snapshot_encoded:
+            try:
+                snapshot = base64.b64decode(snapshot_encoded, validate=True)
+                stored = ContentAddressedStore(settings.survey_storage_dir).ingest_bytes(snapshot)
+                package_id = hashlib.sha256(f"conflict-package:{fact_id}".encode()).hexdigest()[:40]
+                evidence_id = hashlib.sha256(f"conflict-frame:{fact_id}".encode()).hexdigest()[:40]
+                package = EvidencePackage(
+                    id=package_id,
+                    task_id=None,
+                    owner_type="conflict_event",
+                    owner_id=fact_id,
+                    source_event_id=value["message_id"],
+                    integrity_status="hash_verified",
+                    manifest_hash=stored.sha256,
+                )
+                session.add(EvidenceItem(
+                    id=evidence_id,
+                    package_id=package_id,
+                    package=package,
+                    task_id=None,
+                    kind="conflict_keyframe",
+                    storage_backend="managed",
+                    storage_key=stored.storage_key,
+                    sha256=stored.sha256,
+                    media_type="image/jpeg",
+                    size_bytes=stored.size_bytes,
+                    item_metadata={"width": snapshot_width, "height": snapshot_height},
+                ))
+                data["evidence_refs"] = [{
+                    "id": evidence_id,
+                    "kind": "conflict_keyframe",
+                    "url": f"/api/v1/survey-evidence/{evidence_id}/content",
+                    "sha256": stored.sha256,
+                }]
+                references.append(f"uav_evidence_items:{evidence_id}")
+            except (ValueError, TypeError):
+                data["evidence_status"] = "snapshot_decode_failed"
+        common = self._common(envelope, value)
+        lineage = self._lineage(data)
         session.add(ConflictEvent(
             id=fact_id,
             occurred_at=occurred_at,
@@ -480,20 +579,22 @@ class PostgresMetricStoreAdapter:
             motor_position_m=data.get("motor_position_m"),
             non_motor_position_m=data.get("non_motor_position_m"),
             world_anchor_lat_lon=data.get("world_anchor_lat_lon"),
+            **lineage,
             **common,
         ))
-        return [f"uav_conflict_events:{fact_id}:{occurred_at.isoformat()}"]
+        return [f"uav_conflict_events:{fact_id}:{occurred_at.isoformat()}", *references]
 
     def _add_telemetry(self, session: AsyncSession, envelope: MessageEnvelope, value: dict[str, Any]) -> list[str]:
         data = value["data"]
         common = self._common(envelope, value)
         observed_at = value["occurred_at"]
-        fact_id = hashlib.sha256(f"telemetry:{value['message_id']}".encode()).hexdigest()[:40]
+        fact_id = hashlib.sha256(f"uav_telemetry:{value['message_id']}".encode()).hexdigest()[:40]
         session.add(TelemetryMetric(
             id=fact_id,
             observed_at=observed_at,
             mission_id=data.get("mission_id"),
             pipeline_id=data.get("pipeline_id"),
+            source_profile_id=data.get("source_profile_id"),
             latitude=_float(data.get("latitude", data.get("lat"))),
             longitude=_float(data.get("longitude", data.get("lon"))),
             altitude_m=_float(data.get("altitude_m", data.get("altitude"))),
@@ -576,18 +677,51 @@ class PostgresMetricStoreAdapter:
 
     async def query_tracks(
         self, inter_id: str, period: str, limit: int, class_name: str | None = None,
-        turn_behavior: str | None = None,
+        turn_behavior: str | None = None, mission_id: str | None = None,
+        source_profile_id: str | None = None, quality_status: str | None = None,
+        start_at: datetime | None = None, end_at: datetime | None = None,
+        spatial_ready: bool = False,
+        min_world_points: int = 2,
     ) -> list[dict]:
         statement = select(TrackEvent).where(
             TrackEvent.inter_id == inter_id,
-            TrackEvent.ended_at >= _period_start(period),
+            TrackEvent.ended_at >= (start_at or _period_start(period)),
         )
+        if end_at:
+            statement = statement.where(TrackEvent.ended_at <= end_at)
         if class_name:
             statement = statement.where(TrackEvent.vehicle_class == class_name)
         if turn_behavior:
             statement = statement.where(TrackEvent.turn_behavior == turn_behavior)
+        if mission_id:
+            statement = statement.where(TrackEvent.mission_id == mission_id)
+        if source_profile_id:
+            statement = statement.where(TrackEvent.source_profile_id == source_profile_id)
+        if quality_status:
+            statement = statement.where(TrackEvent.quality_status == quality_status)
+        if spatial_ready:
+            statement = statement.where(
+                func.json_array_length(TrackEvent.trajectory_world_m) >= min_world_points,
+                TrackEvent.world_anchor_lat_lon.is_not(None),
+            )
         rows = (await self._execute(statement.order_by(TrackEvent.ended_at.desc()).limit(limit))).scalars().all()
-        return [dict(row.payload.get("data", row.payload), id=row.id) for row in rows]
+        return [
+            dict(
+                row.payload.get("data", row.payload),
+                id=row.id,
+                mission_id=row.mission_id,
+                pipeline_id=row.pipeline_id,
+                source_profile_id=row.source_profile_id,
+                inter_id=row.inter_id,
+                road_data_version=row.road_data_version,
+                road_context_status=row.road_context_status,
+                quality_status=row.quality_status,
+                time_quality=row.time_quality,
+                started_at=row.started_at.isoformat() if row.started_at else None,
+                ended_at=row.ended_at.isoformat(),
+            )
+            for row in rows
+        ]
 
     async def query_conflicts(self, inter_id: str, period: str, limit: int) -> list[dict]:
         statement = select(ConflictEvent).where(

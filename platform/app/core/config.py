@@ -26,7 +26,6 @@ class Settings(BaseSettings):
     db_password: str = "traffic123"
     db_name: str = "road9"
     db_bootstrap_database: str = "postgres"
-    db_legacy_name: str = "traffic_platform"
 
     @property
     def database_url(self) -> str:
@@ -35,14 +34,7 @@ class Settings(BaseSettings):
     # ── Kafka ──
     kafka_bootstrap: str = "kafka:9092"
     kafka_consumer_group: str = "vision-service"
-    kafka_topics_pattern: str = "((uav_)?(statistics|track_complete|conflicts|telemetry)_.*|(uav_)?system_metrics)"
-
-    # ── InfluxDB ──
-    influx_host: str = "influxdb"
-    influx_port: int = 8086
-    influx_db: str = "traffic"
-    influx_user: str = ""
-    influx_pass: str = ""
+    kafka_topics_pattern: str = "(uav_(statistics|track_complete|conflicts|telemetry)_.*|uav_system_metrics)"
 
     # ── JWT ──
     jwt_secret_key: str = "your-secret-key-change-in-production"

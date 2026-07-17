@@ -37,17 +37,16 @@ describe('useWebSocket', () => {
 
   it('authenticates, subscribes, normalizes, deduplicates, and unsubscribes on unmount', () => {
     const onMessage = vi.fn()
-    const view = render(<Probe channels={['uav_intersection:INT-1', 'intersection:INT-1']} onMessage={onMessage} />)
+    const view = render(<Probe channels={['uav_intersection:INT-1']} onMessage={onMessage} />)
     expect(sockets[0].url).toContain('access_token=ws-token')
 
     act(() => sockets[0].onopen())
     expect(screen.getByText('connected')).toBeInTheDocument()
     expect(sockets[0].sent).toEqual([
       { action: 'subscribe', channel: 'uav_intersection:INT-1' },
-      { action: 'subscribe', channel: 'intersection:INT-1' },
     ])
 
-    const message = JSON.stringify({ type: 'stats', message_id: 'M-1', data: { cars: 3 } })
+    const message = JSON.stringify({ type: 'uav_stats', message_id: 'M-1', data: { cars: 3 } })
     act(() => {
       sockets[0].onmessage({ data: message })
       sockets[0].onmessage({ data: message })

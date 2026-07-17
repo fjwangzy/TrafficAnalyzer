@@ -38,12 +38,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-legacy-influx = [
-    # Migration inventory only; ADR-019 target images must not install it.
-    "influxdb>=5.3.2",
-]
 dev = [
-    "influxdb>=5.3.2",
     "pytest>=8.0.0",
     "pytest-asyncio>=0.24.0",
     "black>=24.0.0",

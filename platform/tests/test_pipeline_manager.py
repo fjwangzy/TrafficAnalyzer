@@ -54,10 +54,16 @@ class PipelineManagerTest(unittest.IsolatedAsyncioTestCase):
                 video_src="test_videos/inter_xqh/demo.mp4",
                 roads_json="",
                 telemetry_source="srt",
-                telemetry_file_path="test_videos/inter_xqh/telemetry.srt",
+                telemetry_file_path="test_videos/mp4new/srt/海右路 0624.txt",
                 telemetry_time_offset_sec=12.25,
                 telemetry_sync_tolerance_sec=2.5,
                 kafka_bootstrap="kafka:29092",
+                mission_id="MIS-REAL-001",
+                source_profile_id="SRC-REAL-001",
+                inter_id="INT_camera_1",
+                road_data_version="road-v1",
+                road_context_status="complete",
+                quality_status="verified",
             )
 
         self._monitor_task = manager._monitor_task
@@ -74,7 +80,7 @@ class PipelineManagerTest(unittest.IsolatedAsyncioTestCase):
                 "hydra/job_logging=disabled",
                 "telemetry.enabled=True",
                 "telemetry.source=srt",
-                "telemetry.file_path=test_videos/inter_xqh/telemetry.srt",
+                "telemetry.file_path='test_videos/mp4new/srt/海右路 0624.txt'",
                 "telemetry.time_offset_sec=12.25",
                 "telemetry.sync_tolerance_sec=2.5",
             ),
@@ -83,7 +89,16 @@ class PipelineManagerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(captured["env"]["ROADS_JSON"], "")
         self.assertEqual(captured["env"]["TOPIC_NAME"], "uav_statistics_10")
         self.assertEqual(captured["env"]["CAMERA_ID"], "10")
+        self.assertEqual(captured["env"]["DRONE_ID"], "drone_1")
         self.assertEqual(captured["env"]["INTERSECTION_ID"], "INT_camera_1")
+        self.assertEqual(captured["env"]["INTER_ID"], "INT_camera_1")
+        self.assertEqual(captured["env"]["MISSION_ID"], "MIS-REAL-001")
+        self.assertEqual(captured["env"]["PIPELINE_ID"], pipeline.pipeline_id)
+        self.assertEqual(captured["env"]["RUN_ID"], pipeline.pipeline_id)
+        self.assertEqual(captured["env"]["SOURCE_PROFILE_ID"], "SRC-REAL-001")
+        self.assertEqual(captured["env"]["ROAD_DATA_VERSION"], "road-v1")
+        self.assertEqual(captured["env"]["ROAD_CONTEXT_STATUS"], "complete")
+        self.assertEqual(captured["env"]["QUALITY_STATUS"], "verified")
         self.assertEqual(captured["env"]["VIDEO_PORT"], "8101")
         self.assertEqual(captured["env"]["FRAME_STRIDE"], "12")
         self.assertEqual(captured["env"]["KAFKA_BOOTSTRAP"], "kafka:29092")
@@ -96,7 +111,7 @@ class PipelineManagerTest(unittest.IsolatedAsyncioTestCase):
             intersection_id="INT_camera_1",
             video_src="test_videos/test_video.mp4",
             roads_json="",
-            topic_name="statistics_10",
+            topic_name="uav_statistics_10",
             camera_id=10,
             status=PipelineStatus.RUNNING,
             error_message="previous error",
@@ -116,7 +131,7 @@ class PipelineManagerTest(unittest.IsolatedAsyncioTestCase):
             intersection_id="INT_camera_1",
             video_src="test_videos/test_video.mp4",
             roads_json="",
-            topic_name="statistics_10",
+            topic_name="uav_statistics_10",
             camera_id=10,
             status=PipelineStatus.RUNNING,
             stderr_tail="ValueError: boom",
@@ -164,15 +179,12 @@ class PlatformDeploymentConfigTest(unittest.TestCase):
 
     def test_compose_topic_patterns_include_system_metrics(self):
         root = Path(__file__).resolve().parents[2]
-        compose_files = [
-            root / "docker-compose.yaml",
-            root / "platform" / "docker" / "docker-compose.platform.yml",
-        ]
+        compose_files = [root / "docker-compose.yaml"]
 
         for path in compose_files:
             with self.subTest(path=str(path)):
                 text = path.read_text()
-                self.assertIn("system_metrics", text)
+                self.assertIn("uav_system_metrics", text)
                 self.assertIn("track_complete", text)
                 self.assertIn("conflicts", text)
                 self.assertIn("telemetry", text)

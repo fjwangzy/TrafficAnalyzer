@@ -1,6 +1,6 @@
 {
   "schema_version": "uav.i6-target-stack/v1",
-  "generated_at": "2026-07-15T07:12:19.845880Z",
+  "generated_at": "2026-07-16T04:42:49.192745Z",
   "environment": "isolated_local_non_contract",
   "project": "traffic_analyzer_i6_target_full",
   "containers": {
@@ -19,14 +19,72 @@
     "console2": {
       "status": "running",
       "health": "none"
+    },
+    "nginx": {
+      "status": "running",
+      "health": "none"
     }
   },
   "database": {
     "name": "road9",
-    "alembic_revision": "20260715_0009",
+    "alembic_revision": "20260715_0010",
     "timescaledb_version": "2.28.2",
     "hypertables": 5,
-    "uav_tables": 41
+    "hypertable_names": [
+      "uav_conflict_events",
+      "uav_system_metrics",
+      "uav_telemetry_metrics",
+      "uav_track_points",
+      "uav_traffic_metrics"
+    ],
+    "uav_tables": 41,
+    "uav_table_names": [
+      "uav_ai_events",
+      "uav_alembic_version",
+      "uav_alerts",
+      "uav_audit_logs",
+      "uav_capture_batches",
+      "uav_capture_frames",
+      "uav_capture_ingestion_jobs",
+      "uav_conflict_events",
+      "uav_conflict_reviews",
+      "uav_dead_letters",
+      "uav_device_intersection_bindings",
+      "uav_drones",
+      "uav_enforcement_clues",
+      "uav_enforcement_review_audits",
+      "uav_enforcement_rules",
+      "uav_enforcement_zones",
+      "uav_event_delivery_attempts",
+      "uav_event_feedback",
+      "uav_event_outbox",
+      "uav_evidence_items",
+      "uav_evidence_packages",
+      "uav_flight_plans",
+      "uav_message_dead_letters",
+      "uav_message_inbox",
+      "uav_missions",
+      "uav_pipelines",
+      "uav_road_context_snapshots",
+      "uav_rule_versions",
+      "uav_scene_annotations",
+      "uav_survey_measurements",
+      "uav_survey_reports",
+      "uav_survey_tasks",
+      "uav_system_metrics",
+      "uav_telemetry_metrics",
+      "uav_telemetry_sources",
+      "uav_track_events",
+      "uav_track_points",
+      "uav_traffic_metrics",
+      "uav_users",
+      "uav_video_sources",
+      "uav_visual_lane_bindings"
+    ],
+    "admin_rows": 1,
+    "business_rows": 0,
+    "legacy_database_count": 0,
+    "migration_isolation_tables": []
   },
   "api": {
     "ready": {
@@ -47,20 +105,19 @@
     "image_mode": "apache_kraft",
     "canonical_probe_topic": "uav_statistics_i6_probe"
   },
-  "target_image": {
-    "influxdb_module": null
-  },
   "checks": {
     "containers_running": true,
     "dependency_health": true,
     "platform_ready": true,
+    "nginx_platform_proxy": true,
     "console_proxy_login": true,
     "dashboard_via_console": true,
     "system_health_via_console": true,
     "openapi_available": true,
-    "target_image_without_influx_client": true,
     "road9_at_head": true,
     "timescaledb_hypertables": true,
+    "only_seed_admin": true,
+    "no_legacy_database_or_migration_tables": true,
     "canonical_kafka_topic": true
   },
   "passed": true,

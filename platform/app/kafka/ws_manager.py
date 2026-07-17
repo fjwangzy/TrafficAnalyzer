@@ -1,6 +1,7 @@
 """WebSocket connection manager with channel-based pub/sub."""
 import asyncio
 import json
+import re
 import time
 from fastapi import WebSocket
 from typing import Any
@@ -34,6 +35,8 @@ class WSManager:
 
     async def subscribe(self, ws: WebSocket, channel: str):
         """Subscribe a connection to a channel."""
+        if not self._is_canonical_channel(channel):
+            raise ValueError(f"unsupported WebSocket channel: {channel}")
         async with self._lock:
             if channel not in self._channels:
                 self._channels[channel] = set()
@@ -52,6 +55,11 @@ class WSManager:
 
     async def broadcast(self, channel: str, message: dict[str, Any]):
         """Broadcast a message to all subscribers of a channel."""
+        if not self._is_canonical_channel(channel):
+            raise ValueError(f"unsupported WebSocket channel: {channel}")
+        message_type = str(message.get("type", ""))
+        if not self._is_canonical_message_type(message_type):
+            raise ValueError(f"unsupported WebSocket message type: {message_type}")
         async with self._lock:
             subscribers = set(self._channels.get(channel, set()))
 
@@ -108,19 +116,25 @@ class WSManager:
             # Used for dev/testing: inject mock data to verify frontend displays.
             # The message must contain "channel", "type", and "data" fields.
             channel = msg.get("channel", "")
-            if channel:
-                broadcast_msg = {
-                    "channel": channel,
-                    "type": msg.get("type", "stats"),
-                    "data": msg.get("data", {}),
-                    "ts": time.time(),
-                }
-                await self.broadcast(channel, broadcast_msg)
-                await ws.send_text(json.dumps({
-                    "action": "published",
-                    "channel": channel,
-                    "ts": time.time(),
-                }))
+            message_type = str(msg.get("type", ""))
+            if not self._is_canonical_channel(channel):
+                await ws.send_text(json.dumps({"error": "unsupported_channel"}))
+                return
+            if not self._is_canonical_message_type(message_type):
+                await ws.send_text(json.dumps({"error": "unsupported_message_type"}))
+                return
+            broadcast_msg = {
+                "channel": channel,
+                "type": message_type,
+                "data": msg.get("data", {}),
+                "ts": time.time(),
+            }
+            await self.broadcast(channel, broadcast_msg)
+            await ws.send_text(json.dumps({
+                "action": "published",
+                "channel": channel,
+                "ts": time.time(),
+            }))
 
         elif action == "ping":
             await ws.send_text(json.dumps({
@@ -158,3 +172,14 @@ class WSManager:
             return [str(ch) for ch in channels if ch]
         channel = msg.get("channel", "")
         return [str(channel)] if channel else []
+
+    @staticmethod
+    def _is_canonical_channel(channel: str) -> bool:
+        return bool(re.fullmatch(
+            r"(?:uav_intersection:[^:]+|uav_alerts(?::[^:]+)?|uav_system|uav_telemetry:[^:]+|uav_calibration)",
+            channel,
+        ))
+
+    @staticmethod
+    def _is_canonical_message_type(message_type: str) -> bool:
+        return bool(re.fullmatch(r"uav_[a-z0-9_]+", message_type))

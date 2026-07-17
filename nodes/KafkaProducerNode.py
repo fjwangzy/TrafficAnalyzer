@@ -2,7 +2,7 @@
 
 改进点（审查报告 T-101 / T-103 / T-201 / T-203）:
   T-101: 独立发送线程 + 有界队列，Kafka 不可用时不阻塞管道
-  T-103: 新增 telemetry_{N} topic，5Hz 节流发布遥测数据
+  T-103: 新增 uav_telemetry_{N} topic，5Hz 节流发布遥测数据
   T-201: roads_activity 改为动态数组 [{"id": 1, "activity": 4.2}, ...]
   T-203: congestion_index 改为多因子计算 (车辆密度 + 排队 + 低速比例)
 """
@@ -13,8 +13,6 @@ import base64
 import re
 import uuid
 from datetime import UTC, datetime
-from queue import Queue, Full
-from threading import Thread
 
 import cv2
 import numpy as np
@@ -26,6 +24,7 @@ from utils_local.homography import is_valid_homography, undistort_points
 from utils_local.motion_compensation import pixel_to_world_compensated
 from elements.VideoEndBreakElement import VideoEndBreakElement
 from elements.FrameElement import FrameElement
+from nodes.ReliableKafkaPublisher import ReliableKafkaPublisher
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +34,7 @@ class KafkaProducerNode:
         config_kafka = config["kafka_producer_node"]
         bootstrap_servers = config_kafka["bootstrap_servers"]
         self.camera_id = config_kafka["camera_id"]
+        self.drone_id = config_kafka.get("drone_id") or os.environ.get("DRONE_ID") or f"drone_{self.camera_id}"
         self.topic_name, self.track_complete_topic, self.conflicts_topic, self.telemetry_topic = (
             self._canonical_topics(self.camera_id)
         )
@@ -46,6 +46,24 @@ class KafkaProducerNode:
             # 增加重试和超时配置以提高可靠性
             retries=3,
             request_timeout_ms=5000,
+        )
+
+        self.mission_id = os.environ.get("MISSION_ID")
+        self.pipeline_id = os.environ.get("PIPELINE_ID")
+        self.run_id = os.environ.get("RUN_ID") or self.pipeline_id
+        self.source_profile_id = os.environ.get("SOURCE_PROFILE_ID")
+        self.inter_id = os.environ.get("INTER_ID") or os.environ.get("INTERSECTION_ID")
+        self.road_data_version = os.environ.get("ROAD_DATA_VERSION")
+        self.road_context_status = os.environ.get("ROAD_CONTEXT_STATUS", "missing")
+        self.quality_status = os.environ.get("QUALITY_STATUS", "unverified")
+        spool_dir = os.environ.get("KAFKA_SPOOL_DIR", "output/kafka-spool")
+        spool_name = re.sub(
+            r"[^A-Za-z0-9_.-]", "_", self.pipeline_id or f"camera-{self.camera_id}"
+        )
+        self.publisher = ReliableKafkaPublisher(
+            self.kafka_producer,
+            os.path.join(spool_dir, spool_name),
+            queue_size=int(config_kafka.get("send_queue_size", 200)),
         )
 
         self.buffer_analytics_sec = (
@@ -67,14 +85,6 @@ class KafkaProducerNode:
         # ── T-103: 遥测发布 ──
         self._telemetry_interval = 0.2  # 5Hz 节流
         self._last_telemetry_time = 0.0
-
-        # ── T-101: 异步发送线程 + 有界队列 ──
-        self._send_queue: Queue = Queue(maxsize=200)
-        self._sender_thread = Thread(
-            target=self._send_loop, name="kafka_sender", daemon=True
-        )
-        self._sender_thread.start()
-        self._dropped_count = 0  # 队列满时丢弃的消息计数
 
         # ── T-203: 拥堵指数参数 ──
         # 路口设计通行能力（辆/分钟），用于归一化车辆密度因子
@@ -99,6 +109,13 @@ class KafkaProducerNode:
         self._active_trajectory_tail_points = int(
             config.get("kafka_producer_node", {}).get("active_trajectory_tail_points", 30)
         )
+        self._event_snapshot_congestion_threshold = float(
+            config.get("kafka_producer_node", {}).get("event_snapshot_congestion_threshold", 4.0)
+        )
+        self._event_snapshot_consecutive_samples = int(
+            config.get("kafka_producer_node", {}).get("event_snapshot_consecutive_samples", 30)
+        )
+        self._congestion_snapshot_count = 0
 
     @staticmethod
     def _canonical_topics(camera_id) -> tuple[str, str, str, str]:
@@ -138,58 +155,40 @@ class KafkaProducerNode:
             "produced_at": produced_at.isoformat(),
             "source_system": "uav_traffic_analyzer_ai",
             "camera_id": f"id_{self.camera_id}",
-            "drone_id": f"drone_{self.camera_id}",
+            "drone_id": getattr(self, "drone_id", f"drone_{self.camera_id}"),
             "intersection_id": self.intersection_id,
-            "inter_id": None,
-            "road_data_version": None,
-            "road_context_status": "missing",
+            "inter_id": getattr(self, "inter_id", self.intersection_id),
+            "road_data_version": getattr(self, "road_data_version", None),
+            "road_context_status": getattr(self, "road_context_status", "missing"),
             "trace_id": str(uuid.uuid4()),
             "source_time_raw": {"frame_timestamp_sec": frame_element.timestamp},
             "source_time_semantics": semantics,
             "time_quality": time_quality,
-            "quality_status": "unverified",
-            "data": data,
+            "quality_status": getattr(self, "quality_status", "unverified"),
+            "data": {
+                "mission_id": getattr(self, "mission_id", None),
+                "pipeline_id": getattr(self, "pipeline_id", None),
+                "run_id": getattr(self, "run_id", None),
+                "source_profile_id": getattr(self, "source_profile_id", None),
+                **data,
+            },
         }
 
-    def _send_loop(self):
-        """后台发送线程：从有界队列取消息并发送到 Kafka。
+    def _enqueue(self, topic: str, data: dict, *, durable: bool = False):
+        self.publisher.publish(topic, data, durable=durable)
 
-        独立于主管道线程运行，Kafka 阻塞不影响管道帧率。
-        发送失败仅记录日志，不抛异常。
-        """
-        while True:
-            try:
-                topic, data = self._send_queue.get(timeout=1.0)
-            except Exception:
-                continue  # 队列空，继续等待
-            try:
-                future = self.kafka_producer.send(topic, value=data)
-                future.add_callback(self._on_send_success, topic=topic)
-                future.add_errback(self._on_send_error, topic=topic)
-            except Exception as e:
-                logger.warning(f"Kafka send failed (topic={topic}): {e}")
-
-    @staticmethod
-    def _on_send_success(record_metadata, topic=None):
-        logger.debug(
-            f"Kafka sent OK: topic={topic} partition={record_metadata.partition} "
-            f"offset={record_metadata.offset}"
-        )
-
-    @staticmethod
-    def _on_send_error(exc, topic=None):
-        logger.warning(f"Kafka send error (topic={topic}): {exc}")
-
-    def _enqueue(self, topic: str, data: dict):
-        """非阻塞入队。队列满时丢弃消息并计数。"""
-        try:
-            self._send_queue.put_nowait((topic, data))
-        except Full:
-            self._dropped_count += 1
-            if self._dropped_count % 100 == 1:
-                logger.warning(
-                    f"Kafka send queue full, dropped {self._dropped_count} messages total"
-                )
+    def _delivery_snapshot(self) -> dict:
+        publisher = getattr(self, "publisher", None)
+        if publisher is None:
+            return {
+                "expected_samples": 0,
+                "actual_samples": 0,
+                "dropped_samples": 0,
+                "coverage_ratio": 1.0,
+                "drop_reason": None,
+                "durable_pending": 0,
+            }
+        return publisher.snapshot()
 
     def _compute_fps(self) -> float:
         """基于wall-clock滑动窗口计算实时FPS。"""
@@ -255,18 +254,20 @@ class KafkaProducerNode:
 
         height, width = frame.shape[:2]
         out_frame = frame
-        if width > self._snapshot_width:
-            scale = self._snapshot_width / width
+        snapshot_width = int(getattr(self, "_snapshot_width", 960))
+        jpeg_quality = int(getattr(self, "_snapshot_jpeg_quality", 75))
+        if width > snapshot_width:
+            scale = snapshot_width / width
             out_frame = cv2.resize(
                 frame,
-                (self._snapshot_width, int(height * scale)),
+                (snapshot_width, int(height * scale)),
                 interpolation=cv2.INTER_AREA,
             )
 
         ok, buf = cv2.imencode(
             ".jpg",
             out_frame,
-            [int(cv2.IMWRITE_JPEG_QUALITY), int(self._snapshot_jpeg_quality)],
+            [int(cv2.IMWRITE_JPEG_QUALITY), jpeg_quality],
         )
         if not ok:
             return None
@@ -281,7 +282,7 @@ class KafkaProducerNode:
     def _build_active_trajectories(self, frame_element: FrameElement) -> list[dict]:
         """Serialize active track trajectories for real-time BEV rendering.
 
-        Completed tracks are still published on track_complete_*; this snapshot
+        Completed tracks are still published on uav_track_complete_*; this snapshot
         lets the platform draw in-progress trajectories at the same cadence as
         the left-side detection stream.
         """
@@ -359,6 +360,10 @@ class KafkaProducerNode:
     def process(self, frame_element: FrameElement):
         # 如果是VideoEndBreakElement而不是FrameElement则退出处理
         if isinstance(frame_element, VideoEndBreakElement):
+            publisher = getattr(self, "publisher", None)
+            if publisher is not None:
+                final_delivery = publisher.close()
+                logger.info("Kafka publisher closed: %s", final_delivery)
             return frame_element
 
         current_time = time.time()
@@ -381,6 +386,9 @@ class KafkaProducerNode:
                     "activity": round(val, 2) if timestamp >= self.buffer_analytics_sec else None,
                 })
 
+            congestion_index = self._compute_congestion_index(
+                cars_amount, roads_activity, frame_element
+            )
             data = {
                 "camera_id": f"id_{self.camera_id}",
                 "cars": cars_amount,
@@ -395,10 +403,26 @@ class KafkaProducerNode:
                 "roads": roads_array,
                 "road_polygons": frame_element.roads_info,
                 # T-203: 多因子拥堵指数
-                "congestion_index": self._compute_congestion_index(
-                    cars_amount, roads_activity, frame_element
-                ),
+                "congestion_index": congestion_index,
+                **self._delivery_snapshot(),
             }
+            snapshot_threshold = getattr(self, "_event_snapshot_congestion_threshold", 4.0)
+            snapshot_samples = getattr(self, "_event_snapshot_consecutive_samples", 30)
+            if congestion_index > snapshot_threshold:
+                self._congestion_snapshot_count = getattr(self, "_congestion_snapshot_count", 0) + 1
+                if self._congestion_snapshot_count == snapshot_samples:
+                    snapshot = self._encode_annotation_snapshot(frame_element)
+                    if snapshot:
+                        data["event_snapshot_jpeg"] = snapshot["annotation_snapshot_jpeg"]
+                        data["event_snapshot_width"] = snapshot["annotation_snapshot_width"]
+                        data["event_snapshot_height"] = snapshot["annotation_snapshot_height"]
+                    data["event_rule"] = {
+                        "rule_id": "congestion.sustained.v1",
+                        "threshold": snapshot_threshold,
+                        "consecutive_samples": snapshot_samples,
+                    }
+            else:
+                self._congestion_snapshot_count = 0
 
             # 向后兼容：保留 road_1..road_N 字段（最多 8 条，不足的为 None）
             for road_id in range(1, max(len(roads_activity) + 1, 6)):
@@ -506,22 +530,31 @@ class KafkaProducerNode:
             for ct in completed_tracks:
                 ct_msg = {"intersection_id": self.intersection_id, **ct}
                 ct_msg = self._canonical_envelope("uav_track_complete", ct_msg, frame_element)
-                self._enqueue(self.track_complete_topic, ct_msg)
-                logger.info(f"KAFKA enqueued track_complete: id={ct.get('track_id')} topic={self.track_complete_topic}")
+                self._enqueue(self.track_complete_topic, ct_msg, durable=True)
+                logger.debug(f"KAFKA enqueued track_complete: id={ct.get('track_id')} topic={self.track_complete_topic}")
 
         # 发布冲突事件到独立topic（T-101: 异步发送）
         conflict_events = getattr(frame_element, "conflict_events", None)
         if conflict_events:
             for event in conflict_events:
                 event_msg = {"intersection_id": self.intersection_id, **event}
+                snapshot = self._encode_annotation_snapshot(frame_element)
+                if snapshot:
+                    event_msg["evidence_snapshot_jpeg"] = snapshot["annotation_snapshot_jpeg"]
+                    event_msg["evidence_snapshot_width"] = snapshot["annotation_snapshot_width"]
+                    event_msg["evidence_snapshot_height"] = snapshot["annotation_snapshot_height"]
                 event_msg = self._canonical_envelope("uav_conflict", event_msg, frame_element)
-                self._enqueue(self.conflicts_topic, event_msg)
+                self._enqueue(self.conflicts_topic, event_msg, durable=True)
                 logger.info(f"KAFKA enqueued conflict: {event.get('severity')} topic={self.conflicts_topic}")
 
         # ── T-103: 遥测发布（5Hz 节流） ──
         telemetry = getattr(frame_element, "telemetry", None)
         if telemetry and (current_time - self._last_telemetry_time > self._telemetry_interval):
-            tel_msg = {"drone_id": f"drone_{self.camera_id}", "intersection_id": self.intersection_id, **telemetry}
+            tel_msg = {
+                "drone_id": getattr(self, "drone_id", f"drone_{self.camera_id}"),
+                "intersection_id": self.intersection_id,
+                **telemetry,
+            }
             tel_msg = self._canonical_envelope("uav_telemetry", tel_msg, frame_element)
             self._enqueue(self.telemetry_topic, tel_msg)
             self._last_telemetry_time = current_time

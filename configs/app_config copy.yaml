@@ -121,8 +121,8 @@ telemetry:
   mqtt_topic: "drone/+/osd"
   buffer_size: 100
   sync_tolerance_sec: 0.05
-  # file_path: ""            # source="file"时的遥测文件路径
-  # time_offset_sec: 0.0     # source="file"时视频t=0对应的遥测相对时间偏移(秒)
+  file_path: ""              # source="file"时的遥测文件路径
+  time_offset_sec: 0.0       # source="file"时视频t=0对应的遥测相对时间偏移(秒)
 
 speed_estimation:
   enabled: true

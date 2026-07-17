@@ -59,7 +59,7 @@ class KafkaActiveTrajectoriesTest(unittest.TestCase):
 
         producer = self._producer_without_kafka()
         sent = []
-        producer._enqueue = lambda topic, data: sent.append((topic, data))
+        producer._enqueue = lambda topic, data, **_kwargs: sent.append((topic, data))
 
         out = producer.process(frame_element)
 
@@ -85,6 +85,9 @@ class KafkaActiveTrajectoriesTest(unittest.TestCase):
         self.assertEqual(sent[1][1]["data"]["track_id"], 101)
         self.assertEqual(sent[2][1]["msg_type"], "uav_conflict")
         self.assertEqual(sent[2][1]["data"]["conflict_scene"], "suspected_right_turn_mv_nmv")
+        self.assertTrue(sent[2][1]["data"]["evidence_snapshot_jpeg"])
+        self.assertEqual(sent[2][1]["data"]["evidence_snapshot_width"], 20)
+        self.assertEqual(sent[2][1]["data"]["evidence_snapshot_height"], 20)
         self.assertEqual(sent[3][1]["msg_type"], "uav_telemetry")
         self.assertEqual(sent[3][1]["drone_id"], "drone_7")
         self.assertEqual(sent[3][1]["data"]["height"], 120.0)

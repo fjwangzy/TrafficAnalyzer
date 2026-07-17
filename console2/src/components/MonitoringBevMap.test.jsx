@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { trajectoryLonLats, validMapCenter, worldToLonLat } from './MonitoringBevMap'
+import { mapFitPadding, trajectoryLonLats, validMapCenter, worldToLonLat } from './MonitoringBevMap'
 
 describe('MonitoringBevMap world-coordinate projection', () => {
   it('converts ENU points around the trajectory anchor', () => {
@@ -18,5 +18,9 @@ describe('MonitoringBevMap world-coordinate projection', () => {
 
   it('falls back from invalid zero coordinates to the configured monitoring center', () => {
     expect(validMapCenter(0, 0)).toEqual({ lat: 36.7029, lon: 117.0223 })
+  })
+
+  it('uses panel-safe fit padding when the map is embedded in trajectory analysis', () => {
+    expect(mapFitPadding({ compact: false, embedded: true })).toEqual([32, 32, 32, 32])
   })
 })

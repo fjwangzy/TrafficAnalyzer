@@ -18,10 +18,10 @@ def test_readiness_soak_requires_explicit_guard(monkeypatch):
         module.validate(duration_sec=10, interval_sec=1)
 
 
-def test_readiness_soak_rejects_contract_like_duration(monkeypatch):
+def test_readiness_soak_rejects_duration_longer_than_local_cutover_probe(monkeypatch):
     monkeypatch.setenv("ALLOW_LOCAL_READINESS_SOAK", "1")
-    with pytest.raises(ValueError, match="between 10 and 300"):
-        module.validate(duration_sec=301, interval_sec=1)
+    with pytest.raises(ValueError, match="between 10 and 1800"):
+        module.validate(duration_sec=1801, interval_sec=1)
 
 
 def test_summarize_requires_every_probe_to_remain_healthy():
@@ -40,3 +40,29 @@ def test_summarize_requires_every_probe_to_remain_healthy():
     assert summary["ready_ratio"] == pytest.approx(2 / 3)
     assert summary["max_latency_ms"] == 25.0
 
+
+def test_readiness_soak_stops_on_first_failed_sample(monkeypatch):
+    monkeypatch.setenv("ALLOW_LOCAL_READINESS_SOAK", "1")
+    healthy = {
+        "checks": {"platform_ready": True, "console_login": True, "dashboard": True, "system_health": True},
+        "latency_ms": 12.0,
+    }
+    degraded = {
+        "checks": {"platform_ready": False, "console_login": True, "dashboard": True, "system_health": True},
+        "latency_ms": 25.0,
+    }
+    probes = iter([healthy, degraded])
+    ticks = iter([0.0, 1.0, 2.0])
+
+    result = module.validate(
+        duration_sec=10,
+        interval_sec=1,
+        probe=lambda: next(probes),
+        clock=lambda: next(ticks),
+        sleeper=lambda _seconds: None,
+    )
+
+    assert result["passed"] is False
+    assert result["execution_complete"] is False
+    assert result["stopped_early"] is True
+    assert result["summary"]["sample_count"] == 2

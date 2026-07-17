@@ -33,13 +33,25 @@ class _FailingKafkaConsumer:
 
 
 class KafkaConsumerStatsTest(unittest.IsolatedAsyncioTestCase):
+    def test_extract_intersection_rejects_legacy_topic(self):
+        service = KafkaConsumerService(
+            bootstrap_servers="localhost:9092",
+            group_id="test",
+            topics_pattern="uav_statistics_.*",
+            ws_manager=_RecordingWS(),
+        )
+
+        self.assertEqual(service._extract_intersection("uav_statistics_3"), "INT_camera_3")
+        with self.assertRaisesRegex(ValueError, "unsupported canonical topic"):
+            service._extract_intersection("statistics_3")
+
     async def test_start_failure_closes_consumer_and_enters_degraded_mode(self):
         ws = _RecordingWS()
         fake_consumer = _FailingKafkaConsumer()
         service = KafkaConsumerService(
             bootstrap_servers="missing-kafka:9092",
             group_id="test",
-            topics_pattern="statistics_.*",
+            topics_pattern="uav_statistics_.*",
             ws_manager=ws,
         )
 
@@ -56,14 +68,14 @@ class KafkaConsumerStatsTest(unittest.IsolatedAsyncioTestCase):
         service = KafkaConsumerService(
             bootstrap_servers="localhost:9092",
             group_id="test",
-            topics_pattern="statistics_.*",
+            topics_pattern="uav_statistics_.*",
             ws_manager=ws,
             lane_annotation_store=_FailingLaneAnnotationStore(),
         )
 
         await service._handle_stats(
             {
-                "msg_type": "stats",
+                "msg_type": "uav_stats",
                 "lane_stats": {"1": {"count": 2}},
                 "active_trajectories": [{"track_id": 7, "trajectory_world_m": [[0, 0]]}],
             },
@@ -82,12 +94,12 @@ class KafkaConsumerStatsTest(unittest.IsolatedAsyncioTestCase):
         service = KafkaConsumerService(
             bootstrap_servers="localhost:9092",
             group_id="test",
-            topics_pattern="conflicts_.*",
+            topics_pattern="uav_conflicts_.*",
             ws_manager=ws,
         )
 
         first = {
-            "msg_type": "conflict",
+            "msg_type": "uav_conflict",
             "motor_id": 96,
             "non_motor_id": 88,
             "severity": "critical",
@@ -108,12 +120,12 @@ class KafkaConsumerStatsTest(unittest.IsolatedAsyncioTestCase):
         service = KafkaConsumerService(
             bootstrap_servers="localhost:9092",
             group_id="test",
-            topics_pattern="conflicts_.*",
+            topics_pattern="uav_conflicts_.*",
             ws_manager=ws,
         )
 
         warning = {
-            "msg_type": "conflict",
+            "msg_type": "uav_conflict",
             "motor_id": 96,
             "non_motor_id": 88,
             "severity": "warning",

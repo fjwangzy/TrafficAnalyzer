@@ -158,7 +158,10 @@ def _masked_location(location: str) -> str:
 
 class SourceValidator:
     def __init__(self, roots: list[str] | None = None):
-        project_root = Path(__file__).resolve().parents[3]
+        project_root = Path(
+            os.environ.get("PIPELINE_PROJECT_ROOT", Path(__file__).resolve().parents[3])
+        ).resolve()
+        self._project_root = project_root
         configured = roots if roots is not None else settings.uav_local_asset_roots
         self._roots = tuple(
             (project_root / root).resolve() if not Path(root).is_absolute() else Path(root).resolve()
@@ -166,9 +169,12 @@ class SourceValidator:
         )
 
     def resolve_local(self, location: str, suffix: str | tuple[str, ...]) -> Path:
-        project_root = Path(__file__).resolve().parents[3]
         candidate = Path(location)
-        resolved = (project_root / candidate).resolve() if not candidate.is_absolute() else candidate.resolve()
+        resolved = (
+            (self._project_root / candidate).resolve()
+            if not candidate.is_absolute()
+            else candidate.resolve()
+        )
         suffixes = (suffix,) if isinstance(suffix, str) else suffix
         if resolved.suffix.lower() not in suffixes:
             raise MissionError(f"expected {'/'.join(suffixes)} source", code="source_type_mismatch")
@@ -809,6 +815,12 @@ class MissionOrchestrator:
                 "video_src": legacy["video_src"], "roads_json": legacy.get("roads_json", ""),
                 "telemetry_source": legacy.get("telemetry_source") or "srt",
                 "telemetry_file_path": legacy.get("telemetry_file_path"),
+                "mission_id": mission.id,
+                "source_profile_id": mission.context_snapshot.get("source_profile_id"),
+                "inter_id": mission.inter_id,
+                "road_data_version": mission.road_data_version,
+                "road_context_status": "complete" if mission.road_data_version else "missing",
+                "quality_status": mission.context_snapshot.get("quality_status", "unverified"),
             }
         video = await session.get(VideoSourceRecord, mission.video_source_id)
         telemetry = await session.get(TelemetrySourceRecord, mission.telemetry_source_id)
@@ -836,6 +848,12 @@ class MissionOrchestrator:
             "telemetry_file_path": telemetry.location if telemetry.mode == "local" else None,
             "telemetry_time_offset_sec": (telemetry.config or {}).get("time_offset_sec", 0.0),
             "telemetry_sync_tolerance_sec": (telemetry.config or {}).get("sync_tolerance_sec", 0.5),
+            "mission_id": mission.id,
+            "source_profile_id": video.profile_id,
+            "inter_id": context.inter_id,
+            "road_data_version": context.road_data_version,
+            "road_context_status": "complete",
+            "quality_status": context.quality_status,
         }
 
     async def _validate_plan(self, session: AsyncSession, plan: FlightPlanRecord) -> None:

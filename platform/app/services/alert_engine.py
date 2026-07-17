@@ -173,10 +173,12 @@ class AlertEngine:
         ws_manager: WSManager,
         settings: Any = None,
         alert_store: Any = None,
+        event_center: Any = None,
     ):
         self._ws = ws_manager
         self._alerts: dict[str, Alert] = {}  # alert_id → Alert
         self._alert_store = alert_store
+        self._event_center = event_center
         self._consecutive_congestion: dict[str, int] = {}  # intersection_id → count
 
         # Thresholds
@@ -275,6 +277,7 @@ class AlertEngine:
                 severity="P2",
                 title=f"排队超限预警 ({max_queue:.0f}m)",
                 description=f"路口 {intersection_id} 最大排队长度 {max_queue:.0f}m 超过阈值 {self._queue_threshold:.0f}m",
+                event_context=data,
             )
 
         # Congestion index check with consecutive frame counter
@@ -289,6 +292,7 @@ class AlertEngine:
                     severity="P2",
                     title=f"拥堵指数突破阈值 ({congestion:.1f})",
                     description=f"路口 {intersection_id} 连续 {count} 帧拥堵指数 > {self._congestion_threshold}",
+                    event_context=data,
                 )
                 self._consecutive_congestion[intersection_id] = 0
         else:
@@ -303,6 +307,7 @@ class AlertEngine:
                 severity="P3",
                 title=f"标定漂移预警 (匹配率 {match_rate:.0%})",
                 description=f"路口 {intersection_id} 车道匹配率 {match_rate:.0%} 低于阈值 {self._calibration_threshold:.0%}",
+                event_context=data,
             )
 
         # T-104: high_avg_speed check — 连续帧计数
@@ -320,6 +325,7 @@ class AlertEngine:
                         f"路口 {intersection_id} 连续 {count} 帧平均车速 "
                         f"{avg_speed:.0f}km/h 超过阈值 {self._high_speed_threshold_kmh:.0f}km/h"
                     ),
+                    event_context=data,
                 )
                 self._consecutive_high_speed[intersection_id] = 0
         else:
@@ -399,6 +405,7 @@ class AlertEngine:
         title: str,
         description: str | None = None,
         track_ids: list[int] | None = None,
+        event_context: dict | None = None,
     ):
         """Create a new alert, broadcast via WebSocket."""
         # Deduplicate: don't create duplicate alerts within 60s
@@ -421,17 +428,22 @@ class AlertEngine:
         self._alerts[alert.id] = alert
         payload = alert.to_dict()
         await self._save_persisted_alert(payload)
+        if self._event_center:
+            try:
+                await self._event_center.record_alert(payload, event_context or {})
+            except Exception as exc:
+                logger.warning("Replayable event persistence failed: %s", exc)
 
         logger.info(f"Alert created: [{severity}] {title} @ {intersection_id}")
 
         # Broadcast via WebSocket
         ws_msg = {
-            "channel": "alerts",
-            "type": "alert_new",
+            "channel": "uav_alerts",
+            "type": "uav_alert_new",
             "data": payload,
             "ts": time.time(),
         }
-        await self._ws.broadcast("alerts", ws_msg)
+        await self._ws.broadcast("uav_alerts", ws_msg)
 
         # Also broadcast to intersection-specific alert channel
-        await self._ws.broadcast(f"alerts:{intersection_id}", ws_msg)
+        await self._ws.broadcast(f"uav_alerts:{intersection_id}", ws_msg)

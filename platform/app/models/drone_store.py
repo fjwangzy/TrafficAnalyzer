@@ -53,7 +53,7 @@ def update_drone_telemetry(drone_id: str, telemetry: dict) -> None:
     """Update drone state from a Kafka telemetry message.
 
     Called by ``KafkaConsumerService._handle_telemetry()`` when a
-    ``msg_type=telemetry`` message arrives from the detection pipeline.
+    ``msg_type=uav_telemetry`` message arrives from the detection pipeline.
 
     Args:
         drone_id: Drone identifier (e.g., ``"drone_001"``).

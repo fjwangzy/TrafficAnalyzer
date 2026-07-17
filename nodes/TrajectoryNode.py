@@ -52,6 +52,7 @@ class TrajectoryNode:
 
         for ct in completed:
             trajectory_px = ct.get("trajectory_px", [])
+            trajectory_timestamps = ct.get("trajectory_timestamps_sec", [])
 
             # 转向行为分类
             if not ct.get("turn_behavior"):
@@ -68,6 +69,12 @@ class TrajectoryNode:
             if len(trajectory_px) > 50:
                 step = len(trajectory_px) // 50
                 ct["trajectory_px"] = trajectory_px[::step]
+                if len(trajectory_timestamps) == len(trajectory_px):
+                    ct["trajectory_timestamps_sec"] = trajectory_timestamps[::step]
+                    ct["trajectory_time_offsets_sec"] = [
+                        round(value - trajectory_timestamps[0], 3)
+                        for value in trajectory_timestamps[::step]
+                    ]
 
             # 世界坐标转换：像素→东北偏移（米）
             if can_convert_world:

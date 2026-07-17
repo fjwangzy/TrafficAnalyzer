@@ -26,10 +26,10 @@ RUN python -m pip install --upgrade pip \
     && pip install --no-cache-dir -e . \
     && pip install --no-cache-dir "numpy<2" "setuptools<70.0" wheel cython \
     && pip install --no-cache-dir torch==2.2.2 torchvision==0.17.2 \
-    && pip install --no-cache-dir -c pipeline-constraints.txt -r pipeline-requirements.txt
+    && pip install --no-cache-dir --no-build-isolation -c pipeline-constraints.txt -r pipeline-requirements.txt
 
 # Create necessary directories
-RUN mkdir -p /hls /calibration
+RUN mkdir -p /hls /calibration /pipeline-output
 
 # Expose port
 EXPOSE 8000

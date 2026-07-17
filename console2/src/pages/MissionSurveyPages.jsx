@@ -30,7 +30,12 @@ export function DronesPage() {
   const dronesQuery = useQuery({ queryKey: ['s9-drones'], queryFn: platformApi.drones, refetchInterval: 10_000 })
   const sourcesQuery = useQuery({ queryKey: ['s9-sources'], queryFn: platformApi.sources, refetchInterval: 30_000 })
   const plansQuery = useQuery({ queryKey: ['s9-flight-plans'], queryFn: platformApi.flightPlans, refetchInterval: 10_000 })
-  const missionsQuery = useQuery({ queryKey: ['s9-missions'], queryFn: platformApi.missions, refetchInterval: 2_000 })
+  const missionsQuery = useQuery({ queryKey: ['s9-missions'], queryFn: () => platformApi.missions(), refetchInterval: 2_000 })
+  const sourceResultsQuery = useQuery({
+    queryKey: ['s9-source-results', selectedId],
+    queryFn: () => platformApi.sourceResults(selectedId),
+    enabled: tab === 'sources' && Boolean(selectedId),
+  })
   const drones = dronesQuery.data || []
   const sources = sourcesQuery.data || []
   const plans = plansQuery.data || []
@@ -116,7 +121,7 @@ export function DronesPage() {
     <PageHeader eyebrow='S9 · 无人机对接' title='无人机与飞行计划' description='管理设备、RTSP+MQTT/MP4+SRT或DJI JSON数据源、单次/周期计划和 Mission 执行审计；这里只启停 AI Pipeline，不下发飞控。' meta='road9 持久化 · 调度扫描 5s' actions={<button className='primary-button' disabled={!isAdmin} onClick={startCreate}><Plus size={15} /> {tab === 'plans' ? '新建飞行计划' : tab === 'sources' ? '登记数据源' : tab === 'missions' ? '新建手动 Mission' : '登记无人机'}</button>} />
     <div className='page-tabs'>{missionTabs.map((item) => <button key={item.value} className={tab === item.value ? 'active' : ''} onClick={() => changeTab(item.value)}>{item.label}<span>{item.value === 'fleet' ? drones.length : item.value === 'sources' ? sources.length : item.value === 'plans' ? plans.length : missions.length}</span></button>)}</div>
     {loading && <QualityNotice title='正在读取 road9'>无人机、数据源、计划和 Mission 正在同步。</QualityNotice>}
-    {(queryError || actionError) && <QualityNotice tone='danger' title='S9 数据不可用'>{actionError || apiErrorMessage(queryError)}；页面未使用 Mock 回退。</QualityNotice>}
+    {(queryError || actionError) && <QualityNotice tone='danger' title='数据不可用'>{actionError || apiErrorMessage(queryError)}</QualityNotice>}
     {tab === 'fleet' && <><div className='kpi-grid four'><KpiCard icon={Drone} label='登记无人机' value={drones.length} unit='架' detail={`${drones.filter((item) => item.enabled).length} 已启用`} /><KpiCard icon={Play} label='执行任务' value={missions.filter((item) => item.status === 'running').length} unit='个' tone='cyan' /><KpiCard icon={Gauge} label='遥测有效' value={drones.filter((item) => item.telemetry_status === 'fresh').length} unit='架' detail='由遥测新鲜度派生' tone='amber' /><KpiCard icon={Warning} label='保障缺口' value={drones.filter((item) => !item.enabled || item.status === 'offline').length} unit='项' tone='red' /></div><ReplayCameraControls drones={drones} sources={sources} missions={missions} isAdmin={isAdmin} pending={cameraMutation.isPending} onAction={(payload) => cameraMutation.mutate(payload)} /><Panel title='无人机档案' subtitle='静态设备记录不等于在线；在线状态由遥测新鲜度共同判定'><DataTable onRowClick={selectRecord} rows={rows} columns={[{ key: 'status', label: '状态', render: (value) => <StatusBadge value={value} /> }, { key: 'id', label: '无人机 ID' }, { key: 'battery', label: '电量', render: (value) => value == null ? '—' : `${value}%` }, { key: 'intersection', label: '当前路口' }, { key: 'source', label: '默认源' }, { key: 'mission', label: '当前 Mission', render: (value) => value || '—' }, { key: 'telemetryAt', label: '最后遥测' }]} /></Panel></>}
     {tab === 'sources' && <><QualityNotice tone='info' title='敏感信息已脱敏'>页面只展示文件名或主机摘要和 secret reference 是否存在，不返回完整路径或凭据。</QualityNotice><Panel title='数据源' subtitle='实时源和本地回放源分别校验'><DataTable rows={rows} onRowClick={selectRecord} columns={[{ key: 'status', label: '校验状态', render: (value) => <StatusBadge value={value} /> }, { key: 'id', label: '数据源 ID' }, { key: 'kind', label: '类型' }, { key: 'drone', label: '配对无人机' }, { key: 'enabled', label: '启用', render: (value) => value ? '是' : '否' }, { key: 'checkedAt', label: '最近验证' }, { key: 'detail', label: '验证摘要' }]} /></Panel></>}
     {tab === 'plans' && <><FilterBar result={`${plans.length} 个持久化计划`}><label>状态<select><option>全部</option><option>已启用</option><option>草稿</option></select></label></FilterBar><Panel title='飞行计划' subtitle='启用前检查数据源、RoadContext、跨午夜、例外日期和同无人机冲突'><DataTable rows={rows} onRowClick={selectRecord} columns={[{ key: 'status', label: '状态', render: (value) => <StatusBadge value={value} /> }, { key: 'name', label: '计划名称' }, { key: 'drone', label: '无人机' }, { key: 'type', label: '类型' }, { key: 'scheduleLabel', label: '时间窗口' }, { key: 'timezone', label: '业务时区' }, { key: 'revision', label: 'Revision' }]} /></Panel></>}
@@ -124,10 +129,26 @@ export function DronesPage() {
     {selectedRecord && <DetailDrawer title={selectedRecord.name || selectedRecord.id} subtitle={tab === 'plans' ? 'FlightPlan 详情' : tab === 'missions' ? 'Mission 审计详情' : tab === 'sources' ? '数据源验证详情' : '无人机详情'} onClose={closeRecord} footer={<RecordActions tab={tab} record={selectedRecord} isAdmin={isAdmin} pending={actionMutation.isPending} onAction={(kind) => actionMutation.mutate({ kind, record: selectedRecord })} onClose={closeRecord} />}>
       {Object.entries(selectedRecord).filter(([, value]) => typeof value !== 'object' && typeof value !== 'boolean').map(([key, value]) => <InfoRow key={key} label={key} value={String(value ?? '—')} />)}
       {selectedRecord.kind && <QualityNotice tone={selectedRecord.status === 'valid' ? 'success' : 'warning'} title='最近验证结果'>{selectedRecord.detail}；敏感连接信息未写入页面、日志或审计详情。</QualityNotice>}
+      {tab === 'sources' && <SourceResultsPanel result={sourceResultsQuery.data} loading={sourceResultsQuery.isLoading} error={sourceResultsQuery.error} navigate={navigate} />}
       {tab === 'missions' && <Panel title='执行时间线'><div className='state-timeline'>{['计划窗口到期', `实际启动 · ${selectedRecord.actual}`, `Pipeline · ${selectedRecord.pipelineStatus}`, `Mission · ${selectedRecord.status}`, selectedRecord.reason !== '—' ? `原因 · ${selectedRecord.reason}` : '持续运行中'].map((item, index) => <div key={item} className={index === 4 ? 'current' : ''}><i /><span>{item}</span></div>)}</div></Panel>}
     </DetailDrawer>}
     {createMode && <S9CreateDrawer mode={createMode} drones={drones} sources={sources} onClose={() => setCreateMode(null)} pending={createMutation.isPending} onSubmit={(body) => createMutation.mutate({ mode: createMode, body })} />}
   </AppShell>
+}
+
+function SourceResultsPanel({ result, loading, error, navigate }) {
+  if (loading) return <QualityNotice title='正在关联成果'>从 road9 汇总 Mission、态势、研判、测绘和标注记录。</QualityNotice>
+  if (error) return <QualityNotice tone='danger' title='关联成果不可用'>{apiErrorMessage(error)}</QualityNotice>
+  if (!result) return null
+  const links = [
+    ['态势历史', result.links.situation, result.counts.traffic_metrics],
+    ['监控画面', result.links.monitoring, result.missions.length],
+    ['轨迹研判', result.links.insight, `${result.counts.tracks}/${result.counts.conflicts}`],
+    ['测绘关键帧', result.links.survey, result.counts.survey_frames],
+    ['场景标注', result.links.scene_annotation, result.counts.scene_annotations],
+    ['车道标注', result.links.lane_annotation, result.counts.lane_annotations],
+  ]
+  return <Panel title='关联成果' subtitle={`${result.telemetry_type} · ${result.survey_tasks.length} 个测绘批次 · ${result.counts.survey_reports} 份成果包`}><div className='source-result-links'>{links.map(([label, href, count]) => <button key={label} className='source-result-link' onClick={() => navigate(href)}><span>{label}</span><strong>{count}</strong></button>)}</div></Panel>
 }
 
 function formatDate(value) {

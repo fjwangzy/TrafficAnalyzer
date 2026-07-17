@@ -15,11 +15,15 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.add_column(
-        "uav_telemetry_sources",
-        sa.Column("config", sa.JSON(), nullable=False, server_default=sa.text("'{}'::json")),
-    )
+    columns = {column["name"] for column in sa.inspect(op.get_bind()).get_columns("uav_telemetry_sources")}
+    if "config" not in columns:
+        op.add_column(
+            "uav_telemetry_sources",
+            sa.Column("config", sa.JSON(), nullable=False, server_default=sa.text("'{}'::json")),
+        )
 
 
 def downgrade() -> None:
-    op.drop_column("uav_telemetry_sources", "config")
+    columns = {column["name"] for column in sa.inspect(op.get_bind()).get_columns("uav_telemetry_sources")}
+    if "config" in columns:
+        op.drop_column("uav_telemetry_sources", "config")

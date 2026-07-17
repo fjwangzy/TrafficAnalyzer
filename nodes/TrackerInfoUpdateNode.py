@@ -125,6 +125,7 @@ class TrackerInfoUpdateNode:
             cx = (bbox[0] + bbox[2]) / 2.0
             cy = (bbox[1] + bbox[3]) / 2.0
             self.buffer_tracks[id].trajectory_points.append((cx, cy))
+            self.buffer_tracks[id].trajectory_timestamps_sec.append(frame_element.timestamp)
 
             # 累积position_history（含时间戳，供SpeedEstimationNode和DirectionFlowNode使用）
             self.buffer_tracks[id].position_history.append((cx, cy, frame_element.timestamp))
@@ -191,6 +192,11 @@ class TrackerInfoUpdateNode:
                     "avg_speed_kmh": round(track.avg_speed_kmh, 1),
                     "max_speed_kmh": round(track.max_speed_kmh, 1),
                     "trajectory_px": track.trajectory_points,
+                    "trajectory_timestamps_sec": track.trajectory_timestamps_sec,
+                    "trajectory_time_offsets_sec": [
+                        round(value - track.timestamp_first, 3)
+                        for value in track.trajectory_timestamps_sec
+                    ],
                     "timestamp_first": track.timestamp_first,
                     "timestamp_last": track.timestamp_last,
                 }
@@ -218,7 +224,10 @@ class TrackerInfoUpdateNode:
 
                 completed_tracks.append(completed_track_data)
             self.buffer_tracks.pop(key)  # 从字典中删除元素
-            logger.info(f"Removed tracker with key {key}")
+            # A sparse replay can retire thousands of short-lived tracks at EOF.
+            # Keep the per-track detail available for diagnostics without flooding
+            # the mission subprocess tail and hiding the actual failure traceback.
+            logger.debug(f"Removed tracker with key {key}")
 
         # 记录处理结果：
         frame_element.buffer_tracks = self.buffer_tracks

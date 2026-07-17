@@ -15,7 +15,7 @@ from sqlalchemy import (
     UniqueConstraint,
     func,
 )
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
 
@@ -60,6 +60,10 @@ class EvidencePackage(Base):
     integrity_status: Mapped[str] = mapped_column(String(24), nullable=False, default="unverified")
     manifest_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    items: Mapped[list["EvidenceItem"]] = relationship(
+        back_populates="package",
+        cascade="all, delete-orphan",
+    )
 
     __table_args__ = (UniqueConstraint("task_id", "version", name="uq_uav_evidence_package_task_version"),)
 
@@ -71,6 +75,7 @@ class EvidenceItem(Base):
     package_id: Mapped[str] = mapped_column(ForeignKey("uav_evidence_packages.id", ondelete="CASCADE"), index=True)
     task_id: Mapped[str | None] = mapped_column(ForeignKey("uav_survey_tasks.id", ondelete="CASCADE"), nullable=True, index=True)
     kind: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
+    storage_backend: Mapped[str] = mapped_column(String(24), nullable=False, default="managed")
     storage_key: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     sha256: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     media_type: Mapped[str] = mapped_column(String(100), nullable=False)
@@ -78,6 +83,7 @@ class EvidenceItem(Base):
     derived_from_id: Mapped[str | None] = mapped_column(ForeignKey("uav_evidence_items.id"), nullable=True)
     item_metadata: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    package: Mapped[EvidencePackage] = relationship(back_populates="items")
 
 
 class SurveyCaptureBatch(Base):
@@ -87,6 +93,7 @@ class SurveyCaptureBatch(Base):
     task_id: Mapped[str] = mapped_column(ForeignKey("uav_survey_tasks.id", ondelete="CASCADE"), index=True)
     status: Mapped[str] = mapped_column(String(24), nullable=False, default="processing", index=True)
     source_type: Mapped[str] = mapped_column(String(24), nullable=False, default="mp4_srt")
+    source_profile_id: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
     video_evidence_id: Mapped[str | None] = mapped_column(ForeignKey("uav_evidence_items.id"), nullable=True)
     telemetry_evidence_id: Mapped[str | None] = mapped_column(ForeignKey("uav_evidence_items.id"), nullable=True)
     duration_sec: Mapped[float | None] = mapped_column(Float, nullable=True)

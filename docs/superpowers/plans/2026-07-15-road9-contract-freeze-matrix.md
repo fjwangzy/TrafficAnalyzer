@@ -58,8 +58,8 @@
 
 1. canonical consumer 已写入 inbox + 事实表并在成功后手动提交 offset。
 2. 旧消息由兼容 Adapter 规范化；当前生产者只生成 canonical `uav_*` Topic。
-3. 正式历史 API 和 Console2 已切读 `road9`；历史双写/回填对账、观察期和停止 InfluxDB 新写入尚待批准。
-4. 本地备份恢复、故障注入和回滚演练已完成；生产演练、RPO/RTO 和 Telegraf/InfluxDB/Grafana 退役仍阻断。
+3. 正式历史 API 和 Console2 已切读全新 `road9`；本机不双写、不回填、不对账旧数据，旧写入方已停止。
+4. 本地断库恢复、30 分钟探测和严格退役审计已完成；生产演练、RPO/RTO 和生产退役批准仍阻断。
 
 ## 4. I1 待冻结决策
 

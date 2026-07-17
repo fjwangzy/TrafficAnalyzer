@@ -145,16 +145,14 @@ class TelemetryFileReader:
         best_diff = float("inf")
         for candidate in [idx - 1, idx, idx + 1]:
             if 0 <= candidate < len(self._timestamps):
-                diff = abs(self._timestamps[candidate] - frame_timestamp)
+                diff = abs(self._timestamps[candidate] - lookup_t)
                 if diff < best_diff:
                     best_diff = diff
                     best_idx = candidate
 
         if best_diff <= self.sync_tolerance_sec:
             return self._records[best_idx]
-
-        # 放宽容忍：返回最近的（即使超出严格窗口）
-        return self._records[best_idx]
+        return None
 
     @property
     def buffer_count(self) -> int:

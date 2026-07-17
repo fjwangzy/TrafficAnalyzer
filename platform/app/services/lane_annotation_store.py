@@ -64,6 +64,50 @@ class LaneAnnotationStore:
         path = Path(image_path)
         return path if path.exists() else None
 
+    def ensure_task_from_snapshot(
+        self,
+        intersection_id: str,
+        image_bytes: bytes,
+        image_width: int,
+        image_height: int,
+        source_frame_id: str,
+        roads: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Create an idempotent task from a persisted real keyframe; hover tasks remain the live trigger."""
+        db = self._load()
+        existing = next(
+            (task for task in db.get("tasks", []) if task.get("source_frame_id") == source_frame_id),
+            None,
+        )
+        if existing:
+            return existing
+        now = time.time()
+        safe_frame = "".join(char if char.isalnum() or char in "-_" else "_" for char in source_frame_id)
+        task_id = f"lane-{intersection_id}-{safe_frame}"[:120]
+        self.image_dir.mkdir(parents=True, exist_ok=True)
+        image_path = self.image_dir / f"{task_id}.jpg"
+        with image_path.open("wb") as fh:
+            fh.write(image_bytes)
+        task = {
+            "task_id": task_id,
+            "intersection_id": intersection_id,
+            "status": "pending",
+            "created_at": now,
+            "hover_started_at": None,
+            "is_hovering": False,
+            "trigger": "persisted_survey_keyframe",
+            "source_frame_id": source_frame_id,
+            "roads": roads or {},
+            "lane_count": 0,
+            "image_path": str(image_path),
+            "image_url": f"/api/v1/calibration/lane-tasks/{task_id}/image",
+            "image_width": image_width,
+            "image_height": image_height,
+        }
+        db.setdefault("tasks", []).append(task)
+        self._write(db)
+        return task
+
     def observe_stats(self, intersection_id: str, data: dict[str, Any]) -> dict[str, Any] | None:
         if not data.get("is_hovering"):
             self._hover_state.pop(intersection_id, None)

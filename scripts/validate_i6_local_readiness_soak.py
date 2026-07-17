@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run a guarded short readiness soak against the isolated ADR-019 stack.
+"""Run a guarded readiness soak against a local ADR-019 stack.
 
 This is deliberately a local, non-contract check. It cannot approve production
 availability, performance thresholds, high availability, RPO/RTO, or the
@@ -20,10 +20,10 @@ from pathlib import Path
 from typing import Any, Callable
 
 
-PLATFORM_URL = "http://127.0.0.1:18007"
-CONSOLE_URL = "http://127.0.0.1:4178"
+PLATFORM_URL = os.getenv("PLATFORM_URL", "http://127.0.0.1:18007")
+CONSOLE_URL = os.getenv("CONSOLE_URL", "http://127.0.0.1:4178")
 MIN_DURATION_SEC = 10
-MAX_DURATION_SEC = 300
+MAX_DURATION_SEC = 1800
 MIN_INTERVAL_SEC = 1
 MAX_INTERVAL_SEC = 30
 
@@ -88,6 +88,12 @@ def _probe_sample() -> dict[str, Any]:
         ),
         "system_health": system_status == 200 and isinstance(system_health, dict),
     }
+    payloads = {
+        "ready": ready,
+        "login": login,
+        "dashboard": dashboard,
+        "system_health": system_health,
+    }
     return {
         "observed_at": datetime.now(tz=UTC).isoformat().replace("+00:00", "Z"),
         "statuses": {
@@ -98,6 +104,18 @@ def _probe_sample() -> dict[str, Any]:
         },
         "services": ready.get("services", {}) if isinstance(ready, dict) else {},
         "dashboard_quality_status": dashboard.get("quality_status") if isinstance(dashboard, dict) else None,
+        "probe_errors": {
+            name: payload
+            for name, payload in payloads.items()
+            if not checks[
+                {
+                    "ready": "platform_ready",
+                    "login": "console_login",
+                    "dashboard": "dashboard",
+                    "system_health": "system_health",
+                }[name]
+            ]
+        },
         "checks": checks,
         "latency_ms": round((time.perf_counter() - started) * 1000, 2),
     }
@@ -134,7 +152,7 @@ def validate(
     sleeper: Callable[[float], None] | None = None,
 ) -> dict[str, Any]:
     if os.getenv("ALLOW_LOCAL_READINESS_SOAK") != "1":
-        raise RuntimeError("set ALLOW_LOCAL_READINESS_SOAK=1 to run the isolated localhost soak")
+        raise RuntimeError("set ALLOW_LOCAL_READINESS_SOAK=1 to run the localhost soak")
     if not MIN_DURATION_SEC <= duration_sec <= MAX_DURATION_SEC:
         raise ValueError(f"duration must be between {MIN_DURATION_SEC} and {MAX_DURATION_SEC} seconds")
     if not MIN_INTERVAL_SEC <= interval_sec <= MAX_INTERVAL_SEC:
@@ -145,31 +163,40 @@ def validate(
     sleeper = sleeper or time.sleep
     started = clock()
     samples: list[dict[str, Any]] = []
+    elapsed = 0.0
+    stopped_early = False
     while True:
-        samples.append(probe())
+        sample = probe()
+        samples.append(sample)
         elapsed = clock() - started
+        if not all(sample["checks"].values()):
+            stopped_early = True
+            break
         if elapsed >= duration_sec:
             break
         sleeper(min(float(interval_sec), duration_sec - elapsed))
 
     summary = _summarize(samples)
-    execution_complete = summary["sample_count"] >= 3
+    execution_complete = not stopped_early and elapsed >= duration_sec and summary["sample_count"] >= 3
     passed = execution_complete and summary["all_samples_healthy"]
     return {
         "schema_version": "uav.i6-local-readiness-soak/v1",
         "generated_at": datetime.now(tz=UTC).isoformat().replace("+00:00", "Z"),
-        "environment": "isolated_local_non_contract",
+        "environment": "local_development_only",
+        "targets": {"platform": PLATFORM_URL, "console": CONSOLE_URL},
         "threshold_status": "unverified",
         "requested_duration_sec": duration_sec,
         "interval_sec": interval_sec,
         "execution_complete": execution_complete,
+        "stopped_early": stopped_early,
+        "observed_duration_sec": round(elapsed, 3),
         "summary": summary,
         "samples": samples,
         "passed": passed,
         "acceptance": {
             "status": "blocked_external",
             "detail": (
-                "A short local soak does not approve production thresholds, HA, capacity, "
+                "A local soak does not approve production thresholds, HA, capacity, "
                 "RPO/RTO, sustained observation duration, or legacy retirement."
             ),
         },

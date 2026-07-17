@@ -2,6 +2,7 @@
 from fastapi import APIRouter, HTTPException, Request, Query
 from pydantic import BaseModel, Field
 from typing import Optional
+from datetime import datetime
 
 from app.services.metric_store import MessageIdentityConflict, MetricContractError
 
@@ -23,11 +24,29 @@ async def get_trajectories(
     limit: int = Query(500, le=2000),
     class_name: Optional[str] = Query(None),
     turn_behavior: Optional[str] = Query(None),
+    mission_id: Optional[str] = Query(None),
+    source_profile_id: Optional[str] = Query(None),
+    quality_status: Optional[str] = Query(None),
+    start_at: Optional[datetime] = Query(None),
+    end_at: Optional[datetime] = Query(None),
+    spatial_ready: bool = Query(False),
+    min_world_points: int = Query(2, ge=2, le=10000),
 ):
     """Get track events for an intersection."""
     metric_store = getattr(request.app.state, "metric_store", None)
     return await metric_store.query_tracks(
-        intersection_id, period, limit, class_name, turn_behavior
+        intersection_id,
+        period,
+        limit,
+        class_name=class_name,
+        turn_behavior=turn_behavior,
+        mission_id=mission_id,
+        source_profile_id=source_profile_id,
+        quality_status=quality_status,
+        start_at=start_at,
+        end_at=end_at,
+        spatial_ready=spatial_ready,
+        min_world_points=min_world_points,
     ) if metric_store else []
 
 

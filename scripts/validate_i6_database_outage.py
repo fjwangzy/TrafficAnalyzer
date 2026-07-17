@@ -18,7 +18,7 @@ from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[1]
-COMPOSE_FILE = ROOT / "docker-compose.road9.yaml"
+COMPOSE_FILE = ROOT / "docker-compose.yaml"
 PROJECT = "traffic_analyzer_i6_fault"
 DB_PORT = "6545"
 PLATFORM_PORT = 18006
@@ -28,6 +28,7 @@ BASE_URL = f"http://127.0.0.1:{PLATFORM_PORT}"
 def _compose(*arguments: str, check: bool = True) -> subprocess.CompletedProcess[str]:
     environment = os.environ.copy()
     environment["ROAD9_PORT"] = DB_PORT
+    environment["ROAD9_VOLUME_NAME"] = f"{PROJECT}_road9_data"
     return subprocess.run(
         ["docker", "compose", "-f", str(COMPOSE_FILE), "-p", PROJECT, *arguments],
         cwd=ROOT,
@@ -112,7 +113,6 @@ def run_drill() -> dict[str, Any]:
                 "DB_PASSWORD": "traffic123",
                 "DB_NAME": "road9",
                 "DB_BOOTSTRAP_DATABASE": "postgres",
-                "DB_LEGACY_NAME": "road9",
                 "KAFKA_BOOTSTRAP": "127.0.0.1:9092",
                 "KAFKA_CONSUMER_GROUP": "uav-i6-fault-drill",
                 "JWT_SECRET_KEY": "local-i6-fault-drill-only",

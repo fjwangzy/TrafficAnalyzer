@@ -32,6 +32,7 @@ class TrackElement:
         self.exit_road: int | None = None  # 车辆离开的道路编号
         self.turn_behavior: str | None = None  # 转向行为分类
         self.trajectory_points: list[tuple[float, float]] = []  # [(cx, cy)] 像素坐标序列
+        self.trajectory_timestamps_sec: list[float] = []  # 与 trajectory_points 等长的源视频时间
 
         # ── 新增：分类 ──
         self.vehicle_class: str = "unknown"  # "motor"|"non_motor"|"unknown"

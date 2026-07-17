@@ -40,6 +40,12 @@ export function trajectoryLonLats(item, fallbackLat, fallbackLon) {
     .map(([easting, northing]) => worldToLonLat(easting, northing, anchorCenter.lat, anchorCenter.lon))
 }
 
+export function mapFitPadding({ compact = false, embedded = false } = {}) {
+  if (compact) return [12, 12, 12, 12]
+  if (embedded) return [32, 32, 32, 32]
+  return [150, 390, 120, 350]
+}
+
 const lineStyle = (feature) => {
   const color = TRACK_COLORS[Number(feature.get('color_index') || 0) % TRACK_COLORS.length]
   return new Style({
@@ -58,7 +64,7 @@ const pointStyle = (feature) => {
   })
 }
 
-export function MonitoringBevMap({ centerLat, centerLon, trajectories = [], activeCount = 0, compact = false, label }) {
+export function MonitoringBevMap({ centerLat, centerLon, trajectories = [], activeCount = 0, compact = false, embedded = false, label }) {
   const targetRef = useRef(null)
   const mapRef = useRef(null)
   const trackSourceRef = useRef(new VectorSource())
@@ -113,9 +119,13 @@ export function MonitoringBevMap({ centerLat, centerLon, trajectories = [], acti
 
     const map = mapRef.current
     if (map && lineSource.getFeatures().length) {
-      map.getView().fit(lineSource.getExtent(), { padding: compact ? [12, 12, 12, 12] : [150, 390, 120, 350], maxZoom: compact ? 19 : 20, duration: 350 })
+      map.getView().fit(lineSource.getExtent(), {
+        padding: mapFitPadding({ compact, embedded }),
+        maxZoom: compact || embedded ? 19 : 20,
+        duration: 350,
+      })
     }
-  }, [trajectories, activeCount, center.lat, center.lon, compact])
+  }, [trajectories, activeCount, center.lat, center.lon, compact, embedded])
 
   return <div className={`monitoring-bev-map ${compact ? 'compact' : 'main'}`} role='img' aria-label={label || (compact ? 'BEV 地图轨迹投放图' : 'BEV 地图轨迹主视图')}>
     <div ref={targetRef} className='monitoring-bev-map-canvas' />

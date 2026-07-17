@@ -81,3 +81,54 @@ def test_local_dji_json_txt_source_is_validated_by_content(tmp_path):
     status, code = validator.validate(video, telemetry)
     assert status == "invalid"
     assert code == "telemetry_json_empty"
+
+
+def test_local_dji_json_extension_and_invalid_json_are_handled(tmp_path):
+    video_path = tmp_path / "sample.mp4"
+    telemetry_path = tmp_path / "sample.json"
+    video_path.write_bytes(b"video")
+    telemetry_path.write_text(json.dumps({
+        "data": [{
+            "timestamp": 1782345600.0,
+            "latitude": 36.7,
+            "longitude": 117.0,
+        }]
+    }), encoding="utf-8")
+    validator = SourceValidator([str(tmp_path)])
+    video = VideoSourceRecord(
+        id="v-json-extension", profile_id="p-json-extension", drone_id="d", mode="local",
+        source_type="mp4", location=str(video_path), validation_status="unknown",
+    )
+    telemetry = TelemetrySourceRecord(
+        id="t-json-extension", profile_id="p-json-extension", drone_id="d", mode="local",
+        source_type="file", location=str(telemetry_path), validation_status="unknown", config={},
+    )
+
+    assert validator.validate(video, telemetry) == ("valid", None)
+
+    telemetry_path.write_text("{not valid JSON", encoding="utf-8")
+    assert validator.validate(video, telemetry) == ("invalid", "telemetry_json_invalid")
+
+
+def test_local_source_outside_allowlist_reports_stable_error_code(tmp_path):
+    allowed = tmp_path / "allowed"
+    allowed.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    video_path = outside / "sample.mp4"
+    telemetry_path = allowed / "sample.txt"
+    video_path.write_bytes(b"video")
+    telemetry_path.write_text(json.dumps({
+        "data": [{"timestamp": 1782345600.0}]
+    }), encoding="utf-8")
+    validator = SourceValidator([str(allowed)])
+    video = VideoSourceRecord(
+        id="v-outside", profile_id="p-outside", drone_id="d", mode="local",
+        source_type="mp4", location=str(video_path), validation_status="unknown",
+    )
+    telemetry = TelemetrySourceRecord(
+        id="t-outside", profile_id="p-outside", drone_id="d", mode="local",
+        source_type="file", location=str(telemetry_path), validation_status="unknown", config={},
+    )
+
+    assert validator.validate(video, telemetry) == ("invalid", "source_outside_allowlist")

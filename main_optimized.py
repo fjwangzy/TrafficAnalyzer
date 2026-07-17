@@ -26,7 +26,7 @@ os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")  # MPS设备NMS等操�
 
 import signal
 from time import sleep, time
-from multiprocessing import Process, Queue, shared_memory
+from multiprocessing import Process, Queue, shared_memory, resource_tracker
 from queue import Empty
 import numpy as np
 
@@ -128,6 +128,23 @@ def _is_pid_alive(pid: int) -> bool:
         return False
 
 
+def _close_shared_memory_consumer(shm: shared_memory.SharedMemory) -> None:
+    """Close a POSIX shared-memory handle without claiming unlink ownership.
+
+    The reader creates each segment, the tracker reads it, and the show worker is
+    the single owner that unlinks it after rendering.  Python registers every
+    opened handle with the local process resource tracker; unless the two
+    non-owning processes unregister their handles, an early reader EOF can unlink
+    queued frames before the slower Kafka/show stages consume them.
+    """
+    shm.close()
+    if os.name != "nt":
+        try:
+            resource_tracker.unregister(shm._name, "shared_memory")
+        except (KeyError, ValueError):
+            pass
+
+
 def proc_frame_reader_and_detection(
     queue_out: Queue, config: dict, time_sleep_start: int,
 ):
@@ -182,7 +199,7 @@ def proc_frame_reader_and_detection(
             else:
                 # POSIX keeps the named segment alive until ShowNode unlinks it. Closing
                 # the creator handle prevents a 4K-frame leak that exhausts /dev/shm.
-                shm.close()
+                _close_shared_memory_consumer(shm)
         if PRINT_PROFILE_INFO:
             print(
                 f"PROC_FRAME_READER_AND_DETECTION: {(time()-ts0) * 1000:.0f} ms: "
@@ -272,7 +289,7 @@ def proc_tracker_update_and_calc(
                 if len(proc_tracker_update_and_calc.shm_pool) > _FRAME_QUEUE_MAXSIZE + 2:
                     proc_tracker_update_and_calc.shm_pool.pop(0).close()
             else:
-                _shm_tracker.close()
+                _close_shared_memory_consumer(_shm_tracker)
         if PRINT_PROFILE_INFO:
             print(
                 f"PROC_TRACKER_UPDATE_AND_CALC: {(time()-ts0) * 1000:.0f} ms: "
@@ -407,7 +424,7 @@ if __name__ == "__main__":
 
     # 检查并设置环境变量（如果不存在）
     check_and_set_env_var("VIDEO_SRC", "test_videos/test_video.mp4")
-    check_and_set_env_var("TOPIC_NAME", "statistics_1")
+    check_and_set_env_var("TOPIC_NAME", "uav_statistics_1")
     check_and_set_env_var("CAMERA_ID", 1)
 
     main()

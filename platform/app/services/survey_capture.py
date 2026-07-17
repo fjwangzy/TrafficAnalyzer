@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import bisect
+import json
 import re
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
 import cv2
@@ -75,12 +77,61 @@ def parse_dji_srt(path: str | Path) -> list[dict]:
     return records
 
 
-def _nearest(records: list[dict], timestamps: list[float], timestamp: float) -> dict:
+def parse_dji_json(path: str | Path) -> list[dict]:
+    """Parse DJI Cloud API JSON exports (including files with a .txt suffix)."""
+    payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    rows = payload.get("data") if isinstance(payload, dict) else payload
+    if not isinstance(rows, list):
+        raise ValueError("DJI telemetry JSON must contain a data array")
+    decoded: list[tuple[datetime, dict]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        try:
+            recorded_at = datetime.strptime(str(row["time"]), "%Y-%m-%d %H:%M:%S.%f")
+            value = row.get("value", {})
+            value = json.loads(value) if isinstance(value, str) else value
+            if not isinstance(value, dict):
+                continue
+            decoded.append((recorded_at, value))
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+            continue
+    decoded.sort(key=lambda item: item[0])
+    if not decoded:
+        return []
+    origin = decoded[0][0]
+    records: list[dict] = []
+    for recorded_at, value in decoded:
+        camera = value.get("99-0-0", {}) if isinstance(value.get("99-0-0"), dict) else {}
+        records.append(
+            {
+                "timestamp": (recorded_at - origin).total_seconds(),
+                "recorded_at": recorded_at.isoformat(),
+                "latitude": value.get("latitude"),
+                "longitude": value.get("longitude"),
+                "altitude_agl": float(value.get("height") or 0),
+                "attitude_head": float(value.get("attitude_head") or 0),
+                "attitude_pitch": float(value.get("attitude_pitch") or 0),
+                "gimbal_yaw": float(camera.get("gimbal_yaw") or 0),
+                "gimbal_pitch": float(camera.get("gimbal_pitch") if camera.get("gimbal_pitch") is not None else -90),
+                "gimbal_roll": float(camera.get("gimbal_roll") or 0),
+                "zoom_factor": float(camera.get("zoom_factor") or 1),
+            }
+        )
+    return records
+
+
+def _nearest(
+    records: list[dict], timestamps: list[float], timestamp: float, tolerance_sec: float | None = None
+) -> dict:
     if not records:
         return {}
     index = bisect.bisect_left(timestamps, timestamp)
     candidates = [i for i in (index - 1, index, index + 1) if 0 <= i < len(records)]
-    return records[min(candidates, key=lambda i: abs(timestamps[i] - timestamp))]
+    nearest_index = min(candidates, key=lambda i: abs(timestamps[i] - timestamp))
+    if tolerance_sec is not None and abs(timestamps[nearest_index] - timestamp) > tolerance_sec:
+        return {}
+    return records[nearest_index]
 
 
 def _jpeg(frame: np.ndarray, quality: int = 88) -> bytes:
@@ -90,7 +141,14 @@ def _jpeg(frame: np.ndarray, quality: int = 88) -> bytes:
     return encoded.tobytes()
 
 
-def process_mp4_srt(video_path: str | Path, srt_path: str | Path, keyframe_count: int = 6) -> ProcessedBatch:
+def process_mp4_telemetry(
+    video_path: str | Path,
+    telemetry_path: str | Path,
+    keyframe_count: int = 6,
+    telemetry_type: str = "srt",
+    time_offset_sec: float = 0.0,
+    sync_tolerance_sec: float = 0.5,
+) -> ProcessedBatch:
     capture = cv2.VideoCapture(str(video_path))
     if not capture.isOpened():
         raise ValueError("video cannot be opened")
@@ -102,7 +160,11 @@ def process_mp4_srt(video_path: str | Path, srt_path: str | Path, keyframe_count
         capture.release()
         raise ValueError("video metadata is incomplete")
     duration = frame_count / fps
-    telemetry_records = parse_dji_srt(srt_path)
+    telemetry_records = (
+        parse_dji_srt(telemetry_path)
+        if telemetry_type == "srt"
+        else parse_dji_json(telemetry_path)
+    )
     telemetry_timestamps = [record["timestamp"] for record in telemetry_records]
     if keyframe_count == 1:
         frame_numbers = [frame_count // 2]
@@ -119,7 +181,12 @@ def process_mp4_srt(video_path: str | Path, srt_path: str | Path, keyframe_count
         if not ok:
             continue
         timestamp = frame_number / fps
-        telemetry = _nearest(telemetry_records, telemetry_timestamps, timestamp)
+        telemetry = _nearest(
+            telemetry_records,
+            telemetry_timestamps,
+            timestamp + time_offset_sec,
+            sync_tolerance_sec,
+        )
         homography = compute_homography_from_telemetry(telemetry, (width, height))
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         clarity = float(cv2.Laplacian(gray, cv2.CV_64F).var())
@@ -155,8 +222,20 @@ def process_mp4_srt(video_path: str | Path, srt_path: str | Path, keyframe_count
             )
         )
     capture.release()
-    srt_duration = telemetry_timestamps[-1] - telemetry_timestamps[0] if len(telemetry_timestamps) > 1 else 0
-    coverage = min(1.0, srt_duration / duration) if duration else 0.0
+    sample_count = min(1000, max(1, int(duration) + 1))
+    sample_times = np.linspace(0, duration, sample_count)
+    matched = sum(
+        bool(
+            _nearest(
+                telemetry_records,
+                telemetry_timestamps,
+                float(sample_time) + time_offset_sec,
+                sync_tolerance_sec,
+            )
+        )
+        for sample_time in sample_times
+    )
+    coverage = matched / sample_count
     return ProcessedBatch(
         duration_sec=duration,
         fps=fps,
@@ -174,3 +253,8 @@ def process_mp4_srt(video_path: str | Path, srt_path: str | Path, keyframe_count
         },
         frames=processed,
     )
+
+
+def process_mp4_srt(video_path: str | Path, srt_path: str | Path, keyframe_count: int = 6) -> ProcessedBatch:
+    """Backward-compatible wrapper for the original survey contract."""
+    return process_mp4_telemetry(video_path, srt_path, keyframe_count, telemetry_type="srt")

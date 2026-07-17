@@ -12,10 +12,10 @@ import { useAuth } from '../auth/AuthContext'
 
 export const navigationGroups = [
   { id: 'situation', label: '全域态势', icon: GridFour, roles: ['admin', 'commander', 'enforcement', 'survey', 'analyst'], items: [
-    ['/', '工作台首屏'], ['/monitoring', '实时监测'], ['/gis', '轨迹研判'],
+    ['/', '工作台首屏'], ['/monitoring', '实时监测'],
   ] },
   { id: 'insight', label: '智能研判', icon: ShieldWarning, roles: ['admin', 'commander', 'enforcement', 'analyst'], items: [
-    ['/events', 'AI 事件中心'],
+    ['/events', 'AI 事件中心'], ['/gis', '轨迹研判'],
   ] },
   { id: 'survey', label: '事故测绘', icon: Crosshair, roles: ['admin', 'survey'], items: [['/survey', '测绘任务']] },
   { id: 'enforcement', label: '执法线索', icon: Buildings, roles: ['admin', 'enforcement', 'analyst'], items: [['/enforcement', '执法工作台']] },

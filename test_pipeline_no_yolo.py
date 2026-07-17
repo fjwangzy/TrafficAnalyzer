@@ -15,7 +15,7 @@ import numpy as np
 
 os.environ["VIDEO_SRC"] = "test_videos/inter_xqh/DJI_20260403142902_0001_V小清河北路与水屯路路口.mp4"
 os.environ["ROADS_JSON"] = ""
-os.environ["TOPIC_NAME"] = "statistics_1"
+os.environ["TOPIC_NAME"] = "uav_statistics_1"
 os.environ["CAMERA_ID"] = "1"
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
@@ -326,7 +326,7 @@ def main():
         },
         "kafka_producer_node": {
             "bootstrap_servers": "kafka:29092",
-            "topic_name": "statistics_1",
+            "topic_name": "uav_statistics_1",
             "how_often_sec": 1,
             "camera_id": 1,
         },

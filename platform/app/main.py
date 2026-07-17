@@ -20,6 +20,7 @@ from app.services.mission_orchestrator import MissionOrchestrator, PipelineManag
 from app.services.metric_store import PostgresMetricStoreAdapter
 from app.services.enforcement_service import EnforcementService
 from app.services.dashboard_read_model import DashboardReadModel
+from app.services.event_center import EventCenter
 from app.services.road_context import (
     FallbackRoadContextAdapter,
     FixtureRoadContextAdapter,
@@ -27,7 +28,7 @@ from app.services.road_context import (
     RoadContext,
     RoadContextResult,
 )
-from app.api.v1 import intersections, alerts, system, trajectories, video, calibration, auth, users, survey, enforcement, dashboard
+from app.api.v1 import intersections, alerts, system, trajectories, video, calibration, auth, users, survey, enforcement, dashboard, events
 from app.api.v1.drones import router as drones_router
 from app.api.v1.drones import telemetry_router
 from app.api.v1.pipelines import router as pipelines_router
@@ -51,9 +52,15 @@ async def lifespan(app: FastAPI):
 
     # ── Initialize components ──
     ws_manager = WSManager()
+    event_center = EventCenter(async_session_maker) if db_available else None
     alert_store = SqlAlertStore(async_session_maker) if db_available else None
-    alert_engine = AlertEngine(ws_manager, settings, alert_store=alert_store)
+    alert_engine = AlertEngine(
+        ws_manager, settings, alert_store=alert_store, event_center=event_center
+    )
     await alert_engine.load_persisted_alerts()
+    if event_center:
+        await event_center.sync_alerts()
+        await event_center.sync_survey_reports()
     lane_annotation_store = LaneAnnotationStore(
         db_path=settings.lane_annotation_db_path,
         hover_seconds=settings.lane_annotation_hover_seconds,
@@ -141,6 +148,7 @@ async def lifespan(app: FastAPI):
     app.state.metric_store = metric_store
     app.state.enforcement_service = enforcement_service
     app.state.dashboard_read_model = dashboard_read_model
+    app.state.event_center = event_center
     app.state.kafka_service = kafka_service
     app.state.pipeline_manager = pipeline_manager
     app.state.survey_worker = survey_worker
@@ -204,6 +212,7 @@ app.include_router(survey.router, prefix="/api/v1")
 app.include_router(survey.evidence_router, prefix="/api/v1")
 app.include_router(enforcement.router, prefix="/api/v1")
 app.include_router(dashboard.router, prefix="/api/v1")
+app.include_router(events.router, prefix="/api/v1")
 
 
 @app.get("/")

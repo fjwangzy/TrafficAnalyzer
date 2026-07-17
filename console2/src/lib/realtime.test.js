@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import { alertChannels, intersectionChannels, normalizeRealtimeMessage, realtimeEventKey, telemetryChannels } from './realtime'
 
-describe('realtime data migration adapter', () => {
-  it('normalizes current messages to the uav-prefixed target model', () => {
-    expect(normalizeRealtimeMessage({ type: 'stats', ts: 1, data: { cars: 3 } })).toMatchObject({
+describe('canonical realtime data contract', () => {
+  it('preserves canonical message types', () => {
+    expect(normalizeRealtimeMessage({ type: 'uav_stats', ts: 1, data: { cars: 3 } })).toMatchObject({
       type: 'uav_stats',
       occurredAt: '1970-01-01T00:00:01.000Z',
       data: { cars: 3 },
@@ -11,10 +11,10 @@ describe('realtime data migration adapter', () => {
     expect(normalizeRealtimeMessage({ type: 'uav_telemetry', data: {} }).type).toBe('uav_telemetry')
   })
 
-  it('subscribes to canonical and temporary current channel names', () => {
-    expect(intersectionChannels('INT-1')).toEqual(['uav_intersection:INT-1', 'intersection:INT-1'])
-    expect(alertChannels('INT-1')).toEqual(['uav_alerts:INT-1', 'alerts:INT-1'])
-    expect(telemetryChannels('UAV-1')).toEqual(['uav_telemetry:UAV-1', 'telemetry:UAV-1'])
+  it('subscribes only to canonical channels', () => {
+    expect(intersectionChannels('INT-1')).toEqual(['uav_intersection:INT-1'])
+    expect(alertChannels('INT-1')).toEqual(['uav_alerts', 'uav_alerts:INT-1'])
+    expect(telemetryChannels('UAV-1')).toEqual(['uav_telemetry:UAV-1'])
   })
 
   it('builds stable deduplication keys for persisted and realtime conflicts', () => {

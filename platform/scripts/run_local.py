@@ -26,7 +26,7 @@ def main():
     os.environ.setdefault("KAFKA_CONSUMER_GROUP", "platform-consumer")
     os.environ.setdefault(
         "KAFKA_TOPICS_PATTERN",
-        "((uav_)?(statistics|track_complete|conflicts|telemetry)_.*|(uav_)?system_metrics)",
+        "(uav_(statistics|track_complete|conflicts|telemetry)_.*|uav_system_metrics)",
     )
 
     # JWT

@@ -86,7 +86,7 @@ class KafkaConsumerService:
             consumer.subscribe(pattern=pattern)
             logger.info(f"Kafka consumer subscribing to pattern: {self._topics_pattern}")
         except Exception:
-            topics = ["statistics_1", "statistics_2"]
+            topics = ["uav_statistics_1", "uav_statistics_2"]
             consumer.subscribe(topics=topics)
             logger.info(f"Kafka consumer subscribing to topics: {topics}")
 
@@ -226,6 +226,8 @@ class KafkaConsumerService:
                 "intersection_id": normalized.get("intersection_id") or business_data.get("intersection_id"),
                 "inter_id": normalized.get("inter_id") or business_data.get("inter_id"),
                 "road_data_version": normalized.get("road_data_version") or business_data.get("road_data_version"),
+                "road_context_status": normalized.get("road_context_status") or business_data.get("road_context_status"),
+                "quality_status": normalized.get("quality_status") or business_data.get("quality_status"),
                 "time_quality": normalized.get("time_quality") or business_data.get("time_quality"),
             }
         msg_type = result.msg_type
@@ -455,49 +457,17 @@ class KafkaConsumerService:
         }
         await self._ws.broadcast(f"uav_telemetry:{drone_id}", ws_msg)
 
-    async def _handle_legacy_stats(self, data: dict, topic: str):
-        """Handle legacy Kafka messages (old format: camera_id, cars, road_1..5)."""
-        intersection_id = self._extract_intersection(topic)
-        camera_id = data.get("camera_id", "")
-
-        # Convert legacy format to new format
-        lanes = []
-        for i in range(1, 6):
-            val = data.get(f"road_{i}")
-            if val is not None:
-                lanes.append({
-                    "lane_id": i,
-                    "flow_veh_per_min": float(val),
-                    "vehicle_count": 0,
-                    "avg_speed_kmh": 0.0,
-                })
-
-        normalized = {
-            "msg_type": "stats",
-            "intersection_id": intersection_id,
-            "timestamp": time.time(),
-            "camera_id": camera_id,
-            "total_vehicles": data.get("cars", 0),
-            "cars": data.get("cars", 0),
-            "lanes": lanes,
-        }
-        for i in range(1, 6):
-            normalized[f"road_{i}"] = data.get(f"road_{i}")
-
-        await self._handle_stats(normalized, intersection_id)
-
     def _extract_intersection(self, topic: str) -> str:
         """Extract intersection ID from topic name."""
         for prefix in (
             "uav_statistics_", "uav_track_complete_", "uav_conflicts_",
-            "statistics_", "track_complete_", "conflicts_",
         ):
             if topic.startswith(prefix):
                 cam_id = topic[len(prefix):]
                 return f"INT_camera_{cam_id}"
-        for prefix in ("uav_telemetry_", "telemetry_"):
+        for prefix in ("uav_telemetry_",):
             if topic.startswith(prefix):
                 return topic[len(prefix):]
-        if "intersection_" in topic:
-            return topic.split("intersection_")[-1]
-        return topic
+        if topic == "uav_system_metrics":
+            return "uav_system"
+        raise ValueError(f"unsupported canonical topic: {topic}")

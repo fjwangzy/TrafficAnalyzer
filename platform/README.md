@@ -1,10 +1,30 @@
 # Traffic Platform
 
-Unified traffic analysis platform — **monolith architecture**.
+Traffic Platform 是 TrafficAnalyzer 的 FastAPI 单体后端。自 ADR-019 本机切换完成后，它只使用全新 `road9`/TimescaleDB、Apache Kafka KRaft 和 canonical `uav_*` 消息契约；不读取、不迁移旧数据库或旧时序数据。
 
-## Quick Start
+## 本机正式栈
 
-### Local Development
+从仓库根目录启动唯一 Compose：
+
+```bash
+docker compose -p traffic_analyzer up -d --build
+```
+
+默认入口：
+
+| 服务 | 地址 |
+| --- | --- |
+| Platform | `http://localhost:8000` |
+| Console2 | `http://localhost:8080` |
+| Nginx | `http://localhost:8009` |
+| road9 / TimescaleDB | `localhost:5432` |
+| Kafka | `localhost:9092` |
+
+根 `docker-compose.yaml` 是唯一正式拓扑；`platform/docker/` 和旧微服务目录已退役删除。Kafka UI 通过 `ops` profile 可选启动，检测器和 NVIDIA MPS 通过 `gpu-only` profile 可选启动。
+
+## 本地进程开发
+
+需要已运行的 `road9` 和 Kafka：
 
 ```bash
 cd platform
@@ -12,229 +32,104 @@ pip install -e .
 python scripts/run_local.py
 ```
 
-The application will start on `http://localhost:8000`.
+本地启动脚本默认连接 `road9@localhost:5432` 和 `Kafka@localhost:9092`，仅订阅 canonical Topic。
 
-**Note**: The application gracefully degrades when dependencies are unavailable:
-- PostgreSQL unavailable → auth features disabled
-- Kafka unavailable → real-time updates disabled
-- InfluxDB unavailable → historical queries return empty
+## 数据库启动语义
 
-### Docker Deployment
+Platform 启动时：
+
+1. 确保目标 database=`road9` 存在；
+2. 执行 Alembic 到当前 head `20260715_0010`；
+3. 初始化唯一管理员 `admin / admin123`（仅限本机开发）；
+4. 不创建旧库迁移审计/隔离表，不复制旧用户、告警、指标、轨迹或任务数据。
+
+正式本机数据卷为 `traffic_road9_data`。不得挂载任何旧 PostgreSQL、实验 TimescaleDB 或旧时序目录。
+
+## Kafka 与 WebSocket 契约
+
+支持的 Kafka Topic / `msg_type`：
+
+| Topic | `msg_type` |
+| --- | --- |
+| `uav_statistics_*` | `uav_stats` |
+| `uav_track_complete_*` | `uav_track_complete` |
+| `uav_conflicts_*` | `uav_conflict` |
+| `uav_telemetry_*` | `uav_telemetry` |
+| `uav_system_metrics` | `uav_system_metrics` |
+
+支持的 WebSocket channel：
+
+- `uav_intersection:*`
+- `uav_alerts`、`uav_alerts:*`
+- `uav_system`
+- `uav_telemetry:*`
+- `uav_calibration`
+
+MetricStore 会同时校验 Topic 与 `msg_type` 的映射；WebSocket 订阅、开发发布和内部广播都会拒绝无前缀频道或消息类型。
+
+## API 与就绪检查
+
+- OpenAPI：`GET /openapi.json`
+- 进程存活：`GET /health`
+- 强就绪：`GET /ready`
+- REST：`/api/v1/*`
+- WebSocket：`/ws/realtime`
+
+`/ready` 检查数据库、TimescaleDB、Kafka 和管道管理器。依赖故障必须如实返回降级/非就绪状态，不能回读旧存储。
+
+## 关键配置
+
+| 变量 | 本机默认 | 说明 |
+| --- | --- | --- |
+| `SERVICE_PORT` | `8000` | Platform 端口 |
+| `DB_HOST` | `localhost` | road9 主机 |
+| `DB_PORT` | `5432` | road9 端口 |
+| `DB_USER` | `traffic` | road9 用户 |
+| `DB_PASSWORD` | `traffic123` | 仅本机默认密码 |
+| `DB_NAME` | `road9` | 唯一目标数据库 |
+| `DB_BOOTSTRAP_DATABASE` | `postgres` | 仅用于创建空白 road9 |
+| `KAFKA_BOOTSTRAP` | `kafka:9092` | Kafka bootstrap |
+| `KAFKA_TOPICS_PATTERN` | canonical `uav_*` 正则 | 消费 Topic |
+| `JWT_SECRET_KEY` | 本机开发值 | 生产必须外部注入 |
+
+完整配置见 `app/core/config.py`。
+
+## 验证
 
 ```bash
-cd platform/docker
-docker compose -f docker-compose.platform.yml up -d --build
+python -m pytest platform/tests -q
+cd ../console2 && npm test && npm run build
+cd ..
+python scripts/audit_adr019_retirement.py --scope local --strict
 ```
 
-This starts the complete stack:
-- **Platform** (port 8000) — monolith application
-- PostgreSQL (port 5432)
-- Kafka (port 9092)
-- InfluxDB (port 8086)
-- Frontend (port 8080)
+本机运行态验收报告见：
 
-## Architecture
+- `docs/test_report_i6_target_stack.json`
+- `docs/test_report_i6_database_outage.json`
+- `docs/test_report_i6_local_readiness_soak.json`
+- `docs/test_report_adr019_local_retirement.json`
 
-The platform uses a **monolith architecture** — a single FastAPI application that consolidates all backend services:
+## 项目结构
 
-- **Authentication & Users** — JWT-based auth, user management
-- **Intersections** — Traffic intersection data and statistics
-- **Alerts** — Rule-based and VLM-based alert detection
-- **Video** — HLS video streaming
-- **Trajectories** — Vehicle trajectory analysis
-- **Calibration** — Camera calibration data
-- **Drones** — Drone management and telemetry
-- **System** — Health checks, GPU metrics, Kafka stats
-- **WebSocket** — Real-time data push
-
-See [MONOLITH.md](MONOLITH.md) for detailed architecture documentation.
-
-## API Endpoints
-
-All API endpoints are mounted under `/api/v1/`:
-
-### Authentication
-- `POST /auth/register` — Register new user
-- `POST /auth/login` — Login and get JWT token
-- `GET /auth/me` — Get current user info
-
-### Intersections
-- `GET /intersections` — List all intersections
-- `GET /intersections/summary` — System-wide summary
-- `GET /intersections/{id}` — Get intersection details
-- `GET /intersections/{id}/stats` — Historical statistics
-- `GET /intersections/{id}/lane-stats` — Lane-level statistics
-
-### Alerts
-- `GET /alerts` — List alerts (with filters)
-- `GET /alerts/{id}` — Get alert details
-- `POST /alerts/{id}/acknowledge` — Acknowledge alert
-
-### System
-- `GET /system/health` — System health check
-- `GET /system/gpu` — GPU metrics
-- `GET /system/gpu/history` — GPU history
-- `GET /system/kafka/topics` — Kafka topic stats
-- `GET /system/models` — Available YOLO models
-
-### Trajectories
-- `GET /trajectories/{id}` — Track events
-- `GET /trajectories/{id}/heatmap` — Trajectory heatmap
-- `GET /trajectories/{id}/turn-summary` — Turn behavior distribution
-- `GET /trajectories/{id}/lane-change-heatmap` — Lane change heatmap
-
-### Video
-- `GET /video/streams` — List active streams
-- `POST /video/streams/{id}/start` — Start HLS stream
-- `POST /video/streams/{id}/stop` — Stop HLS stream
-
-### Calibration
-- `GET /calibration/summary` — Calibration summary
-- `GET /calibration/records` — List calibration records
-- `GET /calibration/records/{key}` — Get specific record
-- `GET /calibration/coverage/{id}` — Coverage heatmap
-
-### Drones
-- `GET /drones` — List all drones
-- `GET /drones/{id}` — Get drone details
-- `GET /drones/{id}/trajectory` — Flight trajectory
-- `GET /drones/{id}/hover-points` — Hover points
-- `GET /missions` — List missions
-- `GET /missions/{id}` — Get mission details
-- `GET /telemetry/{id}` — Latest telemetry
-- `GET /telemetry/{id}/history` — Telemetry history
-
-### WebSocket
-- `WS /ws/realtime` — Real-time data push (subscribe to channels)
-
-## Testing
-
-### Health Check
-```bash
-curl http://localhost:8000/health
-```
-
-### Readiness Check
-```bash
-curl http://localhost:8000/ready
-```
-
-Returns status of all dependencies (database, Kafka, InfluxDB).
-
-### Register User
-```bash
-curl -X POST http://localhost:8000/api/v1/auth/register \
-  -H "Content-Type: application/json" \
-  -d '{
-    "username": "admin",
-    "email": "admin@example.com",
-    "password": "password123",
-    "role": "admin"
-  }'
-```
-
-### Login
-```bash
-curl -X POST http://localhost:8000/api/v1/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{
-    "username": "admin",
-    "password": "password123"
-  }'
-```
-
-### Protected Endpoint
-```bash
-TOKEN="<token_from_login_response>"
-curl -H "Authorization: Bearer $TOKEN" \
-  http://localhost:8000/api/v1/intersections
-```
-
-## Configuration
-
-All configuration is managed through environment variables. See `app/core/config.py` for the complete list.
-
-Key variables:
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `SERVICE_PORT` | 8000 | Application port |
-| `DB_HOST` | localhost | PostgreSQL host |
-| `DB_PORT` | 5432 | PostgreSQL port |
-| `DB_USER` | traffic | Database user |
-| `DB_PASSWORD` | traffic123 | Database password |
-| `DB_NAME` | traffic_platform | Database name |
-| `KAFKA_BOOTSTRAP` | kafka:9092 | Kafka bootstrap servers |
-| `INFLUX_HOST` | influxdb | InfluxDB host |
-| `INFLUX_PORT` | 8086 | InfluxDB port |
-| `INFLUX_DB` | traffic | InfluxDB database |
-| `JWT_SECRET_KEY` | (hardcoded) | JWT signing key (change in production!) |
-
-## Frontend Integration
-
-The frontend (`traffic-fly-console`) connects to the platform API:
-
-```typescript
-// traffic-fly-console/src/lib/api.ts
-const API_BASE = import.meta.env.VITE_API_BASE || '/api/v1'
-```
-
-For local development, set `VITE_API_BASE=http://localhost:8000/api/v1` in the frontend `.env` file.
-
-## Project Structure
-
-```
+```text
 platform/
-├── app/                          # Monolith application
-│   ├── main.py                   # FastAPI app entry point
-│   ├── core/                     # Configuration and database
-│   ├── middleware/               # JWT authentication
-│   ├── api/v1/                   # All API endpoints
-│   ├── kafka/                    # Kafka consumer and WebSocket
-│   ├── services/                 # Business logic
-│   ├── models/                   # Database models
-│   ├── schemas/                  # Pydantic schemas
-│   └── utils/                    # Utilities
-├── scripts/
-│   └── run_local.py              # Local development script
-├── docker/
-│   └── docker-compose.platform.yml  # Docker Compose config
-├── Dockerfile                    # Docker build file
-├── pyproject.toml                # Python dependencies
-├── MONOLITH.md                   # Architecture documentation
-└── REFACTORING_SUMMARY.md        # Migration details
+├── app/
+│   ├── main.py
+│   ├── core/
+│   ├── api/v1/
+│   ├── kafka/
+│   ├── services/
+│   ├── models/
+│   └── schemas/
+├── alembic/
+├── scripts/run_local.py
+├── Dockerfile
+└── pyproject.toml
 ```
 
-## Development
+详细契约以 `docs/ARCHITECTURE.md`、`docs/API_CONTRACTS.md` 和 `docs/DATABASE_SCHEMA.md` 为准。
 
-### Install Dependencies
-```bash
-pip install -e .
-```
+## 生产边界
 
-### Run with Auto-Reload
-```bash
-uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
-```
-
-### Run Tests
-```bash
-pytest
-```
-
-### Format Code
-```bash
-black app/
-ruff check app/ --fix
-```
-
-## Documentation
-
-- [MONOLITH.md](MONOLITH.md) — Detailed architecture documentation
-- [REFACTORING_SUMMARY.md](REFACTORING_SUMMARY.md) — Migration from microservices
-- [API Contracts](../docs/API_CONTRACTS.md) — API specifications
-- [Database Schema](../docs/DATABASE_SCHEMA.md) — Database structure
-
-## License
-
-See [LICENSE](../LICENSE) for details.
+当前只完成本机开发环境闭环。生产镜像固定、秘密管理、TLS/SASL、HA、容量、正式性能阈值、RPO/RTO、试点和主平台联调仍为外部门禁，不得用本机报告宣称生产验收完成。

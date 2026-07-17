@@ -17,7 +17,7 @@ import time
 # 设置环境变量
 os.environ["VIDEO_SRC"] = "dummy"
 os.environ["ROADS_JSON"] = "dummy"
-os.environ["TOPIC_NAME"] = "statistics_1"
+os.environ["TOPIC_NAME"] = "uav_statistics_1"
 os.environ["CAMERA_ID"] = "1"
 
 from elements.FrameElement import FrameElement

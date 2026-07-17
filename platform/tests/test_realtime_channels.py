@@ -40,36 +40,81 @@ class RealtimeChannelTest(unittest.IsolatedAsyncioTestCase):
             ws,
             json.dumps({
                 "action": "subscribe",
-                "channels": ["intersection:INT_camera_1", "alerts", "system"],
+                "channels": ["uav_intersection:INT_camera_1", "uav_alerts", "uav_system"],
             }),
         )
         await manager.handle_message(
             ws,
-            json.dumps({"action": "subscribe", "channel": "telemetry:drone_001"}),
+            json.dumps({"action": "subscribe", "channel": "uav_telemetry:drone_001"}),
         )
 
         self.assertTrue(ws.accepted)
-        self.assertEqual(manager.channel_stats["intersection:INT_camera_1"], 1)
-        self.assertEqual(manager.channel_stats["alerts"], 1)
-        self.assertEqual(manager.channel_stats["system"], 1)
-        self.assertEqual(manager.channel_stats["telemetry:drone_001"], 1)
+        self.assertEqual(manager.channel_stats["uav_intersection:INT_camera_1"], 1)
+        self.assertEqual(manager.channel_stats["uav_alerts"], 1)
+        self.assertEqual(manager.channel_stats["uav_system"], 1)
+        self.assertEqual(manager.channel_stats["uav_telemetry:drone_001"], 1)
         self.assertEqual(
             [msg["channel"] for msg in ws.sent],
-            ["intersection:INT_camera_1", "alerts", "system", "telemetry:drone_001"],
+            ["uav_intersection:INT_camera_1", "uav_alerts", "uav_system", "uav_telemetry:drone_001"],
         )
+
+    async def test_ws_manager_rejects_legacy_channels_and_message_types(self):
+        manager = WSManager()
+        ws = _FakeWebSocket()
+        await manager.connect(ws)
+
+        with self.assertRaisesRegex(ValueError, "unsupported WebSocket channel"):
+            await manager.subscribe(ws, "intersection:INT_camera_1")
+        with self.assertRaisesRegex(ValueError, "unsupported WebSocket message type"):
+            await manager.broadcast(
+                "uav_intersection:INT_camera_1",
+                {"channel": "uav_intersection:INT_camera_1", "type": "stats", "data": {}},
+            )
+
+        await manager.handle_message(
+            ws,
+            json.dumps({
+                "action": "publish",
+                "channel": "uav_intersection:INT_camera_1",
+                "type": "stats",
+                "data": {},
+            }),
+        )
+        self.assertEqual(ws.sent[-1], {"error": "unsupported_message_type"})
+
+    async def test_ws_manager_publishes_canonical_message(self):
+        manager = WSManager()
+        publisher = _FakeWebSocket()
+        subscriber = _FakeWebSocket()
+        await manager.connect(publisher)
+        await manager.connect(subscriber)
+        await manager.subscribe(subscriber, "uav_system")
+
+        await manager.handle_message(
+            publisher,
+            json.dumps({
+                "action": "publish",
+                "channel": "uav_system",
+                "type": "uav_system_metrics",
+                "data": {"fps": 15},
+            }),
+        )
+
+        self.assertEqual(subscriber.sent[-1]["type"], "uav_system_metrics")
+        self.assertEqual(publisher.sent[-1]["action"], "published")
 
     async def test_kafka_handlers_broadcast_realtime_business_channels(self):
         ws = _RecordingWS()
         service = KafkaConsumerService(
             bootstrap_servers="localhost:9092",
             group_id="test",
-            topics_pattern="((statistics|track_complete|conflicts|telemetry)_.*|system_metrics)",
+            topics_pattern="(uav_(statistics|track_complete|conflicts|telemetry)_.*|uav_system_metrics)",
             ws_manager=ws,
         )
 
         await service._handle_stats(
             {
-                "msg_type": "stats",
+                "msg_type": "uav_stats",
                 "cars": 12,
                 "road_1": 3.0,
                 "direction_flow": {"straight": {"count": 5, "avg_speed_kmh": 20.0}},
@@ -82,7 +127,7 @@ class RealtimeChannelTest(unittest.IsolatedAsyncioTestCase):
         )
         await service._handle_track_complete(
             {
-                "msg_type": "track_complete",
+                "msg_type": "uav_track_complete",
                 "track_id": 7,
                 "trajectory_px": [[1, 2]],
                 "trajectory_world_m": [[0.1, 0.2]],
@@ -95,7 +140,7 @@ class RealtimeChannelTest(unittest.IsolatedAsyncioTestCase):
         )
         await service._handle_conflict(
             {
-                "msg_type": "conflict",
+                "msg_type": "uav_conflict",
                 "motor_id": 96,
                 "non_motor_id": 88,
                 "severity": "critical",
@@ -107,8 +152,8 @@ class RealtimeChannelTest(unittest.IsolatedAsyncioTestCase):
             },
             "INT_camera_1",
         )
-        await service._handle_telemetry({"msg_type": "telemetry", "drone_id": "drone_001"})
-        await service._handle_system_metrics({"msg_type": "system_metrics", "fps": 14.0})
+        await service._handle_telemetry({"msg_type": "uav_telemetry", "drone_id": "drone_001"})
+        await service._handle_system_metrics({"msg_type": "uav_system_metrics", "fps": 14.0})
 
         broadcasts = [(channel, message["type"]) for channel, message in ws.messages]
         self.assertIn(("uav_intersection:INT_camera_1", "uav_stats"), broadcasts)
@@ -131,6 +176,6 @@ class RealtimeChannelTest(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(len(ws.messages), 2)
-        self.assertEqual(ws.messages[0][0], "alerts")
-        self.assertEqual(ws.messages[0][1]["type"], "alert_new")
-        self.assertEqual(ws.messages[1][0], "alerts:INT_camera_1")
+        self.assertEqual(ws.messages[0][0], "uav_alerts")
+        self.assertEqual(ws.messages[0][1]["type"], "uav_alert_new")
+        self.assertEqual(ws.messages[1][0], "uav_alerts:INT_camera_1")

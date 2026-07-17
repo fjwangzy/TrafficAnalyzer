@@ -17,11 +17,20 @@ from typing import Any
 PROJECT = "traffic_analyzer_i6_target_full"
 PLATFORM_URL = "http://127.0.0.1:18007"
 CONSOLE_URL = "http://127.0.0.1:4178"
+NGINX_URL = "http://127.0.0.1:18009"
 CONTAINERS = {
     "road9": f"{PROJECT}-road9-1",
     "kafka": f"{PROJECT}-kafka-1",
     "platform": f"{PROJECT}-platform-1",
     "console2": f"{PROJECT}-console2-1",
+    "nginx": f"{PROJECT}-nginx-1",
+}
+EXPECTED_HYPERTABLES = {
+    "uav_conflict_events",
+    "uav_system_metrics",
+    "uav_telemetry_metrics",
+    "uav_track_points",
+    "uav_traffic_metrics",
 }
 
 
@@ -61,6 +70,13 @@ def _container_state(name: str) -> dict[str, str]:
     return {"status": status, "health": health}
 
 
+def _psql(database: str, sql: str) -> str:
+    return _run([
+        "docker", "exec", CONTAINERS["road9"], "psql", "-U", "traffic", "-d", database,
+        "-At", "-F", "|", "-c", sql,
+    ])
+
+
 def validate() -> dict[str, Any]:
     if os.getenv("ALLOW_LOCAL_TARGET_STACK_CHECK") != "1":
         raise RuntimeError("set ALLOW_LOCAL_TARGET_STACK_CHECK=1 to inspect the fixed isolated target stack")
@@ -75,6 +91,7 @@ def validate() -> dict[str, Any]:
     dashboard_status, dashboard = _http_json(f"{CONSOLE_URL}/api/v1/dashboard/overview", token=token)
     system_status, system_health = _http_json(f"{CONSOLE_URL}/api/v1/system/health", token=token)
     openapi_status, openapi = _http_json(f"{PLATFORM_URL}/openapi.json")
+    nginx_ready_status, nginx_ready = _http_json(f"{NGINX_URL}/ready")
     operation_methods = {"get", "post", "put", "patch", "delete", "options", "head", "trace"}
     paths = openapi.get("paths", {}) if isinstance(openapi, dict) else {}
     operations = sum(
@@ -84,34 +101,41 @@ def validate() -> dict[str, Any]:
         for method in path_item
     )
 
-    influx_spec = _run(
-        [
-            "docker",
-            "exec",
-            CONTAINERS["platform"],
-            "python",
-            "-c",
-            "import importlib.util; print(importlib.util.find_spec('influxdb'))",
-        ]
-    )
-    database_raw = _run(
-        [
-            "docker",
-            "exec",
-            CONTAINERS["road9"],
-            "psql",
-            "-U",
-            "traffic",
-            "-d",
-            "road9",
-            "-At",
-            "-F",
-            "|",
-            "-c",
-            "SELECT (SELECT version_num FROM uav_alembic_version LIMIT 1), extversion, (SELECT count(*) FROM timescaledb_information.hypertables), (SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name LIKE 'uav_%') FROM pg_extension WHERE extname='timescaledb'",
-        ]
+    database_raw = _psql(
+        "road9",
+        "SELECT (SELECT version_num FROM uav_alembic_version LIMIT 1), extversion, "
+        "(SELECT count(*) FROM timescaledb_information.hypertables), "
+        "(SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name LIKE 'uav_%') "
+        "FROM pg_extension WHERE extname='timescaledb'",
     )
     revision, timescaledb_version, hypertables, uav_tables = database_raw.split("|", maxsplit=3)
+    hypertable_names = set(_psql(
+        "road9",
+        "SELECT hypertable_name FROM timescaledb_information.hypertables "
+        "WHERE hypertable_schema='public' ORDER BY hypertable_name",
+    ).splitlines())
+    uav_table_names = _psql(
+        "road9",
+        "SELECT table_name FROM information_schema.tables WHERE table_schema='public' "
+        "AND table_name LIKE 'uav_%' ORDER BY table_name",
+    ).splitlines()
+    admin_rows = int(_psql("road9", "SELECT count(*) FROM uav_users WHERE username='admin'"))
+    user_rows = int(_psql("road9", "SELECT count(*) FROM uav_users"))
+    business_tables = _psql(
+        "road9",
+        "SELECT table_name FROM information_schema.tables WHERE table_schema='public' "
+        "AND table_name LIKE 'uav_%' AND table_name NOT IN ('uav_users','uav_alembic_version') "
+        "ORDER BY table_name",
+    ).splitlines()
+    business_rows = sum(int(_psql("road9", f'SELECT count(*) FROM "{table}"')) for table in business_tables)
+    legacy_database_count = int(_psql(
+        "postgres", "SELECT count(*) FROM pg_database WHERE datname='traffic_platform'"
+    ))
+    migration_isolation_tables = _psql(
+        "road9",
+        "SELECT table_name FROM information_schema.tables WHERE table_schema='public' "
+        "AND table_name IN ('uav_migration_audit','uav_migration_quarantine','uav_isolation_audit')",
+    ).splitlines()
     topics = _run(
         [
             "docker",
@@ -128,13 +152,15 @@ def validate() -> dict[str, Any]:
         "containers_running": all(state["status"] == "running" for state in containers.values()),
         "dependency_health": all(containers[name]["health"] == "healthy" for name in ("road9", "kafka", "platform")),
         "platform_ready": ready_status == 200 and ready.get("status") == "ready",
+        "nginx_platform_proxy": nginx_ready_status == 200 and nginx_ready.get("status") == "ready",
         "console_proxy_login": login_status == 200 and bool(token),
         "dashboard_via_console": dashboard_status == 200 and dashboard.get("schema_version") == "uav.dashboard/v1",
         "system_health_via_console": system_status == 200 and isinstance(system_health, dict),
         "openapi_available": openapi_status == 200 and len(paths) > 0 and operations > 0,
-        "target_image_without_influx_client": influx_spec == "None",
         "road9_at_head": revision == "20260715_0010",
-        "timescaledb_hypertables": int(hypertables) == 5,
+        "timescaledb_hypertables": int(hypertables) == 5 and hypertable_names == EXPECTED_HYPERTABLES,
+        "only_seed_admin": admin_rows == 1 and user_rows == 1 and business_rows == 0,
+        "no_legacy_database_or_migration_tables": legacy_database_count == 0 and not migration_isolation_tables,
         "canonical_kafka_topic": "uav_statistics_i6_probe" in topics,
     }
     return {
@@ -148,7 +174,13 @@ def validate() -> dict[str, Any]:
             "alembic_revision": revision,
             "timescaledb_version": timescaledb_version,
             "hypertables": int(hypertables),
+            "hypertable_names": sorted(hypertable_names),
             "uav_tables": int(uav_tables),
+            "uav_table_names": uav_table_names,
+            "admin_rows": admin_rows,
+            "business_rows": business_rows,
+            "legacy_database_count": legacy_database_count,
+            "migration_isolation_tables": migration_isolation_tables,
         },
         "api": {
             "ready": ready,
@@ -157,7 +189,6 @@ def validate() -> dict[str, Any]:
             "dashboard_quality_status": dashboard.get("quality_status") if isinstance(dashboard, dict) else None,
         },
         "kafka": {"image_mode": "apache_kraft", "canonical_probe_topic": "uav_statistics_i6_probe"},
-        "target_image": {"influxdb_module": None if influx_spec == "None" else influx_spec},
         "checks": checks,
         "passed": all(checks.values()),
         "acceptance": {

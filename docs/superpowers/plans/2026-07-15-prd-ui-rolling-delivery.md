@@ -14,7 +14,7 @@
 2. UAV 内部 Topic、`msg_type`、WebSocket channel 和本项目自建表统一使用 `uav_` 前缀。
 3. Console2 正式路由不直接依赖 `mockData`，所有未知、缺失、过期、降级和无权限状态如实显示。
 4. S1～S9 每项需求均可追溯到页面、接口、数据/消息、测试和验收证据。
-5. 旧 InfluxDB/Telegraf/Grafana 链路在迁移对账、回滚演练和观察期通过后退役。
+5. 本机旧链路不迁移历史数据，已按纯净新库方案退役；生产退役仍走外部门禁。
 
 工程完成与正式验收分开管理。工程可以交付真实闭环；精度、法制、主平台、权威路网和合同偏差等外部事项必须取得书面关闭依据，不能由代码测试替代。
 
@@ -22,13 +22,13 @@
 
 | 分册 | PRD/产品状态 | 当前实现 | 下一验收接缝 |
 | --- | --- | --- | --- |
-| S1 路口态势 | 详细评审草案，业务阈值待冻结 | 检测管道、实时监控、TimescaleDB 指标事实和 `road9` 历史查询已真实化 | 冻结正式指标/质量阈值，完成历史 Influx 对账和生产容量/保留验收 |
+| S1 路口态势 | 详细评审草案，业务阈值待冻结 | 检测管道、实时监控、TimescaleDB 指标事实和 `road9` 历史查询已真实化 | 冻结正式指标/质量阈值和生产容量/保留验收；历史数据不迁移 |
 | S2 冲突识别 | 规则、验收集和合同偏差待关闭 | 冲突算法、`inter_xqh` 基线、冲突事实、GIS/事件历史查询和技术复核已真实化 | 冻结规则/验收集，完成历史对账、主平台处置映射和生产验收 |
 | S3 事故测绘 | 工程闭环完成，正式验收阻断未关闭 | PostgreSQL、worker、量算、报告、UI 和真实全量材料验证已完成 | 仅处理正式精度、法制、签章、归档、主平台合同及增量缺陷 |
 | S4 执法检测 | 本地工程闭环完成，规则/法制/雷达/权威发布待关闭 | candidate 围栏/规则、统一 AI 线索、证据哈希、技术复核和 Console2 三视图已真实化 | 关闭批准规则、雷达、法制证据、权威围栏和主平台合同；不得把本地 fixture 当真实违法检测 |
 | S5 路网共性 | 内部接口已冻结，外部权威合同阻断 | RoadContext、snapshot/binding DDL 和 fixture/road9 Adapter 已实现 | 取得权威视图、坐标和版本合同后替换 Adapter，推进 I3 地图匹配 |
 | S6 主平台集成 | 内部接口已冻结，外部主平台合同阻断 | EventDelivery 与统一 event/outbox/attempt/feedback/dead-letter DDL 已实现；外部 Adapter 禁用 | 冻结正式传输/认证/schema/SLA 后联调，不模拟成功 |
-| S7 质量运营 | 最后汇总冻结 | 本地目标栈、迁移/恢复/故障/性能/短时巡检和退役审计已实现 | 冻结生产阈值、持续运行、灾备、试点、主平台联调和退役批准 |
+| S7 质量运营 | 本机纯净切换完成 | 唯一根 Compose、空白 `road9@0010`、断库恢复、30 分钟巡检、旧资产 7 天保留和本机严格退役审计已通过 | 冻结生产阈值、灾备、试点、主平台联调和生产退役批准 |
 | S8 全域工作台 | 信息架构已冻结，核心口径待批准 | DashboardReadModel、四类聚合 API、真实 OSM 点位门禁和全状态 UI 已实现；正式 `/` 不读 Mock | 冻结项目范围/KPI/底图/权限并完成获批数据下的 5 秒/30 秒主任任务验收 |
 | S9 飞行任务 | 工程闭环完成，正式验收阻断未关闭 | `road9` 持久化、MissionOrchestrator、canonical Topic、四页签与真实 MP4+SRT 已完成 | 关闭设备/RTSP/MQTT/权限/容量/生产 HA 外部门禁 |
 
@@ -39,7 +39,7 @@
 | 模块 | 对调用方暴露的接口 | 隐藏的实现复杂度 | Adapter |
 | --- | --- | --- | --- |
 | RoadContext | 按 `inter_id + road_data_version` 读取不可变上下文和质量状态 | 权威源读取、版本快照、checksum、缓存、坐标语义、视觉绑定、降级 | `road9` 只读 Adapter；测试 fixture Adapter |
-| MetricStore | 写入 canonical 指标/轨迹/冲突事实并按时间窗口查询 | inbox 幂等、TimescaleDB hypertable、空值/Decimal/时间语义、迁移对账 | TimescaleDB Adapter；测试数据库 Adapter |
+| MetricStore | 写入 canonical 指标/轨迹/冲突事实并按时间窗口查询 | inbox 幂等、TimescaleDB hypertable、空值/Decimal/时间语义和空库重放 | TimescaleDB Adapter；测试数据库 Adapter |
 | EventDelivery | 记录 AI 事件、投递到期事件、应用回执/反馈 | outbox、attempt、dead-letter、重试、幂等、payload hash、外部等级映射 | 主平台 HTTP/Kafka Adapter；测试 Adapter |
 | MissionOrchestrator | 管理计划、生成执行、停止/重试并查询审计结果 | advisory lock/租约、时间窗、冲突校验、状态机、PipelineManager、重启恢复 | PipelineManager Adapter；测试 Adapter |
 | DashboardReadModel | 读取 overview、地图摘要和单路口详情 | 权限过滤、统一 `as_of`、覆盖率、重点排序、缓存、部分来源降级 | PostgreSQL/TimescaleDB 查询 Adapter；测试 Adapter |
@@ -79,7 +79,7 @@
 
 **入口**：MetricStore、RoadContext 和 EventDelivery 接口可用。  
 **交付**：canonical `uav_` 消息；inbox + 手动 offset；指标/轨迹/冲突写入 TimescaleDB；历史接口切读 `road9`；事件中心、GIS 回放和技术复核真实化。  
-**验证**：单元/契约/崩溃点/重放/空值/时间语义测试；`inter_xqh` 56 项基线；旧/新存储数量、时间桶、关键聚合和抽样事件对账。  
+**验证**：单元/契约/崩溃点/重放/空值/时间语义测试；`inter_xqh` 56 项基线；全新空库从 canonical 消息产生可查询事实，不读取旧存储。
 **退出门禁**：页面、REST、WebSocket 与数据库值及质量状态一致，遗留写入可进入停写观察期。
 
 ### I4：S4 执法线索闭环
@@ -99,9 +99,9 @@
 ### I6：S7 总体验收与迁移退役
 
 **入口**：I2～I5 工程闭环完成，外部阻断进入正式关闭。  
-**交付**：统一数据集和标注方案、业务/算法/性能阈值、故障注入、灾备、RPO/RTO、试点、运营手册、迁移对账、旧链路退役和发布回滚方案。  
+**交付**：本机纯净新库、故障注入、30 分钟健康探测、旧资产 7 天保留/清理机制；生产数据集、阈值、灾备、RPO/RTO、试点、运营手册和发布回滚方案继续独立验收。
 **验证**：全量自动化、真实材料、主平台联调、性能与持续运行、备份恢复、权限与审计、视觉验收。  
-**退出门禁**：总 PRD 第 14 章阻断逐项关闭，发布清单与实际部署一致，InfluxDB/Telegraf/Grafana 无新增写入且可安全移除。
+**退出门禁**：本机以 `audit_adr019_retirement.py --scope local --strict` 为准；生产仍需总 PRD 第 14 章阻断逐项关闭。
 
 ## 5. 滚动执行规则
 
@@ -119,15 +119,16 @@
 | I0 | 已完成 | 基线 `fad252f`；分册引用统一为总 PRD v2.1；Console2 43/43；Platform 41 + 11 subtests | 保持追踪矩阵和 TASKS 状态同步 |
 | I1 | 已完成（内部工程契约） | RoadContext、EventDelivery、MissionOrchestrator；migration `20260715_0003`；API/DDL/状态机一致 | 外部权威路网与主平台合同保持 blocked |
 | I2 | 已完成（工程闭环） | PG 调度并发/重启/停止/EOF/error 集成通过；另从 Console2 页面在本地 `road9@20260715_0009` 登记源、启用 once 计划并由调度器触发 `MSN-5A61F57DA1D7`，396.663 秒后自然写入 `completed/source_eof`；四页签及截图；`inter_xqh` 56/0/0 | 生产 RTSP/MQTT、权限、容量和 HA 进入正式专项验收 |
-| I3 | 已完成（本地工程闭环） | Alembic `20260715_0004`～`0007`；TimescaleDB 2.28.2/PG17 隔离验证；5 张 hypertable、MetricStore、inbox/事实幂等、输入死信、手动 offset；历史 API 与 `/gis`、`/events` 真实切读和技术复核 | 生产版本/容量/保留/压缩/HA、历史 Influx 对账和正式 S1/S2 指标仍保持 blocked |
+| I3 | 已完成（本地工程闭环） | Alembic `20260715_0004`～`0007`；TimescaleDB 2.28.2/PG17 隔离验证；5 张 hypertable、MetricStore、inbox/事实幂等、输入死信、手动 offset；历史 API 与 `/gis`、`/events` 真实切读和技术复核；T-456 以 LIMIT 前空间筛选投放 285 条完整轨迹，单任务可视验收 149 条折线 | 生产版本/容量/保留/压缩/HA 和正式 S1/S2 指标仍保持 blocked；历史数据不迁移 |
 | I4 | 已完成（本地工程闭环） | Alembic `20260715_0008`；EnforcementService；candidate zone/rule、统一事件、通用证据、技术复核审计；Console2 `/enforcement/**` 真实切读；真实 MP4/SRT 哈希工程样本和权威发布 503 门禁 | 批准规则、权威围栏、雷达/检定/融合、法制证据、统一身份和主平台合同仍 blocked；滚动进入 I5 |
 | I5 | 内部工程完成 / 正式验收阻断 | DashboardReadModel、4 个聚合 API、正式 `/` Mock 清除、KPI null/WGS84 门禁、服务端筛选/bbox/分页、422/503、底图失败降级、45/45 前端测试和真实阻断态截图 | 项目范围/底图/KPI/权限、点位聚合/全局增量回补、获批正常/混合状态及 5 秒/30 秒正式验收仍 blocked |
-| I6 | 本地工程完成 / 正式验收阻断 | `uav.adr019-retirement-audit/v1` 为 12 pass / 6 blocked；完整 `road9 + Apache Kafka KRaft + Platform + Console2` 目标栈构建/强 readiness/代理登录/API 通过，目标镜像无 Influx 客户端；空库/回滚 migration、`0009` 完整性触发器、Timescale-aware 备份恢复、三类 Influx measurement 只读盘点、80/80 localhost 只读请求、隔离 `200→503→200` 断库恢复和 60 秒/13 样本 readiness 巡检通过 | 等待批准并执行生产镜像/秘密/TLS/SASL/HA、性能阈值/批准时长的持续运行、正式 RPO/RTO、历史字段/时间映射与回填对账、试点、主平台联调和旧链路退役 |
+| I6 | 本机完成 / 生产验收阻断 | 唯一根 Compose 正式端口运行；空白 `road9@20260715_0010`、TimescaleDB 5 hypertable、管理员 1 条/业务 0 条；隔离目标栈和 `200→503→200` 断库恢复通过；最终镜像正式端口 1800.225 秒、61/61 样本健康；本机严格退役审计通过，旧资产保留至 2026-07-23 11:11:54 | 等待生产镜像/秘密/TLS/SASL/HA、正式性能阈值、RPO/RTO、试点、主平台联调和生产退役批准；不执行历史回填 |
 
-## 7. 阶段收尾（2026-07-15）
+## 7. 阶段收尾（更新于 2026-07-17）
 
 - I1～I6 的本地可实施工程项停止继续扩张，后续仅处理明确缺陷或已获得批准输入的正式验收项。
-- 最终本地门禁为 Platform `76 passed / 5 skipped / 11 subtests`、Console2 `45/45` 与生产构建、根目录轻量及 EOF `10 passed`、`inter_xqh` `56 PASS / 0 FAIL / 0 WARN`、`git diff --check` 通过。
+- 最终本地门禁更新为 Platform `104 passed / 5 skipped / 10 subtests`、Console2 `56/56` 与生产构建、`inter_xqh` 基线 `56 PASS / 0 FAIL / 0 WARN`；ADR-019 本机严格退役审计通过。
 - S9 页面触发证据见 `console2/design-qa.md` 的“Page-triggered retained screenshots”和 `docs/TASKS.md` T-449；截图保存在本机 `console2/.design-qa/`，不假定由 Git 管理。
-- 本阶段没有关闭任何权威路网、正式精度/法制、主平台、生产参数、历史对账、试点或安全退役阻断项；总体状态继续为 `blocked_external`。
+- MP4+SRT 产品深度展示闭环见 `docs/test_report_mp4_srt_product_deep_demo.md`；事件中心、轨迹研判和事故测绘均使用 `road9` 真实事实。T-456 已关闭 GIS 只显示计数/散点的问题，Mission `MSN-3421232DD4B9` 实际绘制 149 条彩色世界轨迹。
+- 本阶段关闭了本机旧库/旧观测链路退役项；不迁移历史数据。权威路网、正式精度/法制、主平台、生产参数、试点和生产退役批准仍未关闭，总体生产状态继续为 `blocked_external`。
 - 下一阶段从外部批准清单中选择唯一主线；若继续产品/UI，应优先使用已冻结契约补齐获批数据状态和正式任务验收，不新增 Mock 或候选生产默认值。

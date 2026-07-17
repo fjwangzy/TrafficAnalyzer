@@ -1,7 +1,7 @@
 {
   "name": "trafficanalyzer",
   "version": "1.0.0",
-  "description": "**带有多摄像头、Influx时序数据库和Grafana仪表盘的生产版本**",
+  "description": "无人机交通感知与 road9/TimescaleDB 本机开发栈",
   "main": "index.js",
   "directories": {
     "doc": "docs"

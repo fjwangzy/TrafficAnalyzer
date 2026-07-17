@@ -31,6 +31,7 @@ from app.models.mission import (
     TelemetrySourceRecord,
     VideoSourceRecord,
     VisualLaneBinding,
+    LaneAnnotationTaskRecord,
 )
 from app.models.metrics import (
     ConflictEvent,
@@ -52,7 +53,7 @@ __all__ = [
     "User", "AlertRecord", "SurveyTask", "SurveyCaptureBatch", "SurveyFrame",
     "SurveyMeasurement", "SceneAnnotation", "SurveyReport", "EvidencePackage",
     "EvidenceItem", "AuditLog", "CaptureIngestionJob", "AiEvent", "EventOutbox", "EventDeliveryAttempt",
-    "DeadLetter", "RuleVersion", "RoadContextSnapshot", "VisualLaneBinding",
+    "DeadLetter", "RuleVersion", "RoadContextSnapshot", "VisualLaneBinding", "LaneAnnotationTaskRecord",
     "DeviceIntersectionBinding", "DroneRecord", "VideoSourceRecord",
     "TelemetrySourceRecord", "FlightPlanRecord", "MissionRecord", "PipelineRecord",
     "EventFeedback", "MessageInbox", "MessageDeadLetter", "TrafficMetric", "TrackEvent", "TrackPoint",

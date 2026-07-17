@@ -1,207 +1,100 @@
-# 环形交叉路口交通分析器
-**生产版本：支持多摄像头、InfluxDB时序数据库和Grafana仪表盘**
+# 无人机交通态势分析平台
 
-本程序用于分析环形交叉路口区域的交通流量。算法能够确定相邻道路的拥堵情况并显示交互式统计数据。
+TrafficAnalyzer 使用无人机视频、遥测和道路配置完成车辆检测、跟踪、速度/方向/车道分析、轨迹输出与机非冲突识别。管理端由 FastAPI Platform 与 React Console2 组成。
 
-关于项目及其架构的详细教程 - [__视频链接__](https://vk.com/video-145052891_456247910)
+## 本机数据架构
 
-## 快速启动：视频流检测器
+ADR-019 已在本机开发环境完成纯净切换：
 
-### 本地启动（无需 Kafka / Docker）
+- 唯一数据库为 PostgreSQL connection database `road9`，镜像启用 TimescaleDB；
+- 数据库由 Alembic 初始化，当前 head 为 `20260715_0010`；
+- Kafka 使用 Apache Kafka KRaft；
+- Topic、`msg_type`、WebSocket channel 和自建表统一使用 `uav_` 前缀；
+- 旧观测链路已从代码和 Compose 删除，历史数据不迁移；
+- 生产镜像、密钥、TLS/SASL、HA、容量与 RPO/RTO 仍需独立验收。
+
+## Docker 全栈
+
+```bash
+docker compose -p traffic_analyzer up -d --build
+```
+
+默认入口：
+
+| 服务 | 地址/端口 |
+|---|---|
+| road9 / TimescaleDB | `localhost:5432` |
+| Kafka | `localhost:9092` |
+| Platform | `http://localhost:8000` |
+| Console2 | `http://localhost:8080` |
+| Nginx | `http://localhost:8009` |
+
+Console2 开发账号：`admin / admin123`。Kafka UI 为可选 profile：
+
+```bash
+docker compose -p traffic_analyzer --profile ops up -d kafka-ui
+```
+
+检测器需要 NVIDIA GPU，通过 `gpu-only` profile 启动：
+
+```bash
+docker compose -p traffic_analyzer --profile gpu-only up -d --build
+```
+
+## 本地运行检测管道
+
+不依赖 Kafka/Docker：
 
 ```bash
 python main_optimized.py pipeline.send_info_kafka=False
 ```
 
-启动后访问：
-- MJPEG 视频流：http://127.0.0.1:8100/video
-- Flask 主页：http://127.0.0.1:8100/
-
-## 开发环境全链路测试
-### 最小化环境依赖
-```bash
-docker-compose -f ./docker-compose.yaml  -f ./docker-compose.test.yaml  up zookeeper kafka influxdb postgres platform -d
-```
-
-### inter_xqh 视频 + SRT 遥测 + Kafka（推荐）
+使用 inter_xqh 视频、SRT 遥测和本机 Kafka：
 
 ```bash
-# ROADS_JSON="configs/inter_xqh_lanes.json" \
 VIDEO_SRC="test_videos/inter_xqh/DJI_20260403142902_0001_V小清河北路与水屯路路口.mp4" \
-TOPIC_NAME="statistics_1" \
+ROADS_JSON="configs/inter_xqh_lanes.json" \
+TOPIC_NAME="uav_statistics_1" \
 CAMERA_ID=1 \
 KAFKA_BOOTSTRAP="localhost:9092" \
-FRAME_STRIDE=3 \
 python main_optimized.py \
   pipeline.send_info_kafka=True \
   telemetry.enabled=true \
   telemetry.source=srt \
-  telemetry.file_path=test_videos/inter_xqh/telemetry.srt
+  +telemetry.file_path=test_videos/inter_xqh/telemetry.srt
 ```
 
-```powershell
-$env:VIDEO_SRC = "test_videos/inter_xqh/DJI_20260403142902_0001_V小清河北路与水屯路路口.mp4"
-$env:TOPIC_NAME = "statistics_1"
-$env:CAMERA_ID = "1"
-$env:KAFKA_BOOTSTRAP = "localhost:9092"
-$env:FRAME_STRIDE = "5"
-python main_optimized.py pipeline.send_info_kafka=True telemetry.enabled=true telemetry.source=srt telemetry.file_path=test_videos/inter_xqh/telemetry.srt
-```
+canonical Kafka Topic：
 
-后台运行加 `nohup ... > /tmp/detector_xqh.log 2>&1 &`。
+- `uav_statistics_*`
+- `uav_track_complete_*`
+- `uav_conflicts_*`
+- `uav_telemetry_*`
+- `uav_system_metrics`
 
-### 自定义视频源
+canonical WebSocket channel：`uav_intersection:*`、`uav_alerts`、`uav_alerts:*`、`uav_system`、`uav_telemetry:*`、`uav_calibration`。
+
+## 验证
 
 ```bash
-VIDEO_SRC=test_videos/inter1.mp4 python main_optimized.py pipeline.send_info_kafka=False
+python -m pytest platform/tests -q
+python -m pytest test_kafka_active_trajectories.py test_utils_local.py test_byte_tracker_core.py -q
+python test_pipeline_inter_xqh.py
+cd console2 && npm test && npm run build
+python scripts/audit_adr019_retirement.py --scope local --strict
+git diff --check
 ```
 
-### 启用 Kafka 数据推送（完整管道）
+`test_pipeline_inter_xqh.py` 的基线为 `56 PASS / 0 FAIL / 0 WARN`。
+
+## 旧存储保留
+
+旧容器已下线，旧卷/绑定目录仅保留 7 天且不再挂载。记录状态：
 
 ```bash
-python main_optimized.py
+python scripts/purge_adr019_legacy_storage.py status
 ```
 
-### 关键环境变量
+清理脚本具有固定 allowlist、到期校验、环境开关和确认短语；7 天内会拒绝删除。不要把旧数据导入 `road9`。
 
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `VIDEO_SRC` | `test_videos/test_video.mp4` | 视频文件路径、RTSP URL 或摄像头索引 |
-| `ROADS_JSON` | `configs/entry_exit_lanes.json` | 道路多边形坐标 JSON 文件 |
-| `TOPIC_NAME` | `statistics_1` | Kafka 主题名 |
-| `CAMERA_ID` | `1` | 摄像头 ID |
-| `KAFKA_BOOTSTRAP` | `kafka:29092` | Kafka 地址（本地运行改为 `localhost:9092`）|
-
-### 停止检测器
-
-```bash
-pkill -f main_optimized.py
-```
-
----
-
-## 安装和启动：
-
-克隆仓库：
-
-```
-git clone 
-```
-
-之后，需要在项目主目录下创建一个环境变量文件，这些变量将被注入到Grafana和Influx的容器中。请创建 `.env` 文件并填入以下类似内容（包含服务的登录名和密码）：
-
-```
-INFLUXDB_ADMIN_USER=admin
-INFLUXDB_ADMIN_PASSWORD=admin
-GRAFANA_ADMIN_USER=admin
-GRAFANA_ADMIN_PASSWORD=admin
-KAFKA_USERNAME=traffic
-KAFKA_PASSWORD=traffic-secret
-```
-
-接下来，使用以下命令启动项目：
-
-```
-docker compose -p traffic_analyzer up -d --build
-```
-
-在Docker Compose中，每个新摄像头都作为 traffic_analyzer_camera_{n} 后端服务的一个额外实例添加，只需通过服务的环境变量指定不同的 `src` 和配置即可。
-
-## 如何在本地通过Python运行（无需额外微服务）：
-
-```
-# 安装依赖库：
-python -m pip install --upgrade pip
-pip install "numpy<2"
-pip install cython_bbox==0.1.5 lap==0.4.0
-pip install torch==2.3.1 torchvision==0.18.1 --index-url https://download.pytorch.org/whl/cu121
-pip install -r requirements.txt
-
-# 运行代码：
-python main_optimized.py pipeline.send_info_kafka=False
-```
-程序运行结果可通过此[链接](http://127.0.0.1:8100/)查看。
-
----
-
-## 项目架构：
-
-该项目是一个实时视频分析系统，可处理RTSP流或MP4文件。主服务 **traffic_analyzer_camera_{n}** 处理视频帧，提取分析数据（例如，环岛上的车辆数量、相邻道路的拥堵情况）并将其发送到消息代理 **Kafka**。每个摄像头的实时统计数据被写入其专属的Kafka主题 *statistics_{n}*。数据通过 **Telegraf** 自动从Kafka写入时间序列数据库 **InfluxDB**。InfluxDB因其高性能和对海量数据的支持，非常适合存储流数据。
-
-数据可视化通过 **Grafana** 实现，它连接到InfluxDB并将分析结果以交互式仪表盘的形式展示。这使得用户可以实时跟踪关键指标、绘制图表并分析趋势。
-
-#### 主要组件：
-1.  **traffic_analyzer_camera_{n}**: 按编号n处理视频流，将数据发送到Kafka。
-2.  **Kafka**: 数据的临时存储和传输。
-3.  **Telegraf**: 将数据从Kafka转移到InfluxDB。
-4.  **InfluxDB**: 存储分析数据。
-5.  **Grafana**: 将InfluxDB中的数据可视化到交互式仪表盘。
-6.  **Nginx**: 充当反向代理，将所有处理后的视频Flask流统一聚合到一个端口的不同端点下。这样可以方便地管理视频流的访问，并为所有摄像头提供统一的入口点。
-
-![项目架构](content_for_readme/архитектура.png)
-
-## 主视频流处理服务的代码实现：
-
-每个视频帧（FrameElement对象）会顺序通过多个处理节点（Node），该对象的属性会逐步添加越来越多的信息。
-
-```mermaid
-graph TD;
-    A["VideoReader<br>从视频流中读取帧"] --> B["DetectionTrackingNodes<br>实现车辆检测+跟踪"];
-    B --> C["TrackerInfoUpdateNode<br>更新有效跟踪信息"];
-    C --> D["CalcStatisticsNode<br>计算道路拥堵情况"];
-    D --send_info_kafka==False --> F;
-    D --send_info_kafka==True --> E["KafkaProducerNode<br>将结果发送到Kafka"];
-    E --> F["ShowNode<br>supervision库实现结果可视化"];
-    F --save_video==True --> H["VideoSaverNode<br>保存处理后的帧"];
-    F --show_in_web==True & save_video==False --> L["FlaskServerVideoNode<br>在Web界面中输出处理后的帧"];
-    H --show_in_web==True --> L
-```
-
----
-
-## 使用程序：
-
-启动前，必须在 __configs/app_config.yaml__ 文件中指定所有所需的参数。然后即可运行代码。
-
-要使用特定视频启动项目，需要在Docker Compose中通过环境变量指定其路径。也可以指定rtsp流的URL来代替文件路径。同样地，可以通过容器的环境变量指定包含相邻道路多边形坐标的json文件路径。
-
-#### <ins>运行MP4文件的选项：<ins>
-
-**main.py** - 项目的主要代码，在循环中实现帧通过所有节点的处理。
-
-**main_optimized.py** - 使用multiprocessing优化后的main.py版本。由于所有资源密集型操作分布在独立且并行工作的进程之间，因此可以实现更高的处理速度（超过35帧/秒）。包含进程健康检查（`is_alive()` + 队列超时）以确保可靠退出。
-
-#### <ins>已废弃的启动选项（已删除，功能已整合到 main_optimized.py）：<ins>
-
-之前存在 `main_stream_optimized.py` 和 `main_stream_optimized_v2.py`——用于RTSP实时流的版本。它们的功能（`is_alive()` 检查、队列超时）已整合到 `main_optimized.py` 中。
-
-**generate_lanes车道标定** python d:\ai\TrafficAnalyzer\generate_lanes.py d:\ai\TrafficAnalyzer\test_videos\inter2.mp4 d:\ai\TrafficAnalyzer\configs\inter2_lanes.json
----
-
-## 代码工作示例：
-
-__显示统计信息的算法工作示例__：每辆车以其来自的道路对应的颜色显示 + 显示可见车辆数量的值 + 显示输入流强度值（每分钟从各入口道路驶入的车辆数）。<br/>当在配置中选择 show_node.show_info_statistics=True 时，显示方式如下：
-
-![交通统计 1](content_for_readme/with_statistics_1.gif)
-![交通统计 2](content_for_readme/with_statistics_2.gif)
-
-通过在配置中选择 show_node.show_info_statistics=False 可以禁用统计信息窗口的显示。<br/>
-要像第一个示例中那样观察处理FPS，需要在配置中指定 show_node.draw_fps_info=True。
-
----
-
-__显示车辆跟踪结果的演示模式示例__（每个ID以其独特的颜色显示）<br/>
-当在配置中选择 show_node.show_track_id_different_colors=True 时，显示方式如下：
-
-![交通跟踪](content_for_readme/traffic_tracking.gif)
-
----
-
-Git项目的分支结构如下：
-
-```
-main
-└── prod_docker_version
-    └── multicamera
-        ├── feature/triton
-        └── feature/influx
+详细契约见 `docs/ARCHITECTURE.md`、`docs/API_CONTRACTS.md`、`docs/DATABASE_SCHEMA.md` 和 `docs/DECISIONS.md`。

@@ -7,7 +7,15 @@ from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.schemas.survey import MeasurementCreate, MeasurementUpdate, SurveyAction, SurveyAssetImport, SurveyTaskCreate
+from app.schemas.survey import (
+    MeasurementCreate,
+    MeasurementUpdate,
+    SceneAnnotationCreate,
+    SceneAnnotationUpdate,
+    SurveyAction,
+    SurveyAssetImport,
+    SurveyTaskCreate,
+)
 from app.services.survey_service import SurveyService
 
 
@@ -124,9 +132,70 @@ async def import_capture_batch(
             task_id,
             payload.video_asset,
             payload.telemetry_asset,
+            payload.source_profile_id,
             actor_id,
             role,
             _request_id(request, idempotency_key),
+        )
+    except Exception as exc:
+        _raise_domain_error(exc)
+
+
+@router.get("/{task_id}/annotations")
+async def list_scene_annotations(task_id: str, request: Request, db: AsyncSession = Depends(get_db)):
+    actor_id, role, _ = _actor(request)
+    try:
+        return await SurveyService(db).list_annotations(task_id, actor_id, role)
+    except Exception as exc:
+        _raise_domain_error(exc)
+
+
+@router.post("/{task_id}/annotations", status_code=status.HTTP_201_CREATED)
+async def create_scene_annotation(
+    task_id: str,
+    payload: SceneAnnotationCreate,
+    request: Request,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    db: AsyncSession = Depends(get_db),
+):
+    actor_id, role, _ = _actor(request)
+    try:
+        return await SurveyService(db).create_annotation(
+            task_id, payload.model_dump(), actor_id, role, _request_id(request, idempotency_key)
+        )
+    except Exception as exc:
+        _raise_domain_error(exc)
+
+
+@router.patch("/{task_id}/annotations/{annotation_id}")
+async def update_scene_annotation(
+    task_id: str,
+    annotation_id: str,
+    payload: SceneAnnotationUpdate,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    actor_id, role, _ = _actor(request)
+    try:
+        return await SurveyService(db).update_annotation(
+            task_id, annotation_id, payload.model_dump(), actor_id, role
+        )
+    except Exception as exc:
+        _raise_domain_error(exc)
+
+
+@router.delete("/{task_id}/annotations/{annotation_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_scene_annotation(
+    task_id: str,
+    annotation_id: str,
+    request: Request,
+    expected_revision: int = Query(ge=1),
+    db: AsyncSession = Depends(get_db),
+):
+    actor_id, role, _ = _actor(request)
+    try:
+        await SurveyService(db).delete_annotation(
+            task_id, annotation_id, expected_revision, actor_id, role
         )
     except Exception as exc:
         _raise_domain_error(exc)
@@ -281,6 +350,15 @@ async def survey_evidence_content(evidence_id: str, request: Request, db: AsyncS
     actor_id, role, _ = _actor(request)
     try:
         item, path = await SurveyService(db).evidence_item(evidence_id, actor_id, role)
-        return FileResponse(path, media_type=item.media_type, filename=None)
+        return FileResponse(
+            path,
+            media_type=item.media_type,
+            filename=None,
+            headers={
+                "ETag": f'"{item.sha256}"',
+                "X-Content-SHA256": item.sha256,
+                "X-Storage-Backend": item.storage_backend,
+            },
+        )
     except Exception as exc:
         _raise_domain_error(exc)

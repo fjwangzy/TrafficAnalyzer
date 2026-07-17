@@ -1,8 +1,8 @@
 # 端到端测试报告：inter_xqh 视频 + SRT 遥测
 
-> **架构替代声明（2026-07-15）**：`56 PASS / 0 FAIL / 0 WARN` 是算法/管道防回退证据；它不证明 database=`road9`、`uav_` 消息与表命名、TimescaleDB、历史数据迁移或 InfluxDB/Telegraf/Grafana 退役已完成。目标数据架构及新增验收门禁见 [ADR-019](DECISIONS.md)、[API_CONTRACTS.md](API_CONTRACTS.md) 和 [DATABASE_SCHEMA.md](DATABASE_SCHEMA.md)。
+> **当前范围说明（2026-07-16）**：`56 PASS / 0 FAIL / 0 WARN` 是算法/管道防回退证据；正式本机 `road9`、`uav_*`、TimescaleDB 与旧链路退役另由 ADR-019 严格审计及[六组本机全流程报告](test_report_local_replay_full_flow.md)证明。两者都不代表生产验收。
 
-**最近复跑日期**: 2026-07-15
+**最近复跑日期**: 2026-07-16
 **测试资产**: `test_videos/inter_xqh/`  
 - 视频: `DJI_20260403142902_0001_V小清河北路与水屯路路口.mp4` (5.4GB, 4K, 16.5min)  
 - 遥测: `telemetry.srt` (29,741 条记录, 逐帧@30fps)
@@ -11,7 +11,7 @@
 
 ## 测试结果：56 PASS / 0 FAIL / 0 WARN ✅
 
-2026-07-15 当前工作树复跑 `python test_pipeline_inter_xqh.py` 通过：`56 PASS / 0 FAIL / 0 WARN`。前 100 帧真实 YOLO+SRT 管道耗时 96.4s（CPU），检测目标帧率 100/100、累计 8051 个目标、遥测注入 100/100、H 矩阵 100/100、运动补偿 90/100、机非冲突事件数 0。
+2026-07-16 最终工作树复跑 `python test_pipeline_inter_xqh.py` 通过：`56 PASS / 0 FAIL / 0 WARN`。前 100 帧真实 YOLO+SRT 管道耗时 96.2s（CPU），检测目标帧率 100/100、累计 8051 个目标、遥测注入 100/100、H 矩阵 100/100、运动补偿 90/100、机非冲突事件数 0。
 
 ### Phase 1: SRT 遥测解析 (7/7)
 | 检查项 | 结果 | 详情 |

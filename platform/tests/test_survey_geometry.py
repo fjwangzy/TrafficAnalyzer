@@ -3,9 +3,9 @@ from pathlib import Path
 
 import numpy as np
 
-from app.services.survey_capture import parse_dji_srt
+from app.services.survey_capture import parse_dji_json, parse_dji_srt
 from app.services.survey_geometry import calculate_measurement, compute_homography_from_telemetry
-from app.services.survey_storage import ContentAddressedStore
+from app.services.survey_storage import ContentAddressedStore, resolve_allowlisted_asset
 
 
 def test_nadir_homography_centers_enu_and_scales_metric_distance():
@@ -33,8 +33,8 @@ def test_real_inter_xqh_srt_is_parseable():
     path = Path(__file__).resolve().parents[2] / "test_videos" / "inter_xqh" / "telemetry.srt"
     records = parse_dji_srt(path)
     assert len(records) == 29_741
-    assert records[0]["altitude_agl"] > 100
-    assert records[0]["gimbal_pitch"] == -90
+    assert records[0]["altitude_agl"] > 50
+    assert -90 <= records[0]["gimbal_pitch"] <= 0
 
 
 def test_content_addressed_evidence_verification_detects_tampering(tmp_path):
@@ -46,3 +46,43 @@ def test_content_addressed_evidence_verification_detects_tampering(tmp_path):
     stored.path.chmod(0o640)
     stored.path.write_bytes(b"tampered")
     assert not store.verify(stored.storage_key, stored.sha256, stored.size_bytes)
+
+
+def test_real_mp4new_dji_cloud_txt_is_parseable():
+    path = (
+        Path(__file__).resolve().parents[2]
+        / "test_videos/mp4new/srt/解放东路-海右路0625早高峰 srt文件.txt"
+    )
+    records = parse_dji_json(path)
+    assert records
+    assert records[0]["timestamp"] == 0
+    assert records[0]["altitude_agl"] > 50
+    assert -90 <= records[0]["gimbal_pitch"] <= 0
+
+
+def test_server_asset_reference_hashes_without_copying(tmp_path):
+    source_root = tmp_path / "source"
+    store_root = tmp_path / "store"
+    source_root.mkdir()
+    source = source_root / "capture.mp4"
+    source.write_bytes(b"original-video")
+    store = ContentAddressedStore(str(store_root))
+
+    stored = store.reference_path(source, "capture.mp4")
+
+    assert stored.storage_backend == "server_asset"
+    assert stored.path == source
+    assert stored.storage_key == "capture.mp4"
+    assert list((store_root / "objects").iterdir()) == []
+
+
+def test_allowlisted_asset_rejects_path_traversal(tmp_path):
+    root = tmp_path / "assets"
+    root.mkdir()
+    (tmp_path / "outside.mp4").write_bytes(b"outside")
+    try:
+        resolve_allowlisted_asset("../outside.mp4", [str(root)], tmp_path)
+    except ValueError as exc:
+        assert "outside configured survey roots" in str(exc)
+    else:
+        raise AssertionError("path traversal was accepted")

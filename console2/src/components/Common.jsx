@@ -5,17 +5,11 @@ export function StatusBadge({ value, children }) {
   return <span className={`status-badge ${value}`}>{children || statusLabel[value] || value}</span>
 }
 
-export function PageHeader({ eyebrow, title, description, actions, meta }) {
-  return (
-    <header className='page-heading'>
-      <div>
-        {eyebrow && <span className='eyebrow'>{eyebrow}</span>}
-        <h1>{title}</h1>
-        {description && <p>{description}</p>}
-      </div>
-      <div className='heading-actions'>{meta && <span className='heading-meta'>{meta}</span>}{actions}</div>
-    </header>
-  )
+export function PageHeader({ title, actions }) {
+  return <>
+    <h1 className='sr-only'>{title}</h1>
+    {actions && <div className='page-actions'>{actions}</div>}
+  </>
 }
 
 export function Panel({ title, subtitle, action, className = '', children }) {

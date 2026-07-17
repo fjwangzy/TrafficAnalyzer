@@ -10,7 +10,7 @@
 - 以 `FrameElement` 为唯一帧级数据载体：新增跨节点字段必须在 `elements/FrameElement.py` 声明。
 - 配置驱动：运行参数进入 `configs/app_config.yaml`，需要容器差异时通过环境变量或 Hydra override 注入。
 - 不回退用户已有改动：工作树可能包含并行修改，除非用户明确要求，不还原不相关文件。
-- 遵守 ADR-019：目标为 database=`road9` + TimescaleDB，UAV 内部消息/自建表使用 `uav_` 前缀；旧 InfluxDB/Telegraf/Grafana 只做迁移回归，不得扩建。
+- 遵守 ADR-019：本机唯一数据库为 database=`road9` + TimescaleDB，UAV Topic、`msg_type`、WebSocket channel 和自建表使用 `uav_` 前缀；旧库与旧观测链路已退役，历史数据不迁移，不得恢复兼容或挂载旧存储。
 
 ## 模块边界
 
@@ -21,7 +21,8 @@
 | `utils_local/` | 几何、单应性、车道推断等纯工具 |
 | `byte_tracker/` | ByteTrack 移植代码，参数优先从配置调整 |
 | `platform/app/` | FastAPI 单体平台，不重新拆回微服务 |
-| `traffic-fly-console/` | React 前端，实时态势、GIS、告警、管道和无人机页面 |
+| `console2/` | 当前 React 前端，使用 canonical REST/WebSocket 契约 |
+| `traffic-fly-console/` | 已退役子模块，仅保留历史审计，不进入 Compose、Nginx 或发布构建 |
 | `docs/` | 架构、业务逻辑、API、数据库和测试报告，完成任务后同步更新 |
 
 ## TCC 闭环验证习惯
@@ -31,12 +32,12 @@
 ```bash
 python test_pipeline_inter_xqh.py
 python -m pytest platform/tests -q
-python -m pytest test_kafka_active_trajectories.py test_utils_local.py test_byte_tracker_core.py -q
-# 迁移完成前可单独运行遗留 test_grafana_provisioning.py；它不属于目标架构验收
-cd traffic-fly-console && npm test && npm run build
+python -m pytest test_kafka_active_trajectories.py test_utils_local.py test_byte_tracker_core.py test_main_optimized_eof.py test_road9_compose_runtime.py test_telemetry_file_reader.py test_video_reader_frame_stride.py -q
+cd console2 && npm test && npm run build
+python scripts/audit_adr019_retirement.py --scope local --strict
 ```
 
-当前 inter_xqh 端到端基线为 `56 PASS / 0 FAIL / 0 WARN`。如果测试资产或权重缺失，应记录缺失项，不能把未运行的验证当作通过；该基线也不能替代 ADR-019 的 `road9`/TimescaleDB、消息改名、迁移对账和退役验收。
+当前 inter_xqh 端到端基线为 `56 PASS / 0 FAIL / 0 WARN`。如果测试资产或权重缺失，应记录缺失项，不能把未运行的验证当作通过；该基线也不能替代 ADR-019 的空白 `road9`、canonical 消息、本机运行态和旧资产隔离验收。
 
 ## 文档同步
 
@@ -52,5 +53,6 @@ cd traffic-fly-console && npm test && npm run build
 - 禁止新增绕过 `main_optimized.py` 的生产入口。
 - 禁止在 ShowNode 中加入业务判定逻辑。
 - 禁止将 `platform/` 重新拆为 gateway/services/shared 微服务结构。
+- 禁止恢复无前缀 Topic/`msg_type`/WebSocket channel、旧数据库自动迁移或已退役观测依赖。
 - 禁止使用 `python-jose`，平台鉴权使用 PyJWT。
 - 禁止把旧的 0.9m~1.7m CPA 擦肩事件重新作为默认机非冲突业务口径。

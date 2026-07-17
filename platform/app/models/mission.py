@@ -64,6 +64,23 @@ class VisualLaneBinding(Base):
     )
 
 
+class LaneAnnotationTaskRecord(Base):
+    __tablename__ = "uav_lane_annotation_tasks"
+
+    id: Mapped[str] = mapped_column(String(100), primary_key=True)
+    inter_id: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    road_data_version: Mapped[str] = mapped_column(String(100), nullable=False)
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default="pending", index=True)
+    image_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    annotation: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    confirmed_by: Mapped[int | None] = mapped_column(ForeignKey("uav_users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=lambda: datetime.now(UTC), nullable=False
+    )
+
+
 class DeviceIntersectionBinding(Base):
     __tablename__ = "uav_device_intersection_bindings"
 

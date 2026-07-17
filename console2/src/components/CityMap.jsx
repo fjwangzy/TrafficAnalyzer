@@ -8,19 +8,41 @@ import VectorSource from 'ol/source/Vector.js'
 import Feature from 'ol/Feature.js'
 import Point from 'ol/geom/Point.js'
 import { fromLonLat } from 'ol/proj.js'
-import { Circle as CircleStyle, Fill, Stroke, Style } from 'ol/style.js'
+import { Circle as CircleStyle, Fill, Icon as IconStyle, Stroke, Style } from 'ol/style.js'
 import { Crosshair, MapPin, Minus, Plus, WarningCircle } from '@phosphor-icons/react'
 import 'ol/ol.css'
 
 const colors = { critical: '#ff715b', warning: '#ffbe55', normal: '#5ad3e7' }
 
-export function CityMap({ points, selectedId, onSelect, offline = false, compact = false, showHeat = false, coordinateLabel = '坐标来源未冻结' }) {
+function droneDisplacement(item, points) {
+  const nearby = points
+    .filter((candidate) => Math.abs(candidate.lon - item.lon) <= 0.003 && Math.abs(candidate.lat - item.lat) <= 0.003)
+    .sort((left, right) => String(left.id).localeCompare(String(right.id)))
+  if (nearby.length < 2) return [0, 0]
+  const angle = (Math.PI * 2 * nearby.findIndex((candidate) => candidate.id === item.id)) / nearby.length
+  return [Math.round(Math.cos(angle) * 18), Math.round(Math.sin(angle) * 18)]
+}
+
+function droneMarker(color, selected, displacement) {
+  const outline = selected ? '#ffffff' : '#0a101a'
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 40 40"><circle cx="8" cy="8" r="5" fill="#0a101a" stroke="${color}" stroke-width="2.5"/><circle cx="32" cy="8" r="5" fill="#0a101a" stroke="${color}" stroke-width="2.5"/><circle cx="8" cy="32" r="5" fill="#0a101a" stroke="${color}" stroke-width="2.5"/><circle cx="32" cy="32" r="5" fill="#0a101a" stroke="${color}" stroke-width="2.5"/><path d="M11.5 11.5L17 17M28.5 11.5L23 17M11.5 28.5L17 23M28.5 28.5L23 23" stroke="${color}" stroke-width="3" stroke-linecap="round"/><rect x="15" y="15" width="10" height="10" rx="3" fill="${color}" stroke="${outline}" stroke-width="2"/><circle cx="20" cy="20" r="2" fill="#ffffff"/></svg>`
+  return new IconStyle({
+    src: `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`,
+    anchor: [0.5, 0.5],
+    scale: selected ? 1 : 0.86,
+    displacement,
+  })
+}
+
+export function CityMap({ points, selectedId, onSelect, offline = false, compact = false, showHeat = false, coordinateLabel = '坐标来源未冻结', markerType = 'status' }) {
   const ref = useRef(null)
   const mapRef = useRef(null)
   const [zoom, setZoom] = useState(compact ? 12 : 12.4)
   const [tileFailed, setTileFailed] = useState(false)
-  const firstPoint = points.find((item) => Number.isFinite(item.lon) && Number.isFinite(item.lat))
-  const initialCenter = firstPoint ? [firstPoint.lon, firstPoint.lat] : [117.085, 36.674]
+  const validPoints = points.filter((item) => Number.isFinite(item.lon) && Number.isFinite(item.lat))
+  const initialCenter = validPoints.length
+    ? validPoints.reduce((center, item) => [center[0] + item.lon / validPoints.length, center[1] + item.lat / validPoints.length], [0, 0])
+    : [117.085, 36.674]
 
   useEffect(() => {
     if (!ref.current || offline || tileFailed) return undefined
@@ -36,10 +58,11 @@ export function CityMap({ points, selectedId, onSelect, offline = false, compact
       style: (feature) => {
         const item = feature.get('item')
         const selected = item.id === selectedId
+        const color = colors[item.risk] || '#8290aa'
         return new Style({
-          image: new CircleStyle({
+          image: markerType === 'drone' ? droneMarker(color, selected, droneDisplacement(item, points)) : new CircleStyle({
             radius: selected ? 12 : item.risk === 'critical' ? 10 : 8,
-            fill: new Fill({ color: `${colors[item.risk] || '#8290aa'}d9` }),
+            fill: new Fill({ color: `${color}d9` }),
             stroke: new Stroke({ color: selected ? '#ffffff' : '#0a101a', width: selected ? 3 : 2 }),
           }),
         })
@@ -58,7 +81,7 @@ export function CityMap({ points, selectedId, onSelect, offline = false, compact
     })
     mapRef.current = map
     return () => { map.setTarget(undefined); mapRef.current = null }
-  }, [points, selectedId, onSelect, offline, tileFailed])
+  }, [points, selectedId, onSelect, offline, tileFailed, markerType])
 
   useEffect(() => { if (mapRef.current) mapRef.current.getView().setZoom(zoom) }, [zoom])
 

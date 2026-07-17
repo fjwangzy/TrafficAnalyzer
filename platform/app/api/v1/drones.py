@@ -4,7 +4,14 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from fastapi import APIRouter, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.database import get_db
+from app.models.metrics import ConflictEvent, TrackEvent, TrafficMetric
+from app.models.mission import LaneAnnotationTaskRecord, MissionRecord, TelemetrySourceRecord, VideoSourceRecord
+from app.models.survey import SceneAnnotation, SurveyCaptureBatch, SurveyFrame, SurveyReport, SurveyTask
 
 from app.models.drone_store import (
     DRONES,
@@ -103,6 +110,95 @@ async def list_drone_sources(drone_id: str, request: Request):
 @router.get("/sources")
 async def list_sources(request: Request):
     return await _call(_orchestrator(request).list_sources())
+
+
+@router.get("/sources/{profile_id}/results")
+async def get_source_results(profile_id: str, request: Request, db: AsyncSession = Depends(get_db)):
+    """Return persisted Mission, situation, insight, survey and annotation entrypoints for one source."""
+    video = (
+        await db.execute(select(VideoSourceRecord).where(VideoSourceRecord.profile_id == profile_id))
+    ).scalar_one_or_none()
+    telemetry = (
+        await db.execute(select(TelemetrySourceRecord).where(TelemetrySourceRecord.profile_id == profile_id))
+    ).scalar_one_or_none()
+    if video is None or telemetry is None:
+        raise HTTPException(status_code=404, detail="source profile not found")
+    missions = (
+        await db.execute(
+            select(MissionRecord)
+            .where(MissionRecord.video_source_id == video.id, MissionRecord.telemetry_source_id == telemetry.id)
+            .order_by(MissionRecord.created_at.desc())
+        )
+    ).scalars().all()
+    batches = (
+        await db.execute(
+            select(SurveyCaptureBatch, SurveyTask)
+            .join(SurveyTask, SurveyTask.id == SurveyCaptureBatch.task_id)
+            .where(SurveyCaptureBatch.source_profile_id == profile_id)
+            .order_by(SurveyCaptureBatch.created_at.desc())
+        )
+    ).all()
+    task_ids = list(dict.fromkeys(batch.task_id for batch, _ in batches))
+    frame_count = int(await db.scalar(select(func.count()).select_from(SurveyFrame).where(SurveyFrame.task_id.in_(task_ids)))) if task_ids else 0
+    annotation_count = int(await db.scalar(select(func.count()).select_from(SceneAnnotation).where(SceneAnnotation.task_id.in_(task_ids)))) if task_ids else 0
+    report_count = int(await db.scalar(select(func.count()).select_from(SurveyReport).where(SurveyReport.task_id.in_(task_ids)))) if task_ids else 0
+    inter_id = missions[0].inter_id if missions else (batches[0][1].inter_id if batches else None)
+    metric_count = int(await db.scalar(select(func.count()).select_from(TrafficMetric).where(TrafficMetric.inter_id == inter_id))) if inter_id else 0
+    track_count = int(await db.scalar(select(func.count()).select_from(TrackEvent).where(TrackEvent.inter_id == inter_id))) if inter_id else 0
+    conflict_count = int(await db.scalar(select(func.count()).select_from(ConflictEvent).where(ConflictEvent.inter_id == inter_id))) if inter_id else 0
+    lane_tasks = (
+        await db.execute(
+            select(LaneAnnotationTaskRecord)
+            .where(LaneAnnotationTaskRecord.inter_id == inter_id)
+            .order_by(LaneAnnotationTaskRecord.created_at.desc())
+        )
+    ).scalars().all() if inter_id else []
+    return {
+        "profile_id": profile_id,
+        "drone_id": video.drone_id,
+        "inter_id": inter_id,
+        "telemetry_type": (telemetry.config or {}).get("format") or telemetry.source_type,
+        "sync_config": telemetry.config or {},
+        "missions": [
+            {
+                "id": row.id,
+                "status": row.status,
+                "reason_code": row.reason_code,
+                "pipeline_id": row.pipeline_id,
+                "actual_start_at": row.actual_start_at,
+                "actual_end_at": row.actual_end_at,
+            }
+            for row in missions
+        ],
+        "survey_tasks": [
+            {
+                "id": task.id,
+                "status": task.state,
+                "batch_id": batch.id,
+                "batch_status": batch.status,
+                "telemetry_coverage": batch.telemetry_coverage,
+            }
+            for batch, task in batches
+        ],
+        "counts": {
+            "traffic_metrics": metric_count,
+            "tracks": track_count,
+            "conflicts": conflict_count,
+            "survey_frames": frame_count,
+            "scene_annotations": annotation_count,
+            "survey_reports": report_count,
+            "lane_annotations": len(lane_tasks),
+        },
+        "lane_tasks": [{"id": row.id, "status": row.status, "revision": row.revision} for row in lane_tasks],
+        "links": {
+            "situation": f"/gis?intersection_id={inter_id}&period=24h" if inter_id else "/gis?period=24h",
+            "monitoring": "/drones?tab=fleet",
+            "insight": f"/gis?intersection_id={inter_id}&period=24h&layer=trajectory" if inter_id else "/gis?period=24h&layer=trajectory",
+            "survey": f"/survey/{task_ids[0]}/capture?task_id={task_ids[0]}" if task_ids else "/survey",
+            "scene_annotation": f"/survey/{task_ids[0]}/measure?task_id={task_ids[0]}" if task_ids else "/survey",
+            "lane_annotation": "/admin/calibration?tab=lane",
+        },
+    }
 
 
 @router.post("/drones/{drone_id}/sources", status_code=status.HTTP_201_CREATED)

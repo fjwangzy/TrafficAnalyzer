@@ -26,6 +26,9 @@ vi.mock('./lib/api', async (importOriginal) => {
   const frame = { id: 'FRM-01', task_id: task.id, batch_id: 'BATCH-01', frame_number: 18236, timestamp_sec: 10, has_metric_transform: true, image_url: '/api/v1/survey-evidence/EVI-IMAGE/content', bev_url: '/api/v1/survey-evidence/EVI-BEV/content', quality: {}, telemetry: {} }
   const measurement = { id: 'M-01', revision: 1, frame_id: frame.id, geometry_type: 'line', category: '刹车痕迹', image_geometry: [[10, 10], [40, 40]], display_value: '12.48m', quality_status: 'unverified', source: 'manual' }
   const report = { id: 'RPT-01', task_id: task.id, version: 1, status: 'generated', schema_version: 'uav.survey-result.v1', content_hash: 'a'.repeat(64), payload: {}, pdf_url: '/api/v1/survey-evidence/EVI-PDF/content', delivery_blocked_reason: 'survey quality thresholds are not approved' }
+  const conflictEvent = { id: 'UAV-EVT-20260713-001', source_kind: 'conflict', event_type: 'conflict', inter_id: 'INT-I5', title: '机非冲突风险升高', severity: 'critical', occurred_at: '2026-07-15T02:52:16Z', quality_status: 'unverified', review_status: 'pending', review_revision: 1, delivery_status: 'not_queued', payload: { conflict_scene: '机非冲突风险升高', ttc_sec: 1.2, pet_sec: 0.8, distance_m: 0, risk_score: 86, evidence: ['path_intersection'] } }
+  const congestionEvent = { id: 'UAV-EVT-20260713-004', source_kind: 'ai_event', event_type: 'congestion', inter_id: 'INT-I5', title: '排队增长', severity: 'P2', occurred_at: '2026-07-15T02:50:00Z', quality_status: 'unverified', review_status: 'pending', review_revision: 1, delivery_status: 'not_queued', payload: { metrics: { congestion_index: 7.0 } } }
+  const surveyEvent = { id: 'UAV-EVT-20260713-005', source_kind: 'ai_event', event_type: 'survey_result', inter_id: 'INT-I5', title: '事故测绘成果', severity: 'P3', occurred_at: '2026-07-15T02:49:00Z', quality_status: 'unverified', review_status: 'technical_reviewed', review_revision: 1, delivery_status: 'blocked', payload: { measurements: [{ id: 'M-01' }], task: { version: 'v7' } } }
   return {
     ...actual,
     platformApi: {
@@ -52,10 +55,13 @@ vi.mock('./lib/api', async (importOriginal) => {
       dashboardDrones: vi.fn().mockResolvedValue({ schema_version: 'uav.dashboard/v1', items: [{ id: 'UAV-I5', name: 'I5 drone', enabled: true, status: 'offline', telemetry_quality: 'missing' }] }),
       trajectories: vi.fn().mockResolvedValue([{ id: 'TRK-1', track_id: 7, trajectory_world_m: [[0, 0], [1, 1]], quality_status: 'unverified' }]),
       conflicts: vi.fn().mockResolvedValue([
-        { id: 'UAV-EVT-20260713-001', inter_id: '370102000104', conflict_scene: '机非冲突风险升高', severity: 'critical', ttc_sec: 1.2, pet_sec: 0.8, distance_m: 0, risk_score: 86, evidence: ['path_intersection'], occurred_at: '2026-07-15T02:52:16Z', quality_status: 'unverified', time_quality: 'reconstructed', review_status: 'pending', review_revision: 1 },
+        { id: 'UAV-EVT-20260713-001', inter_id: 'INT-I5', conflict_scene: '机非冲突风险升高', severity: 'critical', ttc_sec: 1.2, pet_sec: 0.8, distance_m: 0, risk_score: 86, evidence: ['path_intersection'], occurred_at: '2026-07-15T02:52:16Z', quality_status: 'unverified', time_quality: 'reconstructed', review_status: 'pending', review_revision: 1 },
       ]),
-      alerts: vi.fn().mockResolvedValue([{ id: 'UAV-EVT-20260713-004', intersection_id: '370102000104', alert_type: 'congestion', severity: 'P2', title: '排队增长', description: 'queue', status: 'open', timestamp: '2026-07-15T02:50:00Z' }]),
-      reviewConflict: vi.fn().mockImplementation((_interId, _eventId, body) => Promise.resolve({ id: 'UAV-EVT-20260713-001', inter_id: '370102000104', conflict_scene: '机非冲突风险升高', severity: 'critical', ttc_sec: 1.2, pet_sec: 0.8, occurred_at: '2026-07-15T02:52:16Z', quality_status: 'unverified', time_quality: 'reconstructed', review_status: body.review_status, review_revision: 2 })),
+      alerts: vi.fn().mockResolvedValue([{ id: 'UAV-EVT-20260713-004', intersection_id: 'INT-I5', alert_type: 'congestion', severity: 'P2', title: '排队增长', description: 'queue', status: 'open', timestamp: '2026-07-15T02:50:00Z' }]),
+      reviewConflict: vi.fn().mockImplementation((_interId, _eventId, body) => Promise.resolve({ id: 'UAV-EVT-20260713-001', inter_id: 'INT-I5', conflict_scene: '机非冲突风险升高', severity: 'critical', ttc_sec: 1.2, pet_sec: 0.8, occurred_at: '2026-07-15T02:52:16Z', quality_status: 'unverified', time_quality: 'reconstructed', review_status: body.review_status, review_revision: 2 })),
+      events: vi.fn().mockResolvedValue([conflictEvent, congestionEvent, surveyEvent]),
+      event: vi.fn().mockImplementation((eventId) => Promise.resolve({ ...(eventId === conflictEvent.id ? conflictEvent : congestionEvent), related_tracks: [] })),
+      reviewEvent: vi.fn().mockImplementation((_eventId, body) => Promise.resolve({ ...conflictEvent, review_status: body.review_status, review_revision: 2 })),
       surveyTask: vi.fn().mockResolvedValue(task),
       surveyBatches: vi.fn().mockResolvedValue([{ id: 'BATCH-01', status: 'ready', telemetry_coverage: 0.94, quality_checks: { keyframes_extracted: 1, homography_available: 1 } }]),
       surveyFrames: vi.fn().mockResolvedValue([frame]),
@@ -63,6 +69,10 @@ vi.mock('./lib/api', async (importOriginal) => {
       surveyAction: vi.fn().mockImplementation((_id, body) => Promise.resolve({ ...task, status: body.action === 'submit_review' ? 'pending_review' : task.status, revision: 5, version: 'v5' })),
       surveyEvidence: vi.fn().mockResolvedValue(new Blob(['image'])),
       importSurveyBatch: vi.fn().mockResolvedValue({ id: 'BATCH-01', status: 'queued' }),
+      surveyAnnotations: vi.fn().mockResolvedValue([]),
+      createSurveyAnnotation: vi.fn(),
+      updateSurveyAnnotation: vi.fn(),
+      deleteSurveyAnnotation: vi.fn(),
       surveyReports: vi.fn().mockResolvedValue([]),
       generateSurveyReport: vi.fn().mockResolvedValue(report),
       drones: vi.fn().mockResolvedValue([
@@ -72,6 +82,7 @@ vi.mock('./lib/api', async (importOriginal) => {
         { profile_id: 'SRC-LOCAL-XQH', display_name: 'inter_xqh 早高峰', drone_id: 'UAV-M300-03', mode: 'local', enabled: true, validation_status: 'valid', revision: 1, video: { id: 'VID-1', source_type: 'mp4', location_hint: 'inter_xqh.mp4' }, telemetry: { id: 'TEL-1', source_type: 'srt', location_hint: 'telemetry.srt' } },
         { profile_id: 'SRC-LOCAL-XQH-PM', display_name: 'inter_xqh 晚高峰', drone_id: 'UAV-M300-03', mode: 'local', enabled: true, validation_status: 'valid', revision: 1, video: { id: 'VID-2', source_type: 'mp4', location_hint: 'inter_xqh-pm.mp4' }, telemetry: { id: 'TEL-2', source_type: 'file', location_hint: 'telemetry.txt' } },
       ]),
+      sourceResults: vi.fn().mockResolvedValue({ profile_id: 'SRC-LOCAL-XQH', telemetry_type: 'dji_srt', missions: [], survey_tasks: [], counts: { traffic_metrics: 0, tracks: 0, conflicts: 0, survey_frames: 0, scene_annotations: 0, survey_reports: 0, lane_annotations: 0 }, links: { situation: '/gis', monitoring: '/drones?tab=fleet', insight: '/insight', survey: '/survey', scene_annotation: '/survey', lane_annotation: '/admin/calibration?tab=lane' } }),
       flightPlans: vi.fn().mockResolvedValue([
         { id: 'FP-20260713-03', name: '夜间货车限行验证', drone_id: 'UAV-M300-03', state: 'draft', revision: 1, timezone: 'Asia/Shanghai', schedule: { type: 'once', start_at: '2026-07-15T22:30:00+08:00', end_at: '2026-07-16T00:30:00+08:00' } },
       ]),
@@ -135,20 +146,55 @@ describe('Console2 full prototype', () => {
   })
 
   it('renders the S8 city overview at the root route', () => {
-    open('/')
-    expect(screen.getByRole('heading', { name: '无人机交通态势工作台' })).toBeInTheDocument()
+    const { container } = open('/')
+    expect(screen.getByRole('heading', { name: '无人机交通态势工作台' })).toHaveClass('sr-only')
+    expect(container.querySelector('.page-heading')).not.toBeInTheDocument()
+    expect(container.querySelector('.page-actions')).toBeInTheDocument()
+    expect(screen.queryByText('I5 内部工程口径')).not.toBeInTheDocument()
     expect(screen.getByText('无人机路口态势纵览')).toBeInTheDocument()
     expect(screen.getByText('待办任务')).toBeInTheDocument()
-    expect(screen.getByRole('navigation', { name: '全域态势二级导航' })).toHaveTextContent('工作台首屏实时监测轨迹研判')
+    expect(screen.getByRole('navigation', { name: '全域态势二级导航' })).toHaveTextContent('工作台首屏实时监测')
+    expect(screen.getByRole('navigation', { name: '全域态势二级导航' })).not.toHaveTextContent('轨迹研判')
     expect(screen.getByRole('complementary', { name: '一级业务域' })).toBeInTheDocument()
   })
 
   it('uses the same first-level rail and domain secondary navigation on monitoring', () => {
     open('/monitoring')
-    expect(screen.getByRole('navigation', { name: '全域态势二级导航' })).toHaveTextContent('工作台首屏实时监测轨迹研判')
+    expect(screen.getByRole('navigation', { name: '全域态势二级导航' })).toHaveTextContent('工作台首屏实时监测')
+    expect(screen.getByRole('navigation', { name: '全域态势二级导航' })).not.toHaveTextContent('轨迹研判')
     expect(screen.getByRole('link', { name: '实时监测' })).toHaveClass('active')
     expect(screen.getByRole('complementary', { name: '一级业务域' })).toBeInTheDocument()
     expect(screen.getByLabelText('飞行姿态数据')).toBeInTheDocument()
+  })
+
+  it('moves trajectory analysis into the intelligent-insight navigation domain', () => {
+    const { container } = open('/gis')
+    const navigation = screen.getByRole('navigation', { name: '智能研判二级导航' })
+    expect(navigation).toHaveTextContent('AI 事件中心轨迹研判')
+    expect(screen.getByRole('link', { name: '轨迹研判' })).toHaveClass('active')
+    expect(container.querySelector('.page-heading')).not.toBeInTheDocument()
+    expect(screen.getByLabelText('时间窗口')).toHaveValue('all')
+  })
+
+  it('does not present pending road9 trajectory queries as zero data', async () => {
+    let resolveIntersections
+    platformApi.dashboardIntersections.mockImplementationOnce(() => new Promise((resolve) => {
+      resolveIntersections = resolve
+    }))
+
+    open('/gis')
+
+    expect(screen.getByText('路口加载中 · 轨迹等待路口')).toBeInTheDocument()
+    expect(screen.queryByText('0 个路口 · 0 条轨迹')).not.toBeInTheDocument()
+
+    resolveIntersections({
+      schema_version: 'uav.dashboard/v1', total: 1, items: [
+        { id: 'INT-I5', inter_id: 'INT-I5', name: 'I5 未验证路口', lat: null, lon: null, map_eligible: false, map_exclusion_reason: 'road_context_unverified', road_data_version: 'ROAD-I5', monitor: 'standby', risk: 'unknown', quality: 'unverified', metric: {}, events: [], conflict_count: 0 },
+      ],
+    })
+
+    await waitFor(() => expect(screen.getByText('1 个路口 · 1 条轨迹')).toBeInTheDocument())
+    expect(platformApi.trajectories).toHaveBeenCalledWith('INT-I5', { period: 'all', limit: 500, spatial_ready: true, min_world_points: 6 })
   })
 
   it('uses the server dashboard scope instead of URL prototype labels', async () => {
@@ -158,8 +204,11 @@ describe('Console2 full prototype', () => {
   })
 
   it('restores intersection and drone selections from deep links', async () => {
-    open('/gis?intersection_id=370102000104')
-    await waitFor(() => expect(screen.getByLabelText('路口')).toHaveValue('370102000104'))
+    open('/gis?intersection_id=INT-I5&period=24h')
+    await waitFor(() => expect(screen.getByLabelText('路口')).toHaveValue('INT-I5'))
+    expect(screen.getByLabelText('时间窗口')).toHaveValue('24h')
+    expect(screen.getByText('坐标尚未冻结')).toBeInTheDocument()
+    expect(platformApi.trajectories).toHaveBeenCalledWith('INT-I5', { period: '24h', limit: 500, spatial_ready: true, min_world_points: 6 })
   })
 
   it('restores the fleet tab and selected drone from a deep link', async () => {
@@ -190,21 +239,52 @@ describe('Console2 full prototype', () => {
     })))
   })
 
+  it('shows the starting state while Mission polling waits for MJPEG readiness', async () => {
+    platformApi.missions.mockResolvedValueOnce([
+      { id: 'MSN-STARTING', drone_id: 'UAV-M300-03', status: 'starting', pipeline: { observed_status: 'starting', camera_id: 19 } },
+    ])
+    open('/drones?tab=fleet')
+
+    expect(await screen.findByText('Pipeline 启动中')).toBeInTheDocument()
+    expect(screen.getByText('正在等待首个 MJPEG 检测帧')).toBeInTheDocument()
+    expect(screen.queryByRole('img', { name: '小清河北路 × 水屯路 实时检测画面' })).not.toBeInTheDocument()
+    expect(screen.getByRole('combobox', { name: '小清河北路 × 水屯路回放源' })).toBeDisabled()
+  })
+
+  it('shows the backend Mission conflict instead of falling back to demo state', async () => {
+    platformApi.missions.mockResolvedValueOnce([])
+    platformApi.createMission.mockRejectedValueOnce({
+      response: { data: { detail: { code: 'drone_mission_active', message: '该无人机已有运行中的 Mission' } } },
+    })
+    open('/drones?tab=fleet')
+
+    fireEvent.click(await screen.findByRole('button', { name: '启动检测' }))
+
+    expect(await screen.findByText(/该无人机已有运行中的 Mission/)).toBeInTheDocument()
+    expect(screen.queryByText(/Mock 回退/)).not.toBeInTheDocument()
+  })
+
   it('supports event deep links and persistent technical review', async () => {
     open('/events?event_id=UAV-EVT-20260713-001')
     expect(await screen.findByRole('dialog', { name: '机非冲突风险升高' })).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: '技术确认' }))
     expect(await screen.findByText('AI 结果已技术确认')).toBeInTheDocument()
-    expect(platformApi.reviewConflict).toHaveBeenCalledWith('370102000104', 'UAV-EVT-20260713-001', expect.objectContaining({ review_status: 'confirmed', expected_revision: 1 }))
+    expect(platformApi.reviewEvent).toHaveBeenCalledWith('UAV-EVT-20260713-001', expect.objectContaining({ review_status: 'confirmed', expected_revision: 1 }))
   })
 
   it('links event filters across persisted event type, intersection, and search', async () => {
     open('/events')
     expect(await screen.findByText('UAV-EVT-20260713-004')).toBeInTheDocument()
-    fireEvent.change(screen.getByLabelText('事件路口'), { target: { value: '370102000104' } })
+    fireEvent.change(screen.getByLabelText('事件路口'), { target: { value: 'INT-I5' } })
     expect(screen.getByText('UAV-EVT-20260713-001')).toBeInTheDocument()
     fireEvent.change(screen.getByLabelText('事件搜索'), { target: { value: '不存在的事件' } })
     expect(screen.getByText('暂无符合条件的数据')).toBeInTheDocument()
+  })
+
+  it('normalizes an already-prefixed survey version in the event metric', async () => {
+    open('/events')
+    expect(await screen.findByText('1 项量算 · v7')).toBeInTheDocument()
+    expect(screen.queryByText('1 项量算 · vv7')).not.toBeInTheDocument()
   })
 
   it('surfaces the backend overlap decision and keeps the plan as a draft', async () => {
@@ -233,8 +313,12 @@ describe('Console2 full prototype', () => {
     open('/survey/SVY-20260713-006/capture')
     expect(await screen.findByRole('heading', { name: '采集与质量预检' })).toBeInTheDocument()
     const taskReadsBeforeImport = platformApi.surveyTask.mock.calls.length
-    fireEvent.click(screen.getByRole('button', { name: '导入 inter_xqh 真实材料' }))
-    await waitFor(() => expect(platformApi.importSurveyBatch).toHaveBeenCalled())
+    fireEvent.click(screen.getByRole('button', { name: '引用目录素材' }))
+    await waitFor(() => expect(platformApi.importSurveyBatch).toHaveBeenCalledWith(
+      'SVY-20260713-006',
+      { source_profile_id: 'SRC-LOCAL-XQH' },
+      expect.any(String),
+    ))
     await waitFor(() => expect(platformApi.surveyTask.mock.calls.length).toBeGreaterThan(taskReadsBeforeImport))
   })
 
@@ -257,7 +341,7 @@ describe('Console2 full prototype', () => {
     open('/enforcement?event_id=CLUE-I4-01')
     fireEvent.click(await screen.findByRole('button', { name: '确认 AI 线索' }))
     await waitFor(() => expect(platformApi.reviewEnforcementClue).toHaveBeenCalledWith('CLUE-I4-01', expect.objectContaining({ review_status: 'reviewed_confirmed', expected_revision: 1 })))
-    expect(screen.getByText('工程契约样本')).toBeInTheDocument()
+    expect(screen.queryByText('工程契约样本')).not.toBeInTheDocument()
   })
 
   it('saves a zone candidate with PostgreSQL revision state', async () => {
@@ -304,14 +388,14 @@ describe('Console2 full prototype', () => {
 
   it('isolates unverified coordinates instead of plotting demo points', async () => {
     open('/')
-    expect(await screen.findByText('暂无可上图的权威路口坐标')).toBeInTheDocument()
-    expect(await screen.findByText(/1 个路口因 RoadContext、坐标参考或坐标值未验证被隔离/)).toBeInTheDocument()
+    expect(await screen.findByText('暂无可上图的路口坐标')).toBeInTheDocument()
+    expect(await screen.findByText('1 个路口尚未具备权威或验收测试坐标。')).toBeInTheDocument()
     expect(screen.queryByText('演示地图')).not.toBeInTheDocument()
   })
 
   it('applies dashboard risk filters through the server query contract', async () => {
     open('/')
-    await screen.findByText('暂无可上图的权威路口坐标')
+    await screen.findByText('暂无可上图的路口坐标')
     fireEvent.click(screen.getByRole('button', { name: '高风险' }))
     await waitFor(() => expect(platformApi.dashboardIntersections).toHaveBeenCalledWith({ risk: 'critical', limit: 500 }))
   })

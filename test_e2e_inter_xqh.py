@@ -30,7 +30,7 @@ VIDEO_SRC = "test_videos/inter_xqh/DJI_20260403142902_0001_V小清河北路与�
 ROADS_JSON = "configs/inter_xqh_lanes.json"
 TELEMETRY_FILE = "test_videos/inter_xqh/telemetry.srt"
 KAFKA_BOOTSTRAP = "localhost:9093"  # HOST listener (PLAINTEXT, no SASL)
-TOPIC_NAME = "statistics_1"
+TOPIC_NAME = "uav_statistics_1"
 CAMERA_ID = "1"
 INTERSECTION_ID = "INT_camera_1"
 
@@ -164,8 +164,8 @@ def check_kafka_topics(results: E2ETestResults):
         topics = admin.list_topics()
         admin.close()
         results.check("Kafka topic list获取", True, f"topics={topics}")
-        results.check(f"statistics_1 存在", "statistics_1" in topics)
-        results.check(f"track_complete_1 存在", "track_complete_1" in topics)
+        results.check("uav_statistics_1 存在", "uav_statistics_1" in topics)
+        results.check("uav_track_complete_1 存在", "uav_track_complete_1" in topics)
     except Exception as e:
         results.check("Kafka topic list获取", False, str(e))
 

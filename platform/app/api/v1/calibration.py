@@ -7,6 +7,14 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+from fastapi import Depends
+
+from app.core.database import get_db
+from app.models.mission import LaneAnnotationTaskRecord, RoadContextSnapshot, VisualLaneBinding
+from app.models.survey import SurveyFrame, SurveyTask
+from app.services.survey_service import SurveyService
 
 
 logger = logging.getLogger(__name__)
@@ -24,6 +32,10 @@ class LanePayload(BaseModel):
 class SaveLaneAnnotationPayload(BaseModel):
     lanes: list[LanePayload] = Field(min_length=1)
     roads: dict[str, Any] | None = None
+
+
+class LaneTaskFromSurveyFramePayload(BaseModel):
+    frame_id: str = Field(min_length=1, max_length=40)
 
 
 def _load_calibration_db(path: str) -> dict:
@@ -119,6 +131,45 @@ async def list_lane_annotation_tasks(request: Request):
     return _lane_store(request).list_tasks()
 
 
+@router.post("/lane-tasks/from-survey-frame", status_code=201)
+async def create_lane_task_from_survey_frame(
+    payload: LaneTaskFromSurveyFramePayload,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Create a recoverable lane task from an already persisted real source keyframe."""
+    user = getattr(request.state, "user", None) or {}
+    if user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="administrator capability is required")
+    frame = await db.get(SurveyFrame, payload.frame_id)
+    if frame is None:
+        raise HTTPException(status_code=404, detail="survey frame not found")
+    task = await db.get(SurveyTask, frame.task_id)
+    if task is None or not task.inter_id:
+        raise HTTPException(status_code=422, detail="survey frame has no intersection context")
+    try:
+        actor_id = int(user.get("sub")) if user.get("sub") is not None else None
+    except (TypeError, ValueError):
+        actor_id = None
+    _, image_path = await SurveyService(db).evidence_item(frame.image_evidence_id, actor_id, "admin")
+    context = (
+        await db.execute(
+            select(RoadContextSnapshot)
+            .where(RoadContextSnapshot.inter_id == task.inter_id)
+            .order_by(RoadContextSnapshot.created_at.desc())
+        )
+    ).scalars().first()
+    roads = ((context.payload or {}).get("intersection") or {}) if context else {}
+    return _lane_store(request).ensure_task_from_snapshot(
+        task.inter_id,
+        image_path.read_bytes(),
+        frame.image_width,
+        frame.image_height,
+        frame.id,
+        roads,
+    )
+
+
 @router.get("/lane-annotations")
 async def list_lane_annotations(request: Request):
     """List saved lane annotation parameters."""
@@ -148,10 +199,68 @@ async def save_lane_annotation(
     task_id: str,
     payload: SaveLaneAnnotationPayload,
     request: Request,
+    db: AsyncSession = Depends(get_db),
 ):
     """Save a task's manual lane annotation as reusable pipeline parameters."""
     try:
-        return _lane_store(request).save_annotation(task_id, payload.model_dump())
+        annotation = _lane_store(request).save_annotation(task_id, payload.model_dump())
+        intersection_id = annotation["intersection_id"]
+        context = (
+            await db.execute(
+                select(RoadContextSnapshot)
+                .where(RoadContextSnapshot.inter_id == intersection_id)
+                .order_by(RoadContextSnapshot.created_at.desc())
+            )
+        ).scalars().first()
+        road_data_version = context.road_data_version if context else f"ROAD-{intersection_id}-ANNOTATION-V1"
+        user = getattr(request.state, "user", None) or {}
+        try:
+            actor_id = int(user.get("sub")) if user.get("sub") is not None else None
+        except (TypeError, ValueError):
+            actor_id = None
+        task = await db.get(LaneAnnotationTaskRecord, task_id)
+        if task is None:
+            task = LaneAnnotationTaskRecord(
+                id=task_id,
+                inter_id=intersection_id,
+                road_data_version=road_data_version,
+                status="completed",
+                image_path=_lane_store(request).get_task(task_id).get("image_path"),
+                annotation=annotation,
+                confirmed_by=actor_id,
+            )
+            db.add(task)
+        else:
+            task.status = "completed"
+            task.annotation = annotation
+            task.confirmed_by = actor_id
+            task.revision += 1
+        for lane in annotation["lanes"]:
+            binding = (
+                await db.execute(
+                    select(VisualLaneBinding).where(
+                        VisualLaneBinding.inter_id == intersection_id,
+                        VisualLaneBinding.road_data_version == road_data_version,
+                        VisualLaneBinding.local_lane_id == lane["lane_id"],
+                    )
+                )
+            ).scalar_one_or_none()
+            if binding is None:
+                db.add(VisualLaneBinding(
+                    id=f"VLB-{task_id[-24:]}-{lane['lane_id']}"[:40],
+                    inter_id=intersection_id,
+                    road_data_version=road_data_version,
+                    local_lane_id=lane["lane_id"],
+                    roads_json=annotation["export_path"],
+                    status="candidate",
+                    confirmed_by=actor_id,
+                ))
+            else:
+                binding.roads_json = annotation["export_path"]
+                binding.status = "candidate"
+                binding.confirmed_by = actor_id
+        await db.commit()
+        return {**annotation, "road_data_version": road_data_version, "binding_count": len(annotation["lanes"])}
     except KeyError:
         raise HTTPException(status_code=404, detail="lane annotation task not found")
     except ValueError as exc:

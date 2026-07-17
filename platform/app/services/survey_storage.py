@@ -16,6 +16,8 @@ class StoredObject:
     sha256: str
     size_bytes: int
     path: Path
+    storage_backend: str = "managed"
+    source_fingerprint: dict[str, int] | None = None
 
 
 class ContentAddressedStore:
@@ -48,6 +50,24 @@ class ContentAddressedStore:
                 shutil.copy2(source_path, destination)
         destination.chmod(0o440)
         return StoredObject(f"objects/{digest[:2]}/{digest}", digest, size, destination)
+
+    def reference_path(self, source: str | Path, asset_key: str) -> StoredObject:
+        """Hash an allowlisted server asset while keeping the original in place."""
+        source_path = Path(source).expanduser().resolve(strict=True)
+        digest, size = self._hash_file(source_path)
+        stat = source_path.stat()
+        return StoredObject(
+            asset_key,
+            digest,
+            size,
+            source_path,
+            "server_asset",
+            {
+                "size_bytes": stat.st_size,
+                "mtime_ns": stat.st_mtime_ns,
+                "ctime_ns": stat.st_ctime_ns,
+            },
+        )
 
     def ingest_bytes(self, data: bytes) -> StoredObject:
         digest = hashlib.sha256(data).hexdigest()
@@ -106,6 +126,7 @@ def resolve_allowlisted_asset(asset: str, roots: list[str], base_dir: str | Path
     if not asset or Path(asset).is_absolute():
         raise ValueError("asset must be a relative allowlisted key")
     base = Path(base_dir).resolve()
+    allowlisted_candidate = False
     for root_value in roots:
         root = Path(root_value)
         if not root.is_absolute():
@@ -113,6 +134,11 @@ def resolve_allowlisted_asset(asset: str, roots: list[str], base_dir: str | Path
         else:
             root = root.resolve()
         candidate = (root / asset).resolve()
-        if root in candidate.parents and candidate.is_file():
+        if root not in candidate.parents:
+            continue
+        allowlisted_candidate = True
+        if candidate.is_file():
             return candidate
-    raise ValueError("asset key is outside configured survey roots or missing")
+    if allowlisted_candidate:
+        raise FileNotFoundError("allowlisted server asset is missing")
+    raise ValueError("asset key is outside configured survey roots")

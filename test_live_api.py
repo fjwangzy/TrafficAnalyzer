@@ -81,7 +81,7 @@ if d:
     svcs = d.get("services", {})
     check("  - database", svcs.get("database") == "healthy")
     check("  - kafka", svcs.get("kafka") == "healthy")
-    check("  - influxdb", svcs.get("influxdb") == "healthy")
+    check("  - timescaledb", svcs.get("timescaledb") == "healthy")
 
 s, d = get(f"{PLATFORM}/")
 check("GET / (root)", s == 200 and d.get("service") == "traffic-platform")
@@ -166,7 +166,7 @@ try:
     async def test_ws():
         async with websockets.connect(f"ws://localhost:8000/ws/realtime", open_timeout=5) as ws:
             # Subscribe
-            await ws.send(json.dumps({"action": "subscribe", "channel": "intersection:INT_camera_1"}))
+            await ws.send(json.dumps({"action": "subscribe", "channel": "uav_intersection:INT_camera_1"}))
             # Should get ack or just stay connected
             try:
                 msg = await asyncio.wait_for(ws.recv(), timeout=3)

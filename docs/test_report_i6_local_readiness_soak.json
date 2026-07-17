@@ -1,21 +1,27 @@
 {
   "schema_version": "uav.i6-local-readiness-soak/v1",
-  "generated_at": "2026-07-15T07:21:05.863839Z",
-  "environment": "isolated_local_non_contract",
+  "generated_at": "2026-07-16T05:21:53.107531Z",
+  "environment": "local_development_only",
+  "targets": {
+    "platform": "http://127.0.0.1:8000",
+    "console": "http://127.0.0.1:8080"
+  },
   "threshold_status": "unverified",
-  "requested_duration_sec": 60,
-  "interval_sec": 5,
+  "requested_duration_sec": 1800,
+  "interval_sec": 30,
   "execution_complete": true,
+  "stopped_early": false,
+  "observed_duration_sec": 1800.225,
   "summary": {
-    "sample_count": 13,
+    "sample_count": 61,
     "all_samples_healthy": true,
     "ready_ratio": 1.0,
-    "max_latency_ms": 239.84,
-    "p95_latency_ms": 239.84
+    "max_latency_ms": 257.76,
+    "p95_latency_ms": 233.83
   },
   "samples": [
     {
-      "observed_at": "2026-07-15T07:20:05.880753Z",
+      "observed_at": "2026-07-16T04:51:53.135147Z",
       "statuses": {
         "ready": 200,
         "login": 200,
@@ -29,16 +35,17 @@
         "pipeline_manager": "healthy"
       },
       "dashboard_quality_status": null,
+      "probe_errors": {},
       "checks": {
         "platform_ready": true,
         "console_login": true,
         "dashboard": true,
         "system_health": true
       },
-      "latency_ms": 239.84
+      "latency_ms": 257.76
     },
     {
-      "observed_at": "2026-07-15T07:20:11.117655Z",
+      "observed_at": "2026-07-16T04:52:23.355508Z",
       "statuses": {
         "ready": 200,
         "login": 200,
@@ -52,16 +59,17 @@
         "pipeline_manager": "healthy"
       },
       "dashboard_quality_status": null,
+      "probe_errors": {},
       "checks": {
         "platform_ready": true,
         "console_login": true,
         "dashboard": true,
         "system_health": true
       },
-      "latency_ms": 226.4
+      "latency_ms": 215.75
     },
     {
-      "observed_at": "2026-07-15T07:20:16.348023Z",
+      "observed_at": "2026-07-16T04:52:53.587389Z",
       "statuses": {
         "ready": 200,
         "login": 200,
@@ -75,167 +83,7 @@
         "pipeline_manager": "healthy"
       },
       "dashboard_quality_status": null,
-      "checks": {
-        "platform_ready": true,
-        "console_login": true,
-        "dashboard": true,
-        "system_health": true
-      },
-      "latency_ms": 220.24
-    },
-    {
-      "observed_at": "2026-07-15T07:20:21.571544Z",
-      "statuses": {
-        "ready": 200,
-        "login": 200,
-        "dashboard": 200,
-        "system_health": 200
-      },
-      "services": {
-        "database": "healthy",
-        "kafka": "healthy",
-        "timescaledb": "healthy",
-        "pipeline_manager": "healthy"
-      },
-      "dashboard_quality_status": null,
-      "checks": {
-        "platform_ready": true,
-        "console_login": true,
-        "dashboard": true,
-        "system_health": true
-      },
-      "latency_ms": 213.43
-    },
-    {
-      "observed_at": "2026-07-15T07:20:26.807378Z",
-      "statuses": {
-        "ready": 200,
-        "login": 200,
-        "dashboard": 200,
-        "system_health": 200
-      },
-      "services": {
-        "database": "healthy",
-        "kafka": "healthy",
-        "timescaledb": "healthy",
-        "pipeline_manager": "healthy"
-      },
-      "dashboard_quality_status": null,
-      "checks": {
-        "platform_ready": true,
-        "console_login": true,
-        "dashboard": true,
-        "system_health": true
-      },
-      "latency_ms": 227.98
-    },
-    {
-      "observed_at": "2026-07-15T07:20:32.035849Z",
-      "statuses": {
-        "ready": 200,
-        "login": 200,
-        "dashboard": 200,
-        "system_health": 200
-      },
-      "services": {
-        "database": "healthy",
-        "kafka": "healthy",
-        "timescaledb": "healthy",
-        "pipeline_manager": "healthy"
-      },
-      "dashboard_quality_status": null,
-      "checks": {
-        "platform_ready": true,
-        "console_login": true,
-        "dashboard": true,
-        "system_health": true
-      },
-      "latency_ms": 223.3
-    },
-    {
-      "observed_at": "2026-07-15T07:20:37.263508Z",
-      "statuses": {
-        "ready": 200,
-        "login": 200,
-        "dashboard": 200,
-        "system_health": 200
-      },
-      "services": {
-        "database": "healthy",
-        "kafka": "healthy",
-        "timescaledb": "healthy",
-        "pipeline_manager": "healthy"
-      },
-      "dashboard_quality_status": null,
-      "checks": {
-        "platform_ready": true,
-        "console_login": true,
-        "dashboard": true,
-        "system_health": true
-      },
-      "latency_ms": 217.57
-    },
-    {
-      "observed_at": "2026-07-15T07:20:42.495858Z",
-      "statuses": {
-        "ready": 200,
-        "login": 200,
-        "dashboard": 200,
-        "system_health": 200
-      },
-      "services": {
-        "database": "healthy",
-        "kafka": "healthy",
-        "timescaledb": "healthy",
-        "pipeline_manager": "healthy"
-      },
-      "dashboard_quality_status": null,
-      "checks": {
-        "platform_ready": true,
-        "console_login": true,
-        "dashboard": true,
-        "system_health": true
-      },
-      "latency_ms": 225.87
-    },
-    {
-      "observed_at": "2026-07-15T07:20:47.726058Z",
-      "statuses": {
-        "ready": 200,
-        "login": 200,
-        "dashboard": 200,
-        "system_health": 200
-      },
-      "services": {
-        "database": "healthy",
-        "kafka": "healthy",
-        "timescaledb": "healthy",
-        "pipeline_manager": "healthy"
-      },
-      "dashboard_quality_status": null,
-      "checks": {
-        "platform_ready": true,
-        "console_login": true,
-        "dashboard": true,
-        "system_health": true
-      },
-      "latency_ms": 221.37
-    },
-    {
-      "observed_at": "2026-07-15T07:20:52.952971Z",
-      "statuses": {
-        "ready": 200,
-        "login": 200,
-        "dashboard": 200,
-        "system_health": 200
-      },
-      "services": {
-        "database": "healthy",
-        "kafka": "healthy",
-        "timescaledb": "healthy",
-        "pipeline_manager": "healthy"
-      },
-      "dashboard_quality_status": null,
+      "probe_errors": {},
       "checks": {
         "platform_ready": true,
         "console_login": true,
@@ -245,7 +93,7 @@
       "latency_ms": 221.69
     },
     {
-      "observed_at": "2026-07-15T07:20:58.177812Z",
+      "observed_at": "2026-07-16T04:53:23.815187Z",
       "statuses": {
         "ready": 200,
         "login": 200,
@@ -259,16 +107,17 @@
         "pipeline_manager": "healthy"
       },
       "dashboard_quality_status": null,
+      "probe_errors": {},
       "checks": {
         "platform_ready": true,
         "console_login": true,
         "dashboard": true,
         "system_health": true
       },
-      "latency_ms": 214.76
+      "latency_ms": 220.1
     },
     {
-      "observed_at": "2026-07-15T07:21:03.386542Z",
+      "observed_at": "2026-07-16T04:53:54.046371Z",
       "statuses": {
         "ready": 200,
         "login": 200,
@@ -282,16 +131,17 @@
         "pipeline_manager": "healthy"
       },
       "dashboard_quality_status": null,
+      "probe_errors": {},
       "checks": {
         "platform_ready": true,
         "console_login": true,
         "dashboard": true,
         "system_health": true
       },
-      "latency_ms": 207.51
+      "latency_ms": 220.97
     },
     {
-      "observed_at": "2026-07-15T07:21:05.863742Z",
+      "observed_at": "2026-07-16T04:54:24.265798Z",
       "statuses": {
         "ready": 200,
         "login": 200,
@@ -305,18 +155,1339 @@
         "pipeline_manager": "healthy"
       },
       "dashboard_quality_status": null,
+      "probe_errors": {},
       "checks": {
         "platform_ready": true,
         "console_login": true,
         "dashboard": true,
         "system_health": true
       },
-      "latency_ms": 215.61
+      "latency_ms": 216.7
+    },
+    {
+      "observed_at": "2026-07-16T04:54:54.485278Z",
+      "statuses": {
+        "ready": 200,
+        "login": 200,
+        "dashboard": 200,
+        "system_health": 200
+      },
+      "services": {
+        "database": "healthy",
+        "kafka": "healthy",
+        "timescaledb": "healthy",
+        "pipeline_manager": "healthy"
+      },
+      "dashboard_quality_status": null,
+      "probe_errors": {},
+      "checks": {
+        "platform_ready": true,
+        "console_login": true,
+        "dashboard": true,
+        "system_health": true
+      },
+      "latency_ms": 218.92
+    },
+    {
+      "observed_at": "2026-07-16T04:55:24.706860Z",
+      "statuses": {
+        "ready": 200,
+        "login": 200,
+        "dashboard": 200,
+        "system_health": 200
+      },
+      "services": {
+        "database": "healthy",
+        "kafka": "healthy",
+        "timescaledb": "healthy",
+        "pipeline_manager": "healthy"
+      },
+      "dashboard_quality_status": null,
+      "probe_errors": {},
+      "checks": {
+        "platform_ready": true,
+        "console_login": true,
+        "dashboard": true,
+        "system_health": true
+      },
+      "latency_ms": 215.24
+    },
+    {
+      "observed_at": "2026-07-16T04:55:54.929843Z",
+      "statuses": {
+        "ready": 200,
+        "login": 200,
+        "dashboard": 200,
+        "system_health": 200
+      },
+      "services": {
+        "database": "healthy",
+        "kafka": "healthy",
+        "timescaledb": "healthy",
+        "pipeline_manager": "healthy"
+      },
+      "dashboard_quality_status": null,
+      "probe_errors": {},
+      "checks": {
+        "platform_ready": true,
+        "console_login": true,
+        "dashboard": true,
+        "system_health": true
+      },
+      "latency_ms": 213.35
+    },
+    {
+      "observed_at": "2026-07-16T04:56:25.162908Z",
+      "statuses": {
+        "ready": 200,
+        "login": 200,
+        "dashboard": 200,
+        "system_health": 200
+      },
+      "services": {
+        "database": "healthy",
+        "kafka": "healthy",
+        "timescaledb": "healthy",
+        "pipeline_manager": "healthy"
+      },
+      "dashboard_quality_status": null,
+      "probe_errors": {},
+      "checks": {
+        "platform_ready": true,
+        "console_login": true,
+        "dashboard": true,
+        "system_health": true
+      },
+      "latency_ms": 229.91
+    },
+    {
+      "observed_at": "2026-07-16T04:56:55.385455Z",
+      "statuses": {
+        "ready": 200,
+        "login": 200,
+        "dashboard": 200,
+        "system_health": 200
+      },
+      "services": {
+        "database": "healthy",
+        "kafka": "healthy",
+        "timescaledb": "healthy",
+        "pipeline_manager": "healthy"
+      },
+      "dashboard_quality_status": null,
+      "probe_errors": {},
+      "checks": {
+        "platform_ready": true,
+        "console_login": true,
+        "dashboard": true,
+        "system_health": true
+      },
+      "latency_ms": 212.41
+    },
+    {
+      "observed_at": "2026-07-16T04:57:25.600849Z",
+      "statuses": {
+        "ready": 200,
+        "login": 200,
+        "dashboard": 200,
+        "system_health": 200
+      },
+      "services": {
+        "database": "healthy",
+        "kafka": "healthy",
+        "timescaledb": "healthy",
+        "pipeline_manager": "healthy"
+      },
+      "dashboard_quality_status": null,
+      "probe_errors": {},
+      "checks": {
+        "platform_ready": true,
+        "console_login": true,
+        "dashboard": true,
+        "system_health": true
+      },
+      "latency_ms": 208.11
+    },
+    {
+      "observed_at": "2026-07-16T04:57:55.817017Z",
+      "statuses": {
+        "ready": 200,
+        "login": 200,
+        "dashboard": 200,
+        "system_health": 200
+      },
+      "services": {
+        "database": "healthy",
+        "kafka": "healthy",
+        "timescaledb": "healthy",
+        "pipeline_manager": "healthy"
+      },
+      "dashboard_quality_status": null,
+      "probe_errors": {},
+      "checks": {
+        "platform_ready": true,
+        "console_login": true,
+        "dashboard": true,
+        "system_health": true
+      },
+      "latency_ms": 214.71
+    },
+    {
+      "observed_at": "2026-07-16T04:58:26.039310Z",
+      "statuses": {
+        "ready": 200,
+        "login": 200,
+        "dashboard": 200,
+        "system_health": 200
+      },
+      "services": {
+        "database": "healthy",
+        "kafka": "healthy",
+        "timescaledb": "healthy",
+        "pipeline_manager": "healthy"
+      },
+      "dashboard_quality_status": null,
+      "probe_errors": {},
+      "checks": {
+        "platform_ready": true,
+        "console_login": true,
+        "dashboard": true,
+        "system_health": true
+      },
+      "latency_ms": 215.74
+    },
+    {
+      "observed_at": "2026-07-16T04:58:56.248089Z",
+      "statuses": {
+        "ready": 200,
+        "login": 200,
+        "dashboard": 200,
+        "system_health": 200
+      },
+      "services": {
+        "database": "healthy",
+        "kafka": "healthy",
+        "timescaledb": "healthy",
+        "pipeline_manager": "healthy"
+      },
+      "dashboard_quality_status": null,
+      "probe_errors": {},
+      "checks": {
+        "platform_ready": true,
+        "console_login": true,
+        "dashboard": true,
+        "system_health": true
+      },
+      "latency_ms": 207.04
+    },
+    {
+      "observed_at": "2026-07-16T04:59:26.467237Z",
+      "statuses": {
+        "ready": 200,
+        "login": 200,
+        "dashboard": 200,
+        "system_health": 200
+      },
+      "services": {
+        "database": "healthy",
+        "kafka": "healthy",
+        "timescaledb": "healthy",
+        "pipeline_manager": "healthy"
+      },
+      "dashboard_quality_status": null,
+      "probe_errors": {},
+      "checks": {
+        "platform_ready": true,
+        "console_login": true,
+        "dashboard": true,
+        "system_health": true
+      },
+      "latency_ms": 217.0
+    },
+    {
+      "observed_at": "2026-07-16T04:59:56.694194Z",
+      "statuses": {
+        "ready": 200,
+        "login": 200,
+        "dashboard": 200,
+        "system_health": 200
+      },
+      "services": {
+        "database": "healthy",
+        "kafka": "healthy",
+        "timescaledb": "healthy",
+        "pipeline_manager": "healthy"
+      },
+      "dashboard_quality_status": null,
+      "probe_errors": {},
+      "checks": {
+        "platform_ready": true,
+        "console_login": true,
+        "dashboard": true,
+        "system_health": true
+      },
+      "latency_ms": 216.82
+    },
+    {
+      "observed_at": "2026-07-16T05:00:26.924544Z",
+      "statuses": {
+        "ready": 200,
+        "login": 200,
+        "dashboard": 200,
+        "system_health": 200
+      },
+      "services": {
+        "database": "healthy",
+        "kafka": "healthy",
+        "timescaledb": "healthy",
+        "pipeline_manager": "healthy"
+      },
+      "dashboard_quality_status": null,
+      "probe_errors": {},
+      "checks": {
+        "platform_ready": true,
+        "console_login": true,
+        "dashboard": true,
+        "system_health": true
+      },
+      "latency_ms": 223.03
+    },
+    {
+      "observed_at": "2026-07-16T05:00:57.152496Z",
+      "statuses": {
+        "ready": 200,
+        "login": 200,
+        "dashboard": 200,
+        "system_health": 200
+      },
+      "services": {
+        "database": "healthy",
+        "kafka": "healthy",
+        "timescaledb": "healthy",
+        "pipeline_manager": "healthy"
+      },
+      "dashboard_quality_status": null,
+      "probe_errors": {},
+      "checks": {
+        "platform_ready": true,
+        "console_login": true,
+        "dashboard": true,
+        "system_health": true
+      },
+      "latency_ms": 217.8
+    },
+    {
+      "observed_at": "2026-07-16T05:01:27.393962Z",
+      "statuses": {
+        "ready": 200,
+        "login": 200,
+        "dashboard": 200,
+        "system_health": 200
+      },
+      "services": {
+        "database": "healthy",
+        "kafka": "healthy",
+        "timescaledb": "healthy",
+        "pipeline_manager": "healthy"
+      },
+      "dashboard_quality_status": null,
+      "probe_errors": {},
+      "checks": {
+        "platform_ready": true,
+        "console_login": true,
+        "dashboard": true,
+        "system_health": true
+      },
+      "latency_ms": 232.06
+    },
+    {
+      "observed_at": "2026-07-16T05:01:57.623156Z",
+      "statuses": {
+        "ready": 200,
+        "login": 200,
+        "dashboard": 200,
+        "system_health": 200
+      },
+      "services": {
+        "database": "healthy",
+        "kafka": "healthy",
+        "timescaledb": "healthy",
+        "pipeline_manager": "healthy"
+      },
+      "dashboard_quality_status": null,
+      "probe_errors": {},
+      "checks": {
+        "platform_ready": true,
+        "console_login": true,
+        "dashboard": true,
+        "system_health": true
+      },
+      "latency_ms": 220.85
+    },
+    {
+      "observed_at": "2026-07-16T05:02:27.852623Z",
+      "statuses": {
+        "ready": 200,
+        "login": 200,
+        "dashboard": 200,
+        "system_health": 200
+      },
+      "services": {
+        "database": "healthy",
+        "kafka": "healthy",
+        "timescaledb": "healthy",
+        "pipeline_manager": "healthy"
+      },
+      "dashboard_quality_status": null,
+      "probe_errors": {},
+      "checks": {
+        "platform_ready": true,
+        "console_login": true,
+        "dashboard": true,
+        "system_health": true
+      },
+      "latency_ms": 219.21
+    },
+    {
+      "observed_at": "2026-07-16T05:02:58.079685Z",
+      "statuses": {
+        "ready": 200,
+        "login": 200,
+        "dashboard": 200,
+        "system_health": 200
+      },
+      "services": {
+        "database": "healthy",
+        "kafka": "healthy",
+        "timescaledb": "healthy",
+        "pipeline_manager": "healthy"
+      },
+      "dashboard_quality_status": null,
+      "probe_errors": {},
+      "checks": {
+        "platform_ready": true,
+        "console_login": true,
+        "dashboard": true,
+        "system_health": true
+      },
+      "latency_ms": 219.49
+    },
+    {
+      "observed_at": "2026-07-16T05:03:28.303722Z",
+      "statuses": {
+        "ready": 200,
+        "login": 200,
+        "dashboard": 200,
+        "system_health": 200
+      },
+      "services": {
+        "database": "healthy",
+        "kafka": "healthy",
+        "timescaledb": "healthy",
+        "pipeline_manager": "healthy"
+      },
+      "dashboard_quality_status": null,
+      "probe_errors": {},
+      "checks": {
+        "platform_ready": true,
+        "console_login": true,
+        "dashboard": true,
+        "system_health": true
+      },
+      "latency_ms": 219.9
+    },
+    {
+      "observed_at": "2026-07-16T05:03:58.532135Z",
+      "statuses": {
+        "ready": 200,
+        "login": 200,
+        "dashboard": 200,
+        "system_health": 200
+      },
+      "services": {
+        "database": "healthy",
+        "kafka": "healthy",
+        "timescaledb": "healthy",
+        "pipeline_manager": "healthy"
+      },
+      "dashboard_quality_status": null,
+      "probe_errors": {},
+      "checks": {
+        "platform_ready": true,
+        "console_login": true,
+        "dashboard": true,
+        "system_health": true
+      },
+      "latency_ms": 218.48
+    },
+    {
+      "observed_at": "2026-07-16T05:04:28.765307Z",
+      "statuses": {
+        "ready": 200,
+        "login": 200,
+        "dashboard": 200,
+        "system_health": 200
+      },
+      "services": {
+        "database": "healthy",
+        "kafka": "healthy",
+        "timescaledb": "healthy",
+        "pipeline_manager": "healthy"
+      },
+      "dashboard_quality_status": null,
+      "probe_errors": {},
+      "checks": {
+        "platform_ready": true,
+        "console_login": true,
+        "dashboard": true,
+        "system_health": true
+      },
+      "latency_ms": 222.96
+    },
+    {
+      "observed_at": "2026-07-16T05:04:58.998023Z",
+      "statuses": {
+        "ready": 200,
+        "login": 200,
+        "dashboard": 200,
+        "system_health": 200
+      },
+      "services": {
+        "database": "healthy",
+        "kafka": "healthy",
+        "timescaledb": "healthy",
+        "pipeline_manager": "healthy"
+      },
+      "dashboard_quality_status": null,
+      "probe_errors": {},
+      "checks": {
+        "platform_ready": true,
+        "console_login": true,
+        "dashboard": true,
+        "system_health": true
+      },
+      "latency_ms": 222.55
+    },
+    {
+      "observed_at": "2026-07-16T05:05:29.196699Z",
+      "statuses": {
+        "ready": 200,
+        "login": 200,
+        "dashboard": 200,
+        "system_health": 200
+      },
+      "services": {
+        "database": "healthy",
+        "kafka": "healthy",
+        "timescaledb": "healthy",
+        "pipeline_manager": "healthy"
+      },
+      "dashboard_quality_status": null,
+      "probe_errors": {},
+      "checks": {
+        "platform_ready": true,
+        "console_login": true,
+        "dashboard": true,
+        "system_health": true
+      },
+      "latency_ms": 196.44
+    },
+    {
+      "observed_at": "2026-07-16T05:05:59.447215Z",
+      "statuses": {
+        "ready": 200,
+        "login": 200,
+        "dashboard": 200,
+        "system_health": 200
+      },
+      "services": {
+        "database": "healthy",
+        "kafka": "healthy",
+        "timescaledb": "healthy",
+        "pipeline_manager": "healthy"
+      },
+      "dashboard_quality_status": null,
+      "probe_errors": {},
+      "checks": {
+        "platform_ready": true,
+        "console_login": true,
+        "dashboard": true,
+        "system_health": true
+      },
+      "latency_ms": 245.31
+    },
+    {
+      "observed_at": "2026-07-16T05:06:29.691199Z",
+      "statuses": {
+        "ready": 200,
+        "login": 200,
+        "dashboard": 200,
+        "system_health": 200
+      },
+      "services": {
+        "database": "healthy",
+        "kafka": "healthy",
+        "timescaledb": "healthy",
+        "pipeline_manager": "healthy"
+      },
+      "dashboard_quality_status": null,
+      "probe_errors": {},
+      "checks": {
+        "platform_ready": true,
+        "console_login": true,
+        "dashboard": true,
+        "system_health": true
+      },
+      "latency_ms": 233.83
+    },
+    {
+      "observed_at": "2026-07-16T05:06:59.896893Z",
+      "statuses": {
+        "ready": 200,
+        "login": 200,
+        "dashboard": 200,
+        "system_health": 200
+      },
+      "services": {
+        "database": "healthy",
+        "kafka": "healthy",
+        "timescaledb": "healthy",
+        "pipeline_manager": "healthy"
+      },
+      "dashboard_quality_status": null,
+      "probe_errors": {},
+      "checks": {
+        "platform_ready": true,
+        "console_login": true,
+        "dashboard": true,
+        "system_health": true
+      },
+      "latency_ms": 195.53
+    },
+    {
+      "observed_at": "2026-07-16T05:07:30.127272Z",
+      "statuses": {
+        "ready": 200,
+        "login": 200,
+        "dashboard": 200,
+        "system_health": 200
+      },
+      "services": {
+        "database": "healthy",
+        "kafka": "healthy",
+        "timescaledb": "healthy",
+        "pipeline_manager": "healthy"
+      },
+      "dashboard_quality_status": null,
+      "probe_errors": {},
+      "checks": {
+        "platform_ready": true,
+        "console_login": true,
+        "dashboard": true,
+        "system_health": true
+      },
+      "latency_ms": 223.16
+    },
+    {
+      "observed_at": "2026-07-16T05:08:00.357277Z",
+      "statuses": {
+        "ready": 200,
+        "login": 200,
+        "dashboard": 200,
+        "system_health": 200
+      },
+      "services": {
+        "database": "healthy",
+        "kafka": "healthy",
+        "timescaledb": "healthy",
+        "pipeline_manager": "healthy"
+      },
+      "dashboard_quality_status": null,
+      "probe_errors": {},
+      "checks": {
+        "platform_ready": true,
+        "console_login": true,
+        "dashboard": true,
+        "system_health": true
+      },
+      "latency_ms": 222.89
+    },
+    {
+      "observed_at": "2026-07-16T05:08:30.581450Z",
+      "statuses": {
+        "ready": 200,
+        "login": 200,
+        "dashboard": 200,
+        "system_health": 200
+      },
+      "services": {
+        "database": "healthy",
+        "kafka": "healthy",
+        "timescaledb": "healthy",
+        "pipeline_manager": "healthy"
+      },
+      "dashboard_quality_status": null,
+      "probe_errors": {},
+      "checks": {
+        "platform_ready": true,
+        "console_login": true,
+        "dashboard": true,
+        "system_health": true
+      },
+      "latency_ms": 220.81
+    },
+    {
+      "observed_at": "2026-07-16T05:09:00.813376Z",
+      "statuses": {
+        "ready": 200,
+        "login": 200,
+        "dashboard": 200,
+        "system_health": 200
+      },
+      "services": {
+        "database": "healthy",
+        "kafka": "healthy",
+        "timescaledb": "healthy",
+        "pipeline_manager": "healthy"
+      },
+      "dashboard_quality_status": null,
+      "probe_errors": {},
+      "checks": {
+        "platform_ready": true,
+        "console_login": true,
+        "dashboard": true,
+        "system_health": true
+      },
+      "latency_ms": 226.06
+    },
+    {
+      "observed_at": "2026-07-16T05:09:31.034262Z",
+      "statuses": {
+        "ready": 200,
+        "login": 200,
+        "dashboard": 200,
+        "system_health": 200
+      },
+      "services": {
+        "database": "healthy",
+        "kafka": "healthy",
+        "timescaledb": "healthy",
+        "pipeline_manager": "healthy"
+      },
+      "dashboard_quality_status": null,
+      "probe_errors": {},
+      "checks": {
+        "platform_ready": true,
+        "console_login": true,
+        "dashboard": true,
+        "system_health": true
+      },
+      "latency_ms": 217.99
+    },
+    {
+      "observed_at": "2026-07-16T05:10:01.254664Z",
+      "statuses": {
+        "ready": 200,
+        "login": 200,
+        "dashboard": 200,
+        "system_health": 200
+      },
+      "services": {
+        "database": "healthy",
+        "kafka": "healthy",
+        "timescaledb": "healthy",
+        "pipeline_manager": "healthy"
+      },
+      "dashboard_quality_status": null,
+      "probe_errors": {},
+      "checks": {
+        "platform_ready": true,
+        "console_login": true,
+        "dashboard": true,
+        "system_health": true
+      },
+      "latency_ms": 218.24
+    },
+    {
+      "observed_at": "2026-07-16T05:10:31.474558Z",
+      "statuses": {
+        "ready": 200,
+        "login": 200,
+        "dashboard": 200,
+        "system_health": 200
+      },
+      "services": {
+        "database": "healthy",
+        "kafka": "healthy",
+        "timescaledb": "healthy",
+        "pipeline_manager": "healthy"
+      },
+      "dashboard_quality_status": null,
+      "probe_errors": {},
+      "checks": {
+        "platform_ready": true,
+        "console_login": true,
+        "dashboard": true,
+        "system_health": true
+      },
+      "latency_ms": 215.57
+    },
+    {
+      "observed_at": "2026-07-16T05:11:01.697758Z",
+      "statuses": {
+        "ready": 200,
+        "login": 200,
+        "dashboard": 200,
+        "system_health": 200
+      },
+      "services": {
+        "database": "healthy",
+        "kafka": "healthy",
+        "timescaledb": "healthy",
+        "pipeline_manager": "healthy"
+      },
+      "dashboard_quality_status": null,
+      "probe_errors": {},
+      "checks": {
+        "platform_ready": true,
+        "console_login": true,
+        "dashboard": true,
+        "system_health": true
+      },
+      "latency_ms": 216.76
+    },
+    {
+      "observed_at": "2026-07-16T05:11:31.924397Z",
+      "statuses": {
+        "ready": 200,
+        "login": 200,
+        "dashboard": 200,
+        "system_health": 200
+      },
+      "services": {
+        "database": "healthy",
+        "kafka": "healthy",
+        "timescaledb": "healthy",
+        "pipeline_manager": "healthy"
+      },
+      "dashboard_quality_status": null,
+      "probe_errors": {},
+      "checks": {
+        "platform_ready": true,
+        "console_login": true,
+        "dashboard": true,
+        "system_health": true
+      },
+      "latency_ms": 216.48
+    },
+    {
+      "observed_at": "2026-07-16T05:12:02.145797Z",
+      "statuses": {
+        "ready": 200,
+        "login": 200,
+        "dashboard": 200,
+        "system_health": 200
+      },
+      "services": {
+        "database": "healthy",
+        "kafka": "healthy",
+        "timescaledb": "healthy",
+        "pipeline_manager": "healthy"
+      },
+      "dashboard_quality_status": null,
+      "probe_errors": {},
+      "checks": {
+        "platform_ready": true,
+        "console_login": true,
+        "dashboard": true,
+        "system_health": true
+      },
+      "latency_ms": 217.73
+    },
+    {
+      "observed_at": "2026-07-16T05:12:32.362269Z",
+      "statuses": {
+        "ready": 200,
+        "login": 200,
+        "dashboard": 200,
+        "system_health": 200
+      },
+      "services": {
+        "database": "healthy",
+        "kafka": "healthy",
+        "timescaledb": "healthy",
+        "pipeline_manager": "healthy"
+      },
+      "dashboard_quality_status": null,
+      "probe_errors": {},
+      "checks": {
+        "platform_ready": true,
+        "console_login": true,
+        "dashboard": true,
+        "system_health": true
+      },
+      "latency_ms": 212.4
+    },
+    {
+      "observed_at": "2026-07-16T05:13:02.586602Z",
+      "statuses": {
+        "ready": 200,
+        "login": 200,
+        "dashboard": 200,
+        "system_health": 200
+      },
+      "services": {
+        "database": "healthy",
+        "kafka": "healthy",
+        "timescaledb": "healthy",
+        "pipeline_manager": "healthy"
+      },
+      "dashboard_quality_status": null,
+      "probe_errors": {},
+      "checks": {
+        "platform_ready": true,
+        "console_login": true,
+        "dashboard": true,
+        "system_health": true
+      },
+      "latency_ms": 214.19
+    },
+    {
+      "observed_at": "2026-07-16T05:13:32.808318Z",
+      "statuses": {
+        "ready": 200,
+        "login": 200,
+        "dashboard": 200,
+        "system_health": 200
+      },
+      "services": {
+        "database": "healthy",
+        "kafka": "healthy",
+        "timescaledb": "healthy",
+        "pipeline_manager": "healthy"
+      },
+      "dashboard_quality_status": null,
+      "probe_errors": {},
+      "checks": {
+        "platform_ready": true,
+        "console_login": true,
+        "dashboard": true,
+        "system_health": true
+      },
+      "latency_ms": 216.69
+    },
+    {
+      "observed_at": "2026-07-16T05:14:03.018156Z",
+      "statuses": {
+        "ready": 200,
+        "login": 200,
+        "dashboard": 200,
+        "system_health": 200
+      },
+      "services": {
+        "database": "healthy",
+        "kafka": "healthy",
+        "timescaledb": "healthy",
+        "pipeline_manager": "healthy"
+      },
+      "dashboard_quality_status": null,
+      "probe_errors": {},
+      "checks": {
+        "platform_ready": true,
+        "console_login": true,
+        "dashboard": true,
+        "system_health": true
+      },
+      "latency_ms": 205.74
+    },
+    {
+      "observed_at": "2026-07-16T05:14:33.255491Z",
+      "statuses": {
+        "ready": 200,
+        "login": 200,
+        "dashboard": 200,
+        "system_health": 200
+      },
+      "services": {
+        "database": "healthy",
+        "kafka": "healthy",
+        "timescaledb": "healthy",
+        "pipeline_manager": "healthy"
+      },
+      "dashboard_quality_status": null,
+      "probe_errors": {},
+      "checks": {
+        "platform_ready": true,
+        "console_login": true,
+        "dashboard": true,
+        "system_health": true
+      },
+      "latency_ms": 227.18
+    },
+    {
+      "observed_at": "2026-07-16T05:15:03.469346Z",
+      "statuses": {
+        "ready": 200,
+        "login": 200,
+        "dashboard": 200,
+        "system_health": 200
+      },
+      "services": {
+        "database": "healthy",
+        "kafka": "healthy",
+        "timescaledb": "healthy",
+        "pipeline_manager": "healthy"
+      },
+      "dashboard_quality_status": null,
+      "probe_errors": {},
+      "checks": {
+        "platform_ready": true,
+        "console_login": true,
+        "dashboard": true,
+        "system_health": true
+      },
+      "latency_ms": 208.58
+    },
+    {
+      "observed_at": "2026-07-16T05:15:33.700364Z",
+      "statuses": {
+        "ready": 200,
+        "login": 200,
+        "dashboard": 200,
+        "system_health": 200
+      },
+      "services": {
+        "database": "healthy",
+        "kafka": "healthy",
+        "timescaledb": "healthy",
+        "pipeline_manager": "healthy"
+      },
+      "dashboard_quality_status": null,
+      "probe_errors": {},
+      "checks": {
+        "platform_ready": true,
+        "console_login": true,
+        "dashboard": true,
+        "system_health": true
+      },
+      "latency_ms": 220.61
+    },
+    {
+      "observed_at": "2026-07-16T05:16:03.958383Z",
+      "statuses": {
+        "ready": 200,
+        "login": 200,
+        "dashboard": 200,
+        "system_health": 200
+      },
+      "services": {
+        "database": "healthy",
+        "kafka": "healthy",
+        "timescaledb": "healthy",
+        "pipeline_manager": "healthy"
+      },
+      "dashboard_quality_status": null,
+      "probe_errors": {},
+      "checks": {
+        "platform_ready": true,
+        "console_login": true,
+        "dashboard": true,
+        "system_health": true
+      },
+      "latency_ms": 251.47
+    },
+    {
+      "observed_at": "2026-07-16T05:16:34.181370Z",
+      "statuses": {
+        "ready": 200,
+        "login": 200,
+        "dashboard": 200,
+        "system_health": 200
+      },
+      "services": {
+        "database": "healthy",
+        "kafka": "healthy",
+        "timescaledb": "healthy",
+        "pipeline_manager": "healthy"
+      },
+      "dashboard_quality_status": null,
+      "probe_errors": {},
+      "checks": {
+        "platform_ready": true,
+        "console_login": true,
+        "dashboard": true,
+        "system_health": true
+      },
+      "latency_ms": 212.86
+    },
+    {
+      "observed_at": "2026-07-16T05:17:04.395419Z",
+      "statuses": {
+        "ready": 200,
+        "login": 200,
+        "dashboard": 200,
+        "system_health": 200
+      },
+      "services": {
+        "database": "healthy",
+        "kafka": "healthy",
+        "timescaledb": "healthy",
+        "pipeline_manager": "healthy"
+      },
+      "dashboard_quality_status": null,
+      "probe_errors": {},
+      "checks": {
+        "platform_ready": true,
+        "console_login": true,
+        "dashboard": true,
+        "system_health": true
+      },
+      "latency_ms": 213.59
+    },
+    {
+      "observed_at": "2026-07-16T05:17:34.619931Z",
+      "statuses": {
+        "ready": 200,
+        "login": 200,
+        "dashboard": 200,
+        "system_health": 200
+      },
+      "services": {
+        "database": "healthy",
+        "kafka": "healthy",
+        "timescaledb": "healthy",
+        "pipeline_manager": "healthy"
+      },
+      "dashboard_quality_status": null,
+      "probe_errors": {},
+      "checks": {
+        "platform_ready": true,
+        "console_login": true,
+        "dashboard": true,
+        "system_health": true
+      },
+      "latency_ms": 214.37
+    },
+    {
+      "observed_at": "2026-07-16T05:18:04.844308Z",
+      "statuses": {
+        "ready": 200,
+        "login": 200,
+        "dashboard": 200,
+        "system_health": 200
+      },
+      "services": {
+        "database": "healthy",
+        "kafka": "healthy",
+        "timescaledb": "healthy",
+        "pipeline_manager": "healthy"
+      },
+      "dashboard_quality_status": null,
+      "probe_errors": {},
+      "checks": {
+        "platform_ready": true,
+        "console_login": true,
+        "dashboard": true,
+        "system_health": true
+      },
+      "latency_ms": 214.24
+    },
+    {
+      "observed_at": "2026-07-16T05:18:35.064708Z",
+      "statuses": {
+        "ready": 200,
+        "login": 200,
+        "dashboard": 200,
+        "system_health": 200
+      },
+      "services": {
+        "database": "healthy",
+        "kafka": "healthy",
+        "timescaledb": "healthy",
+        "pipeline_manager": "healthy"
+      },
+      "dashboard_quality_status": null,
+      "probe_errors": {},
+      "checks": {
+        "platform_ready": true,
+        "console_login": true,
+        "dashboard": true,
+        "system_health": true
+      },
+      "latency_ms": 214.24
+    },
+    {
+      "observed_at": "2026-07-16T05:19:05.289799Z",
+      "statuses": {
+        "ready": 200,
+        "login": 200,
+        "dashboard": 200,
+        "system_health": 200
+      },
+      "services": {
+        "database": "healthy",
+        "kafka": "healthy",
+        "timescaledb": "healthy",
+        "pipeline_manager": "healthy"
+      },
+      "dashboard_quality_status": null,
+      "probe_errors": {},
+      "checks": {
+        "platform_ready": true,
+        "console_login": true,
+        "dashboard": true,
+        "system_health": true
+      },
+      "latency_ms": 217.65
+    },
+    {
+      "observed_at": "2026-07-16T05:19:35.509580Z",
+      "statuses": {
+        "ready": 200,
+        "login": 200,
+        "dashboard": 200,
+        "system_health": 200
+      },
+      "services": {
+        "database": "healthy",
+        "kafka": "healthy",
+        "timescaledb": "healthy",
+        "pipeline_manager": "healthy"
+      },
+      "dashboard_quality_status": null,
+      "probe_errors": {},
+      "checks": {
+        "platform_ready": true,
+        "console_login": true,
+        "dashboard": true,
+        "system_health": true
+      },
+      "latency_ms": 218.75
+    },
+    {
+      "observed_at": "2026-07-16T05:20:05.723129Z",
+      "statuses": {
+        "ready": 200,
+        "login": 200,
+        "dashboard": 200,
+        "system_health": 200
+      },
+      "services": {
+        "database": "healthy",
+        "kafka": "healthy",
+        "timescaledb": "healthy",
+        "pipeline_manager": "healthy"
+      },
+      "dashboard_quality_status": null,
+      "probe_errors": {},
+      "checks": {
+        "platform_ready": true,
+        "console_login": true,
+        "dashboard": true,
+        "system_health": true
+      },
+      "latency_ms": 212.14
+    },
+    {
+      "observed_at": "2026-07-16T05:20:35.937329Z",
+      "statuses": {
+        "ready": 200,
+        "login": 200,
+        "dashboard": 200,
+        "system_health": 200
+      },
+      "services": {
+        "database": "healthy",
+        "kafka": "healthy",
+        "timescaledb": "healthy",
+        "pipeline_manager": "healthy"
+      },
+      "dashboard_quality_status": null,
+      "probe_errors": {},
+      "checks": {
+        "platform_ready": true,
+        "console_login": true,
+        "dashboard": true,
+        "system_health": true
+      },
+      "latency_ms": 213.72
+    },
+    {
+      "observed_at": "2026-07-16T05:21:06.164131Z",
+      "statuses": {
+        "ready": 200,
+        "login": 200,
+        "dashboard": 200,
+        "system_health": 200
+      },
+      "services": {
+        "database": "healthy",
+        "kafka": "healthy",
+        "timescaledb": "healthy",
+        "pipeline_manager": "healthy"
+      },
+      "dashboard_quality_status": null,
+      "probe_errors": {},
+      "checks": {
+        "platform_ready": true,
+        "console_login": true,
+        "dashboard": true,
+        "system_health": true
+      },
+      "latency_ms": 218.8
+    },
+    {
+      "observed_at": "2026-07-16T05:21:36.377847Z",
+      "statuses": {
+        "ready": 200,
+        "login": 200,
+        "dashboard": 200,
+        "system_health": 200
+      },
+      "services": {
+        "database": "healthy",
+        "kafka": "healthy",
+        "timescaledb": "healthy",
+        "pipeline_manager": "healthy"
+      },
+      "dashboard_quality_status": null,
+      "probe_errors": {},
+      "checks": {
+        "platform_ready": true,
+        "console_login": true,
+        "dashboard": true,
+        "system_health": true
+      },
+      "latency_ms": 203.58
+    },
+    {
+      "observed_at": "2026-07-16T05:21:53.107247Z",
+      "statuses": {
+        "ready": 200,
+        "login": 200,
+        "dashboard": 200,
+        "system_health": 200
+      },
+      "services": {
+        "database": "healthy",
+        "kafka": "healthy",
+        "timescaledb": "healthy",
+        "pipeline_manager": "healthy"
+      },
+      "dashboard_quality_status": null,
+      "probe_errors": {},
+      "checks": {
+        "platform_ready": true,
+        "console_login": true,
+        "dashboard": true,
+        "system_health": true
+      },
+      "latency_ms": 216.94
     }
   ],
   "passed": true,
   "acceptance": {
     "status": "blocked_external",
-    "detail": "A short local soak does not approve production thresholds, HA, capacity, RPO/RTO, sustained observation duration, or legacy retirement."
+    "detail": "A local soak does not approve production thresholds, HA, capacity, RPO/RTO, sustained observation duration, or legacy retirement."
   }
 }

@@ -34,8 +34,24 @@ class SurveyAction(BaseModel):
 
 
 class SurveyAssetImport(BaseModel):
-    video_asset: str = Field(min_length=1, max_length=500)
-    telemetry_asset: str = Field(min_length=1, max_length=500)
+    source_profile_id: str | None = Field(default=None, min_length=1, max_length=40)
+    video_asset: str | None = Field(default=None, min_length=1, max_length=500)
+    telemetry_asset: str | None = Field(default=None, min_length=1, max_length=500)
+
+
+class SceneAnnotationCreate(BaseModel):
+    frame_id: str = Field(min_length=1, max_length=40)
+    category: str = Field(min_length=1, max_length=80)
+    image_geometry: list[list[float]] = Field(min_length=1)
+    source: Literal["manual", "ai_assisted"] = "manual"
+    confidence: float | None = Field(default=None, ge=0, le=1)
+
+
+class SceneAnnotationUpdate(BaseModel):
+    expected_revision: int = Field(ge=1)
+    category: str = Field(min_length=1, max_length=80)
+    image_geometry: list[list[float]] = Field(min_length=1)
+    review_state: Literal["draft", "confirmed", "rejected"] = "draft"
 
 
 class MeasurementCreate(BaseModel):

@@ -481,7 +481,13 @@
 
 ## ADR-019: 统一使用 road9 PostgreSQL/TimescaleDB 并退役 InfluxDB/Telegraf/Grafana 链路
 
-**状态**：Accepted（已采纳，2026-07-13；实施待完成）
+**状态**：Accepted（2026-07-13 采纳；2026-07-16 本机纯净切换完成；生产门禁待外部批准）
+
+**2026-07-16 实施修订**：本机开发环境不迁移、不备份、不核验 PostgreSQL、旧时序库、
+实验 TimescaleDB 或旧 Kafka 的任何历史数据。目标库使用首次创建的 `traffic_road9_data`，
+从空白 `road9` 执行 Alembic 到 `20260715_0010`，只初始化管理员。旧容器已删除，指定旧
+资产仅未挂载保留 7 天并由受保护脚本到期后人工清理。下文原“盘点/双读/影子写入/回填/
+旧链路回滚”方案作为决策历史保留，但已取消，不得实现为兼容路径。
 
 **替代关系**：替代 ADR-005、ADR-014 中的 InfluxDB 决策；部分替代 ADR-011 的旧
 Topic 命名和 Telegraf 路径、ADR-013 的 Grafana/Telegraf 兼容目标。Kafka 的异步传输
@@ -489,7 +495,7 @@ Topic 命名和 Telegraf 路径、ADR-013 的 Grafana/Telegraf 兼容目标。Ka
 
 ### 背景
 
-当前仓库同时维护 PostgreSQL 业务数据与 InfluxDB 时序数据，并通过
+本 ADR 决策时，仓库同时维护 PostgreSQL 业务数据与 InfluxDB 时序数据，并通过
 `Kafka → Telegraf → InfluxDB → Grafana` 展示周期指标。该结构带来多套连接、权限、
 备份、查询语言和监控组件，复杂 JSON 经 Telegraf 扁平化后也难以保留完整业务语义。
 无人机平台已有 React 前端和 FastAPI 查询层，继续维护 Grafana 形成重复展示入口。
@@ -529,16 +535,13 @@ Topic 命名和 Telegraf 路径、ADR-013 的 Grafana/Telegraf 兼容目标。Ka
    partition、offset、status 和事实引用；inbox 登记、事实写入及状态/引用更新必须在同一
    PostgreSQL 事务中提交。保留期必须覆盖最大重放窗口。TimescaleDB hypertable 唯一键因
    必须包含时间分区列，只作为第二层防重，不能取代 inbox 的跨时间消息幂等。
-7. 废弃 Telegraf、InfluxDB 和 Grafana 生产链路。历史查询、时序聚合和页面可视化统一
-   通过 PostgreSQL/TimescaleDB、FastAPI REST/WebSocket 与 `traffic-fly-console` 完成。
-8. 本 ADR 描述目标态，并不代表仓库当前已经完成迁移。现有代码、测试和 Compose 中仍
-   可能存在旧 Topic、`InfluxQuery`、InfluxDB、Telegraf、Grafana 及相关环境变量；这些
-   均列为待迁移对象，完成验收前不得宣称新架构已落地。
-9. 历史 InfluxDB `time` 不作统一业务时间解释。迁移器必须按 measurement 分支，保留
-   `source_time_raw`、`source_time_semantics`、`time_quality`：`statistics`/`conflict`
-   的 `time` 可能只是写入时刻，`track_complete` 还可能把流相对秒误当 Unix 秒而落在
-   epoch 附近。无法证明的时间只作为 `ingested_at`，不得写成 `observed_at`/`occurred_at`；
-   异常轨迹必须隔离，只有具备任务起点和视频时间轴证据时才可审计重建。
+7. 废弃旧观测生产链路。历史查询、时序聚合和页面可视化统一通过
+   PostgreSQL/TimescaleDB、FastAPI REST/WebSocket 与 `console2` 完成。
+8. 本机目标态已于 2026-07-16 落地：根 Compose、Platform、Console2、Nginx、依赖和
+   活动测试中不保留旧运行兼容；生产范围继续由外部门禁控制。
+9. 旧时间字段存在不可证明的业务语义，因此本机明确不执行历史迁移，也不创建迁移器、
+   隔离表或对账路径。`source_time_raw`、`source_time_semantics`、`time_quality` 只服务于
+   新 canonical 消息自身的可审计时间语义。
 10. camera-scoped Topic 只能由统一 builder 根据消息类别和显式 `camera_id` 生成。禁止通过
     字符串替换从一个 Topic 推导另一个 Topic；全局 Topic 由 builder 的独立 canonical
     模板生成，不伪造 `camera_id`。
@@ -549,9 +552,8 @@ Topic 命名和 Telegraf 路径、ADR-013 的 Grafana/Telegraf 兼容目标。Ka
 12. Consumer 关闭 Kafka auto commit。`uav_message_inbox`、payload hash 校验结果和事实数据
     同一 PostgreSQL 事务成功后才手动提交 offset；数据库失败时回滚且不提交，以便重放；
     数据库提交后、offset 提交前的崩溃重放由 inbox 幂等处理。
-13. 历史 Telegraf 与 Platform Consumer 统计写入可能是同一观测的两条落库路径，迁移和
-    对账必须按 source writer、Topic/partition/offset、message ID 或审计指纹去重，禁止
-    简单相加。无法可靠关联时选择并记录权威来源，另一侧仅用于对账并降低质量标记。
+13. 旧统计双写数据不进入新库，不执行去重、对账或质量修复；新库只接收 canonical
+    Topic/`msg_type` 并从空数据开始。
 
 ### 边界与命名例外
 
@@ -565,7 +567,10 @@ Topic 命名和 Telegraf 路径、ADR-013 的 Grafana/Telegraf 兼容目标。Ka
 - TimescaleDB 只解决时序存储和聚合，不改变无人机 AI 子项目与智慧交通主平台之间的
   业务边界；派警、处置、案件归档等闭环状态仍由主平台负责。
 
-### 迁移方案
+### 历史迁移方案（2026-07-16 已取消，不执行）
+
+> 以下六步仅保存 2026-07-13 的原方案，不是当前任务、回滚路径或运行兼容依据。当前实施
+> 采用空白新库，禁止盘点内容、备份、双读、影子写入、历史回填和旧数据对账。
 
 1. **盘点与备份**：冻结旧 measurement、查询、Topic、消费者和 Grafana 面板清单；备份
    PostgreSQL 与 InfluxDB，并记录消息量、数据保留期和基准查询结果。
@@ -585,7 +590,10 @@ Topic 命名和 Telegraf 路径、ADR-013 的 Grafana/Telegraf 兼容目标。Ka
 6. **下线旧链路**：验收通过且观察期结束后停止 InfluxDB 生产写入，禁用并最终移除
    Telegraf、InfluxDB、Grafana 服务、配置、健康检查和依赖；备份按约定期限留存。
 
-### 回滚方案
+### 历史回滚方案（2026-07-16 已取消，不执行）
+
+> 以下内容仅保存原决策历史。本机失败时停止新栈排查，不恢复旧 Topic、旧查询入口或旧
+> 数据挂载；修复后仍从纯净 `road9` 继续。
 
 - 在查询切换验收前保留旧链路的可恢复部署物和只读数据，并用功能开关控制新旧消费者与
   查询适配器；发生数据正确性或性能阻断时，可恢复旧 Topic 订阅和旧查询入口。
@@ -607,7 +615,7 @@ Topic 命名和 Telegraf 路径、ADR-013 的 Grafana/Telegraf 兼容目标。Ka
 - **部署**：Compose 最终删除 Telegraf、InfluxDB、Grafana 及其 volume、端口、环境变量和
   健康依赖；PostgreSQL 镜像/服务必须具备与环境匹配的 TimescaleDB 扩展。
 - **测试**：更新 Topic、WebSocket、数据库和前端契约测试；增加扩展可用性、幂等重放、
-  时区/迟到数据、连续聚合、迁移回填、备份恢复和性能回归测试。
+  时区/迟到数据、空库初始化、断库恢复和本机持续健康探测。
 - **运维**：组件数量下降，但 PostgreSQL 成为更关键的数据底座，需要连接池、磁盘增长、
   WAL、慢查询、hypertable chunk 和备份恢复的专项监控。
 
@@ -626,22 +634,16 @@ Topic 命名和 Telegraf 路径、ADR-013 的 Grafana/Telegraf 兼容目标。Ka
   expected/sent/received/drop/coverage 指标，缺失窗口不会被当作零流量。
 - Consumer 已关闭 auto commit；只有 inbox 与事实同事务提交成功后才手动提交 offset。
   数据库失败、事务成功但 offset 未提交等故障注入场景均能重放且不重复生成事实。
-- 迁移样本期内 PostgreSQL/TimescaleDB 与旧链路的事件总量、关键聚合和抽样明细对账通过，
-  且查询延迟、写入吞吐和存储增长满足验收阈值。
-- 每个历史 measurement 均有已评审的时间语义映射与样本证据；迁移记录完整保留
-  `source_time_raw`、`source_time_semantics`、`time_quality`，无法证明的时间未进入
-  `observed_at`/`occurred_at`，只作为 `ingested_at` 或隔离记录保留。
-- 生产业务表中不存在因流相对秒误作 Unix 秒产生的 epoch 异常轨迹；所有命中项均已隔离，
-  或已基于任务起始时间和视频时间轴完成可审计重建，且不会参与错误的聚合、排序和 SLA。
-- 历史 Telegraf/Platform Consumer 双写统计已按来源与消息身份完成去重，对账结果不存在
-  简单相加造成的翻倍；无法可靠关联的样本已隔离或明确标记低质量。
-- 平台 API 和前端不再查询 InfluxDB 或 Grafana；生产 Compose 不再启动 Telegraf、
-  InfluxDB、Grafana，相关凭据、volume 和健康检查均已按迁移计划处理。
-- 备份恢复和回滚演练通过，迁移记录、异常差异和处置结果可审计。
+- 新 `road9` 只含管理员初始化记录，业务与时序表为空；不存在旧数据库、迁移审计表或隔离表。
+- 平台 API 和 Console2 不查询旧存储；根 Compose 不启动旧服务，也不挂载旧卷或旧 bind 目录。
+- 指定旧资产保留满 7 天、未被任何容器挂载，清理脚本具有固定 allowlist、到期校验、挂载
+  检查、环境开关和精确确认串。
+- 独立空栈、正式端口、断库恢复、30 分钟探测、全量回归和本机严格退役审计通过。
+- 生产镜像、安全、HA、容量、RPO/RTO、试点和主平台联调继续 `blocked_external`。
 
 ### 待冻结参数
 
 - TimescaleDB 版本、chunk 时间粒度、压缩/保留期、连续聚合刷新窗口和迟到数据容忍时间。
-- 消息批量写入大小、重试退避、失败处理队列、最大可接受端到端延迟、历史回填范围，
-  以及 `uav_message_inbox` 最大重放窗口和保留期。
-- 旧 InfluxDB/Grafana 备份留存期限、停写观察期和最终销毁审批责任人。
+- 消息批量写入大小、重试退避、失败处理队列、最大可接受端到端延迟，以及
+  `uav_message_inbox` 最大重放窗口和保留期。
+- 生产镜像、安全、HA、容量、RPO/RTO、试点、主平台联调和生产退役审批责任人。

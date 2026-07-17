@@ -65,8 +65,8 @@ def inject_stats(ws, intersection_id, iteration=0):
 
     msg = json.dumps({
         "action": "publish",
-        "channel": f"intersection:{intersection_id}",
-        "type": "stats",
+        "channel": f"uav_intersection:{intersection_id}",
+        "type": "uav_stats",
         "data": stats,
     })
     ws.send(msg)
@@ -80,8 +80,8 @@ def inject_track_complete(ws, intersection_id, track_id=42):
     """注入一条轨迹完成消息"""
     track_msg = json.dumps({
         "action": "publish",
-        "channel": f"intersection:{intersection_id}",
-        "type": "track_complete",
+        "channel": f"uav_intersection:{intersection_id}",
+        "type": "uav_track_complete",
         "data": {
             "track_id": track_id,
             "turn_behavior": "left_turn",
@@ -109,10 +109,10 @@ def main():
     # Subscribe
     ws.send(json.dumps({
         "action": "subscribe",
-        "channel": f"intersection:{args.intersection}"
+        "channel": f"uav_intersection:{args.intersection}"
     }))
     ws.recv()
-    print(f"Subscribed to intersection:{args.intersection}")
+    print(f"Subscribed to uav_intersection:{args.intersection}")
 
     iteration = 0
     try:

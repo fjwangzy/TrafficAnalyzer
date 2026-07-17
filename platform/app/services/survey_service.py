@@ -27,13 +27,15 @@ from app.models.survey import (
     EvidenceItem,
     EvidencePackage,
     RuleVersion,
+    SceneAnnotation,
     SurveyCaptureBatch,
     SurveyFrame,
     SurveyMeasurement,
     SurveyReport,
     SurveyTask,
 )
-from app.services.survey_capture import process_mp4_srt
+from app.models.mission import TelemetrySourceRecord, VideoSourceRecord
+from app.services.survey_capture import process_mp4_telemetry
 from app.services.survey_geometry import calculate_measurement
 from app.services.survey_storage import ContentAddressedStore, StoredObject, resolve_allowlisted_asset
 
@@ -80,6 +82,7 @@ def _batch_dict(batch: SurveyCaptureBatch) -> dict:
         "task_id": batch.task_id,
         "status": batch.status,
         "source_type": batch.source_type,
+        "source_profile_id": batch.source_profile_id,
         "duration_sec": batch.duration_sec,
         "fps": batch.fps,
         "frame_count": batch.frame_count,
@@ -107,6 +110,21 @@ def _frame_dict(frame: SurveyFrame) -> dict:
         "selected": frame.selected,
         "image_url": f"/api/v1/survey-evidence/{frame.image_evidence_id}/content",
         "bev_url": f"/api/v1/survey-evidence/{frame.bev_evidence_id}/content",
+    }
+
+
+def _annotation_dict(annotation: SceneAnnotation) -> dict:
+    return {
+        "id": annotation.id,
+        "task_id": annotation.task_id,
+        "frame_id": annotation.frame_id,
+        "category": annotation.category,
+        "image_geometry": annotation.image_geometry,
+        "source": annotation.source,
+        "confidence": annotation.confidence,
+        "review_state": annotation.review_state,
+        "revision": annotation.version,
+        "created_at": annotation.created_at.isoformat() if annotation.created_at else None,
     }
 
 
@@ -143,6 +161,84 @@ class SurveyService:
     def __init__(self, session: AsyncSession):
         self.session = session
         self.storage = ContentAddressedStore(settings.survey_storage_dir)
+
+    def _resolve_evidence_path(self, item: EvidenceItem) -> Path:
+        if item.storage_backend == "server_asset":
+            platform_dir = Path(__file__).resolve().parents[2]
+            return resolve_allowlisted_asset(item.storage_key, settings.survey_asset_roots, platform_dir)
+        return self.storage.resolve(item.storage_key)
+
+    def _verify_evidence(self, item: EvidenceItem) -> bool:
+        try:
+            path = self._resolve_evidence_path(item)
+            digest, size = ContentAddressedStore._hash_file(path)
+        except (FileNotFoundError, ValueError, OSError):
+            return False
+        return digest == item.sha256 and size == item.size_bytes
+
+    def _evidence_reference_status(self, item: EvidenceItem) -> str:
+        try:
+            path = self._resolve_evidence_path(item)
+            stat = path.stat()
+        except FileNotFoundError:
+            return "missing"
+        except (ValueError, OSError):
+            return "unavailable"
+        if stat.st_size != item.size_bytes:
+            return "hash_mismatch"
+        metadata = item.item_metadata or {}
+        fingerprint = metadata.get("source_fingerprint") or {}
+        current_fingerprint = {
+            "size_bytes": stat.st_size,
+            "mtime_ns": stat.st_mtime_ns,
+            "ctime_ns": stat.st_ctime_ns,
+        }
+        if item.storage_backend == "server_asset" and fingerprint == current_fingerprint:
+            return "verified"
+        try:
+            digest, size = ContentAddressedStore._hash_file(path)
+        except OSError:
+            return "unavailable"
+        if digest != item.sha256 or size != item.size_bytes:
+            return "hash_mismatch"
+        if item.storage_backend == "server_asset":
+            item.item_metadata = {**metadata, "source_fingerprint": current_fingerprint}
+        return "verified"
+
+    async def _batch_details(self, batch: SurveyCaptureBatch) -> dict:
+        result = _batch_dict(batch)
+        video = await self.session.get(EvidenceItem, batch.video_evidence_id)
+        telemetry = await self.session.get(EvidenceItem, batch.telemetry_evidence_id)
+        telemetry_metadata = telemetry.item_metadata if telemetry else {}
+        result.update(
+            {
+                "telemetry_type": telemetry_metadata.get("telemetry_type", "srt"),
+                "sync_config": telemetry_metadata.get("config") or {},
+                "original_materials": {
+                    "video": {
+                        "evidence_id": video.id,
+                        "storage_backend": video.storage_backend,
+                        "asset_key": (video.item_metadata or {}).get("asset_key"),
+                        "sha256": video.sha256,
+                        "size_bytes": video.size_bytes,
+                        "reference_status": self._evidence_reference_status(video),
+                    }
+                    if video
+                    else {"reference_status": "missing"},
+                    "telemetry": {
+                        "evidence_id": telemetry.id,
+                        "storage_backend": telemetry.storage_backend,
+                        "asset_key": telemetry_metadata.get("asset_key"),
+                        "sha256": telemetry.sha256,
+                        "size_bytes": telemetry.size_bytes,
+                        "reference_status": self._evidence_reference_status(telemetry),
+                    }
+                    if telemetry
+                    else {"reference_status": "missing"},
+                },
+            }
+        )
+        return result
 
     async def _audit(
         self,
@@ -318,16 +414,20 @@ class SurveyService:
         metadata: dict | None = None,
         derived_from_id: str | None = None,
     ) -> EvidenceItem:
+        item_metadata = dict(metadata or {})
+        if stored.storage_backend == "server_asset" and stored.source_fingerprint:
+            item_metadata["source_fingerprint"] = stored.source_fingerprint
         item = EvidenceItem(
             id=_identifier("EVI"),
             package_id=package.id,
             task_id=task_id,
             kind=kind,
+            storage_backend=stored.storage_backend,
             storage_key=stored.storage_key,
             sha256=stored.sha256,
             media_type=media_type,
             size_bytes=stored.size_bytes,
-            item_metadata=metadata or {},
+            item_metadata=item_metadata,
             derived_from_id=derived_from_id,
         )
         self.session.add(item)
@@ -337,8 +437,9 @@ class SurveyService:
     async def import_capture_batch(
         self,
         task_id: str,
-        video_asset: str,
-        telemetry_asset: str,
+        video_asset: str | None,
+        telemetry_asset: str | None,
+        source_profile_id: str | None,
         actor_id: int | None,
         role: str,
         request_id: str | None,
@@ -349,23 +450,68 @@ class SurveyService:
         if task.state not in {"ready", "collecting", "returned"}:
             raise ValueError("task must pass precheck before capture ingestion")
         platform_dir = Path(__file__).resolve().parents[2]
+        telemetry_type = "srt"
+        telemetry_config: dict = {}
+        validation_status = "unknown"
+        if source_profile_id:
+            video_source = (
+                await self.session.execute(
+                    select(VideoSourceRecord).where(VideoSourceRecord.profile_id == source_profile_id)
+                )
+            ).scalar_one_or_none()
+            telemetry_source = (
+                await self.session.execute(
+                    select(TelemetrySourceRecord).where(TelemetrySourceRecord.profile_id == source_profile_id)
+                )
+            ).scalar_one_or_none()
+            if video_source is None or telemetry_source is None:
+                raise LookupError("source profile is incomplete or missing")
+            if video_source.mode != "local" or telemetry_source.mode != "local":
+                raise ValueError("survey server import requires a local source profile")
+            if not video_source.enabled or not telemetry_source.enabled:
+                raise ValueError("source profile is disabled")
+            video_asset = video_source.location.removeprefix("test_videos/")
+            telemetry_asset = telemetry_source.location.removeprefix("test_videos/")
+            telemetry_type = telemetry_source.source_type
+            telemetry_config = telemetry_source.config or {}
+            if telemetry_source.source_type == "file":
+                telemetry_type = telemetry_config.get("format") or "dji_cloud_json"
+            validation_status = telemetry_source.validation_status
+        if not video_asset or not telemetry_asset:
+            raise ValueError("source_profile_id or both video_asset and telemetry_asset are required")
         video_path = resolve_allowlisted_asset(video_asset, settings.survey_asset_roots, platform_dir)
         telemetry_path = resolve_allowlisted_asset(telemetry_asset, settings.survey_asset_roots, platform_dir)
         package = await self._package(task.id)
         video_stored, telemetry_stored = await asyncio.gather(
-            asyncio.to_thread(self.storage.ingest_path, video_path),
-            asyncio.to_thread(self.storage.ingest_path, telemetry_path),
+            asyncio.to_thread(self.storage.reference_path, video_path, video_asset),
+            asyncio.to_thread(self.storage.reference_path, telemetry_path, telemetry_asset),
         )
-        return await self.enqueue_capture_batch(
+        result = await self.enqueue_capture_batch(
             task,
             package,
             video_stored,
             telemetry_stored,
             actor_id,
             request_id,
-            {"asset_key": video_asset, "ingest": "server_asset"},
-            {"asset_key": telemetry_asset, "ingest": "server_asset"},
+            {
+                "asset_key": video_asset,
+                "ingest": "server_asset_reference",
+                "source_profile_id": source_profile_id,
+                "validation_status": validation_status,
+            },
+            {
+                "asset_key": telemetry_asset,
+                "ingest": "server_asset_reference",
+                "source_profile_id": source_profile_id,
+                "telemetry_type": telemetry_type,
+                "config": telemetry_config,
+                "validation_status": validation_status,
+            },
+            source_profile_id=source_profile_id,
+            source_type=f"mp4_{telemetry_type}",
         )
+        batch = await self.session.get(SurveyCaptureBatch, result["id"])
+        return await self._batch_details(batch)
 
     async def upload_capture_batch(
         self,
@@ -410,15 +556,22 @@ class SurveyService:
         request_id: str | None,
         video_metadata: dict,
         telemetry_metadata: dict,
+        source_profile_id: str | None = None,
+        source_type: str = "mp4_srt",
     ) -> dict:
         video_item = await self._evidence(package, task.id, "original_video", video_stored, "video/mp4", video_metadata)
+        telemetry_media_type = (
+            "application/x-subrip" if telemetry_metadata.get("telemetry_type", "srt") == "srt" else "application/json"
+        )
         telemetry_item = await self._evidence(
-            package, task.id, "original_telemetry", telemetry_stored, "application/x-subrip", telemetry_metadata
+            package, task.id, "original_telemetry", telemetry_stored, telemetry_media_type, telemetry_metadata
         )
         batch = SurveyCaptureBatch(
             id=_identifier("BATCH"),
             task_id=task.id,
             status="queued",
+            source_type=source_type,
+            source_profile_id=source_profile_id,
             video_evidence_id=video_item.id,
             telemetry_evidence_id=telemetry_item.id,
         )
@@ -458,6 +611,19 @@ class SurveyService:
         telemetry_item = await self.session.get(EvidenceItem, batch.telemetry_evidence_id)
         if video_item is None or telemetry_item is None:
             raise ValueError("capture source evidence is incomplete")
+        source_statuses = {
+            "video": self._evidence_reference_status(video_item),
+            "telemetry": self._evidence_reference_status(telemetry_item),
+        }
+        if any(status != "verified" for status in source_statuses.values()):
+            batch.status = "error"
+            batch.error_message = "/".join(f"{kind}:{value}" for kind, value in source_statuses.items())
+            job.status = "failed"
+            job.finished_at = datetime.now(UTC)
+            job.last_error = batch.error_message
+            await self.session.flush()
+            await self._audit(None, "survey.capture.source_invalid", "capture_batch", batch.id, after=await self._batch_details(batch))
+            return await self._batch_details(batch)
         package = await self._package(batch.task_id)
         job.status = "processing"
         job.attempt_count += 1
@@ -465,18 +631,24 @@ class SurveyService:
         batch.status = "processing"
         await self.session.flush()
         try:
+            telemetry_metadata = telemetry_item.item_metadata or {}
+            telemetry_config = telemetry_metadata.get("config") or {}
             processed = await asyncio.to_thread(
-                process_mp4_srt,
-                self.storage.resolve(video_item.storage_key),
-                self.storage.resolve(telemetry_item.storage_key),
+                process_mp4_telemetry,
+                self._resolve_evidence_path(video_item),
+                self._resolve_evidence_path(telemetry_item),
                 settings.survey_keyframe_count,
+                telemetry_metadata.get("telemetry_type", "srt"),
+                float(telemetry_config.get("time_offset_sec", 0)),
+                float(telemetry_config.get("sync_tolerance_sec", 0.5)),
             )
             batch.duration_sec = processed.duration_sec
             batch.fps = processed.fps
             batch.frame_count = processed.frame_count
             batch.telemetry_coverage = processed.telemetry_coverage
             batch.quality_checks = processed.quality_checks
-            batch.status = "ready" if processed.frames else "error"
+            declared_degraded = telemetry_metadata.get("validation_status") == "degraded"
+            batch.status = "degraded" if processed.frames and declared_degraded else ("ready" if processed.frames else "error")
             batch.error_message = None
             for index, frame in enumerate(processed.frames):
                 source_stored = await asyncio.to_thread(self.storage.ingest_bytes, frame.image)
@@ -530,7 +702,7 @@ class SurveyService:
             return _batch_dict(batch)
         await self.session.flush()
         await self._audit(None, "survey.capture.processed", "capture_batch", batch.id, after=_batch_dict(batch))
-        return _batch_dict(batch)
+        return await self._batch_details(batch)
 
     async def list_batches(self, task_id: str, actor_id: int | None, role: str) -> list[dict]:
         await self._task(task_id, actor_id, role)
@@ -539,7 +711,7 @@ class SurveyService:
                 select(SurveyCaptureBatch).where(SurveyCaptureBatch.task_id == task_id).order_by(SurveyCaptureBatch.created_at.desc())
             )
         ).scalars().all()
-        return [_batch_dict(row) for row in rows]
+        return [await self._batch_details(row) for row in rows]
 
     async def list_frames(self, task_id: str, actor_id: int | None, role: str, batch_id: str | None = None) -> list[dict]:
         task = await self._task(task_id, actor_id, role)
@@ -646,12 +818,96 @@ class SurveyService:
         current.is_current = False
         await self._audit(actor_id, "survey.measurement.deleted", "survey_measurement", measurement_id, before=_measurement_dict(current))
 
+    async def list_annotations(self, task_id: str, actor_id: int | None, role: str) -> list[dict]:
+        await self._task(task_id, actor_id, role)
+        rows = (
+            await self.session.execute(
+                select(SceneAnnotation)
+                .where(SceneAnnotation.task_id == task_id)
+                .order_by(SceneAnnotation.created_at.asc())
+            )
+        ).scalars().all()
+        return [_annotation_dict(row) for row in rows]
+
+    async def create_annotation(
+        self,
+        task_id: str,
+        data: dict,
+        actor_id: int | None,
+        role: str,
+        request_id: str | None,
+    ) -> dict:
+        if prior := await self._prior("survey.annotation.created", request_id):
+            return prior
+        task = await self._task(task_id, actor_id, role)
+        if task.state not in {"measuring", "returned", "pending_review"}:
+            raise ValueError("task is not in an annotation-editable state")
+        frame = await self.session.get(SurveyFrame, data["frame_id"])
+        if frame is None or frame.task_id != task_id:
+            raise LookupError("survey frame not found")
+        annotation = SceneAnnotation(
+            id=_identifier("ANN"),
+            task_id=task_id,
+            frame_id=frame.id,
+            category=data["category"],
+            image_geometry=data["image_geometry"],
+            source=data.get("source", "manual"),
+            confidence=data.get("confidence"),
+            review_state="draft",
+            version=1,
+        )
+        self.session.add(annotation)
+        await self.session.flush()
+        result = _annotation_dict(annotation)
+        await self._audit(actor_id, "survey.annotation.created", "scene_annotation", annotation.id, after=result, request_id=request_id)
+        return result
+
+    async def update_annotation(
+        self, task_id: str, annotation_id: str, data: dict, actor_id: int | None, role: str
+    ) -> dict:
+        task = await self._task(task_id, actor_id, role)
+        if task.state not in {"measuring", "returned", "pending_review"}:
+            raise ValueError("task is not in an annotation-editable state")
+        annotation = await self.session.get(SceneAnnotation, annotation_id)
+        if annotation is None or annotation.task_id != task_id:
+            raise LookupError("scene annotation not found")
+        if annotation.version != data["expected_revision"]:
+            raise RuntimeError("scene annotation revision conflict")
+        before = _annotation_dict(annotation)
+        annotation.category = data["category"]
+        annotation.image_geometry = data["image_geometry"]
+        annotation.review_state = data.get("review_state", "draft")
+        annotation.version += 1
+        await self.session.flush()
+        result = _annotation_dict(annotation)
+        await self._audit(actor_id, "survey.annotation.updated", "scene_annotation", annotation.id, before, result)
+        return result
+
+    async def delete_annotation(
+        self, task_id: str, annotation_id: str, expected_revision: int, actor_id: int | None, role: str
+    ) -> None:
+        task = await self._task(task_id, actor_id, role)
+        if task.state not in {"measuring", "returned", "pending_review"}:
+            raise ValueError("task is not in an annotation-editable state")
+        annotation = await self.session.get(SceneAnnotation, annotation_id)
+        if annotation is None or annotation.task_id != task_id:
+            raise LookupError("scene annotation not found")
+        if annotation.version != expected_revision:
+            raise RuntimeError("scene annotation revision conflict")
+        before = _annotation_dict(annotation)
+        await self.session.delete(annotation)
+        await self._audit(actor_id, "survey.annotation.deleted", "scene_annotation", annotation_id, before=before)
+
     async def evidence_item(self, evidence_id: str, actor_id: int | None, role: str) -> tuple[EvidenceItem, Path]:
         item = await self.session.get(EvidenceItem, evidence_id)
         if item is None:
             raise LookupError("evidence item not found")
-        await self._task(item.task_id, actor_id, role)
-        return item, self.storage.resolve(item.storage_key)
+        if item.task_id:
+            await self._task(item.task_id, actor_id, role)
+        status = self._evidence_reference_status(item)
+        if status != "verified":
+            raise RuntimeError(f"evidence reference is {status}")
+        return item, self._resolve_evidence_path(item)
 
     @staticmethod
     def _report_pdf(payload: dict) -> bytes:
@@ -707,15 +963,7 @@ class SurveyService:
             await self.session.execute(select(EvidenceItem).where(EvidenceItem.task_id == task.id))
         ).scalars().all()
         integrity_checks = await asyncio.gather(
-            *(
-                asyncio.to_thread(
-                    self.storage.verify,
-                    item.storage_key,
-                    item.sha256,
-                    item.size_bytes,
-                )
-                for item in evidence_rows
-            )
+            *(asyncio.to_thread(self._verify_evidence, item) for item in evidence_rows)
         )
         if not evidence_rows or not all(integrity_checks):
             raise ValueError("evidence integrity check failed")
@@ -766,8 +1014,17 @@ class SurveyService:
             json.dumps(geojson, ensure_ascii=False, sort_keys=True).encode(),
         )
         pdf_item = await self._evidence(package, task.id, "survey_report_pdf", pdf_stored, "application/pdf", {"version": report_version})
-        await self._evidence(package, task.id, "survey_report_json", json_stored, "application/json", {"version": report_version})
-        await self._evidence(package, task.id, "survey_report_geojson", geojson_stored, "application/geo+json", {"version": report_version})
+        json_item = await self._evidence(
+            package, task.id, "survey_report_json", json_stored, "application/json", {"version": report_version}
+        )
+        geojson_item = await self._evidence(
+            package,
+            task.id,
+            "survey_report_geojson",
+            geojson_stored,
+            "application/geo+json",
+            {"version": report_version},
+        )
         report = SurveyReport(
             id=_identifier("RPT"),
             task_id=task.id,
@@ -778,6 +1035,56 @@ class SurveyService:
             created_by=actor_id,
         )
         self.session.add(report)
+        batch = (
+            await self.session.get(SurveyCaptureBatch, task.selected_batch_id)
+            if task.selected_batch_id
+            else None
+        )
+        event_payload = {
+            **payload,
+            "title": f"事故测绘成果 · {task.scene_location}",
+            "description": "真实视频与遥测生成的技术测绘成果",
+            "severity": "P3",
+            "status": "generated",
+            "report_id": report.id,
+            "source_profile_id": batch.source_profile_id if batch else None,
+            "evidence_refs": [
+                {
+                    "id": pdf_item.id,
+                    "kind": "survey_report_pdf",
+                    "url": f"/api/v1/survey-evidence/{pdf_item.id}/content",
+                    "sha256": pdf_item.sha256,
+                },
+                {
+                    "id": json_item.id,
+                    "kind": "survey_report_json",
+                    "url": f"/api/v1/survey-evidence/{json_item.id}/content",
+                    "sha256": json_item.sha256,
+                },
+                {
+                    "id": geojson_item.id,
+                    "kind": "survey_report_geojson",
+                    "url": f"/api/v1/survey-evidence/{geojson_item.id}/content",
+                    "sha256": geojson_item.sha256,
+                },
+            ],
+            "delivery_blocked_reason": "survey quality thresholds are not approved",
+        }
+        self.session.add(AiEvent(
+            id=_identifier("EVT"),
+            source_event_id=report.id,
+            idempotency_key=f"survey-report:{report.id}",
+            event_type="survey_result",
+            task_id=task.id,
+            review_status="technical_reviewed",
+            occurred_at=datetime.now(UTC),
+            inter_id=task.inter_id,
+            road_data_version=task.road_data_version,
+            quality_status=task.quality_status,
+            payload_hash=content_hash,
+            delivery_status="blocked",
+            payload=event_payload,
+        ))
         task.delivery_status = "generated"
         task.version += 1
         package.integrity_status = "unverified"
@@ -792,6 +1099,8 @@ class SurveyService:
             "content_hash": report.content_hash,
             "payload": report.payload,
             "pdf_url": f"/api/v1/survey-evidence/{pdf_item.id}/content",
+            "json_url": f"/api/v1/survey-evidence/{json_item.id}/content",
+            "geojson_url": f"/api/v1/survey-evidence/{geojson_item.id}/content",
             "delivery_blocked_reason": "survey quality thresholds are not approved",
         }
         await self._audit(actor_id, "survey.report.generated", "survey_report", report.id, after=result, request_id=request_id)
@@ -818,6 +1127,25 @@ class SurveyService:
                 select(SurveyReport).where(SurveyReport.task_id == task_id).order_by(SurveyReport.version.desc())
             )
         ).scalars().all()
+        report_evidence = (
+            await self.session.execute(
+                select(EvidenceItem).where(
+                    EvidenceItem.task_id == task_id,
+                    EvidenceItem.kind.in_(
+                        ["survey_report_pdf", "survey_report_json", "survey_report_geojson"]
+                    ),
+                )
+            )
+        ).scalars().all()
+        evidence_by_version_kind = {
+            (int((item.item_metadata or {}).get("version", 0)), item.kind): item.id
+            for item in report_evidence
+        }
+
+        def evidence_url(version: int, kind: str) -> str | None:
+            evidence_id = evidence_by_version_kind.get((version, kind))
+            return f"/api/v1/survey-evidence/{evidence_id}/content" if evidence_id else None
+
         return [
             {
                 "id": row.id,
@@ -828,6 +1156,8 @@ class SurveyService:
                 "content_hash": row.content_hash,
                 "payload": row.payload,
                 "pdf_url": f"/api/v1/survey-evidence/{row.pdf_evidence_id}/content" if row.pdf_evidence_id else None,
+                "json_url": evidence_url(row.version, "survey_report_json"),
+                "geojson_url": evidence_url(row.version, "survey_report_geojson"),
                 "delivery_blocked_reason": blocked_reason if row.status == "generated" else None,
             }
             for row in rows
@@ -862,15 +1192,25 @@ class SurveyService:
         ).scalar_one_or_none()
         if existing:
             return {"status": existing.status, "idempotency_key": idempotency_key}
-        event = AiEvent(
-            id=_identifier("EVT"),
-            source_event_id=report.id,
-            idempotency_key=idempotency_key,
-            event_type="survey_result",
-            task_id=task.id,
-            payload=report.payload,
-        )
-        self.session.add(event)
+        event = (
+            await self.session.execute(
+                select(AiEvent).where(
+                    AiEvent.source_system == "uav_traffic_analyzer_ai",
+                    AiEvent.source_event_id == report.id,
+                )
+            )
+        ).scalar_one_or_none()
+        if event is None:
+            event = AiEvent(
+                id=_identifier("EVT"),
+                source_event_id=report.id,
+                idempotency_key=f"survey-report:{report.id}",
+                event_type="survey_result",
+                task_id=task.id,
+                payload=report.payload,
+            )
+            self.session.add(event)
+        event.delivery_status = "pending"
         self.session.add(
             EventOutbox(
                 id=_identifier("OUT"),

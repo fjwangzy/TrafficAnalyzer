@@ -436,12 +436,14 @@ near-miss 证据：
 ## 事故测绘业务闭环（S3）
 
 1. 任务先完成任务上下文、作业授权、现场指挥、设备和存储五项前置核验；缺项进入 `precheck_failed`，不能开始采集。
-2. MP4 与 DJI `.srt` 以内容寻址方式写入本地证据存储，保存 SHA-256、字节数和父子派生关系；服务器材料导入还必须通过 realpath allowlist。
-3. `SurveyWorker` 从 `uav_capture_ingestion_jobs` 取出任务，提取 6 个关键帧，生成原始帧/BEV、遥测覆盖和清晰度/曝光观测；失败按可配置次数重试并保留错误。
+2. 已登记 SourceProfile 的 MP4 与 DJI `.srt` / DJI Cloud JSON `.json/.txt` 不写入证据卷，而以 `server_asset` allowlist 相对键、SHA-256、字节数和 size/mtime/ctime 快速指纹形成不可变引用；派生关键帧/BEV/报告使用 `managed` 内容寻址对象。指纹未变化时快速确认，指纹变化时必须重新计算完整 SHA-256；绝对路径、路径穿越、allowlist 外文件、缺失或哈希变化均阻止可信处理。
+3. `SurveyWorker` 从 `uav_capture_ingestion_jobs` 取出任务，按来源记录的遥测类型、时间偏移和容忍窗口提取 6 个关键帧，生成原始帧/BEV、遥测覆盖和清晰度/曝光观测；失败按可配置次数重试并保留错误。已知遥测缺口必须保留 `degraded`，不能用插值伪装连续。
 4. 用户选择可用批次后进入量算。浏览器只提交图像像素几何，服务端使用该帧变换计算 ENU 米制点、长度、折线长度、面积和周长，并把每次修订保存为版本链。
 5. 提交复核至少需要一项带 metric geometry 的当前量算；复核可通过或带原因退回“补拍/修订量算”。技术复核通过不等于法定事故认定。
 6. 报告生成前重新计算全部引用材料的 SHA-256 和大小，输出 PDF、canonical JSON、GeoJSON 与 manifest hash；重复请求用 `Idempotency-Key` 返回同一业务结果。
 7. 报告只有在 `survey_quality` 规则已批准且配置主平台 URL 后才创建 `survey_result` 事件和 outbox；worker 记录每次 HTTP 尝试，超过上限进入 dead letter。当前未冻结阈值保持 `unverified`，不得伪造“质量通过”或成功回执。
+8. 场景标注只能关联已持久化关键帧，车辆、痕迹、散落物和其他对象的创建/修改/删除保留 revision 与统一审计；车道标注继续以稳定悬停为实时触发，亦可从同一来源的真实持久关键帧恢复任务，确认结果进入 `uav_lane_annotation_tasks` 与 `uav_visual_lane_bindings` 并供后续 Pipeline 优先复用。
+9. 冲突节点实际产出事件时才保存研判关键帧并附到统一证据包；当前素材没有真实事件时应保存“未检出事件”事实，禁止为了验收制造冲突。
 
 ## 统计数据的完整生命周期
 
@@ -509,3 +511,10 @@ near-miss 证据：
 - 本地视频自然 EOF 必须先由三进程管道完整级联 `VideoEndBreakElement` 并以零退出码结束，随后 Mission 写 `completed/source_eof`；不得仅因时间窗口结束而伪造 EOF。
 - 非零退出写 `failed/pipeline_error` 并保存脱敏错误尾部；运行窗口内找不到运行时写 `failed/pipeline_runtime_missing`。Pipeline 期望状态同步为 `stopped`，观察状态保留真实 `stopped/error`。
 - 平台重启处于有效窗口时优先按持久化 Mission 恢复新 Pipeline；恢复流程不把旧进程句柄当业务真源。
+
+### 真实事件与展示口径（2026-07-16）
+
+- 持续拥堵只在拥堵指数连续 30 个发布样本超过 4.0 时生成事件，证据快照与触发样本同时定格。
+- 完整性以 `expected_samples / actual_samples / dropped_samples / coverage_ratio / drop_reason` 表达；低覆盖数据保留事实但必须降质，不得伪装为完整时段。
+- 事件中心不把告警、冲突、拥堵、质量下降和测绘成果压成同一指标；每类事件保留各自的规则、质量和证据。
+- 当真实检测没有产生冲突时，轨迹研判显示 0 和真实空态，禁止为展示向正式 `road9` 注入伪冲突。

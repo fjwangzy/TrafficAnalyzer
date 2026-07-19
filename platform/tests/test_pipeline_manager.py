@@ -1,9 +1,11 @@
 import asyncio
 import contextlib
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from app.core.config import settings
 from app.services.pipeline_manager import PipelineInstance, PipelineManager, PipelineStatus
 
 
@@ -29,6 +31,15 @@ class PipelineManagerTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_start_pipeline_builds_detector_command_and_environment(self):
         captured = {}
+        temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_dir.cleanup)
+        project_root = Path(temp_dir.name)
+        video_path = project_root / "test_videos/inter_xqh/demo.mp4"
+        telemetry_path = project_root / "test_videos/mp4new/srt/海右路 0624.txt"
+        video_path.parent.mkdir(parents=True)
+        telemetry_path.parent.mkdir(parents=True)
+        video_path.write_bytes(b"test")
+        telemetry_path.write_text("test")
 
         async def fake_exec(*cmd, **kwargs):
             captured["cmd"] = cmd
@@ -38,7 +49,7 @@ class PipelineManagerTest(unittest.IsolatedAsyncioTestCase):
             return _FakeProcess()
 
         manager = PipelineManager(
-            project_root="/project",
+            project_root=project_root,
             kafka_bootstrap="kafka:29092",
             pipeline_python="/opt/pipeline/bin/python",
             frame_stride=12,
@@ -69,7 +80,7 @@ class PipelineManagerTest(unittest.IsolatedAsyncioTestCase):
         self._monitor_task = manager._monitor_task
 
         self.assertEqual(pipeline.status, PipelineStatus.RUNNING)
-        self.assertEqual(captured["cwd"], "/project")
+        self.assertEqual(captured["cwd"], str(project_root))
         self.assertTrue(captured["start_new_session"])
         self.assertEqual(
             captured["cmd"],
@@ -80,12 +91,12 @@ class PipelineManagerTest(unittest.IsolatedAsyncioTestCase):
                 "hydra/job_logging=disabled",
                 "telemetry.enabled=True",
                 "telemetry.source=srt",
-                "telemetry.file_path='test_videos/mp4new/srt/海右路 0624.txt'",
+                f"telemetry.file_path='{telemetry_path.resolve()}'",
                 "telemetry.time_offset_sec=12.25",
                 "telemetry.sync_tolerance_sec=2.5",
             ),
         )
-        self.assertEqual(captured["env"]["VIDEO_SRC"], "test_videos/inter_xqh/demo.mp4")
+        self.assertEqual(captured["env"]["VIDEO_SRC"], str(video_path.resolve()))
         self.assertEqual(captured["env"]["ROADS_JSON"], "")
         self.assertEqual(captured["env"]["TOPIC_NAME"], "uav_statistics_10")
         self.assertEqual(captured["env"]["CAMERA_ID"], "10")
@@ -102,6 +113,49 @@ class PipelineManagerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(captured["env"]["VIDEO_PORT"], "8101")
         self.assertEqual(captured["env"]["FRAME_STRIDE"], "12")
         self.assertEqual(captured["env"]["KAFKA_BOOTSTRAP"], "kafka:29092")
+
+    def test_rtsp_and_roads_sources_use_explicit_allowlists(self):
+        temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_dir.cleanup)
+        project_root = Path(temp_dir.name)
+        roads_root = project_root / "generated-roads"
+        roads_root.mkdir()
+        roads_path = roads_root / "intersection.json"
+        roads_path.write_text("{}")
+        manager = PipelineManager(project_root=project_root)
+
+        with (
+            patch.object(settings, "uav_rtsp_allowed_hosts", ["camera.uat.internal"]),
+            patch.object(settings, "pipeline_roads_roots", [str(roads_root)]),
+        ):
+            self.assertEqual(
+                manager._validate_video_source("rtsp://camera.uat.internal/live"),
+                "rtsp://camera.uat.internal/live",
+            )
+            with self.assertRaisesRegex(ValueError, "RTSP host"):
+                manager._validate_video_source("rtsp://evil.example/live")
+            self.assertEqual(
+                manager._validate_support_file(
+                    str(roads_path), (".json",), roots=manager._roads_roots()
+                ),
+                str(roads_path.resolve()),
+            )
+
+    def test_pipeline_output_never_exposes_rtsp_credentials_or_query_secret(self):
+        pipeline = PipelineInstance(
+            pipeline_id="pipe-redacted",
+            drone_id="drone_1",
+            intersection_id="INT_camera_1",
+            video_src="rtsps://operator:secret@camera.uat.internal:8554/live?token=private",
+            roads_json="",
+            topic_name="uav_statistics_10",
+            camera_id=10,
+        )
+
+        self.assertEqual(
+            pipeline.to_dict()["video_src"],
+            "rtsps://camera.uat.internal:8554/live",
+        )
 
     def test_zero_return_code_marks_pipeline_stopped_not_error(self):
         manager = PipelineManager(project_root="/project")

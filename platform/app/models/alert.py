@@ -1,7 +1,7 @@
 """Alert persistence model."""
 from datetime import datetime
 
-from sqlalchemy import DateTime, JSON, String, Text
+from sqlalchemy import JSON, DateTime, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base

@@ -26,6 +26,30 @@ class _MemoryAlertStore:
 
 
 class AlertEnginePersistenceTest(unittest.IsolatedAsyncioTestCase):
+    async def test_source_event_id_prevents_alert_recreation_after_acknowledgement(self):
+        store = _MemoryAlertStore()
+        engine = AlertEngine(_RecordingWS(), alert_store=store)
+
+        await engine._create_alert(
+            "INT_camera_1",
+            alert_type="conflict",
+            severity="P1",
+            title="机非冲突",
+            event_id="conflict-message-1",
+        )
+        alert_id = next(iter(engine.alerts))
+        await engine.acknowledge_alert(alert_id, "operator")
+        await engine._create_alert(
+            "INT_camera_1",
+            alert_type="conflict",
+            severity="P1",
+            title="机非冲突重放",
+            event_id="conflict-message-1",
+        )
+
+        self.assertEqual(len(engine.alerts), 1)
+        self.assertEqual(len(store.records), 1)
+
     async def test_alerts_are_saved_loaded_and_acknowledged_through_store(self):
         store = _MemoryAlertStore()
         first_engine = AlertEngine(_RecordingWS(), alert_store=store)

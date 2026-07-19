@@ -19,7 +19,7 @@ import numpy as np
 
 from elements.FrameElement import FrameElement
 from elements.VideoEndBreakElement import VideoEndBreakElement
-from utils_local.homography import is_valid_homography, pixel_to_world, undistort_points
+from utils_local.homography import is_valid_homography, undistort_points
 from utils_local.motion_compensation import pixel_to_world_compensated
 
 logger = logging.getLogger(__name__)

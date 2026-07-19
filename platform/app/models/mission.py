@@ -7,13 +7,11 @@ from datetime import UTC, datetime
 from sqlalchemy import (
     JSON,
     Boolean,
-    Date,
     DateTime,
     ForeignKey,
     Integer,
     String,
     Text,
-    Time,
     UniqueConstraint,
     func,
 )
@@ -265,9 +263,14 @@ class MessageInbox(Base):
     offset: Mapped[int] = mapped_column(Integer, nullable=False)
     payload_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     status: Mapped[str] = mapped_column(String(24), nullable=False, default="processed")
+    dispatch_status: Mapped[str] = mapped_column(String(24), nullable=False, default="pending")
+    dispatch_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    last_dispatch_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_dispatch_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     fact_references: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     processed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    dispatched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     __table_args__ = (
         UniqueConstraint("topic", "partition", "offset", name="uq_uav_inbox_topic_partition_offset"),

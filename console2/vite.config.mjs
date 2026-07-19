@@ -1,5 +1,6 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import { bundleBudgetPlugin, manualChunks } from './src/config/build.js'
 
 export default defineConfig({
   optimizeDeps: {
@@ -28,7 +29,13 @@ export default defineConfig({
       clientFiles: ["./src/main.jsx"],
     },
   },
-  plugins: [react()],
+  plugins: [react(), bundleBudgetPlugin()],
+  build: {
+    chunkSizeWarningLimit: 750,
+    rollupOptions: {
+      output: { manualChunks },
+    },
+  },
   test: {
     environment: "jsdom",
     setupFiles: ["./src/test-setup.js"],

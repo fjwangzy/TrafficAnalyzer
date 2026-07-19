@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 import logging
 import os
@@ -15,7 +14,7 @@ from typing import Protocol
 from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from sqlalchemy import delete, func, or_, select, text
+from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -39,7 +38,6 @@ from app.schemas.mission import (
     SourcePairUpdate,
 )
 from app.services.road_context import RoadContext
-
 
 logger = logging.getLogger(__name__)
 

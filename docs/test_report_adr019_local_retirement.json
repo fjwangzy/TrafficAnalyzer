@@ -1,6 +1,6 @@
 {
   "schema_version": "uav.adr019-local-retirement/v1",
-  "generated_at": "2026-07-16T11:38:45.214089Z",
+  "generated_at": "2026-07-17T06:36:18.069099Z",
   "scope": "local_development_only",
   "containers": {
     "running": [
@@ -35,7 +35,7 @@
   },
   "database": {
     "name": "road9",
-    "alembic_revision": "20260716_0011",
+    "alembic_revision": "20260717_0013",
     "timescaledb_version": "2.28.2",
     "hypertables": 5,
     "hypertable_names": [
@@ -91,7 +91,7 @@
       "uav_visual_lane_bindings"
     ],
     "admin_rows": 1,
-    "business_rows": 81509,
+    "business_rows": 106871,
     "legacy_database_count": 0,
     "migration_isolation_tables": []
   },
@@ -157,6 +157,7 @@
       "traffic_hls_data",
       "traffic_kafka_data",
       "traffic_pipeline_output_data",
+      "traffic_pipeline_spool_data",
       "traffic_road9_data",
       "traffic_survey_data"
     ]

@@ -1,6 +1,9 @@
 """Traffic Platform Monolith — unified configuration."""
-from pydantic_settings import BaseSettings, SettingsConfigDict
 from functools import lru_cache
+from typing import Literal
+
+from pydantic import model_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -18,6 +21,7 @@ class Settings(BaseSettings):
     api_prefix: str = "/api/v1"
     service_port: int = 8000
     cors_origins: list[str] = ["*"]
+    deployment_mode: Literal["local", "uat", "production"] = "local"
 
     # ── PostgreSQL Database ──
     db_host: str = "localhost"
@@ -40,6 +44,11 @@ class Settings(BaseSettings):
     jwt_secret_key: str = "your-secret-key-change-in-production"
     jwt_algorithm: str = "HS256"
     jwt_access_token_expire_minutes: int = 30
+    media_cookie_name: str = "uav_media_session"
+    media_cookie_secure: bool = False
+    media_cookie_samesite: Literal["strict"] = "strict"
+    media_cookie_path: str = "/"
+    bootstrap_admin_password: str = "admin123"
 
     # ── Alert Rules ──
     queue_overflow_threshold_m: float = 80.0
@@ -52,6 +61,10 @@ class Settings(BaseSettings):
     pipeline_video_base: str = "http://traffic_analyzer_camera_1:8100/video"
     pipeline_python: str = "python"
     pipeline_frame_stride: int | None = None
+    pipeline_max_active: int = 4
+    video_max_active_streams: int = 4
+    pipeline_roads_roots: list[str] = ["configs", "/calibration/lane_annotations"]
+    uav_rtsp_allowed_hosts: list[str] = ["localhost", "127.0.0.1"]
 
     # ── S9 Mission orchestration ──
     uav_local_asset_roots: list[str] = ["test_videos", "/project/test_videos"]
@@ -81,8 +94,30 @@ class Settings(BaseSettings):
     def survey_upload_max_bytes(self) -> int:
         return self.survey_max_upload_mb * 1024 * 1024
 
+    @model_validator(mode="after")
+    def reject_insecure_deployment_defaults(self):
+        if self.deployment_mode in {"uat", "production"}:
+            insecure_jwt = {
+                "",
+                "your-secret-key-change-in-production",
+                "local-road9-target-change-before-production",
+            }
+            if self.db_password in {"", "traffic123"}:
+                raise ValueError("uat/production requires a non-default DB password")
+            if self.jwt_secret_key in insecure_jwt:
+                raise ValueError("uat/production requires a non-default JWT secret")
+            if self.bootstrap_admin_password in {"", "admin123"}:
+                raise ValueError("uat/production requires a non-default bootstrap admin password")
+            if not self.media_cookie_secure:
+                raise ValueError("uat/production requires secure media cookies")
+            if "*" in self.cors_origins:
+                raise ValueError("uat/production requires an explicit CORS origin allowlist")
+            if "*" in self.uav_rtsp_allowed_hosts:
+                raise ValueError("uat/production does not allow wildcard RTSP hosts")
+        return self
 
-@lru_cache()
+
+@lru_cache
 def get_settings() -> Settings:
     """Get cached settings instance."""
     return Settings()

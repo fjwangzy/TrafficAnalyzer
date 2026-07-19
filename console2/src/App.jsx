@@ -87,6 +87,8 @@ export function App() {
   const [activeTrajectories, setActiveTrajectories] = useState([])
   const [completedTrajectories, setCompletedTrajectories] = useState([])
   const [realtimeConflicts, setRealtimeConflicts] = useState([])
+  const [visibleTrendRows, setVisibleTrendRows] = useState([])
+  const [visibleRestAlerts, setVisibleRestAlerts] = useState([])
   const [lastStatsAt, setLastStatsAt] = useState(0)
   const [lastTelemetryAt, setLastTelemetryAt] = useState(0)
   const [now, setNow] = useState(Date.now())
@@ -95,6 +97,8 @@ export function App() {
   const [videoNonce, setVideoNonce] = useState(0)
   const statsFingerprint = useRef('')
   const telemetryFingerprint = useRef('')
+  const liveRef = useRef(true)
+  const pausedBuffer = useRef({ trendRows: null, telemetry: null, alerts: null, realtime: [] })
 
   const intersectionsQuery = useQuery({ queryKey: ['monitoring-intersections'], queryFn: platformApi.intersections })
   const intersections = Array.isArray(intersectionsQuery.data) ? intersectionsQuery.data : []
@@ -113,11 +117,13 @@ export function App() {
     }
   }, [intersectionId, selectedId, location.pathname, location.search, navigate])
   useEffect(() => {
-    const timer = window.setInterval(() => setNow(Date.now()), 1000)
+    const timer = window.setInterval(() => {
+      if (liveRef.current) setNow(Date.now())
+    }, 1000)
     return () => window.clearInterval(timer)
   }, [])
   useEffect(() => {
-    setLatestStats(null); setTelemetry(null); setActiveTrajectories([]); setCompletedTrajectories([]); setRealtimeConflicts([]); setSelectedEvent(null); setVideoError(false); setVideoRetry(0); setLastStatsAt(0); setLastTelemetryAt(0); statsFingerprint.current = ''; telemetryFingerprint.current = ''
+    setLatestStats(null); setTelemetry(null); setActiveTrajectories([]); setCompletedTrajectories([]); setRealtimeConflicts([]); setVisibleTrendRows([]); setVisibleRestAlerts([]); setSelectedEvent(null); setVideoError(false); setVideoRetry(0); setLastStatsAt(0); setLastTelemetryAt(0); statsFingerprint.current = ''; telemetryFingerprint.current = ''; pausedBuffer.current = { trendRows: null, telemetry: null, alerts: null, realtime: [] }
   }, [selectedId])
   useEffect(() => {
     if (!videoError || videoRetry >= 5) return undefined
@@ -133,20 +139,17 @@ export function App() {
   const pipeline = pipelines.find((item) => item.intersection_id === selectedId && item.status === 'running') || null
   const cameraId = pipeline?.camera_id
   const telemetryQuery = useQuery({ queryKey: ['monitoring-telemetry', cameraId], queryFn: () => platformApi.telemetry(`drone_${cameraId}`), enabled: cameraId != null, refetchInterval: 10_000 })
-  useEffect(() => {
-    const rows = Array.isArray(trendQuery.data) ? trendQuery.data : []
-    const snapshot = rows.at(-1)
+  const applyStatsSnapshot = useCallback((snapshot, merge = false) => {
     if (!snapshot) return
     const fingerprint = JSON.stringify(snapshot)
-    setLatestStats(snapshot)
+    setLatestStats((previous) => merge ? ({ ...(previous || {}), ...snapshot }) : snapshot)
     setActiveTrajectories(Array.isArray(snapshot.active_trajectories) ? snapshot.active_trajectories : [])
     if (fingerprint !== statsFingerprint.current) {
       statsFingerprint.current = fingerprint
       setLastStatsAt(Date.now())
     }
-  }, [trendQuery.data])
-  useEffect(() => {
-    const snapshot = telemetryQuery.data
+  }, [])
+  const applyTelemetrySnapshot = useCallback((snapshot) => {
     if (!snapshot || snapshot.error) return
     const fingerprint = JSON.stringify(snapshot)
     setTelemetry(snapshot)
@@ -154,7 +157,32 @@ export function App() {
       telemetryFingerprint.current = fingerprint
       setLastTelemetryAt(Date.now())
     }
-  }, [telemetryQuery.data])
+  }, [])
+  useEffect(() => {
+    const rows = Array.isArray(trendQuery.data) ? trendQuery.data : []
+    const snapshot = rows.at(-1)
+    if (!snapshot) return
+    if (!liveRef.current) {
+      pausedBuffer.current.trendRows = rows
+      return
+    }
+    setVisibleTrendRows(rows)
+    applyStatsSnapshot(snapshot)
+  }, [trendQuery.data, applyStatsSnapshot])
+  useEffect(() => {
+    const rows = Array.isArray(alertsQuery.data) ? alertsQuery.data : []
+    if (!liveRef.current) pausedBuffer.current.alerts = rows
+    else setVisibleRestAlerts(rows)
+  }, [alertsQuery.data])
+  useEffect(() => {
+    const snapshot = telemetryQuery.data
+    if (!snapshot || snapshot.error) return
+    if (!liveRef.current) {
+      pausedBuffer.current.telemetry = snapshot
+      return
+    }
+    applyTelemetrySnapshot(snapshot)
+  }, [telemetryQuery.data, applyTelemetrySnapshot])
   const telemetryDroneIds = [...new Set([
     intersectionQuery.data?.current_drone_id,
     pipeline?.drone_id,
@@ -162,12 +190,9 @@ export function App() {
     cameraId != null ? `drone_${cameraId}` : null,
   ].filter(Boolean))]
   const droneId = telemetry?.drone_id || telemetryDroneIds[0] || ''
-  const onRealtimeMessage = useCallback((message) => {
+  const applyRealtimeMessage = useCallback((message) => {
     if (message.type === 'uav_stats') {
-      statsFingerprint.current = JSON.stringify(message.data)
-      setLatestStats((previous) => ({ ...(previous || {}), ...message.data }))
-      setActiveTrajectories(Array.isArray(message.data.active_trajectories) ? message.data.active_trajectories : [])
-      setLastStatsAt(Date.now())
+      applyStatsSnapshot(message.data, true)
     } else if (message.type === 'uav_track_complete') {
       setCompletedTrajectories((items) => [...items.slice(-198), message.data])
     } else if (message.type === 'uav_conflict') {
@@ -177,11 +202,16 @@ export function App() {
       const alert = normalizeAlert(message.data)
       setRealtimeConflicts((items) => [alert, ...items.filter((item) => item.id !== alert.id)].slice(0, 20))
     } else if (message.type === 'uav_telemetry') {
-      telemetryFingerprint.current = JSON.stringify(message.data)
-      setTelemetry(message.data)
-      setLastTelemetryAt(Date.now())
+      applyTelemetrySnapshot(message.data)
     }
-  }, [])
+  }, [applyStatsSnapshot, applyTelemetrySnapshot])
+  const onRealtimeMessage = useCallback((message) => {
+    if (!liveRef.current) {
+      pausedBuffer.current.realtime = [...pausedBuffer.current.realtime.slice(-499), message]
+      return
+    }
+    applyRealtimeMessage(message)
+  }, [applyRealtimeMessage])
   const wsStatus = useWebSocket({ channels: [...intersectionChannels(selectedId), ...alertChannels(selectedId), ...telemetryDroneIds.flatMap(telemetryChannels)], onMessage: onRealtimeMessage, enabled: Boolean(selectedId) })
 
   const setQueryValue = (key, value) => {
@@ -191,7 +221,7 @@ export function App() {
   }
   const selectIntersection = (id) => setQueryValue('intersection_id', id)
   const selectView = (view) => setQueryValue('view', view)
-  const restAlerts = Array.isArray(alertsQuery.data) ? alertsQuery.data.filter((item) => !selectedId || item.intersection_id === selectedId).map(normalizeAlert) : []
+  const restAlerts = visibleRestAlerts.filter((item) => !selectedId || item.intersection_id === selectedId).map(normalizeAlert)
   const events = useMemo(() => {
     const seen = new Set()
     return [...realtimeConflicts, ...restAlerts].filter((event) => event.id && !seen.has(event.id) && seen.add(event.id)).slice(0, 20)
@@ -201,7 +231,7 @@ export function App() {
   }, [events, selectedEvent])
   const filteredEvents = eventFilter === 'all' ? events : events.filter((event) => event.level === eventFilter)
 
-  const statsRows = Array.isArray(trendQuery.data) ? trendQuery.data : []
+  const statsRows = visibleTrendRows
   const trendData = statsRows.map((row, index) => ({ time: eventTime(row.timestamp || row.time || Date.now() - (statsRows.length - index) * 300_000).slice(0, 5), value: asNumber(row.congestion_index ?? row.cars_amount ?? row.cars ?? row.total_vehicles) ?? 0 }))
   const flowData = statsRows.slice(-6).map((row, index) => ({ time: eventTime(row.timestamp || row.time || Date.now() - (6 - index) * 300_000).slice(0, 5), car: asNumber(row.motor_count ?? row.cars_amount ?? row.cars) ?? 0, truck: asNumber(row.truck_count) ?? 0 }))
   const worldTrajectories = [...activeTrajectories, ...completedTrajectories].filter((item) => Array.isArray(item?.trajectory_world_m) && item.trajectory_world_m.length)
@@ -226,7 +256,26 @@ export function App() {
   const mainIsVideo = primaryView !== 'bev'
   const monitoringError = intersectionsQuery.error || pipelinesQuery.error || trendQuery.error || alertsQuery.error
   const selectedRaw = selectedEvent?.raw || {}
-  const timestamp = new Date().toLocaleTimeString('zh-CN', { hour12: false })
+  const timestamp = new Date(now).toLocaleTimeString('zh-CN', { hour12: false })
+  const toggleLive = () => {
+    if (liveRef.current) {
+      liveRef.current = false
+      setLive(false)
+      return
+    }
+    liveRef.current = true
+    const buffered = pausedBuffer.current
+    if (buffered.trendRows) {
+      setVisibleTrendRows(buffered.trendRows)
+      applyStatsSnapshot(buffered.trendRows.at(-1))
+    }
+    if (buffered.alerts) setVisibleRestAlerts(buffered.alerts)
+    if (buffered.telemetry) applyTelemetrySnapshot(buffered.telemetry)
+    buffered.realtime.forEach(applyRealtimeMessage)
+    pausedBuffer.current = { trendRows: null, telemetry: null, alerts: null, realtime: [] }
+    setNow(Date.now())
+    setLive(true)
+  }
 
   return <ConsoleFrame pageTitle='实时监测' immersive>
     <h1 className='sr-only'>实时监测</h1>
@@ -285,6 +334,6 @@ export function App() {
       <div className='event-list'>{alertsQuery.isLoading && !events.length ? <div className='monitor-empty'>正在加载事件…</div> : filteredEvents.length ? filteredEvents.map((event) => <button key={event.id} className={`event-card ${event.level} ${selectedEvent?.id === event.id ? 'selected' : ''}`} onClick={() => setSelectedEvent(event)}><span className='event-icon'><EventIcon type={event.type} /></span><span className='event-copy'><strong>{event.title}</strong><small>{event.detail}</small><span>{event.metric}</span></span><time>{event.time}</time></button>) : <div className='monitor-empty'>当前路口暂无实时事件</div>}</div>
     </section>
 
-    <section className='timeline'><div className='timeline-controls'><button onClick={() => setLive(!live)}>{live ? <Pause size={15} weight='fill' /> : <Play size={15} weight='fill' />}</button><strong>{live ? '实时' : '暂停观察'}</strong><span>{timestamp}</span></div><div className='timeline-track'>{Array.from({ length: 42 }).map((_, index) => <i key={index} className={events[index % Math.max(events.length,1)]?.level || ''} />)}<div className='playhead' style={{ left: live ? '92%' : '68%' }} /></div><div className='timeline-range'><span>-30m</span><span>-20m</span><span>-10m</span><span>-5m</span><span>现在</span></div></section>
+    <section className='timeline'><div className='timeline-controls'><button aria-label={live ? '暂停实时数据' : '恢复实时数据'} onClick={toggleLive}>{live ? <Pause size={15} weight='fill' /> : <Play size={15} weight='fill' />}</button><strong>{live ? '实时' : '数据已冻结'}</strong><span>{timestamp}</span></div><div className='timeline-track'>{Array.from({ length: 42 }).map((_, index) => <i key={index} className={events[index % Math.max(events.length,1)]?.level || ''} />)}<div className='playhead' style={{ left: live ? '92%' : '68%' }} /></div><div className='timeline-range'><span>-30m</span><span>-20m</span><span>-10m</span><span>-5m</span><span>现在</span></div></section>
   </ConsoleFrame>
 }

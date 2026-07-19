@@ -68,7 +68,7 @@ import { RouterApp } from './RouterApp'
 function open(path) {
   window.history.pushState({}, '', path)
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 }, mutations: { retry: false } } })
-  return render(<QueryClientProvider client={queryClient}><RouterApp /></QueryClientProvider>)
+  return { ...render(<QueryClientProvider client={queryClient}><RouterApp /></QueryClientProvider>), queryClient }
 }
 
 function mockSuccessfulApis() {
@@ -129,6 +129,28 @@ describe('Console2 live module migration', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /机非冲突风险升高/ }))
     expect(screen.queryByText('AI 事件研判')).not.toBeInTheDocument()
+  })
+
+  it('freezes visible REST, WebSocket, and clock updates while paused then restores them in order', async () => {
+    const { queryClient } = open('/monitoring?intersection_id=INT-1')
+    expect((await screen.findAllByText('20')).length).toBeGreaterThan(0)
+
+    fireEvent.click(screen.getByRole('button', { name: '暂停实时数据' }))
+    const frozenClock = document.querySelector('.timeline-controls span').textContent
+
+    act(() => liveMocks.wsCallback({ type: 'uav_stats', data: { cars: 842, congestion_index: 6.3 } }))
+    liveMocks.api.intersectionStats.mockResolvedValueOnce([{ time: '2026-07-14T10:05:00Z', congestion_index: 5.1, cars: 30 }])
+    await act(async () => queryClient.refetchQueries({ queryKey: ['monitoring-trend', 'INT-1'] }))
+    await act(async () => new Promise((resolve) => window.setTimeout(resolve, 1_100)))
+
+    expect(screen.queryByText('842')).not.toBeInTheDocument()
+    expect(screen.queryByText('30')).not.toBeInTheDocument()
+    expect((screen.getAllByText('20')).length).toBeGreaterThan(0)
+    expect(document.querySelector('.timeline-controls span')).toHaveTextContent(frozenClock)
+
+    fireEvent.click(screen.getByRole('button', { name: '恢复实时数据' }))
+    expect(await screen.findByText('842')).toBeInTheDocument()
+    expect(screen.queryByText('30')).not.toBeInTheDocument()
   })
 
   it('auto-collapses translucent monitoring side panels and lets operators lock them open', async () => {

@@ -4,18 +4,16 @@ import logging
 import os
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from fastapi import Depends
 
 from app.core.database import get_db
 from app.models.mission import LaneAnnotationTaskRecord, RoadContextSnapshot, VisualLaneBinding
 from app.models.survey import SurveyFrame, SurveyTask
 from app.services.survey_service import SurveyService
-
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +40,7 @@ def _load_calibration_db(path: str) -> dict:
     """Load calibration database JSON."""
     try:
         if os.path.exists(path):
-            with open(path, "r") as f:
+            with open(path) as f:
                 return json.load(f)
     except Exception as e:
         logger.error(f"Failed to load calibration DB: {e}")

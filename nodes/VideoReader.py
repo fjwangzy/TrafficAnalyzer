@@ -19,12 +19,12 @@ class VideoReader:
         self.video_source = f"Processing of {self.video_pth}"
         assert (
             os.path.isfile(self.video_pth)
-            or type(self.video_pth) == int
+            or isinstance(self.video_pth, int)
             or "://" in self.video_pth
         ), f"VideoReader| 文件 {self.video_pth} 未找到"
 
         self.stream = cv2.VideoCapture(self.video_pth)
-        self._seekable_file = type(self.video_pth) != int and "://" not in str(self.video_pth)
+        self._seekable_file = not isinstance(self.video_pth, int) and "://" not in str(self.video_pth)
         self._total_source_frames = (
             int(self.stream.get(cv2.CAP_PROP_FRAME_COUNT)) if self._seekable_file else 0
         )
@@ -46,8 +46,8 @@ class VideoReader:
         self.telemetry_subscriber = None
         if telemetry_config and telemetry_config.get("enabled", False):
             source = telemetry_config.get("source", "mqtt")
-            try:
-                if source == "file":
+            if source == "file":
+                try:
                     from services.TelemetryFileReader import TelemetryFileReader
                     file_path = telemetry_config.get("file_path", "")
                     sync_tol = telemetry_config.get("sync_tolerance_sec", 0.5)
@@ -55,7 +55,10 @@ class VideoReader:
                     self.telemetry_subscriber = TelemetryFileReader(file_path, sync_tol, time_offset)
                     self.telemetry_subscriber.start()
                     logger.info(f"VideoReader: 文件遥测加载已启动 ({file_path}, offset={time_offset}s)")
-                elif source == "srt":
+                except Exception as exc:
+                    raise RuntimeError("VideoReader: file telemetry initialization failed") from exc
+            elif source == "srt":
+                try:
                     from services.SrtTelemetryParser import SrtTelemetryParser
                     file_path = telemetry_config.get("file_path", "")
                     sync_tol = telemetry_config.get("sync_tolerance_sec", 0.5)
@@ -63,16 +66,24 @@ class VideoReader:
                     self.telemetry_subscriber = SrtTelemetryParser(file_path, sync_tol, time_offset)
                     self.telemetry_subscriber.start()
                     logger.info(f"VideoReader: SRT遥测加载已启动 ({file_path}, offset={time_offset}s)")
-                else:
+                except Exception as exc:
+                    raise RuntimeError("VideoReader: SRT telemetry initialization failed") from exc
+            elif source == "mqtt":
+                try:
                     from services.TelemetrySubscriber import TelemetrySubscriber
                     self.telemetry_subscriber = TelemetrySubscriber(telemetry_config)
                     self.telemetry_subscriber.start()
                     logger.info("VideoReader: MQTT遥测订阅已启动")
-            except Exception as e:
-                logger.warning(f"VideoReader: 遥测启动失败: {e}")
+                except Exception as exc:
+                    raise RuntimeError("VideoReader: MQTT telemetry initialization failed") from exc
+            else:
+                raise ValueError(f"VideoReader: unsupported telemetry source: {source}")
+
+            if source in {"file", "srt"} and not self.telemetry_subscriber.is_connected:
+                raise RuntimeError(f"VideoReader: {source} telemetry contains no records")
 
         # 设置处理摄像机视频时的宽度和高度（输入为int类型的摄像机编号）
-        if type(self.video_pth) == int:
+        if isinstance(self.video_pth, int):
             self.stream.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
             self.stream.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
 
@@ -170,7 +181,7 @@ class VideoReader:
             source_frame_number = next_frame_number
 
             # 计算时间戳（如果从视频或摄像机提取，从0秒开始）
-            if type(self.video_pth) == int or "://" in self.video_pth:
+            if isinstance(self.video_pth, int) or "://" in self.video_pth:
                 # 从摄像机：
                 if source_frame_number == 1:
                     self.first_timestamp = time.time()

@@ -9,10 +9,21 @@ from datetime import UTC, datetime
 
 from sqlalchemy import func, select
 
-from app.models.enforcement import EnforcementClue, EnforcementReviewAudit, EnforcementRule, EnforcementZone
+from app.models.enforcement import (
+    EnforcementClue,
+    EnforcementReviewAudit,
+    EnforcementRule,
+    EnforcementZone,
+)
 from app.models.survey import AiEvent, AuditLog, EvidenceItem, EvidencePackage, RuleVersion
-from app.schemas.enforcement import ClueIngest, ClueReview, RuleCreate, RuleUpdate, ZoneCreate, ZoneUpdate
-
+from app.schemas.enforcement import (
+    ClueIngest,
+    ClueReview,
+    RuleCreate,
+    RuleUpdate,
+    ZoneCreate,
+    ZoneUpdate,
+)
 
 SOURCE_SYSTEM = "uav_traffic_analyzer_ai"
 

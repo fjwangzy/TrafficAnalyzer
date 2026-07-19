@@ -3,7 +3,6 @@ from pathlib import Path
 
 import pytest
 
-
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "validate_i6_target_stack.py"
 SPEC = importlib.util.spec_from_file_location("validate_i6_target_stack", SCRIPT)

@@ -3,7 +3,6 @@ from pathlib import Path
 
 import pytest
 
-
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "validate_adr019_local_retirement.py"
 SPEC = importlib.util.spec_from_file_location("validate_adr019_local_retirement", SCRIPT)
@@ -48,5 +47,6 @@ def test_canonical_topic_check_ignores_kafka_internal_topics():
 
 def test_live_retirement_gate_tracks_current_schema_head():
     source = SCRIPT.read_text(encoding="utf-8")
-    assert 'revision == "20260716_0011"' in source
+    assert 'revision == _current_schema_head()' in source
+    assert module._current_schema_head().startswith("2026")
     assert "business_rows == 0" not in source

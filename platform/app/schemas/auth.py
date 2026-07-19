@@ -1,7 +1,7 @@
 """Authentication schemas."""
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, model_validator
-from typing import Optional
 from datetime import datetime
+
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, model_validator
 
 
 class UserBase(BaseModel):
@@ -53,6 +53,6 @@ class Token(BaseModel):
 
 class TokenData(BaseModel):
     """Token payload data."""
-    user_id: Optional[int] = None
-    username: Optional[str] = None
-    role: Optional[str] = None
+    user_id: int | None = None
+    username: str | None = None
+    role: str | None = None

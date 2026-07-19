@@ -14,9 +14,9 @@ platform process.  It is updated from two sources:
 Both update functions are called by ``KafkaConsumerService`` in
 ``platform/app/kafka/consumer.py``.
 """
+import logging
 import math
 import time
-import logging
 from collections import deque
 from copy import deepcopy
 

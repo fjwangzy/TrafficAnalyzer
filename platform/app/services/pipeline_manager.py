@@ -22,14 +22,17 @@ Deployment modes
 import asyncio
 import logging
 import os
+import re
 import signal
 import time
 import uuid
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
+from app.core.config import settings
 from app.models.drone_store import assign_drone_to_intersection
 
 logger = logging.getLogger(__name__)
@@ -44,7 +47,19 @@ def _hydra_string(value: str) -> str:
     return f"'{escaped}'"
 
 
-class PipelineStatus(str, Enum):
+def redact_video_source(value: str) -> str:
+    """Return a client/audit-safe source without RTSP credentials or query secrets."""
+    parsed = urlsplit(value)
+    if parsed.scheme.lower() not in {"rtsp", "rtsps"} or not parsed.hostname:
+        return value
+    host = parsed.hostname
+    if ":" in host and not host.startswith("["):
+        host = f"[{host}]"
+    port = f":{parsed.port}" if parsed.port is not None else ""
+    return f"{parsed.scheme.lower()}://{host}{port}{parsed.path}"
+
+
+class PipelineStatus(StrEnum):
     PENDING = "pending"
     RUNNING = "running"
     STOPPED = "stopped"
@@ -83,7 +98,7 @@ class PipelineInstance:
             "pipeline_id": self.pipeline_id,
             "drone_id": self.drone_id,
             "intersection_id": self.intersection_id,
-            "video_src": self.video_src,
+            "video_src": redact_video_source(self.video_src),
             "roads_json": self.roads_json,
             "topic_name": self.topic_name,
             "camera_id": self.camera_id,
@@ -145,6 +160,50 @@ class PipelineManager:
         self._next_video_port = 8101  # 8100 reserved for manually-started pipelines
         self._monitor_task: asyncio.Task | None = None
 
+    def _resolve_local_asset(self, value: str, *, roots: tuple[Path, ...]) -> str:
+        candidate = Path(value)
+        resolved = (self._root / candidate).resolve() if not candidate.is_absolute() else candidate.resolve()
+        if not any(root == resolved or root in resolved.parents for root in roots):
+            raise ValueError("pipeline source path is outside the configured allowlist")
+        if not resolved.is_file() or not os.access(resolved, os.R_OK):
+            raise ValueError("pipeline source file is missing or unreadable")
+        return str(resolved)
+
+    def _asset_roots(self) -> tuple[Path, ...]:
+        return tuple(
+            (self._root / value).resolve() if not Path(value).is_absolute() else Path(value).resolve()
+            for value in settings.uav_local_asset_roots
+        )
+
+    def _roads_roots(self) -> tuple[Path, ...]:
+        return tuple(
+            (self._root / value).resolve() if not Path(value).is_absolute() else Path(value).resolve()
+            for value in settings.pipeline_roads_roots
+        )
+
+    def _validate_video_source(self, value: str) -> str:
+        parsed = urlsplit(value)
+        if parsed.scheme:
+            if parsed.scheme.lower() not in {"rtsp", "rtsps"} or not parsed.hostname:
+                raise ValueError("video source must be an allowlisted local file or rtsp/rtsps URL")
+            allowed_hosts = {host.lower() for host in settings.uav_rtsp_allowed_hosts}
+            if parsed.hostname.lower() not in allowed_hosts:
+                raise ValueError("RTSP host is outside the configured allowlist")
+            return value
+        return self._resolve_local_asset(value, roots=self._asset_roots())
+
+    def _validate_support_file(self, value: str | None, suffixes: tuple[str, ...], *, roots: tuple[Path, ...]) -> str | None:
+        if not value:
+            return value
+        resolved = self._resolve_local_asset(value, roots=roots)
+        if Path(resolved).suffix.lower() not in suffixes:
+            raise ValueError(f"pipeline support file must use one of: {', '.join(suffixes)}")
+        return resolved
+
+    def _ensure_capacity(self) -> None:
+        if self.get_active_count() >= settings.pipeline_max_active:
+            raise ValueError("pipeline concurrency limit reached")
+
     # ── Public API ──
 
     def register_pipeline(
@@ -163,6 +222,24 @@ class PipelineManager:
         outside the Platform container (where PyTorch dependencies may
         not be available).
         """
+        self._ensure_capacity()
+        video_src = self._validate_video_source(video_src)
+        roads_json = self._validate_support_file(
+            roads_json, (".json",), roots=self._roads_roots()
+        ) or ""
+        if camera_id is not None and not 1 <= camera_id <= 65535:
+            raise ValueError("camera_id must be between 1 and 65535")
+        if video_port is not None and not 1024 <= video_port <= 65535:
+            raise ValueError("video_port must be between 1024 and 65535")
+        if topic_name is not None and not re.fullmatch(r"uav_statistics_[A-Za-z0-9._-]+", topic_name):
+            raise ValueError("topic_name must be a canonical uav_statistics topic")
+        if any(
+            (camera_id is not None and item.camera_id == camera_id)
+            or (video_port is not None and item.video_port == video_port)
+            for item in self._pipelines.values()
+            if item.status == PipelineStatus.RUNNING
+        ):
+            raise ValueError("camera_id or video_port is already registered")
         pipeline_id = f"pipe-{uuid.uuid4().hex[:8]}"
         cid = camera_id if camera_id is not None else self._next_camera_id
         if camera_id is None:
@@ -225,6 +302,16 @@ class PipelineManager:
         Returns:
             The created PipelineInstance.
         """
+        self._ensure_capacity()
+        video_src = self._validate_video_source(video_src)
+        roads_json = self._validate_support_file(
+            roads_json, (".json",), roots=self._roads_roots()
+        ) or ""
+        telemetry_file_path = self._validate_support_file(
+            telemetry_file_path,
+            (".srt", ".json", ".txt"),
+            roots=self._asset_roots(),
+        )
         pipeline_id = f"pipe-{uuid.uuid4().hex[:8]}"
         camera_id = self._next_camera_id
         self._next_camera_id += 1
@@ -253,7 +340,7 @@ class PipelineManager:
         env = {
             **os.environ,
             "VIDEO_SRC": video_src,
-            "ROADS_JSON": str(self._root / roads_json) if roads_json else "",
+            "ROADS_JSON": roads_json,
             "TOPIC_NAME": topic_name,
             "CAMERA_ID": str(camera_id),
             "DRONE_ID": drone_id,
@@ -346,7 +433,7 @@ class PipelineManager:
                     pipeline.process.terminate()
                 try:
                     await asyncio.wait_for(pipeline.process.wait(), timeout=10)
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     logger.warning(f"Pipeline {pipeline_id} did not exit, sending SIGKILL")
                     try:
                         os.killpg(pipeline.process.pid, signal.SIGKILL)

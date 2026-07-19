@@ -10,7 +10,6 @@ from app.core.database import async_session_maker
 from app.models.mission import RoadContextSnapshot
 from app.services.dashboard_read_model import DashboardReadModel
 
-
 pytestmark = pytest.mark.skipif(
     os.environ.get("RUN_PG_INTEGRATION") != "1",
     reason="requires an explicitly selected local PostgreSQL/TimescaleDB database",

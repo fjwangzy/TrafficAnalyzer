@@ -10,6 +10,9 @@ import {
   Segmented, StatusBadge, WorkflowSteps,
 } from '../components/Common'
 import { apiErrorMessage, platformApi } from '../lib/api'
+import {
+  geometrySegments, imageContainViewport, metricSegmentLabel,
+} from '../lib/surveyGeometry'
 import { useAppState } from '../state/AppState'
 
 const surveySteps = ['任务核验', '采集质检', '点线面量算', '技术复核', '报告交付']
@@ -21,6 +24,14 @@ const checklistLabels = {
   device_ready: '无人机、相机、遥测与时间同步可用',
   storage_ready: '本地原始材料存储空间充足',
 }
+const reviewChecklist = [
+  ['task_and_location', '任务与位置一致'],
+  ['source_materials', '原始材料引用完整'],
+  ['coordinate_chain', '像素至 ENU 坐标链可追溯'],
+  ['measurements', '量算对象及结果已核验'],
+  ['edit_history', '人工编辑版本完整'],
+  ['quality_status', '量算质量状态已记录'],
+]
 
 const requestKey = (prefix) => `${prefix}-${globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`}`
 
@@ -39,6 +50,7 @@ function useSurveyTask() {
       setTask(await platformApi.surveyTask(id))
       setError('')
     } catch (value) {
+      setTask(null)
       setError(apiErrorMessage(value, '测绘任务加载失败'))
     } finally {
       setLoading(false)
@@ -63,7 +75,21 @@ function LoadingState({ text = '正在读取本地 road9 数据…' }) {
   return <Panel><div className='survey-empty'><span className='survey-spinner' />{text}</div></Panel>
 }
 
-function EvidenceImage({ url, alt, className, imageRef, onLoad, onClick, onDoubleClick }) {
+function SurveyTaskUnavailable({ title, error, onRetry }) {
+  const navigate = useNavigate()
+  return <AppShell pageTitle={title}>
+    <h1 className='sr-only'>{title}</h1>
+    <div className='survey-task-unavailable' role='alert'>
+      <QualityNotice tone='warning' title='任务不可用'>{error || '无法读取任务，请重试或返回任务列表。'}</QualityNotice>
+      <div className='page-actions'>
+        <button className='secondary-button' onClick={() => navigate('/survey')}><ArrowLeft size={15} /> 返回任务列表</button>
+        <button className='primary-button' onClick={onRetry}>重试</button>
+      </div>
+    </div>
+  </AppShell>
+}
+
+function EvidenceImage({ url, alt, className, imageRef, onLoad, onClick, onDoubleClick, onMouseMove, onMouseLeave }) {
   const [source, setSource] = useState('')
   const evidenceId = url?.match(/survey-evidence\/([^/]+)\/content/)?.[1]
   useEffect(() => {
@@ -77,7 +103,7 @@ function EvidenceImage({ url, alt, className, imageRef, onLoad, onClick, onDoubl
     return () => { active = false; if (objectUrl) URL.revokeObjectURL(objectUrl) }
   }, [evidenceId])
   if (!source) return <div className={`evidence-loading ${className || ''}`}>正在校验证据哈希并读取图像…</div>
-  return <img ref={imageRef} src={source} alt={alt} className={className} onLoad={onLoad} onClick={onClick} onDoubleClick={onDoubleClick} />
+  return <img ref={imageRef} src={source} alt={alt} className={className} onLoad={onLoad} onClick={onClick} onDoubleClick={onDoubleClick} onMouseMove={onMouseMove} onMouseLeave={onMouseLeave} />
 }
 
 export function SurveyListPage() {
@@ -111,11 +137,12 @@ export function SurveyListPage() {
 }
 
 export function SurveyPrecheckPage() {
-  const { task, setTask, loading, error } = useSurveyTask()
+  const { task, setTask, loading, error, reload } = useSurveyTask()
   const navigate = useNavigate()
   const { dispatch } = useAppState()
   const [checks, setChecks] = useState(Object.fromEntries(completeChecklist.map((key) => [key, false])))
   if (loading) return <AppShell pageTitle='任务核验'><LoadingState /></AppShell>
+  if (!task) return <SurveyTaskUnavailable title='任务核验' error={error} onRetry={reload} />
   const complete = async () => {
     try {
       const next = await platformApi.surveyAction(task.id, { action: 'complete_precheck', expected_revision: task.revision, checklist: checks }, requestKey('survey-precheck-complete'))
@@ -131,7 +158,7 @@ export function SurveyPrecheckPage() {
 }
 
 export function SurveyCapturePage() {
-  const { task, setTask, loading, reload: reloadTask } = useSurveyTask()
+  const { task, setTask, loading, error, reload: reloadTask } = useSurveyTask()
   const navigate = useNavigate()
   const { dispatch } = useAppState()
   const [batches, setBatches] = useState([])
@@ -169,6 +196,7 @@ export function SurveyCapturePage() {
     return () => window.clearInterval(timer)
   }, [batches, loadBatches])
   if (loading) return <AppShell pageTitle='采集与质量预检'><LoadingState /></AppShell>
+  if (!task) return <SurveyTaskUnavailable title='采集与质量预检' error={error} onRetry={reloadTask} />
   const importAssets = async () => {
     setBusy(true)
     try {
@@ -200,44 +228,102 @@ export function SurveyCapturePage() {
 function MeasurementCanvas({ frame, tool, draft, onPoint, onFinish, measurements, editable }) {
   const imageRef = useRef(null)
   const canvasRef = useRef(null)
+  const [hoverPoint, setHoverPoint] = useState(null)
   const draw = useCallback(() => {
     const image = imageRef.current
     const canvas = canvasRef.current
     if (!image || !canvas || !image.naturalWidth) return
-    canvas.width = image.clientWidth * devicePixelRatio
-    canvas.height = image.clientHeight * devicePixelRatio
+    const pixelRatio = globalThis.devicePixelRatio || 1
+    const viewport = imageContainViewport(image.clientWidth, image.clientHeight, image.naturalWidth, image.naturalHeight)
+    if (!viewport) return
+    canvas.width = image.clientWidth * pixelRatio
+    canvas.height = image.clientHeight * pixelRatio
     canvas.style.width = `${image.clientWidth}px`
     canvas.style.height = `${image.clientHeight}px`
     const context = canvas.getContext('2d')
-    context.scale(devicePixelRatio, devicePixelRatio)
-    const sx = image.clientWidth / image.naturalWidth
-    const sy = image.clientHeight / image.naturalHeight
-    const shapes = [...measurements.map((item) => ({ points: item.image_geometry, type: item.geometry_type, saved: true })), { points: draft, type: tool, saved: false }]
+    context.scale(pixelRatio, pixelRatio)
+    const screenPoint = ([x, y]) => [viewport.offsetX + x * viewport.scale, viewport.offsetY + y * viewport.scale]
+    const draftPoints = editable && draft.length && hoverPoint ? [...draft, hoverPoint] : draft
+    const shapes = [
+      ...measurements.filter((item) => item.frame_id === frame.id).map((item) => ({
+        points: item.image_geometry,
+        metricPoints: item.metric_geometry,
+        type: item.geometry_type,
+        saved: true,
+      })),
+      { points: draftPoints, committedPoints: draft.length, type: tool, saved: false },
+    ]
     shapes.forEach((shape) => {
       if (!shape.points?.length) return
       context.beginPath()
-      shape.points.forEach(([x, y], index) => index ? context.lineTo(x * sx, y * sy) : context.moveTo(x * sx, y * sy))
+      shape.points.forEach((point, index) => {
+        const [x, y] = screenPoint(point)
+        if (index) context.lineTo(x, y)
+        else context.moveTo(x, y)
+      })
       if (['area', 'object'].includes(shape.type) && shape.points.length > 2) context.closePath()
       context.lineWidth = shape.saved ? 2 : 2.5
       context.strokeStyle = shape.saved ? '#20c8d8' : '#f4c95d'
       context.fillStyle = shape.saved ? 'rgba(32,200,216,.12)' : 'rgba(244,201,93,.14)'
-      if (['area', 'object'].includes(shape.type)) context.fill()
+      if (['area', 'object'].includes(shape.type) && (shape.saved || !hoverPoint)) context.fill()
       context.stroke()
-      shape.points.forEach(([x, y]) => { context.beginPath(); context.arc(x * sx, y * sy, 4, 0, Math.PI * 2); context.fillStyle = shape.saved ? '#20c8d8' : '#f4c95d'; context.fill() })
+      shape.points.slice(0, shape.saved ? undefined : shape.committedPoints).forEach((point) => {
+        const [x, y] = screenPoint(point)
+        context.beginPath(); context.arc(x, y, 4, 0, Math.PI * 2)
+        context.fillStyle = shape.saved ? '#20c8d8' : '#f4c95d'; context.fill()
+      })
+      const closeForLabels = shape.saved || Boolean(hoverPoint && ['area', 'object'].includes(shape.type))
+      geometrySegments(shape.points, shape.type, closeForLabels).forEach(([start, end], index) => {
+        const metricStart = shape.metricPoints?.[index]
+        const metricEnd = shape.metricPoints?.[(index + 1) % shape.metricPoints.length]
+        const label = metricStart && metricEnd
+          ? `${Math.hypot(metricEnd[0] - metricStart[0], metricEnd[1] - metricStart[1]).toFixed(2)} m`
+          : metricSegmentLabel(start, end, frame.metric_transform)
+        if (!label) return
+        const [x1, y1] = screenPoint(start)
+        const [x2, y2] = screenPoint(end)
+        const x = (x1 + x2) / 2
+        const y = (y1 + y2) / 2
+        context.font = '600 12px system-ui, sans-serif'
+        context.textAlign = 'center'
+        context.textBaseline = 'middle'
+        const width = context.measureText(label).width + 10
+        context.fillStyle = 'rgba(6, 13, 24, .88)'
+        context.fillRect(x - width / 2, y - 10, width, 20)
+        context.strokeStyle = shape.saved ? '#20c8d8' : '#f4c95d'
+        context.lineWidth = 1
+        context.strokeRect(x - width / 2, y - 10, width, 20)
+        context.fillStyle = '#f7fbff'
+        context.fillText(label, x, y)
+      })
     })
-  }, [draft, measurements, tool])
+  }, [draft, editable, frame.id, frame.metric_transform, hoverPoint, measurements, tool])
   useEffect(() => { draw(); window.addEventListener('resize', draw); return () => window.removeEventListener('resize', draw) }, [draw])
-  const click = (event) => {
-    if (!editable) return
+  const eventPoint = (event) => {
     const image = imageRef.current
     const rect = image.getBoundingClientRect()
-    onPoint([(event.clientX - rect.left) * image.naturalWidth / rect.width, (event.clientY - rect.top) * image.naturalHeight / rect.height])
+    const viewport = imageContainViewport(rect.width, rect.height, image.naturalWidth, image.naturalHeight)
+    if (!viewport) return null
+    const x = event.clientX - rect.left - viewport.offsetX
+    const y = event.clientY - rect.top - viewport.offsetY
+    if (x < 0 || y < 0 || x > viewport.width || y > viewport.height) return null
+    return [x / viewport.scale, y / viewport.scale]
   }
-  return <div className='measure-canvas live-measure-canvas'><EvidenceImage imageRef={imageRef} url={frame.bev_url} alt='由真实关键帧生成的正射量算底图' onLoad={draw} onClick={click} onDoubleClick={editable ? onFinish : undefined} /><canvas ref={canvasRef} aria-hidden='true' /></div>
+  const click = (event) => {
+    if (!editable) return
+    const point = eventPoint(event)
+    if (point) onPoint(point)
+  }
+  const liveLabel = draft.length && hoverPoint ? metricSegmentLabel(draft.at(-1), hoverPoint, frame.metric_transform) : ''
+  return <div className='measure-canvas live-measure-canvas'>
+    <EvidenceImage imageRef={imageRef} url={frame.bev_url} alt='由真实关键帧生成的正射量算底图' onLoad={draw} onClick={click} onDoubleClick={editable ? onFinish : undefined} onMouseMove={editable ? (event) => setHoverPoint(eventPoint(event)) : undefined} onMouseLeave={() => setHoverPoint(null)} />
+    <canvas ref={canvasRef} aria-hidden='true' />
+    <span className='sr-only' aria-live='polite'>{liveLabel ? `当前边长 ${liveLabel}` : ''}</span>
+  </div>
 }
 
 export function SurveyMeasurePage() {
-  const { task, loading } = useSurveyTask()
+  const { task, loading, error, reload: reloadTask } = useSurveyTask()
   const navigate = useNavigate()
   const { dispatch } = useAppState()
   const [frames, setFrames] = useState([])
@@ -255,6 +341,7 @@ export function SurveyMeasurePage() {
   }, [task])
   useEffect(() => { reload().catch((error) => notify(dispatch, 'error', apiErrorMessage(error))) }, [reload, dispatch])
   if (loading) return <AppShell pageTitle='点线面量算'><LoadingState /></AppShell>
+  if (!task) return <SurveyTaskUnavailable title='点线面量算' error={error} onRetry={reloadTask} />
   const editable = ['measuring', 'returned'].includes(task.status)
   const required = tool === 'point' ? 1 : tool === 'line' ? 2 : 3
   const save = async (points = draft) => {
@@ -281,7 +368,7 @@ export function SurveyMeasurePage() {
 }
 
 export function SurveyReviewPage() {
-  const { task, loading } = useSurveyTask()
+  const { task, loading, error, reload } = useSurveyTask()
   const navigate = useNavigate()
   const { dispatch } = useAppState()
   const [frames, setFrames] = useState([])
@@ -289,33 +376,41 @@ export function SurveyReviewPage() {
   const [reasonOpen, setReasonOpen] = useState(false)
   const [reason, setReason] = useState('覆盖或量算结果需重新确认')
   const [returnType, setReturnType] = useState('measurement')
+  const [checks, setChecks] = useState(() => Object.fromEntries(reviewChecklist.map(([key]) => [key, false])))
   useEffect(() => { if (task) Promise.all([platformApi.surveyFrames(task.id, task.selected_batch_id), platformApi.surveyMeasurements(task.id)]).then(([a, b]) => { setFrames(a); setMeasurements(b) }) }, [task])
+  useEffect(() => {
+    setChecks(Object.fromEntries(reviewChecklist.map(([key]) => [key, false])))
+  }, [task?.id])
   if (loading) return <AppShell pageTitle='技术复核'><LoadingState /></AppShell>
+  if (!task) return <SurveyTaskUnavailable title='技术复核' error={error} onRetry={reload} />
   const frame = frames.find((item) => item.has_metric_transform) || frames[0]
+  const reviewComplete = reviewChecklist.every(([key]) => checks[key])
   const act = async (action, payload = {}) => {
     try {
       await platformApi.surveyAction(task.id, { action, expected_revision: task.revision, ...payload }, requestKey(`survey-${action}`))
       navigate(action === 'approve_review' ? `/survey/${task.id}/report` : action === 'return' && returnType === 'capture' ? `/survey/${task.id}/capture` : `/survey/${task.id}/measure`)
     } catch (error) { notify(dispatch, 'error', apiErrorMessage(error, '复核操作失败')) }
   }
-  return <SurveyShell task={task} step={3} title='技术复核' description='逐项对照原始帧、BEV 示意、量算结果和质量边界；通过只表示技术复核，不等同法定事故认定。' actions={<><button className='danger-button' disabled={task.status !== 'pending_review'} onClick={() => setReasonOpen(true)}><X size={15} /> 退回修订/补拍</button><button className='primary-button' disabled={task.status !== 'pending_review'} onClick={() => act('approve_review')}><Check size={15} /> 技术复核通过</button></>}>
-    <div className='review-layout'><Panel title='原始帧与正射图对照'><div className='compare-panes'>{frame ? <><div><span>原始帧 #{frame.frame_number}</span><EvidenceImage url={frame.image_url} alt='真实原始关键帧' /></div><div><span>BEV 量算底图</span><EvidenceImage url={frame.bev_url} alt='真实 BEV 关键帧' /></div></> : <div className='survey-empty'>未找到证据帧</div>}</div></Panel><div className='review-side'><Panel title='复核清单'>{['任务与位置一致', '原始材料引用完整', '像素至 ENU 坐标链可追溯', `量算对象 ${measurements.length} 项`, '人工编辑版本完整', '量算质量状态已记录'].map((item) => <label className='check-row' key={item}><input type='checkbox' defaultChecked /><CheckCircle size={16} weight='fill' />{item}</label>)}</Panel><Panel title='量算结果'>{measurements.map((item) => <InfoRow key={item.id} label={item.category || item.id} value={item.display_value} badge={item.quality_status} />)}</Panel></div></div>
+  return <SurveyShell task={task} step={3} title='技术复核' description='逐项对照原始帧、BEV 示意、量算结果和质量边界；通过只表示技术复核，不等同法定事故认定。' actions={<><button className='danger-button' disabled={task.status !== 'pending_review'} onClick={() => setReasonOpen(true)}><X size={15} /> 退回修订/补拍</button><button className='primary-button' disabled={task.status !== 'pending_review' || !reviewComplete} onClick={() => act('approve_review', { checklist: checks })}><Check size={15} /> 技术复核通过</button></>}>
+    <div className='review-layout'><Panel title='原始帧与正射图对照'><div className='compare-panes'>{frame ? <><div><span>原始帧 #{frame.frame_number}</span><EvidenceImage url={frame.image_url} alt='真实原始关键帧' /></div><div><span>BEV 量算底图</span><EvidenceImage url={frame.bev_url} alt='真实 BEV 关键帧' /></div></> : <div className='survey-empty'>未找到证据帧</div>}</div></Panel><div className='review-side'><Panel title='复核清单'>{reviewChecklist.map(([key, label]) => <label className='check-row' key={key}><input type='checkbox' checked={checks[key]} onChange={(event) => setChecks((current) => ({ ...current, [key]: event.target.checked }))} /><CheckCircle size={16} weight={checks[key] ? 'fill' : 'regular'} />{key === 'measurements' ? `${label} · ${measurements.length} 项` : label}</label>)}</Panel><Panel title='量算结果'>{measurements.map((item) => <InfoRow key={item.id} label={item.category || item.id} value={item.display_value} badge={item.quality_status} />)}</Panel></div></div>
     {reasonOpen && <div className='modal-backdrop'><div className='modal-card'><header><strong>退回测绘成果</strong><button onClick={() => setReasonOpen(false)}><X size={18} /></button></header><label>返工类型<select value={returnType} onChange={(event) => setReturnType(event.target.value)}><option value='capture'>补拍</option><option value='measurement'>修订量算</option></select></label><label>退回原因<textarea value={reason} onChange={(event) => setReason(event.target.value)} /></label><footer><button className='secondary-button' onClick={() => setReasonOpen(false)}>取消</button><button className='danger-button' onClick={() => act('return', { return_type: returnType, reason })}>确认退回</button></footer></div></div>}
   </SurveyShell>
 }
 
 export function SurveyReportPage() {
-  const { task, loading, reload: reloadTask } = useSurveyTask()
+  const { task, loading, error, reload: reloadTask } = useSurveyTask()
   const { dispatch } = useAppState()
   const [reports, setReports] = useState([])
   const [measurements, setMeasurements] = useState([])
+  const [frames, setFrames] = useState([])
   const load = useCallback(async () => {
     if (!task) return
-    const [reportRows, measurementRows] = await Promise.all([platformApi.surveyReports(task.id), platformApi.surveyMeasurements(task.id)])
-    setReports(reportRows); setMeasurements(measurementRows)
+    const [reportRows, measurementRows, frameRows] = await Promise.all([platformApi.surveyReports(task.id), platformApi.surveyMeasurements(task.id), platformApi.surveyFrames(task.id, task.selected_batch_id)])
+    setReports(reportRows); setMeasurements(measurementRows); setFrames(frameRows)
   }, [task])
   useEffect(() => { load().catch((error) => notify(dispatch, 'error', apiErrorMessage(error))) }, [load, dispatch])
   if (loading) return <AppShell pageTitle='测绘报告与交付'><LoadingState /></AppShell>
+  if (!task) return <SurveyTaskUnavailable title='测绘报告与交付' error={error} onRetry={reloadTask} />
   const report = reports[0]
   const generate = async () => {
     try {
@@ -331,7 +426,9 @@ export function SurveyReportPage() {
     const url = URL.createObjectURL(blob); window.open(url, '_blank', 'noopener,noreferrer'); window.setTimeout(() => URL.revokeObjectURL(url), 60_000)
   }
   const deliver = async () => { try { await platformApi.deliverSurveyReport(task.id, report.id, report.content_hash); await load() } catch (error) { notify(dispatch, 'warning', apiErrorMessage(error, '投递门禁未通过')) } }
+  const annotatedImages = report?.annotated_images || report?.payload?.annotated_images || []
+  const measuredFrames = frames.filter((item) => measurements.some((measurement) => measurement.frame_id === item.id))
   return <SurveyShell task={task} step={4} title='测绘报告与交付' description='生成带内容哈希的 PDF/JSON/GeoJSON 成果包；只有批准质量规则且配置目标地址后，才可经 outbox 幂等投递。' actions={<button className='primary-button' onClick={report ? openPdf : generate}><FilePdf size={15} /> {report ? '打开真实 PDF' : '生成成果包'}</button>}>
-    <div className='report-preview-layout'><Panel className='report-paper-wrap' title='报告预览' subtitle={report ? `${task.id} · v${report.version} · sha256:${report.content_hash.slice(0, 12)}…` : '尚未生成'}><article className='report-paper'><header><div><Crosshair size={30} weight='duotone' /></div><div><h2>无人机辅助事故现场测绘报告</h2><span>技术复核成果 · 非法定事故责任认定书</span></div></header><div className='report-meta'><span>任务：{task.id}</span><span>位置：{task.location}</span><span>任务版本：{task.version}</span><span>质量：{task.quality}</span></div><h3>真实量算摘要</h3><table><tbody>{measurements.map((item) => <tr key={item.id}><td>{item.category || item.id}</td><td>{item.display_value}</td><td>{item.source} · {item.quality_status}</td></tr>)}</tbody></table><footer>schema uav.survey-result.v1 · local PostgreSQL road9 · evidence SHA-256</footer></article></Panel><div className='report-side'><Panel title='完整性门禁'><InfoRow label='量算对象' value={`${measurements.length} 项`} badge={measurements.length ? 'good' : 'warning'} /><InfoRow label='技术复核' value={task.status === 'technical_reviewed' ? '已通过' : task.status} badge={task.status === 'technical_reviewed' ? 'good' : 'warning'} /><InfoRow label='内容哈希' value={report ? `${report.content_hash.slice(0, 16)}…` : '未生成'} badge={report ? 'good' : 'warning'} /><InfoRow label='误差口径' value='待批准' badge='unverified' /></Panel><Panel title='主平台投递'><InfoRow label='成果状态' value={report?.status || 'not_generated'} badge={report?.status} /><InfoRow label='Schema' value={report?.schema_version || 'uav.survey-result.v1'} /><InfoRow label='Outbox' value={task.delivery} badge={task.delivery} /><button className='primary-button full' disabled={!report || Boolean(report.delivery_blocked_reason)} onClick={deliver}>投递主平台</button></Panel>{report?.delivery_blocked_reason && <QualityNotice tone='warning' title='真实投递门禁'>{report.delivery_blocked_reason}</QualityNotice>}<QualityNotice tone='info' title='成果边界'>报告用于事故现场处置和人工复核，不替代法定勘查、责任认定、人工签章或案件归档。</QualityNotice></div></div>
+    <div className='report-preview-layout'><Panel className='report-paper-wrap' title='报告预览' subtitle={report ? `${task.id} · v${report.version} · sha256:${report.content_hash.slice(0, 12)}…` : '尚未生成'}><article className='report-paper'><header><div><Crosshair size={30} weight='duotone' /></div><div><h2>无人机辅助事故现场测绘报告</h2><span>技术复核成果 · 非法定事故责任认定书</span></div></header><div className='report-meta'><span>任务：{task.id}</span><span>位置：{task.location}</span><span>任务版本：{task.version}</span><span>质量：{task.quality}</span></div><h3>测绘标注图</h3><div className='report-annotation-gallery'>{annotatedImages.length ? annotatedImages.map((item) => <figure key={item.evidence_id || item.frame_id}><EvidenceImage url={item.url} alt={`测绘报告标注图 Frame #${item.frame_number}`} /><figcaption>Frame #{item.frame_number} · {item.measurement_count} 项标注</figcaption></figure>) : measuredFrames.map((item) => { const frameMeasurements = measurements.filter((measurement) => measurement.frame_id === item.id); return <figure key={item.id}><MeasurementCanvas frame={item} tool='line' draft={[]} measurements={frameMeasurements} editable={false} /><figcaption>Frame #{item.frame_number} · {frameMeasurements.length} 项标注</figcaption></figure> })}</div>{!annotatedImages.length && !measuredFrames.length && <div className='report-annotation-empty'>该历史任务没有可回放的标注帧</div>}<h3>真实量算摘要</h3><table><tbody>{measurements.map((item) => <tr key={item.id}><td>{item.category || item.id}</td><td>{item.display_value}</td><td>{item.source} · {item.quality_status}</td></tr>)}</tbody></table><footer>schema uav.survey-result.v1 · local PostgreSQL road9 · evidence SHA-256</footer></article></Panel><div className='report-side'><Panel title='完整性门禁'><InfoRow label='标注图片' value={`${annotatedImages.length || measuredFrames.length} 张`} badge={annotatedImages.length || measuredFrames.length ? 'good' : 'warning'} /><InfoRow label='量算对象' value={`${measurements.length} 项`} badge={measurements.length ? 'good' : 'warning'} /><InfoRow label='技术复核' value={task.status === 'technical_reviewed' ? '已通过' : task.status} badge={task.status === 'technical_reviewed' ? 'good' : 'warning'} /><InfoRow label='内容哈希' value={report ? `${report.content_hash.slice(0, 16)}…` : '未生成'} badge={report ? 'good' : 'warning'} /><InfoRow label='误差口径' value='待批准' badge='unverified' /></Panel><Panel title='主平台投递'><InfoRow label='成果状态' value={report?.status || 'not_generated'} badge={report?.status} /><InfoRow label='Schema' value={report?.schema_version || 'uav.survey-result.v1'} /><InfoRow label='Outbox' value={task.delivery} badge={task.delivery} /><button className='primary-button full' disabled={!report || Boolean(report.delivery_blocked_reason)} onClick={deliver}>投递主平台</button></Panel>{report?.delivery_blocked_reason && <QualityNotice tone='warning' title='真实投递门禁'>{report.delivery_blocked_reason}</QualityNotice>}<QualityNotice tone='info' title='成果边界'>报告用于事故现场处置和人工复核，不替代法定勘查、责任认定、人工签章或案件归档。</QualityNotice></div></div>
   </SurveyShell>
 }

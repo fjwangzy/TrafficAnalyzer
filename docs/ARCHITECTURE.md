@@ -1,7 +1,7 @@
 # ARCHITECTURE.md — TrafficAnalyzer 系统架构
 
 > 2026-07-16 本机开发环境已按 ADR-019 完成纯净切换。本文中的旧链路段落仅是历史设计记录；
-> 当前实现以根 `docker-compose.yaml`、Alembic `20260716_0011` 和 canonical `uav_*` 契约为准。
+> 当前实现以根 `docker-compose.yaml`、Alembic `20260717_0013` 和 canonical `uav_*` 契约为准。
 
 ## 系统总览
 
@@ -439,7 +439,7 @@ Console2 /
 
 - 根 `docker-compose.yaml` 是唯一完整拓扑，包含 `road9`/TimescaleDB、Apache Kafka KRaft、Platform、Console2、Nginx，以及可选 Kafka UI/GPU 检测器；隔离验证使用环境变量覆盖 project、端口和卷名。
 - Platform 镜像复制 `alembic.ini` 与全部 forward migration，`/ready` 同时确认 database、Kafka、TimescaleDB 和 PipelineManager；`/health` 仅表示进程存活。
-- 新 `road9` 最初由 `20260715_0010` 从空库创建并确认 5 张 hypertable，随后以 canonical 迁移前进到 `20260716_0011`。切换时除管理员外业务表为空；当前表内数据只来自切换后的本机验收，不得存在旧 `traffic_platform` database 或迁移隔离表。
+- 新 `road9` 最初由 `20260715_0010` 从空库创建并确认 5 张 hypertable，随后以前向迁移到 `20260717_0013`；`0013` 增加 Kafka inbox 可恢复派发状态。切换时除管理员外业务表为空；当前表内数据只来自切换后的本机验收，不得存在旧 `traffic_platform` database 或迁移隔离表。
 - 正式本机切换执行 30 分钟 readiness/认证/Dashboard/System 连续探测；它只证明本机开发稳定性，不定义生产 SLO。
 - 旧卷和绑定目录保留 7 天且不挂载，到期后仅允许 `scripts/purge_adr019_legacy_storage.py` 固定 allowlist 人工删除。
 - `20260715_0009` 使用数据库触发器维护 `uav_conflict_reviews → uav_conflict_events` 的存在性和删除级联。原因是 PostgreSQL 普通表直接外键指向 Timescale Hypertable 会展开 chunk 约束，无法被 `pg_dump/pg_restore` 可靠重建。
@@ -466,8 +466,8 @@ Console2 /survey/**
 - 后台提取 6 个关键帧，保存原始帧、BEV 图、遥测、质量观测和像素到 ENU 的变换；未冻结的 RTK、覆盖和精度阈值始终标记 `unverified`。
 - 关键帧、BEV、场景标注、车道标注底图和报告仍写入持久内容寻址卷。场景标注按关键帧保留 revision/audit；车道标注保留悬停触发，并可从已持久化真实关键帧恢复任务，确认后同步 `uav_lane_annotation_tasks` 与 `uav_visual_lane_bindings`。
 - 检测器仅在真实冲突发生时把对应 JPEG 写入事件证据包；无事件素材只记录零检出，不生成测试事件。
-- 点、线、折线、面积和对象几何都由服务端基于帧变换计算并版本化，浏览器只提交图像坐标，不能自报米制结果。
-- 报告生成前重新校验证据对象的 SHA-256 与大小，输出 PDF、canonical JSON 和 GeoJSON；质量规则未批准或投递 URL 未配置时禁止外发。
+- 点、线、折线、面积和对象几何都由服务端基于帧变换计算并版本化，浏览器只提交图像坐标，不能自报米制结果。帧读接口额外返回 BEV→ENU `metric_transform`，仅用于画布鼠标跟随预览边长；保存后显示以服务端 `metric_geometry` 为准。
+- 报告生成前重新校验证据对象的 SHA-256 与大小，按关联 BEV 固化带逐边长度的 `survey_report_annotated_image`，嵌入 PDF，并输出 canonical JSON 和 GeoJSON。Console2 报告/历史任务优先读取该内容寻址图，旧版本则从 BEV+量算版本链只读重绘；质量规则未批准或投递 URL 未配置时禁止外发。
 - 对外投递使用 `uav_ai_events(event_type=survey_result)`、`uav_event_outbox`、attempt 和 dead-letter 形成可靠投递链；批准阈值和主平台合同仍属外部验收阻断项。
 
 ### 执法候选深模块（S4 当前实现）

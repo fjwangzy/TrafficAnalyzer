@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from 'react'
-import { getAccessToken } from '../lib/api'
 import { normalizeRealtimeMessage, realtimeEventKey } from '../lib/realtime'
 
 export function useWebSocket({ channels = [], onMessage, enabled = true }) {
@@ -24,9 +23,7 @@ export function useWebSocket({ channels = [], onMessage, enabled = true }) {
       if (!active) return
       setStatus('connecting')
       const base = import.meta.env.VITE_WS_URL || `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/ws/realtime`
-      const token = getAccessToken()
-      const url = token ? `${base}${base.includes('?') ? '&' : '?'}access_token=${encodeURIComponent(token)}` : base
-      const socket = new WebSocket(url)
+      const socket = new WebSocket(base)
       socketRef.current = socket
 
       socket.onopen = () => {

@@ -27,7 +27,7 @@
 ### 1.1 本地开发库实况（2026-07-16 纯净切换）
 
 - 当前连接 database 为 `road9`，应用对象位于 `public`；这只是本地开发现状，不代表生产目标 schema 已冻结。
-- migration head 为 `20260716_0011`，版本表为 `uav_alembic_version`；`0010` 为 `uav_telemetry_sources` 增加回放同步配置，`0011` 增加 server-asset 证据、来源批次关联和持久车道标注任务。
+- migration head 为 `20260717_0013`，版本表为 `uav_alembic_version`；`0012` 增加检测事实 lineage，`0013` 增加 inbox 可恢复派发状态。
 - 正式本机端口 `5432` 由根 Compose 的 TimescaleDB 提供，使用稳定新卷 `traffic_road9_data`；不挂载旧 PostgreSQL、实验 TimescaleDB 或旧目标卷。
 - migration 自动启用 TimescaleDB 并创建 5 张 `uav_*` hypertable。初始化数据仅允许管理员账号，业务、指标、轨迹、任务和告警表为空。
 - `uav_traffic_metrics`、`uav_track_points`、`uav_conflict_events`、`uav_telemetry_metrics`、`uav_system_metrics`、普通表 `uav_track_events` 及长期 `uav_message_inbox` 已实现。永久性输入错误进入独立的 `uav_message_dead_letters`；可变技术复核状态位于普通表 `uav_conflict_reviews`，两者都不更新追加型冲突事实。
@@ -107,7 +107,7 @@ CREATE EXTENSION IF NOT EXISTS timescaledb;
 | `uav_dead_letters` | `id` | EventDelivery/outbox 对外投递超过重试上限后的人工补偿入口 |
 | `uav_message_dead_letters` | `(topic, partition, offset)` 唯一 | 入站 Kafka schema/身份冲突等永久错误的耐久隔离；成功写入后才可推进对应 offset |
 | `uav_evidence_packages` | `id`；`(source_system, source_event_id)` 索引 | 事件证据清单、对象存储引用、哈希和完整性元数据 |
-| `uav_evidence_items` | `id`；`package_id` 索引 | 单个图片/视频/测绘/结构化证据项；`storage_backend=managed|server_asset` 区分内容寻址对象与 allowlist 原文件引用；server asset 的 `item_metadata.source_fingerprint` 保存 size/mtime/ctime，指纹变化后必须回退到完整 SHA-256 校验 |
+| `uav_evidence_items` | `id`；`package_id` 索引 | 单个图片/视频/测绘/结构化证据项；`storage_backend=managed|server_asset` 区分内容寻址对象与 allowlist 原文件引用；`survey_report_annotated_image` 保存报告固化的带逐边长度 JPEG，并以 `derived_from_id` 指向 BEV、metadata 记录报告版本/帧/量算数；server asset 的 `item_metadata.source_fingerprint` 保存 size/mtime/ctime，指纹变化后必须回退到完整 SHA-256 校验 |
 | `uav_message_inbox` | `(source_system, message_id)` 唯一 | 长期 canonical 消费幂等、消息身份校验、处理状态与事实引用审计 |
 | `uav_road_context_snapshots` | `(road_data_version, inter_id)` | 路网只读版本快照/缓存元数据 |
 | `uav_visual_lane_bindings` | `(binding_id)`；业务唯一键待定 | 本地视觉车道到权威路口/Link/车道的版本化绑定 |
@@ -287,6 +287,9 @@ CREATE EXTENSION IF NOT EXISTS timescaledb;
 | `processed_at` | TIMESTAMPTZ/NULL | canonical 事实成功提交时间 |
 | `fact_refs` | JSONB | 实际写入表、主键/时间键引用数组 |
 | `error_code` / `error_detail` | TEXT/NULL | 失败/隔离原因；详情必须脱敏 |
+| `dispatch_status` | TEXT | `pending/dispatched`；事实提交后等待 WS/告警副作用完成 |
+| `dispatch_attempts` / `last_dispatch_error` | INTEGER / TEXT | 派发尝试次数和脱敏错误摘要 |
+| `last_dispatch_attempt_at` / `dispatched_at` | TIMESTAMPTZ/NULL | 最近尝试和完成时间 |
 
 - canonical 事实写入和 inbox `status=processed + fact_refs` 更新必须在 `road9` 的同一事务提交；事实失败时不得留下已处理标记。
 - 收到相同 `(source_system,message_id)` 且 hash 相同时返回既有结果，不重复写入；hash 不同时隔离到 `uav_message_dead_letters` 并告警，不覆盖原消息或事实。历史批量迁移中无法判定时间语义的记录仍使用独立 migration quarantine 口径。
@@ -294,9 +297,9 @@ CREATE EXTENSION IF NOT EXISTS timescaledb;
 
 ### 4.3 Kafka consumer 事务与 offset 边界（目标契约）
 
-- Consumer 配置必须 `enable_auto_commit=false`。
-- 单条/单批消息按“校验 → 开启数据库事务 → inbox 去重/身份校验 → 写事实 → inbox 标记 processed/fact_refs → 提交数据库 → 手动提交 Kafka offset”执行。
-- 数据库事务失败时回滚且不提交 offset；消息由 Kafka 重放。数据库已提交但 offset 未提交的崩溃窗口由 inbox 幂等吸收。
+- Consumer 配置必须 `enable_auto_commit=false` 且新组从 `earliest` 开始。
+- 单条消息按“校验 → 数据库事务写 inbox/facts 并标记 `dispatch_status=pending` → 提交事实 → 派发 WS/告警 → 标记 `dispatched` → 手动提交 Kafka offset”执行。
+- 数据库事务失败时回滚且不提交 offset；派发失败记录尝试和错误并保持 pending，Kafka 重放时继续派发。只有 dispatched 的重复消息才能跳过副作用。
 - 不可重试入站消息必须先把 `uav_message_dead_letters` 记录耐久提交，再手动提交 offset；日志不是耐久隔离。`uav_dead_letters` 继续只处理 EventDelivery/outbox 对外投递失败，二者不得混用。
 - Kafka offset 不属于 PostgreSQL 事务，目标是 at-least-once delivery + exactly-once business effect，不能在验收材料中误称为跨系统 exactly-once transaction。
 

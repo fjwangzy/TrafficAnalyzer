@@ -23,8 +23,8 @@ vi.mock('./hooks/useWebSocket', () => ({ useWebSocket: () => 'connected' }))
 vi.mock('./lib/api', async (importOriginal) => {
   const actual = await importOriginal()
   const task = { id: 'SVY-20260713-006', title: '测试测绘', location: '小清河路口', owner: '事故处理一组', status: 'measuring', quality: 'unverified', delivery: 'not_generated', version: 'v4', revision: 4, selected_batch_id: 'BATCH-01' }
-  const frame = { id: 'FRM-01', task_id: task.id, batch_id: 'BATCH-01', frame_number: 18236, timestamp_sec: 10, has_metric_transform: true, image_url: '/api/v1/survey-evidence/EVI-IMAGE/content', bev_url: '/api/v1/survey-evidence/EVI-BEV/content', quality: {}, telemetry: {} }
-  const measurement = { id: 'M-01', revision: 1, frame_id: frame.id, geometry_type: 'line', category: '刹车痕迹', image_geometry: [[10, 10], [40, 40]], display_value: '12.48m', quality_status: 'unverified', source: 'manual' }
+  const frame = { id: 'FRM-01', task_id: task.id, batch_id: 'BATCH-01', frame_number: 18236, timestamp_sec: 10, has_metric_transform: true, metric_transform: [[0.1, 0, 0], [0, 0.1, 0], [0, 0, 1]], image_url: '/api/v1/survey-evidence/EVI-IMAGE/content', bev_url: '/api/v1/survey-evidence/EVI-BEV/content', quality: {}, telemetry: {} }
+  const measurement = { id: 'M-01', revision: 1, frame_id: frame.id, geometry_type: 'line', category: '刹车痕迹', image_geometry: [[10, 10], [40, 40]], metric_geometry: [[1, 1], [4, 4]], display_value: '12.48m', quality_status: 'unverified', source: 'manual' }
   const report = { id: 'RPT-01', task_id: task.id, version: 1, status: 'generated', schema_version: 'uav.survey-result.v1', content_hash: 'a'.repeat(64), payload: {}, pdf_url: '/api/v1/survey-evidence/EVI-PDF/content', delivery_blocked_reason: 'survey quality thresholds are not approved' }
   const conflictEvent = { id: 'UAV-EVT-20260713-001', source_kind: 'conflict', event_type: 'conflict', inter_id: 'INT-I5', title: '机非冲突风险升高', severity: 'critical', occurred_at: '2026-07-15T02:52:16Z', quality_status: 'unverified', review_status: 'pending', review_revision: 1, delivery_status: 'not_queued', payload: { conflict_scene: '机非冲突风险升高', ttc_sec: 1.2, pet_sec: 0.8, distance_m: 0, risk_score: 86, evidence: ['path_intersection'] } }
   const congestionEvent = { id: 'UAV-EVT-20260713-004', source_kind: 'ai_event', event_type: 'congestion', inter_id: 'INT-I5', title: '排队增长', severity: 'P2', occurred_at: '2026-07-15T02:50:00Z', quality_status: 'unverified', review_status: 'pending', review_revision: 1, delivery_status: 'not_queued', payload: { metrics: { congestion_index: 7.0 } } }
@@ -145,9 +145,9 @@ describe('Console2 full prototype', () => {
     window.history.pushState({}, '', '/')
   })
 
-  it('renders the S8 city overview at the root route', () => {
+  it('renders the S8 city overview at the root route', async () => {
     const { container } = open('/')
-    expect(screen.getByRole('heading', { name: '无人机交通态势工作台' })).toHaveClass('sr-only')
+    expect(await screen.findByRole('heading', { name: '无人机交通态势工作台' })).toHaveClass('sr-only')
     expect(container.querySelector('.page-heading')).not.toBeInTheDocument()
     expect(container.querySelector('.page-actions')).toBeInTheDocument()
     expect(screen.queryByText('I5 内部工程口径')).not.toBeInTheDocument()
@@ -158,18 +158,18 @@ describe('Console2 full prototype', () => {
     expect(screen.getByRole('complementary', { name: '一级业务域' })).toBeInTheDocument()
   })
 
-  it('uses the same first-level rail and domain secondary navigation on monitoring', () => {
+  it('uses the same first-level rail and domain secondary navigation on monitoring', async () => {
     open('/monitoring')
-    expect(screen.getByRole('navigation', { name: '全域态势二级导航' })).toHaveTextContent('工作台首屏实时监测')
+    expect(await screen.findByRole('navigation', { name: '全域态势二级导航' })).toHaveTextContent('工作台首屏实时监测')
     expect(screen.getByRole('navigation', { name: '全域态势二级导航' })).not.toHaveTextContent('轨迹研判')
     expect(screen.getByRole('link', { name: '实时监测' })).toHaveClass('active')
     expect(screen.getByRole('complementary', { name: '一级业务域' })).toBeInTheDocument()
     expect(screen.getByLabelText('飞行姿态数据')).toBeInTheDocument()
   })
 
-  it('moves trajectory analysis into the intelligent-insight navigation domain', () => {
+  it('moves trajectory analysis into the intelligent-insight navigation domain', async () => {
     const { container } = open('/gis')
-    const navigation = screen.getByRole('navigation', { name: '智能研判二级导航' })
+    const navigation = await screen.findByRole('navigation', { name: '智能研判二级导航' })
     expect(navigation).toHaveTextContent('AI 事件中心轨迹研判')
     expect(screen.getByRole('link', { name: '轨迹研判' })).toHaveClass('active')
     expect(container.querySelector('.page-heading')).not.toBeInTheDocument()
@@ -184,7 +184,7 @@ describe('Console2 full prototype', () => {
 
     open('/gis')
 
-    expect(screen.getByText('路口加载中 · 轨迹等待路口')).toBeInTheDocument()
+    expect(await screen.findByText('路口加载中 · 轨迹等待路口')).toBeInTheDocument()
     expect(screen.queryByText('0 个路口 · 0 条轨迹')).not.toBeInTheDocument()
 
     resolveIntersections({
@@ -309,6 +309,61 @@ describe('Console2 full prototype', () => {
     expect(screen.getByText('点线面量算')).toBeInTheDocument()
   })
 
+  it.each([
+    ['/survey/SVY-MISSING/precheck', '任务核验'],
+    ['/survey/SVY-MISSING/capture', '采集与质量预检'],
+    ['/survey/SVY-MISSING/measure', '点线面量算'],
+    ['/survey/SVY-MISSING/review', '技术复核'],
+    ['/survey/SVY-MISSING/report', '测绘报告与交付'],
+  ])('keeps the survey deep link %s usable when the task cannot be loaded', async (path, title) => {
+    platformApi.surveyTask.mockRejectedValueOnce(new Error('task not found'))
+
+    open(path)
+
+    expect(await screen.findByRole('heading', { name: title })).toBeInTheDocument()
+    expect(screen.getByRole('alert')).toHaveTextContent('task not found')
+    expect(screen.getByRole('button', { name: '返回任务列表' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '重试' }))
+    await waitFor(() => expect(platformApi.surveyTask).toHaveBeenLastCalledWith('SVY-MISSING'))
+    await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument())
+  })
+
+  it('requires all six technical review checks and submits their exact audit keys', async () => {
+    platformApi.surveyTask.mockResolvedValueOnce({
+      id: 'SVY-REVIEW', title: '待复核测绘', location: '测试路口', owner: '事故处理一组',
+      status: 'pending_review', quality: 'unverified', delivery: 'not_generated',
+      version: 'v4', revision: 4, selected_batch_id: 'BATCH-01',
+    })
+    open('/survey/SVY-REVIEW/review')
+
+    const approve = await screen.findByRole('button', { name: '技术复核通过' })
+    const checks = screen.getAllByRole('checkbox')
+    expect(checks).toHaveLength(6)
+    checks.forEach((checkbox) => expect(checkbox).not.toBeChecked())
+    expect(approve).toBeDisabled()
+
+    checks.forEach((checkbox) => fireEvent.click(checkbox))
+    expect(approve).toBeEnabled()
+    fireEvent.click(approve)
+
+    await waitFor(() => expect(platformApi.surveyAction).toHaveBeenCalledWith(
+      'SVY-REVIEW',
+      {
+        action: 'approve_review',
+        expected_revision: 4,
+        checklist: {
+          task_and_location: true,
+          source_materials: true,
+          coordinate_chain: true,
+          measurements: true,
+          edit_history: true,
+          quality_status: true,
+        },
+      },
+      expect.any(String),
+    ))
+  })
+
   it('refreshes the survey revision after importing capture material', async () => {
     open('/survey/SVY-20260713-006/capture')
     expect(await screen.findByRole('heading', { name: '采集与质量预检' })).toBeInTheDocument()
@@ -331,6 +386,8 @@ describe('Console2 full prototype', () => {
 
   it('renders a generated survey report without requiring a page reload', async () => {
     open('/survey/SVY-20260713-006/report')
+    expect(await screen.findByText('测绘标注图')).toBeInTheDocument()
+    expect(await screen.findByText('Frame #18236 · 1 项标注')).toBeInTheDocument()
     const generate = await screen.findByRole('button', { name: '生成成果包' })
     fireEvent.click(generate)
     expect(await screen.findByRole('button', { name: '打开真实 PDF' })).toBeInTheDocument()
@@ -351,18 +408,16 @@ describe('Console2 full prototype', () => {
     await waitFor(() => expect(platformApi.updateEnforcementZone).toHaveBeenCalledWith('ZONE-I4-01', expect.objectContaining({ revision: 1, coordinate_system: 'ENU' })))
   })
 
-  it('replays a dead letter with the original idempotency key', () => {
+  it('keeps demo governance disabled unless it is explicitly enabled', async () => {
     open('/admin/integration')
-    fireEvent.click(screen.getByText('DLQ-20260713-004'))
-    fireEvent.click(screen.getByRole('button', { name: '按原幂等键重放' }))
-    expect(screen.getByText('已按原幂等键发起重放')).toBeInTheDocument()
-    expect(screen.getAllByText('MANUAL_REPLAY').length).toBeGreaterThan(0)
-    expect(screen.getAllByText('重试中').length).toBeGreaterThan(0)
+    expect(await screen.findByRole('heading', { name: '集成与交付未启用' })).toBeInTheDocument()
+    expect(screen.queryByText('DLQ-20260713-004')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '按原幂等键重放' })).not.toBeInTheDocument()
   })
 
-  it('exposes the consolidated governance workspaces', () => {
+  it('exposes the consolidated governance workspaces', async () => {
     open('/admin/system?tab=identity')
-    expect(screen.getByRole('heading', { name: '系统与身份' })).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: '系统与身份' })).toBeInTheDocument()
     expect(screen.getByText('身份同步结果')).toBeInTheDocument()
   })
 
@@ -400,12 +455,11 @@ describe('Console2 full prototype', () => {
     await waitFor(() => expect(platformApi.dashboardIntersections).toHaveBeenCalledWith({ risk: 'critical', limit: 500 }))
   })
 
-  it('exposes loading, stale, and error states from the global exception entry', () => {
+  it('does not invent global exceptions or a fixed freshness timestamp', () => {
     open('/monitoring')
-    fireEvent.click(screen.getByRole('button', { name: '异常状态' }))
-    expect(screen.getByText('加载中')).toBeInTheDocument()
-    expect(screen.getByText('已过期')).toBeInTheDocument()
-    expect(screen.getByText('异常')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '异常状态' })).not.toBeInTheDocument()
+    expect(screen.getByText('未提供实时水位')).toBeInTheDocument()
+    expect(screen.queryByText(/候选路网同步中/)).not.toBeInTheDocument()
   })
 
   it('applies role-aware navigation', () => {

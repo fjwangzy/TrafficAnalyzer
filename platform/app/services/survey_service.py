@@ -10,8 +10,10 @@ import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 
+import cv2
 import numpy as np
 from reportlab.lib.pagesizes import A4
+from reportlab.lib.utils import ImageReader
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.cidfonts import UnicodeCIDFont
 from reportlab.pdfgen import canvas
@@ -19,6 +21,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.models.mission import TelemetrySourceRecord, VideoSourceRecord
 from app.models.survey import (
     AiEvent,
     AuditLog,
@@ -34,11 +37,13 @@ from app.models.survey import (
     SurveyReport,
     SurveyTask,
 )
-from app.models.mission import TelemetrySourceRecord, VideoSourceRecord
 from app.services.survey_capture import process_mp4_telemetry
 from app.services.survey_geometry import calculate_measurement
-from app.services.survey_storage import ContentAddressedStore, StoredObject, resolve_allowlisted_asset
-
+from app.services.survey_storage import (
+    ContentAddressedStore,
+    StoredObject,
+    resolve_allowlisted_asset,
+)
 
 TERMINAL_STATES = {"completed", "cancelled", "error"}
 
@@ -96,6 +101,16 @@ def _batch_dict(batch: SurveyCaptureBatch) -> dict:
 
 
 def _frame_dict(frame: SurveyFrame) -> dict:
+    metric_transform = None
+    if frame.homography is not None:
+        try:
+            homography = np.asarray(frame.homography, dtype=np.float64)
+            view_transform = np.asarray(frame.view_transform, dtype=np.float64)
+            transform = homography @ np.linalg.inv(view_transform)
+            if transform.shape == (3, 3) and np.all(np.isfinite(transform)):
+                metric_transform = transform.tolist()
+        except (TypeError, ValueError, np.linalg.LinAlgError):
+            metric_transform = None
     return {
         "id": frame.id,
         "task_id": frame.task_id,
@@ -105,6 +120,7 @@ def _frame_dict(frame: SurveyFrame) -> dict:
         "image_width": frame.image_width,
         "image_height": frame.image_height,
         "has_metric_transform": frame.homography is not None,
+        "metric_transform": metric_transform,
         "telemetry": frame.telemetry,
         "quality": frame.quality,
         "selected": frame.selected,
@@ -377,6 +393,19 @@ class SurveyService:
             task.state = "returned"
             task.last_return_type, task.last_return_reason = return_type, reason
         elif action == "approve_review" and task.state == "pending_review":
+            checklist = payload.get("checklist") or {}
+            required_review = {
+                "task_and_location",
+                "source_materials",
+                "coordinate_chain",
+                "measurements",
+                "edit_history",
+                "quality_status",
+            }
+            if set(checklist) != required_review or not all(
+                checklist.get(key) is True for key in required_review
+            ):
+                raise ValueError("review checklist must contain exactly six true items")
             task.state = "technical_reviewed"
         elif action == "cancel" and task.state not in TERMINAL_STATES:
             reason = (payload.get("reason") or "").strip()
@@ -389,7 +418,12 @@ class SurveyService:
         task.version += 1
         await self.session.flush()
         after = _task_dict(task)
-        await self._audit(actor_id, audit_action, "survey_task", task.id, before, after, payload.get("reason"), request_id)
+        audit_after = (
+            {**after, "review_checklist": dict(payload["checklist"])}
+            if action == "approve_review"
+            else after
+        )
+        await self._audit(actor_id, audit_action, "survey_task", task.id, before, audit_after, payload.get("reason"), request_id)
         return after
 
     async def _package(self, task_id: str) -> EvidencePackage:
@@ -910,7 +944,64 @@ class SurveyService:
         return item, self._resolve_evidence_path(item)
 
     @staticmethod
-    def _report_pdf(payload: dict) -> bytes:
+    def _annotated_bev(source: bytes, measurements: list[dict]) -> bytes:
+        image = cv2.imdecode(np.frombuffer(source, dtype=np.uint8), cv2.IMREAD_COLOR)
+        if image is None:
+            raise ValueError("BEV evidence is not a readable image")
+        overlay = image.copy()
+        for measurement in measurements:
+            points = np.rint(np.asarray(measurement.get("image_geometry") or [], dtype=np.float64)).astype(np.int32)
+            if len(points) == 0:
+                continue
+            geometry_type = measurement.get("geometry_type")
+            closed = geometry_type in {"area", "object"} and len(points) > 2
+            color = (216, 200, 32)
+            if closed:
+                cv2.fillPoly(overlay, [points], color)
+            if len(points) > 1:
+                cv2.polylines(image, [points], closed, color, 3, cv2.LINE_AA)
+            for point in points:
+                cv2.circle(image, tuple(point), 5, color, -1, cv2.LINE_AA)
+
+            metric_points = np.asarray(measurement.get("metric_geometry") or [], dtype=np.float64)
+            segments = list(zip(points[:-1], points[1:], strict=False))
+            metric_segments = list(zip(metric_points[:-1], metric_points[1:], strict=False))
+            if closed:
+                segments.append((points[-1], points[0]))
+                if len(metric_points) == len(points):
+                    metric_segments.append((metric_points[-1], metric_points[0]))
+            for index, (start, end) in enumerate(segments):
+                if index >= len(metric_segments):
+                    continue
+                metric_start, metric_end = metric_segments[index]
+                label = f"{np.linalg.norm(metric_end - metric_start):.2f} m"
+                midpoint = np.rint((start + end) / 2).astype(int)
+                (text_width, text_height), baseline = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.55, 2)
+                x = int(midpoint[0] - text_width / 2)
+                y = int(midpoint[1] + text_height / 2)
+                cv2.rectangle(
+                    image,
+                    (x - 5, y - text_height - 5),
+                    (x + text_width + 5, y + baseline + 5),
+                    (6, 13, 24),
+                    -1,
+                )
+                cv2.rectangle(
+                    image,
+                    (x - 5, y - text_height - 5),
+                    (x + text_width + 5, y + baseline + 5),
+                    color,
+                    1,
+                )
+                cv2.putText(image, label, (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 2, cv2.LINE_AA)
+        image = cv2.addWeighted(overlay, 0.15, image, 0.85, 0)
+        ok, encoded = cv2.imencode(".jpg", image, [cv2.IMWRITE_JPEG_QUALITY, 92])
+        if not ok:
+            raise ValueError("annotated BEV encoding failed")
+        return encoded.tobytes()
+
+    @staticmethod
+    def _report_pdf(payload: dict, annotated_images: list[bytes] | None = None) -> bytes:
         buffer = io.BytesIO()
         pdfmetrics.registerFont(UnicodeCIDFont("STSong-Light"))
         document = canvas.Canvas(buffer, pagesize=A4)
@@ -931,6 +1022,28 @@ class SurveyService:
             document.setFont("STSong-Light", 10)
             document.drawString(48, y, f"{label}：{value}")
             y -= 18
+        for index, annotated_image in enumerate(annotated_images or [], start=1):
+            image = ImageReader(io.BytesIO(annotated_image))
+            image_width, image_height = image.getSize()
+            target_width = width - 96
+            target_height = min(260, target_width * image_height / image_width)
+            if y - target_height < 80:
+                document.showPage()
+                document.setFont("STSong-Light", 13)
+                y = height - 56
+            document.setFont("STSong-Light", 12)
+            document.drawString(48, y, f"测绘标注图 {index}")
+            y -= 16
+            document.drawImage(
+                image,
+                48,
+                y - target_height,
+                width=target_width,
+                height=target_height,
+                preserveAspectRatio=True,
+                anchor="c",
+            )
+            y -= target_height + 22
         y -= 10
         document.setFont("STSong-Light", 13)
         document.drawString(48, y, "量算清单")
@@ -972,6 +1085,49 @@ class SurveyService:
                 select(func.coalesce(func.max(SurveyReport.version), 0)).where(SurveyReport.task_id == task.id)
             )
         ) + 1
+        measurement_frame_ids = {item["frame_id"] for item in measurements}
+        frames = (
+            await self.session.execute(
+                select(SurveyFrame)
+                .where(SurveyFrame.task_id == task.id, SurveyFrame.id.in_(measurement_frame_ids))
+                .order_by(SurveyFrame.frame_number)
+            )
+        ).scalars().all()
+        annotated_images: list[bytes] = []
+        annotated_refs: list[dict] = []
+        for frame in frames:
+            frame_measurements = [item for item in measurements if item["frame_id"] == frame.id]
+            bev_item = await self.session.get(EvidenceItem, frame.bev_evidence_id)
+            if bev_item is None or not await asyncio.to_thread(self._verify_evidence, bev_item):
+                raise ValueError(f"BEV evidence integrity check failed for frame {frame.id}")
+            bev_source = await asyncio.to_thread(self._resolve_evidence_path(bev_item).read_bytes)
+            annotated = await asyncio.to_thread(self._annotated_bev, bev_source, frame_measurements)
+            annotated_stored = await asyncio.to_thread(self.storage.ingest_bytes, annotated)
+            annotated_item = await self._evidence(
+                package,
+                task.id,
+                "survey_report_annotated_image",
+                annotated_stored,
+                "image/jpeg",
+                {
+                    "version": report_version,
+                    "frame_id": frame.id,
+                    "frame_number": frame.frame_number,
+                    "measurement_count": len(frame_measurements),
+                },
+                derived_from_id=frame.bev_evidence_id,
+            )
+            annotated_images.append(annotated)
+            annotated_refs.append(
+                {
+                    "frame_id": frame.id,
+                    "frame_number": frame.frame_number,
+                    "measurement_count": len(frame_measurements),
+                    "evidence_id": annotated_item.id,
+                    "url": f"/api/v1/survey-evidence/{annotated_item.id}/content",
+                    "sha256": annotated_item.sha256,
+                }
+            )
         payload = {
             "schema_version": "uav.survey-result.v1",
             "event_type": "survey_result",
@@ -979,12 +1135,13 @@ class SurveyService:
             "generated_at": _now_iso(),
             "task": _task_dict(task),
             "measurements": measurements,
+            "annotated_images": annotated_refs,
             "evidence": [{"id": item.id, "kind": item.kind, "sha256": item.sha256} for item in evidence_rows],
             "quality_statement": "unverified: S3 measurement thresholds are not approved",
         }
         canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str, separators=(",", ":")).encode()
         content_hash = hashlib.sha256(canonical).hexdigest()
-        pdf_stored = await asyncio.to_thread(self.storage.ingest_bytes, self._report_pdf(payload))
+        pdf_stored = await asyncio.to_thread(self.storage.ingest_bytes, self._report_pdf(payload, annotated_images))
         json_stored = await asyncio.to_thread(self.storage.ingest_bytes, canonical)
         def geojson_coordinates(item: dict):
             coordinates = item["metric_geometry"]
@@ -1067,6 +1224,15 @@ class SurveyService:
                     "url": f"/api/v1/survey-evidence/{geojson_item.id}/content",
                     "sha256": geojson_item.sha256,
                 },
+                *[
+                    {
+                        "id": item["evidence_id"],
+                        "kind": "survey_report_annotated_image",
+                        "url": item["url"],
+                        "sha256": item["sha256"],
+                    }
+                    for item in annotated_refs
+                ],
             ],
             "delivery_blocked_reason": "survey quality thresholds are not approved",
         }
@@ -1101,6 +1267,7 @@ class SurveyService:
             "pdf_url": f"/api/v1/survey-evidence/{pdf_item.id}/content",
             "json_url": f"/api/v1/survey-evidence/{json_item.id}/content",
             "geojson_url": f"/api/v1/survey-evidence/{geojson_item.id}/content",
+            "annotated_images": annotated_refs,
             "delivery_blocked_reason": "survey quality thresholds are not approved",
         }
         await self._audit(actor_id, "survey.report.generated", "survey_report", report.id, after=result, request_id=request_id)
@@ -1158,6 +1325,7 @@ class SurveyService:
                 "pdf_url": f"/api/v1/survey-evidence/{row.pdf_evidence_id}/content" if row.pdf_evidence_id else None,
                 "json_url": evidence_url(row.version, "survey_report_json"),
                 "geojson_url": evidence_url(row.version, "survey_report_geojson"),
+                "annotated_images": (row.payload or {}).get("annotated_images", []),
                 "delivery_blocked_reason": blocked_reason if row.status == "generated" else None,
             }
             for row in rows

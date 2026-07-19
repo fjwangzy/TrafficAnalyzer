@@ -16,7 +16,7 @@
 | 指标查询权威源 | `road9` 中的 `uav_*` 普通表与 TimescaleDB hypertable |
 | 废弃目标链路 | Grafana、Telegraf、InfluxDB 不进入目标部署和验收 |
 
-本机新库最初由 Alembic `20260715_0010` 从空库创建，当前 head 为 `20260716_0011`，不回迁任何旧数据；生产连接、权限、容量、HA 和路网外部合同仍需确认。
+本机新库最初由 Alembic `20260715_0010` 从空库创建，当前 head 为 `20260717_0013`，不回迁任何旧数据；生产连接、权限、容量、HA 和路网外部合同仍需确认。
 
 ### 0.2 canonical Topic 与 `msg_type`
 
@@ -90,7 +90,7 @@ Topic 的单复数按上表固定。`msg_type` 必须与 Topic 映射一致；�
 
 消费者必须先校验 `msg_type + schema_version`，再通过长期 canonical 表 `uav_message_inbox` 的唯一键 `(source_system, message_id)` 做全局幂等；事实写入与 inbox 置为 `processed` 必须在同一数据库事务提交。未知 major 版本进入 `uav_message_dead_letters`，不得按旧结构猜测解析。
 
-`uav_message_inbox` 至少保存 `payload_hash/status/topic/partition/offset/first_seen_at/processed_at/fact_refs`。相同 ID、相同 hash 的重放返回既有处理结果且不重复写事实；相同 ID、不同 hash 视为消息身份冲突，必须隔离并告警，不能覆盖原事实。hypertable 中包含时间分区列的唯一键只是第二层防重，不能替代 inbox 的跨时间全局唯一性。inbox 保留期不得短于 Kafka 最大重放、历史回迁和审计窗口，具体期限待容量/审计评审冻结。
+`uav_message_inbox` 保存 `payload_hash/status/topic/partition/offset/first_seen_at/processed_at/fact_refs`，并以 `dispatch_status/dispatch_attempts/last_dispatch_error/last_dispatch_attempt_at/dispatched_at` 记录事实提交后的副作用恢复状态。相同 ID、相同 hash 的重放不重复写事实；仅 `dispatched` 可跳过 WS/告警，`pending` 必须继续派发。相同 ID、不同 hash 视为消息身份冲突，必须隔离并告警，不能覆盖原事实。hypertable 唯一键只是第二层防重，不能替代 inbox 的跨时间全局唯一性。
 
 ### 0.4 各消息 `data` 边界
 
@@ -805,39 +805,25 @@ Content-Type: application/json
 - 用途：存活检查（liveness probe）
 
 #### `GET /ready`
-- 当前实现返回：
+- 当前实现只检查 canonical 依赖：
 ```json
 {
   "status": "ready",
   "services": {
     "database": "healthy",
     "kafka": "healthy",
-    "influxdb": "healthy",
-    "websocket": "healthy"
-  }
-}
-```
-- 用途：就绪检查（readiness probe），各服务可能为 `healthy`、`degraded` 或 `unavailable`
-
-目标实现删除 `influxdb` 依赖项，显式检查 `road9` 和 TimescaleDB，例如：
-
-```json
-{
-  "status": "ready",
-  "services": {
-    "database": "healthy",
     "timescaledb": "healthy",
-    "kafka": "healthy",
-    "websocket": "healthy"
+    "pipeline_manager": "healthy"
   }
 }
 ```
+- 用途：就绪检查；HTTP 保持 200 兼容，但 database、Kafka、TimescaleDB 任一为
+  `degraded/not_configured` 时整体 `status=degraded`，不得作为容器就绪信号。
 
-该目标响应尚未实现；扩展版本不符、hypertable migration 未完成或 `road9` 不可写时，`timescaledb`/`database` 必须返回 `degraded` 或 `unavailable`。
-
-### 认证端点（无需 JWT）
+### 认证端点
 
 #### `POST /api/v1/auth/register`
+- 必须携带 admin Bearer JWT；系统不提供匿名自注册。
 - 请求体：
 ```json
 {
@@ -859,6 +845,7 @@ Content-Type: application/json
 }
 ```
 - 错误（400）：`{"detail": "Username already registered"}`
+- 错误（401/403）：未登录或非管理员。
 
 #### `POST /api/v1/auth/login`
 - 请求体：
@@ -883,6 +870,16 @@ Content-Type: application/json
 }
 ```
 - 错误（401）：`{"detail": "Incorrect username or password"}`
+- 响应同时设置 `uav_media_session` HttpOnly Cookie，仅供 WebSocket、MJPEG 和 HLS；
+  `SameSite=strict`、`Path=/`，Max-Age 与 JWT 一致，uat/production 强制 `Secure`。
+
+#### `POST /api/v1/auth/logout`
+- 公开且幂等；清除 `uav_media_session`，即使 Bearer 已过期也可退出。
+- 返回（200）：`{"status": "logged_out"}`。
+
+#### `GET /api/v1/auth/media-session`
+- 只接受 `uav_media_session` Cookie，校验 JWT 后回查用户仍存在且启用。
+- 返回（200）：当前媒体会话主体；无效、过期或禁用用户返回 401。
 
 #### `GET /api/v1/auth/me`
 - 请求头：`Authorization: Bearer <token>`
@@ -1003,14 +1000,25 @@ Content-Type: application/json
 | POST | `/survey-tasks/{task_id}/actions` | 前置核验、选择批次、提交/退回/技术复核、取消 |
 | GET/POST | `/survey-tasks/{task_id}/capture-batches` | 查询批次/流式上传 MP4+SRT 并入队 |
 | POST | `/survey-tasks/{task_id}/capture-batches/import` | 以 `source_profile_id` 引用已登记 MP4+DJI SRT/Cloud JSON，或兼容显式 allowlist 资产键；响应含遥测类型、同步配置和原始引用状态 |
-| GET | `/survey-tasks/{task_id}/frames` | 查询原始帧、BEV、遥测和测量变换摘要 |
+| GET | `/survey-tasks/{task_id}/frames` | 查询原始帧、BEV、遥测和测量变换摘要；可量算帧返回 `metric_transform`（BEV 像素→ENU 米制 3×3 矩阵），供浏览器只读计算绘制中边长，服务端仍是最终量算真源 |
 | GET/POST | `/survey-tasks/{task_id}/measurements` | 查询/创建服务端 ENU 点线面量算 |
 | DELETE | `/survey-tasks/{task_id}/measurements/{measurement_id}` | 按 revision 删除当前量算版本 |
 | GET/POST | `/survey-tasks/{task_id}/annotations` | 查询/创建关联持久关键帧的场景标注 |
 | PATCH/DELETE | `/survey-tasks/{task_id}/annotations/{annotation_id}` | 按 revision 修改/删除车辆、痕迹、散落物或其他对象标注并写审计 |
-| GET/POST | `/survey-tasks/{task_id}/reports` | 查询/生成 PDF+JSON+GeoJSON 成果包；列表与生成响应均返回 `pdf_url/json_url/geojson_url` |
+| GET/POST | `/survey-tasks/{task_id}/reports` | 查询/生成 PDF+JSON+GeoJSON+标注 JPEG 成果包；列表与生成响应返回 `pdf_url/json_url/geojson_url/annotated_images[]`，其中标注图包含 `frame_id/frame_number/measurement_count/evidence_id/url/sha256` |
 | POST | `/survey-tasks/{task_id}/reports/{report_id}/deliver` | 经批准质量规则、URL 和 outbox 投递主平台 |
 | GET | `/survey-evidence/{evidence_id}/content` | 鉴权读取 managed 对象或 allowlist server asset，支持原视频 HTTP Range；拒绝绝对路径、路径穿越、缺失和哈希不一致引用；返回 `ETag`、`X-Content-SHA256`、`X-Storage-Backend`。server asset 首次登记或快速指纹变化时完整校验 SHA-256，未变化时以已持久化 size/mtime/ctime 快速确认，避免批次列表反复扫描大文件 |
+
+浏览器上传单文件上限统一为 8GB，Console2 Nginx、根入口和 Platform 使用同一边界；超过
+上限返回 413。`approve_review` 必须携带且只能携带以下六个 checklist 键，并全部为 true：
+`task_and_location`、`source_materials`、`coordinate_chain`、`measurements`、
+`edit_history`、`quality_status`。缺失、false 或额外键返回 422；批准审计的
+`after_value.review_checklist` 保存完整清单。
+
+量算画布以 `metric_transform` 对当前鼠标预览边实时显示米制长度，已保存的线、折线、面积和
+对象按服务端 `metric_geometry` 在每条边上显示长度。报告生成时，每个包含当前量算的 BEV
+帧都会固化为 `survey_report_annotated_image` 证据并嵌入 PDF；Console2 历史任务优先读取该
+不可变标注图，旧报告没有该字段时使用原 BEV 与版本化量算记录只读重绘，不改写历史报告。
 
 测绘结果 canonical schema 为 `uav.survey-result.v1`，事件固定
 `msg_type=uav_ai_event`、`event_type=survey_result`、
@@ -1021,7 +1029,8 @@ Content-Type: application/json
 > 当前运行时只接受第 0.5 节的 canonical channel 和 `uav_*` 业务消息 `type`。
 
 #### `WS /ws/realtime`
-- 连接 URL：`/ws/realtime?access_token=<JWT>`。缺失或无效 Token 在握手阶段以 `4401` 关闭；WebSocket 不读取 Cookie。
+- 连接 URL：`/ws/realtime`，浏览器自动携带 `uav_media_session` HttpOnly Cookie。缺失、无效、
+  过期或禁用用户在握手阶段以 `4401` 关闭；若 URL 出现 `access_token` query 同样拒绝。
 - 连接后发送订阅消息：
 ```json
 {
@@ -1033,6 +1042,7 @@ Content-Type: application/json
 ```json
 {"action": "subscribe", "channel": "uav_system"}
 ```
+- 客户端不得发送 `publish`；服务端返回 `unsupported_action`，不会广播客户端业务载荷。
 - 服务端推送消息格式：
 ```json
 {
@@ -1059,13 +1069,16 @@ Content-Type: application/json
 ```
 
 ### 认证机制
-- JWT token 在 `Authorization: Bearer <token>` 头中传递
-- Console2 仅使用 `sessionStorage:uav_access_token`，不读取旧 Console Cookie 或 Token key
-- WebSocket 因浏览器握手不能附加 Authorization header，使用 `access_token` query 参数并执行相同 JWT 校验
+- REST JWT 在 `Authorization: Bearer <token>` 头中传递；Console2 保存在
+  `sessionStorage:uav_access_token`。
+- WebSocket、MJPEG 和 HLS 只使用后端登录时设置的 HttpOnly `uav_media_session`；前端不可读取。
+- WebSocket URL 不携带 token；出现 `access_token` query 时即使 Cookie 有效也以 4401 拒绝。
 - Token 包含 `sub`（user_id）、`username`、`role` 字段
 - 中间件在 `platform/app/middleware/auth.py` 中实现
-- 公开路径白名单：`/health`、`/ready`、`/api/v1/auth/login`、`/api/v1/auth/register`、`/docs`、`/openapi.json`
-- `/api/v1/system*`、`/api/v1/users*`、`/api/v1/calibration*` 由后端要求 `role=admin`；前端菜单隐藏和角色预览不是安全边界
+- 公开路径白名单不包含 register、Pipeline proxy map 或媒体内容；logout 只清 Cookie且幂等。
+- WebSocket 客户端只允许 subscribe/unsubscribe/ping；`publish` 返回 `unsupported_action`。
+- register、system/users/calibration 和 external pipeline register 要求 admin；Pipeline/FFmpeg
+  写操作要求 operator/admin；前端菜单隐藏不是安全边界。
 - 后端角色固定映射为 Console2 展示角色：`admin → 管理员`、`operator → 交通指挥员`、`viewer → 数据分析员`
 
 ## 8. 平台 REST API（43 条路由）
@@ -1074,8 +1087,11 @@ Content-Type: application/json
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/api/v1/pipelines` | 列出所有管道实例 |
+| GET | `/api/v1/pipelines` | 登录用户列出所有管道实例 |
 | GET | `/api/v1/pipelines/summary` | 管道概览（running/stopped/error 计数） |
+| POST | `/api/v1/pipelines` | operator/admin 启动；视频、遥测、道路路径和 RTSP 必须通过 allowlist |
+| POST | `/api/v1/pipelines/register` | 仅 admin 登记外部管道；校验 camera、端口、canonical Topic 和重复占用 |
+| DELETE | `/api/v1/pipelines/{id}` | operator/admin 停止并记录审计 |
 | POST | `/api/v1/pipelines` | 启动新管道（201 Created） |
 | GET | `/api/v1/pipelines/{id}` | 获取管道详情 |
 | GET | `/api/v1/pipelines/{id}/status` | 获取管道健康状态 |
@@ -1125,7 +1141,7 @@ file handler 并降级到 console，避免 reader/tracker/show worker 因同一�
   "intersection_id": "INT_camera_1",
   "video_src": "rtsp://...",
   "roads_json": "configs/entry_exit_lanes.json",
-  "topic_name": "statistics_10",
+  "topic_name": "uav_statistics_10",
   "camera_id": 10,
   "video_port": 8101,
   "status": "running",

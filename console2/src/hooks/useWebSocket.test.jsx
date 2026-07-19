@@ -1,8 +1,6 @@
 import { act, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-vi.mock('../lib/api', () => ({ getAccessToken: () => 'ws-token' }))
-
 import { useWebSocket } from './useWebSocket'
 
 const sockets = []
@@ -35,10 +33,11 @@ describe('useWebSocket', () => {
     vi.unstubAllGlobals()
   })
 
-  it('authenticates, subscribes, normalizes, deduplicates, and unsubscribes on unmount', () => {
+  it('uses the same-origin media session without exposing a token in the URL', () => {
     const onMessage = vi.fn()
     const view = render(<Probe channels={['uav_intersection:INT-1']} onMessage={onMessage} />)
-    expect(sockets[0].url).toContain('access_token=ws-token')
+    expect(sockets[0].url).toBe('ws://localhost:3000/ws/realtime')
+    expect(sockets[0].url).not.toContain('access_token')
 
     act(() => sockets[0].onopen())
     expect(screen.getByText('connected')).toBeInTheDocument()

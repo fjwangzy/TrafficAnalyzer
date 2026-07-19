@@ -15,11 +15,12 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
 
-from sqlalchemy import func, select, text
+from sqlalchemy import func, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.core.config import settings
 from app.models.metrics import (
     ConflictEvent,
     ConflictReview,
@@ -31,9 +32,7 @@ from app.models.metrics import (
 )
 from app.models.mission import MessageDeadLetter, MessageInbox
 from app.models.survey import EvidenceItem, EvidencePackage
-from app.core.config import settings
 from app.services.survey_storage import ContentAddressedStore
-
 
 SOURCE_SYSTEM = "uav_traffic_analyzer_ai"
 CANONICAL_TYPES = {
@@ -56,7 +55,7 @@ class MetricContractError(ValueError):
     """Message does not satisfy the frozen canonical contract."""
 
 
-class MessageIdentityConflict(MetricContractError):
+class MessageIdentityConflict(MetricContractError):  # noqa: N818 - public contract
     """A stable message ID was replayed with different content."""
 
 
@@ -75,12 +74,19 @@ class PersistResult:
     msg_type: str
     normalized_payload: dict[str, Any]
     fact_references: tuple[str, ...]
+    dispatch_status: str
 
 
 class MetricStorePort(Protocol):
     async def persist(self, envelope: MessageEnvelope) -> PersistResult: ...
 
     async def quarantine(self, envelope: MessageEnvelope, error: MetricContractError) -> str: ...
+
+    async def mark_dispatched(self, source_system: str, message_id: str) -> None: ...
+
+    async def mark_dispatch_failed(
+        self, source_system: str, message_id: str, error: Exception
+    ) -> None: ...
 
 
 def _json_hash(value: dict[str, Any]) -> str:
@@ -149,7 +155,7 @@ class PostgresMetricStoreAdapter:
         raw_message_id = envelope.payload.get("message_id")
         source_system = str(envelope.payload.get("source_system") or SOURCE_SYSTEM)
         dead_letter_id = hashlib.sha256(
-            f"{envelope.topic}:{envelope.partition}:{envelope.offset}".encode("utf-8")
+            f"{envelope.topic}:{envelope.partition}:{envelope.offset}".encode()
         ).hexdigest()[:40]
         now = datetime.now(UTC)
         statement = pg_insert(MessageDeadLetter).values(
@@ -200,6 +206,7 @@ class PostgresMetricStoreAdapter:
                         normalized["msg_type"],
                         normalized,
                         tuple(inbox.fact_references or ()),
+                        inbox.dispatch_status,
                     )
             raise
 
@@ -222,6 +229,7 @@ class PostgresMetricStoreAdapter:
                         normalized["msg_type"],
                         normalized,
                         tuple(inbox.fact_references or ()),
+                        inbox.dispatch_status,
                     )
 
                 inbox = MessageInbox(
@@ -233,6 +241,8 @@ class PostgresMetricStoreAdapter:
                     offset=envelope.offset,
                     payload_hash=payload_hash,
                     status="processing",
+                    dispatch_status="pending",
+                    dispatch_attempts=0,
                     fact_references=[],
                 )
                 session.add(inbox)
@@ -246,7 +256,48 @@ class PostgresMetricStoreAdapter:
                 normalized["msg_type"],
                 normalized,
                 tuple(references),
+                "pending",
             )
+
+    async def mark_dispatched(self, source_system: str, message_id: str) -> None:
+        async with self._sessions() as session:
+            async with session.begin():
+                result = await session.execute(
+                    update(MessageInbox)
+                    .where(
+                        MessageInbox.source_system == source_system,
+                        MessageInbox.message_id == message_id,
+                    )
+                    .values(dispatch_status="dispatched", dispatched_at=datetime.now(UTC))
+                    .values(
+                        dispatch_attempts=MessageInbox.dispatch_attempts + 1,
+                        last_dispatch_error=None,
+                        last_dispatch_attempt_at=datetime.now(UTC),
+                    )
+                )
+                if result.rowcount != 1:
+                    raise RuntimeError("message inbox row is unavailable for dispatch completion")
+
+    async def mark_dispatch_failed(
+        self, source_system: str, message_id: str, error: Exception
+    ) -> None:
+        async with self._sessions() as session:
+            async with session.begin():
+                result = await session.execute(
+                    update(MessageInbox)
+                    .where(
+                        MessageInbox.source_system == source_system,
+                        MessageInbox.message_id == message_id,
+                    )
+                    .values(
+                        dispatch_status="pending",
+                        dispatch_attempts=MessageInbox.dispatch_attempts + 1,
+                        last_dispatch_error=str(error)[:2000],
+                        last_dispatch_attempt_at=datetime.now(UTC),
+                    )
+                )
+                if result.rowcount != 1:
+                    raise RuntimeError("message inbox row is unavailable for dispatch failure")
 
     @staticmethod
     async def _find_inbox(
@@ -842,6 +893,10 @@ class InMemoryMetricStoreAdapter:
         self.messages: dict[tuple[str, str], PersistResult] = {}
         self.payload_hashes: dict[tuple[str, str], str] = {}
         self.dead_letters: dict[tuple[str, int, int], dict[str, Any]] = {}
+        self.dispatched: set[tuple[str, str]] = set()
+        self.dispatch_attempts: dict[tuple[str, str], int] = {}
+        self.dispatch_errors: dict[tuple[str, str], str] = {}
+        self.last_dispatch_attempt_at: dict[tuple[str, str], datetime] = {}
 
     async def persist(self, envelope: MessageEnvelope) -> PersistResult:
         normalized = PostgresMetricStoreAdapter(None)._normalize(envelope)
@@ -855,18 +910,40 @@ class InMemoryMetricStoreAdapter:
                 raise MessageIdentityConflict(
                     f"message_id {message_id} was replayed with a different payload"
                 )
-            return PersistResult(True, message_id, msg_type, existing.normalized_payload, existing.fact_references)
-        result = PersistResult(False, message_id, msg_type, normalized, (f"memory:{message_id}",))
+            return PersistResult(
+                True,
+                message_id,
+                msg_type,
+                existing.normalized_payload,
+                existing.fact_references,
+                "dispatched" if key in self.dispatched else "pending",
+            )
+        result = PersistResult(False, message_id, msg_type, normalized, (f"memory:{message_id}",), "pending")
         self.messages[key] = result
         self.payload_hashes[key] = payload_hash
         return result
+
+    async def mark_dispatched(self, source_system: str, message_id: str) -> None:
+        key = (source_system, message_id)
+        self.dispatched.add(key)
+        self.dispatch_attempts[key] = self.dispatch_attempts.get(key, 0) + 1
+        self.dispatch_errors.pop(key, None)
+        self.last_dispatch_attempt_at[key] = datetime.now(UTC)
+
+    async def mark_dispatch_failed(
+        self, source_system: str, message_id: str, error: Exception
+    ) -> None:
+        key = (source_system, message_id)
+        self.dispatch_attempts[key] = self.dispatch_attempts.get(key, 0) + 1
+        self.dispatch_errors[key] = str(error)
+        self.last_dispatch_attempt_at[key] = datetime.now(UTC)
 
     async def quarantine(self, envelope: MessageEnvelope, error: MetricContractError) -> str:
         key = (envelope.topic, envelope.partition, envelope.offset)
         existing = self.dead_letters.get(key)
         count = int(existing["occurrence_count"]) + 1 if existing else 1
         dead_letter_id = hashlib.sha256(
-            f"{envelope.topic}:{envelope.partition}:{envelope.offset}".encode("utf-8")
+            f"{envelope.topic}:{envelope.partition}:{envelope.offset}".encode()
         ).hexdigest()[:40]
         self.dead_letters[key] = {
             "id": dead_letter_id,

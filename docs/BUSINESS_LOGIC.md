@@ -1,7 +1,8 @@
 # BUSINESS_LOGIC.md — TrafficAnalyzer 核心业务逻辑
 
-> 当前实现说明基于 commit `84c6bd6` 的真实代码分析；标记为“目标态”的消息命名与
-> 持久化逻辑依据 ADR-019（2026-07-13），尚未完成代码、数据库和 Compose 迁移。
+> 2026-07-17 当前实现已完成 ADR-019 本机 canonical 切换；运行时仅使用
+> `road9`/TimescaleDB、Kafka KRaft、`uav_*` 消息和 Console2。旧链路只作为明确标记的
+> 历史背景保留，不得恢复兼容、双写或迁移。
 
 ## S4 执法候选业务边界（I4 本地工程实现）
 
@@ -197,9 +198,9 @@ Kafka 继续承担检测管道到平台之间的异步传输与削峰，但所�
 | 统一 AI 事件（规划） | `uav_ai_events` | `uav_ai_event` |
 | 主平台反馈（规划） | `uav_ai_event_feedback` | `uav_ai_event_feedback` |
 
-当前代码中的 `statistics_*`、`track_complete_*`、`conflicts_*`、`telemetry_*` 和
-`system_metrics` 均是待迁移旧名称。迁移期间可以短期双读或双发用于核验，但目标态不得
-长期保留无 `uav_` 前缀的别名。
+当前运行代码只接受表中的 canonical 名称。`statistics_*`、`track_complete_*`、
+`conflicts_*`、`telemetry_*` 和 `system_metrics` 仅是历史名称；不得双读、双发、fallback
+或增加适配器。
 
 所有带相机维度的 Topic 必须通过统一 builder 以消息类别和显式 `camera_id` 生成，例如
 输入 `statistics + camera_id` 选择 `uav_statistics_{camera_id}` 模板。业务代码不得使用
@@ -262,11 +263,11 @@ PostgreSQL/TimescaleDB 读取。分区粒度、压缩、保留期、连续聚合
   当作零流量。
 - spool/outbox 持久化失败属于链路故障，必须触发健康降级和告警，不能继续返回“发送成功”。
 
-#### 5.4 历史数据时间语义与双写去重规则
+#### 5.4 历史数据时间语义与双写去重规则（历史分析，当前不执行）
 
-新消息应分别携带业务时间和接收时间：指标/遥测使用 `observed_at`，事件使用
-`occurred_at`，平台另存 `ingested_at`。迁移旧 InfluxDB 数据时不得假设 point `time`
-就是业务时间，处理规则如下：
+新消息分别携带业务时间和接收时间：指标/遥测使用 `observed_at`，事件使用
+`occurred_at`，平台另存 `ingested_at`。以下规则仅保存已取消的旧数据迁移风险分析；当前
+本机不读取、不校验、不迁移旧 InfluxDB 数据：
 
 1. 按 measurement 和历史写入代码分支转换，不允许一套通用映射覆盖
    `statistics`、`conflict`、`track_complete` 等不同来源。
@@ -416,7 +417,9 @@ d(t) = |motor_future(t) - non_motor_future(t)|
 2. 同刻 CPA 扩展：`enable_same_time_cpa` 默认关闭，避免只因中心点擦肩距离为 0.9m~1.7m 就判成相撞。显式开启后，对双方相对运动求最近接近点（CPA），只有最近距离进入 `same_time_collision_radius_m`（默认 `0.8m`）才作为 TTC 候选；`collision_radius_m` 不再直接用于同刻触发。CPA 候选中的 `pet_sec=0` 只表示同一预测时刻测距，不作为 PET 侵占证据。
 3. 冲突角过滤：只保留 `30°~150°` 的横向/斜向交叉冲突，过滤同向并行、追尾类和近似正面对向场景。
 
-前端业务回放只展示 `prediction_type=path_intersection` 且 `distance_m` 近似 `0.0` 的事件；旧格式 Kafka/WebSocket 消息仅在缺少 `prediction_type` 且 `distance_m` 近似 `0.0` 时按路径交点兼容，避免历史 0.9m/1.3m/1.7m CPA 擦肩事件或畸形 path 事件继续进入冲突列表。
+前端业务回放只展示 canonical `prediction_type=path_intersection` 且 `distance_m` 近似
+`0.0` 的事件；缺少 canonical 类型或使用旧 Kafka/WebSocket shape 的消息直接拒绝，不恢复
+历史兼容。这样避免旧 0.9m/1.3m/1.7m CPA 擦肩事件或畸形 path 事件进入冲突列表。
 
 专项场景：
 
@@ -438,9 +441,9 @@ near-miss 证据：
 1. 任务先完成任务上下文、作业授权、现场指挥、设备和存储五项前置核验；缺项进入 `precheck_failed`，不能开始采集。
 2. 已登记 SourceProfile 的 MP4 与 DJI `.srt` / DJI Cloud JSON `.json/.txt` 不写入证据卷，而以 `server_asset` allowlist 相对键、SHA-256、字节数和 size/mtime/ctime 快速指纹形成不可变引用；派生关键帧/BEV/报告使用 `managed` 内容寻址对象。指纹未变化时快速确认，指纹变化时必须重新计算完整 SHA-256；绝对路径、路径穿越、allowlist 外文件、缺失或哈希变化均阻止可信处理。
 3. `SurveyWorker` 从 `uav_capture_ingestion_jobs` 取出任务，按来源记录的遥测类型、时间偏移和容忍窗口提取 6 个关键帧，生成原始帧/BEV、遥测覆盖和清晰度/曝光观测；失败按可配置次数重试并保留错误。已知遥测缺口必须保留 `degraded`，不能用插值伪装连续。
-4. 用户选择可用批次后进入量算。浏览器只提交图像像素几何，服务端使用该帧变换计算 ENU 米制点、长度、折线长度、面积和周长，并把每次修订保存为版本链。
+4. 用户选择可用批次后进入量算。浏览器只提交图像像素几何，服务端使用该帧变换计算 ENU 米制点、长度、折线长度、面积和周长，并把每次修订保存为版本链。服务端同时只读下发 BEV→ENU 变换，画布在鼠标移动时把当前预览边换算为米并贴在线段中点；已保存折线、面积和对象的每条边使用持久化 `metric_geometry` 标长，浏览器计算值不替代服务端成果。
 5. 提交复核至少需要一项带 metric geometry 的当前量算；复核可通过或带原因退回“补拍/修订量算”。技术复核通过不等于法定事故认定。
-6. 报告生成前重新计算全部引用材料的 SHA-256 和大小，输出 PDF、canonical JSON、GeoJSON 与 manifest hash；重复请求用 `Idempotency-Key` 返回同一业务结果。
+6. 报告生成前重新计算全部引用材料的 SHA-256 和大小；按量算关联帧生成带几何与逐边长度的标注 JPEG，将其作为派生证据嵌入 PDF，并随 canonical JSON、GeoJSON 与 manifest hash 输出。历史任务优先展示固化标注图；旧报告可由不可变 BEV 和版本化量算记录只读重绘，不回写旧版本。重复请求用 `Idempotency-Key` 返回同一业务结果。
 7. 报告只有在 `survey_quality` 规则已批准且配置主平台 URL 后才创建 `survey_result` 事件和 outbox；worker 记录每次 HTTP 尝试，超过上限进入 dead letter。当前未冻结阈值保持 `unverified`，不得伪造“质量通过”或成功回执。
 8. 场景标注只能关联已持久化关键帧，车辆、痕迹、散落物和其他对象的创建/修改/删除保留 revision 与统一审计；车道标注继续以稳定悬停为实时触发，亦可从同一来源的真实持久关键帧恢复任务，确认结果进入 `uav_lane_annotation_tasks` 与 `uav_visual_lane_bindings` 并供后续 Pipeline 优先复用。
 9. 冲突节点实际产出事件时才保存研判关键帧并附到统一证据包；当前素材没有真实事件时应保存“未检出事件”事实，禁止为了验收制造冲突。
@@ -469,7 +472,7 @@ near-miss 证据：
 帧 N 进入 AutoLaneInferenceNode
   → lane_source="model" → 跳过（模型检测优先于轨迹推断）
 帧 N 进入 KafkaProducerNode
-  → 距离上次发送 > 1 秒 → 发送 JSON 到 statistics_1 topic
+  → 距离上次发送 > 1 秒 → 发送 canonical JSON 到 uav_statistics_1 topic
 帧 N 进入 ShowNode
   → 绘制所有框 + 多边形 + 统计面板
   → frame_result 写入 FrameElement
@@ -477,8 +480,8 @@ near-miss 证据：
   → 写入文件或推流
 ```
 
-当前生命周期只描述检测管道代码事实；其下游仍可能由 Telegraf 写 InfluxDB，并由 Grafana
-展示。该旧链路已废弃，不能作为目标验收依据。
+当前生命周期直接进入 canonical Kafka 与 `road9`；Telegraf、InfluxDB、Grafana 已从运行态
+退役，仅在历史文档中保留背景。
 
 ### 目标持久化生命周期
 
@@ -493,7 +496,7 @@ near-miss 证据：
       └── 业务：uav_track_events / uav_ai_events / uav_event_outbox / ...
   → PostgreSQL 事务提交成功后手动提交 Kafka offset
   → 广播 uav_* WebSocket channel
-  → traffic-fly-console 展示实时状态，并通过 REST 查询 TimescaleDB 历史与聚合数据
+  → Console2 展示实时状态，并通过 REST 查询 TimescaleDB 历史与聚合数据
 ```
 
 业务失败语义：
@@ -503,8 +506,8 @@ near-miss 证据：
   不得以接收恢复时间替代业务观测时间。
 - 路网映射缺失时保留原始本地标识并标记 `unmapped`，不得伪造 `inter_id`、`link_id`、
   `lane_id`；后续补映射不得无审计地改写历史版本。
-- PostgreSQL/TimescaleDB 是目标态唯一统计与事件查询源。InfluxDB 仅允许在迁移核验期
-  只读对账或短期影子写入，完成切换后必须停止生产写入并下线 Grafana/Telegraf/InfluxDB。
+- PostgreSQL/TimescaleDB 是当前唯一统计与事件查询源；运行时禁止重新挂载、影子写入或
+  对账旧 InfluxDB/Grafana/Telegraf 链路。
 ### S9 Mission 与 Pipeline 终态同步
 
 - Mission 与 Pipeline 是两个状态机：PipelineManager 负责识别子进程 `running/stopped/error`，MissionOrchestrator 在 5 秒调度 tick 中持久化业务终态。

@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 from app.kafka.consumer import KafkaConsumerService
 from app.models.survey import EvidenceItem
+from app.services.alert_engine import AlertEngine
 from app.services.metric_store import (
     InMemoryMetricStoreAdapter,
     MessageEnvelope,
@@ -21,6 +22,18 @@ class _RecordingWS:
 
     async def broadcast(self, channel, message):
         self.messages.append((channel, message))
+
+
+class _FailOnceWS(_RecordingWS):
+    def __init__(self):
+        super().__init__()
+        self.failed = False
+
+    async def broadcast(self, channel, message):
+        if not self.failed:
+            self.failed = True
+            raise RuntimeError("temporary websocket failure")
+        await super().broadcast(channel, message)
 
 
 class _RecordingSession:
@@ -126,6 +139,78 @@ class MetricStoreContractTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(ws.messages), 1)
         self.assertEqual(ws.messages[0][0], "uav_intersection:INT_camera_1")
         self.assertEqual(ws.messages[0][1]["type"], "uav_stats")
+
+    async def test_consumer_replays_pending_dispatch_after_side_effect_failure(self):
+        ws = _RecordingWS()
+        store = InMemoryMetricStoreAdapter()
+        service = KafkaConsumerService(
+            bootstrap_servers="localhost:9092",
+            group_id="test",
+            topics_pattern="uav_statistics_.*",
+            ws_manager=ws,
+            metric_store=store,
+        )
+        payload = self._stats_payload("dispatch-retry-1", 2)
+        original = service._handle_stats
+        attempts = 0
+
+        async def fail_once(data, intersection_id):
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                raise RuntimeError("temporary side effect failure")
+            await original(data, intersection_id)
+
+        service._handle_stats = fail_once
+        with self.assertRaisesRegex(RuntimeError, "temporary"):
+            await service._process_message(payload, "uav_statistics_1", 0, 10)
+        key = ("uav_traffic_analyzer_ai", "dispatch-retry-1")
+        self.assertEqual(store.dispatch_attempts[key], 1)
+        self.assertIn("temporary side effect failure", store.dispatch_errors[key])
+        self.assertIsNotNone(store.last_dispatch_attempt_at[key])
+        await service._process_message(payload, "uav_statistics_1", 0, 10)
+        await service._process_message(payload, "uav_statistics_1", 0, 10)
+
+        self.assertEqual(attempts, 2)
+        self.assertEqual(len(ws.messages), 1)
+        self.assertEqual(store.dispatch_attempts[key], 2)
+        self.assertNotIn(key, store.dispatch_errors)
+
+    async def test_conflict_retry_is_not_swallowed_by_visibility_cache(self):
+        ws = _FailOnceWS()
+        store = InMemoryMetricStoreAdapter()
+        alert_engine = AlertEngine(ws)
+        service = KafkaConsumerService(
+            bootstrap_servers="localhost:9092",
+            group_id="test",
+            topics_pattern="uav_conflicts_.*",
+            ws_manager=ws,
+            alert_engine=alert_engine,
+            metric_store=store,
+        )
+        now = datetime.now(UTC).isoformat()
+        payload = {
+            "message_id": "conflict-retry-1",
+            "msg_type": "uav_conflict",
+            "schema_version": "uav_conflict/v1",
+            "occurred_at": now,
+            "produced_at": now,
+            "source_system": "uav_traffic_analyzer_ai",
+            "intersection_id": "INT_camera_1",
+            "data": {
+                "motor_id": 96,
+                "non_motor_id": 88,
+                "severity": "critical",
+                "ttc_sec": 1.2,
+                "distance_m": 0.8,
+            },
+        }
+
+        with self.assertRaisesRegex(RuntimeError, "temporary websocket"):
+            await service._process_message(payload, "uav_conflicts_1", 0, 10)
+        await service._process_message(payload, "uav_conflicts_1", 0, 10)
+
+        self.assertEqual(len(alert_engine.alerts), 1)
 
     async def test_consumer_quarantines_permanent_contract_error_without_broadcast(self):
         ws = _RecordingWS()

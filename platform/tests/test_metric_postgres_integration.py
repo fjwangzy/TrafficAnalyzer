@@ -25,7 +25,6 @@ from app.services.metric_store import (
     PostgresMetricStoreAdapter,
 )
 
-
 pytestmark = pytest.mark.skipif(
     os.environ.get("RUN_PG_INTEGRATION") != "1",
     reason="requires an explicitly selected local PostgreSQL/TimescaleDB database",
@@ -93,6 +92,25 @@ async def test_transactional_inbox_facts_queries_and_identity_conflict():
         assert all(not result.duplicate for result in results)
         assert duplicate.duplicate
         assert len(duplicate.fact_references) == 2  # intersection + one lane
+        assert duplicate.dispatch_status == "pending"
+
+        dispatch_message_id = f"stats-{marker}"
+        await store.mark_dispatch_failed(
+            "uav_traffic_analyzer_ai",
+            dispatch_message_id,
+            RuntimeError("integration dispatch failure"),
+        )
+        pending_replay = await store.persist(
+            MessageEnvelope(messages[0][1], messages[0][0], 0, 101)
+        )
+        assert pending_replay.duplicate
+        assert pending_replay.dispatch_status == "pending"
+
+        await store.mark_dispatched("uav_traffic_analyzer_ai", dispatch_message_id)
+        dispatched_replay = await store.persist(
+            MessageEnvelope(messages[0][1], messages[0][0], 0, 102)
+        )
+        assert dispatched_replay.dispatch_status == "dispatched"
 
         conflicting = {**messages[0][1], "data": {"cars": 999}}
         with pytest.raises(MessageIdentityConflict):
@@ -127,10 +145,20 @@ async def test_transactional_inbox_facts_queries_and_identity_conflict():
                 TrackPoint.source_message_id == f"track-{marker}"
             ))
             dead_letter = await session.get(MessageDeadLetter, dead_letter_id)
+            dispatch_inbox = await session.scalar(
+                select(MessageInbox).where(
+                    MessageInbox.source_system == "uav_traffic_analyzer_ai",
+                    MessageInbox.message_id == dispatch_message_id,
+                )
+            )
         assert inbox_count == 5
         assert point_count == 2
         assert dead_letter is not None
         assert dead_letter.reason_code == "MessageIdentityConflict"
+        assert dispatch_inbox.dispatch_status == "dispatched"
+        assert dispatch_inbox.dispatch_attempts == 2
+        assert dispatch_inbox.last_dispatch_error is None
+        assert dispatch_inbox.last_dispatch_attempt_at is not None
         async with async_session_maker() as session:
             session.add(ConflictReview(
                 event_id=f"missing-{marker}",

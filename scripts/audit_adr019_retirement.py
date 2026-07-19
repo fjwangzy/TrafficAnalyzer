@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from pathlib import Path
 
 
@@ -17,6 +18,23 @@ def _text(relative: str) -> str:
     return path.read_text(encoding="utf-8", errors="ignore") if path.exists() else ""
 
 
+def _current_schema_head() -> str:
+    revisions: set[str] = set()
+    parents: set[str] = set()
+    for path in (ROOT / "platform" / "alembic" / "versions").glob("*.py"):
+        source = path.read_text(encoding="utf-8")
+        revision = re.search(r'^revision\s*=\s*["\']([^"\']+)["\']', source, re.MULTILINE)
+        down_revision = re.search(r'^down_revision\s*=\s*["\']([^"\']+)["\']', source, re.MULTILINE)
+        if revision:
+            revisions.add(revision.group(1))
+        if down_revision:
+            parents.add(down_revision.group(1))
+    heads = revisions - parents
+    if len(heads) != 1:
+        raise RuntimeError(f"expected one Alembic head, found {sorted(heads)}")
+    return heads.pop()
+
+
 def _report_passed() -> bool:
     try:
         report = json.loads(LOCAL_REPORT.read_text(encoding="utf-8"))
@@ -25,7 +43,7 @@ def _report_passed() -> bool:
     return (
         report.get("schema_version") == "uav.adr019-local-retirement/v1"
         and report.get("passed") is True
-        and report.get("database", {}).get("alembic_revision") == "20260716_0011"
+        and report.get("database", {}).get("alembic_revision") == _current_schema_head()
         and report.get("database", {}).get("hypertables") == 5
     )
 

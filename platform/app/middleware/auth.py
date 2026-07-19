@@ -5,19 +5,22 @@ it wraps the ASGI scope in a Request object, which breaks the WebSocket
 upgrade protocol. This pure ASGI implementation validates REST Bearer tokens
 and WebSocket query-string tokens before forwarding either scope.
 """
-from app.services.auth_service import verify_token
+from http.cookies import SimpleCookie
 from urllib.parse import parse_qs
 
+from sqlalchemy import select
+
+from app.core.config import settings
+from app.core.database import async_session_maker
+from app.models.user import User
+from app.services.auth_service import verify_token
 
 # Public paths that skip authentication
 PUBLIC_PATHS = [
     "/health",
     "/ready",
-    "/video/",       # Video stream endpoints (MJPEG proxy)
-    "/api/v1/video/camera/",  # Browser <img> MJPEG proxy
     "/api/v1/auth/login",
-    "/api/v1/auth/register",
-    "/api/v1/pipelines/proxy-map",  # Camera port mapping for Vite dev proxy
+    "/api/v1/auth/logout",
     "/docs",
     "/openapi.json",
     "/redoc",
@@ -25,7 +28,44 @@ PUBLIC_PATHS = [
 
 
 def _is_public_path(path: str) -> bool:
-    return any(path.startswith(prefix) for prefix in PUBLIC_PATHS)
+    return path in PUBLIC_PATHS
+
+
+def _is_media_path(path: str) -> bool:
+    return (
+        path.startswith("/video/")
+        or path.startswith("/api/v1/video/camera/")
+        or path.startswith("/hls/")
+        or path == "/api/v1/auth/media-session"
+    )
+
+
+def _cookie_token(headers: list[tuple[bytes, bytes]]) -> str | None:
+    cookie = SimpleCookie()
+    for key, value in headers:
+        if key.lower() == b"cookie":
+            cookie.load(value.decode("latin-1"))
+    morsel = cookie.get(settings.media_cookie_name)
+    return morsel.value if morsel else None
+
+
+async def _is_active_user(payload: dict) -> bool:
+    try:
+        user_id = int(payload.get("sub"))
+    except (TypeError, ValueError):
+        return False
+    try:
+        async with async_session_maker() as session:
+            user = await session.scalar(select(User).where(User.id == user_id))
+        if user is None or not user.is_active:
+            return False
+        # JWTs identify the session; authorization follows the current DB role
+        # so a demotion takes effect without waiting for token expiry.
+        payload["username"] = user.username
+        payload["role"] = user.role
+        return True
+    except Exception:
+        return False
 
 
 class AuthMiddleware:
@@ -45,15 +85,20 @@ class AuthMiddleware:
             await self.app(scope, receive, send)
             return
 
-        # WebSocket clients authenticate with the same JWT in the query string.
+        # WebSocket clients authenticate only with the HttpOnly media cookie.
         if scope["type"] == "websocket":
             query = parse_qs(scope.get("query_string", b"").decode("utf-8"))
-            token = query.get("access_token", [None])[0]
+            if "access_token" in query:
+                await send({"type": "websocket.close", "code": 4401, "reason": "Query token is not allowed"})
+                return
+            token = _cookie_token(scope.get("headers", []))
             if not token:
                 await send({"type": "websocket.close", "code": 4401, "reason": "Missing access token"})
                 return
             try:
                 payload = verify_token(token)
+                if not await _is_active_user(payload):
+                    raise ValueError("inactive user")
                 scope.setdefault("state", {})
                 scope["state"]["user"] = payload
             except Exception:
@@ -65,6 +110,23 @@ class AuthMiddleware:
         # HTTP: check if path is public
         path = scope.get("path", "")
         if _is_public_path(path):
+            await self.app(scope, receive, send)
+            return
+
+        if _is_media_path(path):
+            token = _cookie_token(scope.get("headers", []))
+            if not token:
+                await self._send_json_response(send, 401, {"detail": "Missing media session"})
+                return
+            try:
+                payload = verify_token(token)
+                if not await _is_active_user(payload):
+                    raise ValueError("inactive user")
+                scope.setdefault("state", {})
+                scope["state"]["user"] = payload
+            except Exception:
+                await self._send_json_response(send, 401, {"detail": "Invalid media session"})
+                return
             await self.app(scope, receive, send)
             return
 
@@ -90,6 +152,8 @@ class AuthMiddleware:
 
         try:
             payload = verify_token(token)
+            if not await _is_active_user(payload):
+                raise ValueError("inactive user")
             # Inject user info into scope state
             scope.setdefault("state", {})
             scope["state"]["user"] = payload
@@ -97,8 +161,17 @@ class AuthMiddleware:
             await self._send_json_response(send, 401, {"detail": f"Invalid token: {str(e)}"})
             return
 
-        admin_prefixes = ("/api/v1/system", "/api/v1/users", "/api/v1/calibration")
-        if path.startswith(admin_prefixes) and payload.get("role") != "admin":
+        admin_prefixes = (
+            "/api/v1/system",
+            "/api/v1/users",
+            "/api/v1/calibration",
+            "/api/v1/auth/register",
+        )
+        is_admin_path = any(
+            path == prefix or path.startswith(f"{prefix}/")
+            for prefix in admin_prefixes
+        )
+        if is_admin_path and payload.get("role") != "admin":
             await self._send_json_response(send, 403, {"detail": "Administrator role required"})
             return
 

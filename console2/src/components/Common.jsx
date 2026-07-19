@@ -1,3 +1,4 @@
+import { useEffect, useRef } from 'react'
 import { CaretRight, CheckCircle, Info, WarningCircle, XCircle } from '@phosphor-icons/react'
 import { statusLabel } from '../data/mockData'
 
@@ -39,7 +40,11 @@ export function DataTable({ columns, rows, rowKey = 'id', onRowClick, empty = '�
         <tbody>
           {rows.length === 0 && <tr><td colSpan={columns.length} className='empty-cell'>{empty}</td></tr>}
           {rows.map((row) => (
-            <tr key={row[rowKey]} onClick={() => onRowClick?.(row)} className={onRowClick ? 'clickable' : ''}>
+            <tr key={row[rowKey]} tabIndex={onRowClick ? 0 : undefined} onClick={() => onRowClick?.(row)} onKeyDown={(event) => {
+              if (!onRowClick || !['Enter', ' '].includes(event.key)) return
+              event.preventDefault()
+              onRowClick(row)
+            }} className={onRowClick ? 'clickable' : ''}>
               {columns.map((column) => <td key={column.key}>{column.render ? column.render(row[column.key], row) : row[column.key]}</td>)}
             </tr>
           ))}
@@ -54,13 +59,41 @@ export function FilterBar({ children, result, onReset }) {
 }
 
 export function Segmented({ value, onChange, options, label }) {
-  return <div className='segmented' aria-label={label}>{options.map((item) => <button key={item.value} className={value === item.value ? 'active' : ''} onClick={() => onChange(item.value)}>{item.label}</button>)}</div>
+  return <div className='segmented' role='group' aria-label={label}>{options.map((item) => <button key={item.value} aria-pressed={value === item.value} className={value === item.value ? 'active' : ''} onClick={() => onChange(item.value)}>{item.label}</button>)}</div>
 }
 
 export function DetailDrawer({ title, subtitle, onClose, children, footer, wide = false }) {
+  const drawerRef = useRef(null)
+  const closeRef = useRef(null)
+  const returnFocusRef = useRef(document.activeElement)
+  useEffect(() => {
+    closeRef.current?.focus()
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        onClose()
+        return
+      }
+      if (event.key !== 'Tab') return
+      const focusable = [...drawerRef.current.querySelectorAll('button:not(:disabled), a[href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])')]
+      if (!focusable.length) return
+      const first = focusable[0]
+      const last = focusable.at(-1)
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault(); last.focus()
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault(); first.focus()
+      }
+    }
+    document.addEventListener('keydown', handleKeyDown)
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown)
+      returnFocusRef.current?.focus?.()
+    }
+  }, [onClose])
   return (
-    <aside className={`detail-drawer ${wide ? 'wide' : ''}`} role='dialog' aria-label={title}>
-      <header><div><span>{subtitle}</span><strong>{title}</strong></div><button className='icon-action' onClick={onClose} aria-label='关闭'><XCircle size={21} /></button></header>
+    <aside ref={drawerRef} className={`detail-drawer ${wide ? 'wide' : ''}`} role='dialog' aria-modal='true' aria-label={title}>
+      <header><div><span>{subtitle}</span><strong>{title}</strong></div><button ref={closeRef} className='icon-action' onClick={onClose} aria-label='关闭'><XCircle size={21} /></button></header>
       <div className='drawer-body'>{children}</div>
       {footer && <footer>{footer}</footer>}
     </aside>

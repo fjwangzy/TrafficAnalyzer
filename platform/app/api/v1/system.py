@@ -2,8 +2,7 @@
 import os
 from pathlib import Path
 
-from fastapi import APIRouter, Request, Query
-
+from fastapi import APIRouter, Query, Request
 
 router = APIRouter(prefix="/system", tags=["system"])
 

@@ -2,11 +2,11 @@
 import asyncio
 import logging
 import os
-import httpx
-from fastapi import APIRouter, Request
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
-from fastapi.staticfiles import StaticFiles
+import re
 
+import httpx
+from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
 logger = logging.getLogger(__name__)
 
@@ -14,6 +14,38 @@ router = APIRouter(prefix="/video", tags=["video"])
 
 # Active HLS streams
 _STREAMS: dict[str, dict] = {}
+
+
+def _require_operator(request: Request) -> dict:
+    user = getattr(request.state, "user", None) or {}
+    if user.get("role") not in {"operator", "admin"}:
+        logger.warning(
+            "audit actor=%s role=%s action=%s outcome=denied",
+            user.get("username") or user.get("sub") or "anonymous",
+            user.get("role") or "unknown",
+            request.url.path,
+        )
+        raise HTTPException(status_code=403, detail="Operator role required")
+    return user
+
+
+async def _audit(request: Request, actor: dict, action: str, stream_id: str) -> None:
+    service = getattr(request.app.state, "audit_service", None)
+    if service is None:
+        raise HTTPException(status_code=503, detail="Persistent audit service unavailable")
+    await service.record(
+        actor=actor,
+        action=action,
+        target_type="video_stream",
+        target_id=stream_id,
+        after_value={"stream_id": stream_id},
+    )
+
+
+def _validate_stream_id(stream_id: str) -> str:
+    if not re.fullmatch(r"[1-9][0-9]{0,4}", stream_id):
+        raise HTTPException(status_code=422, detail="stream_id must be a positive camera number")
+    return stream_id
 
 
 @router.get("/streams")
@@ -75,10 +107,15 @@ async def start_stream(stream_id: str, request: Request):
 
     stream_id corresponds to the camera suffix: '1' -> traffic_analyzer_camera_1:8100
     """
+    actor = _require_operator(request)
+    stream_id = _validate_stream_id(stream_id)
     if stream_id in _STREAMS and _STREAMS[stream_id]["status"] == "running":
         return _STREAMS[stream_id]
 
     settings = request.app.state.settings
+    if sum(item.get("status") == "running" for item in _STREAMS.values()) >= settings.video_max_active_streams:
+        raise HTTPException(status_code=409, detail="video stream concurrency limit reached")
+    await _audit(request, actor, "video.stream.start", stream_id)
     # Build source URL: http://traffic_analyzer_camera_{stream_id}:8100/video
     source_url = f"http://traffic_analyzer_camera_{stream_id}:8100/video"
     output_dir = f"{settings.hls_output_dir}/{stream_id}"
@@ -137,8 +174,11 @@ async def start_stream(stream_id: str, request: Request):
 
 
 @router.post("/streams/{stream_id}/stop")
-async def stop_stream(stream_id: str):
+async def stop_stream(stream_id: str, request: Request):
     """Stop an active HLS stream."""
+    actor = _require_operator(request)
+    stream_id = _validate_stream_id(stream_id)
+    await _audit(request, actor, "video.stream.stop", stream_id)
     stream = _STREAMS.pop(stream_id, None)
     if not stream:
         return {"error": "not_found", "stream_id": stream_id}
@@ -159,6 +199,9 @@ async def get_snapshot(stream_id: str, request: Request):
 
     Useful for thumbnail / preview without starting full HLS.
     """
+    actor = _require_operator(request)
+    stream_id = _validate_stream_id(stream_id)
+    await _audit(request, actor, "video.snapshot", stream_id)
     settings = request.app.state.settings
     source_url = f"http://traffic_analyzer_camera_{stream_id}:8100/video"
     output_path = f"{settings.hls_output_dir}/{stream_id}/snapshot.jpg"
@@ -181,5 +224,5 @@ async def get_snapshot(stream_id: str, request: Request):
         if os.path.exists(output_path):
             return FileResponse(output_path, media_type="image/jpeg")
         return JSONResponse({"error": "snapshot_failed"}, status_code=500)
-    except (FileNotFoundError, asyncio.TimeoutError) as e:
+    except (TimeoutError, FileNotFoundError) as e:
         return JSONResponse({"error": str(e)}, status_code=500)

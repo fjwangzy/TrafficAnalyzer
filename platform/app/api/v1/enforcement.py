@@ -4,9 +4,15 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Query, Request, status
 
-from app.schemas.enforcement import ClueIngest, ClueReview, RuleCreate, RuleUpdate, ZoneCreate, ZoneUpdate
+from app.schemas.enforcement import (
+    ClueIngest,
+    ClueReview,
+    RuleCreate,
+    RuleUpdate,
+    ZoneCreate,
+    ZoneUpdate,
+)
 from app.services.enforcement_service import EnforcementError, EnforcementService
-
 
 router = APIRouter(prefix="/enforcement", tags=["enforcement"])
 

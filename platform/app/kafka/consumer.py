@@ -10,7 +10,7 @@ from aiokafka import AIOKafkaConsumer, TopicPartition
 from aiokafka.structs import OffsetAndMetadata
 
 from app.kafka.ws_manager import WSManager
-from app.models.drone_store import update_drone_telemetry, update_drone_from_stats
+from app.models.drone_store import update_drone_from_stats, update_drone_telemetry
 from app.services.metric_store import MessageEnvelope, MetricContractError, MetricStorePort
 
 logger = logging.getLogger(__name__)
@@ -72,7 +72,7 @@ class KafkaConsumerService:
         consumer = AIOKafkaConsumer(
             bootstrap_servers=self._bootstrap,
             group_id=self._group_id,
-            auto_offset_reset="latest",
+            auto_offset_reset="earliest",
             enable_auto_commit=False,
             value_deserializer=lambda v: json.loads(v.decode("utf-8")),
             request_timeout_ms=10000,
@@ -93,7 +93,7 @@ class KafkaConsumerService:
         try:
             await asyncio.wait_for(consumer.start(), timeout=15)
             return consumer
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.warning("Kafka consumer start timed out (broker may be unavailable)")
             try:
                 await consumer.stop()
@@ -214,7 +214,7 @@ class KafkaConsumerService:
                 type(error).__name__,
             )
             return
-        if result.duplicate:
+        if result.dispatch_status == "dispatched":
             return
         normalized = result.normalized_payload
         business_data = normalized.get("data")
@@ -233,22 +233,31 @@ class KafkaConsumerService:
         msg_type = result.msg_type
         intersection_id = data.get("inter_id") or data.get("intersection_id") or self._extract_intersection(topic)
 
-        if msg_type == "uav_stats":
-            await self._handle_stats(data, intersection_id)
-        elif msg_type == "uav_detections":
-            await self._handle_detections(data, intersection_id)
-        elif msg_type == "uav_track_complete":
-            await self._handle_track_complete(data, intersection_id)
-        elif msg_type == "uav_conflict":
-            await self._handle_conflict(data, intersection_id)
-        elif msg_type == "uav_vlm_analysis":
-            await self._handle_vlm(data, intersection_id)
-        elif msg_type == "uav_system_metrics":
-            await self._handle_system_metrics(data)
-        elif msg_type == "uav_telemetry":
-            await self._handle_telemetry(data)
-        else:
-            raise ValueError(f"Unsupported persisted msg_type: {msg_type}")
+        try:
+            if msg_type == "uav_stats":
+                await self._handle_stats(data, intersection_id)
+            elif msg_type == "uav_detections":
+                await self._handle_detections(data, intersection_id)
+            elif msg_type == "uav_track_complete":
+                await self._handle_track_complete(data, intersection_id)
+            elif msg_type == "uav_conflict":
+                await self._handle_conflict(data, intersection_id)
+            elif msg_type == "uav_vlm_analysis":
+                await self._handle_vlm(data, intersection_id)
+            elif msg_type == "uav_system_metrics":
+                await self._handle_system_metrics(data)
+            elif msg_type == "uav_telemetry":
+                await self._handle_telemetry(data)
+            else:
+                raise ValueError(f"Unsupported persisted msg_type: {msg_type}")
+        except Exception as error:
+            await self._metric_store.mark_dispatch_failed(
+                normalized["source_system"], result.message_id, error
+            )
+            raise
+        await self._metric_store.mark_dispatched(
+            normalized["source_system"], result.message_id
+        )
 
     async def _handle_stats(self, data: dict, intersection_id: str):
         """Handle stats message."""
@@ -378,7 +387,7 @@ class KafkaConsumerService:
 
         # T-104: 记录冲突事件并检查冲突频率
         if self._alert_engine:
-            self._alert_engine.record_conflict(intersection_id)
+            self._alert_engine.record_conflict(intersection_id, data.get("message_id"))
             await self._alert_engine.check_conflict_rate(intersection_id)
 
         # Trigger alert for severe conflicts
@@ -406,6 +415,8 @@ class KafkaConsumerService:
                     f"距离={dist_val:.1f}m，TTC={ttc_val:.1f}s"
                 ),
                 track_ids=[motor_id, non_motor_id],
+                event_context=data,
+                event_id=data.get("message_id"),
             )
 
     @staticmethod
@@ -433,6 +444,8 @@ class KafkaConsumerService:
         for idx, existing in enumerate(buf):
             if self._conflict_pair_key(existing) != pair_key:
                 continue
+            if data.get("message_id") and existing.get("message_id") == data.get("message_id"):
+                return True
             if self._conflict_severity_rank(data) <= self._conflict_severity_rank(existing):
                 return False
             buf[idx] = data

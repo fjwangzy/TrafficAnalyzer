@@ -8,7 +8,6 @@ from utils_local.homography import (
     compute_homography_from_telemetry,
     compute_homography_from_reference_points,
     is_valid_homography,
-    undistort_points,
 )
 from utils_local.gcp_refinement import GCPRefinement
 

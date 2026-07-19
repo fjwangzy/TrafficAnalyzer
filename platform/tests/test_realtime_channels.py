@@ -80,9 +80,9 @@ class RealtimeChannelTest(unittest.IsolatedAsyncioTestCase):
                 "data": {},
             }),
         )
-        self.assertEqual(ws.sent[-1], {"error": "unsupported_message_type"})
+        self.assertEqual(ws.sent[-1], {"error": "unsupported_action"})
 
-    async def test_ws_manager_publishes_canonical_message(self):
+    async def test_ws_manager_rejects_client_publish(self):
         manager = WSManager()
         publisher = _FakeWebSocket()
         subscriber = _FakeWebSocket()
@@ -100,8 +100,8 @@ class RealtimeChannelTest(unittest.IsolatedAsyncioTestCase):
             }),
         )
 
-        self.assertEqual(subscriber.sent[-1]["type"], "uav_system_metrics")
-        self.assertEqual(publisher.sent[-1]["action"], "published")
+        self.assertEqual(subscriber.sent, [])
+        self.assertEqual(publisher.sent[-1], {"error": "unsupported_action"})
 
     async def test_kafka_handlers_broadcast_realtime_business_channels(self):
         ws = _RecordingWS()

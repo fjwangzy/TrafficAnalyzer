@@ -1,7 +1,6 @@
 """Alert API endpoints."""
-from fastapi import APIRouter, Request, Query
-from typing import Optional
 
+from fastapi import APIRouter, Query, Request
 
 router = APIRouter(prefix="/alerts", tags=["alerts"])
 
@@ -9,8 +8,8 @@ router = APIRouter(prefix="/alerts", tags=["alerts"])
 @router.get("")
 async def list_alerts(
     request: Request,
-    severity: Optional[str] = Query(None),
-    status: Optional[str] = Query(None),
+    severity: str | None = Query(None),
+    status: str | None = Query(None),
     limit: int = Query(50, le=200),
     offset: int = Query(0, ge=0),
 ):
@@ -35,7 +34,8 @@ async def acknowledge_alert(alert_id: str, request: Request):
     engine = request.app.state.alert_engine
     user = "admin"
     if hasattr(request.state, "user") and request.state.user:
-        user = getattr(request.state.user, "username", "admin")
+        identity = request.state.user
+        user = identity.get("username", "admin") if isinstance(identity, dict) else getattr(identity, "username", "admin")
     alert = await engine.acknowledge_alert(alert_id, user)
     if not alert:
         return {"error": "not_found", "id": alert_id}

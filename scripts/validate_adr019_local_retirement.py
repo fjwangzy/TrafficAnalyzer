@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import urllib.error
 import urllib.request
@@ -47,6 +48,23 @@ OLD_BIND = str((ROOT / "services" / "influxdb_data").resolve())
 RETENTION = ROOT / "output" / "adr019-retirement" / "retention.json"
 SOAK_REPORT = ROOT / "docs" / "test_report_i6_local_readiness_soak.json"
 OUTAGE_REPORT = ROOT / "docs" / "test_report_i6_database_outage.json"
+
+
+def _current_schema_head() -> str:
+    revisions: set[str] = set()
+    parents: set[str] = set()
+    for path in (ROOT / "platform" / "alembic" / "versions").glob("*.py"):
+        source = path.read_text(encoding="utf-8")
+        revision = re.search(r'^revision\s*=\s*["\']([^"\']+)["\']', source, re.MULTILINE)
+        down_revision = re.search(r'^down_revision\s*=\s*["\']([^"\']+)["\']', source, re.MULTILINE)
+        if revision:
+            revisions.add(revision.group(1))
+        if down_revision:
+            parents.add(down_revision.group(1))
+    heads = revisions - parents
+    if len(heads) != 1:
+        raise RuntimeError(f"expected one Alembic head, found {sorted(heads)}")
+    return heads.pop()
 
 
 def _canonical_topics_only(topics: list[str]) -> bool:
@@ -171,7 +189,7 @@ def validate() -> dict[str, Any]:
         "old_storage_retained": OLD_VOLUMES <= volume_names and Path(OLD_BIND).exists(),
         "old_storage_unmounted": not ((OLD_VOLUMES | {OLD_BIND}) & mounted_sources),
         "retention_is_seven_days": (purge_after - retired_at).total_seconds() >= 7 * 86400,
-        "road9_at_head": database_name == "road9" and revision == "20260716_0011",
+        "road9_at_head": database_name == "road9" and revision == _current_schema_head(),
         "timescaledb_hypertables": int(hypertables) == 5 and hypertable_names == EXPECTED_HYPERTABLES,
         # The clean cutover baseline had zero business rows. Subsequent canonical
         # local-replay acceptance legitimately populates uav_* business tables,

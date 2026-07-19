@@ -1,8 +1,8 @@
 """Intersection API endpoints."""
-from fastapi import APIRouter, Request, Query
-from typing import Optional
 
-from app.models.drone_store import get_drone_for_intersection, DRONES
+from fastapi import APIRouter, Query, Request
+
+from app.models.drone_store import DRONES, get_drone_for_intersection
 
 router = APIRouter(prefix="/intersections", tags=["intersections"])
 

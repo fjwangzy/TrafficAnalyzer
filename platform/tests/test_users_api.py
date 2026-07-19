@@ -1,6 +1,6 @@
 import unittest
-from types import SimpleNamespace
 from datetime import datetime
+from types import SimpleNamespace
 
 from app.api.v1 import users
 

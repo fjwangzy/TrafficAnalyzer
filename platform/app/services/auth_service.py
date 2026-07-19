@@ -1,12 +1,12 @@
 """Authentication service."""
-from datetime import datetime, timedelta
-from typing import Optional
-import jwt
-from jwt.exceptions import PyJWTError
+from datetime import UTC, datetime, timedelta
+
 import bcrypt
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+import jwt
 from fastapi import HTTPException, status
+from jwt.exceptions import PyJWTError
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.models.user import User
@@ -29,13 +29,13 @@ def get_password_hash(password: str) -> str:
     ).decode("utf-8")
 
 
-def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
+def create_access_token(data: dict, expires_delta: timedelta | None = None) -> str:
     """Create a JWT access token."""
     to_encode = data.copy()
     if expires_delta:
-        expire = datetime.utcnow() + expires_delta
+        expire = datetime.now(UTC) + expires_delta
     else:
-        expire = datetime.utcnow() + timedelta(
+        expire = datetime.now(UTC) + timedelta(
             minutes=settings.jwt_access_token_expire_minutes
         )
     to_encode.update({"exp": expire})
@@ -73,7 +73,7 @@ def verify_token(token: str) -> dict:
         raise credentials_exception
 
 
-async def authenticate_user(db: AsyncSession, username: str, password: str) -> Optional[User]:
+async def authenticate_user(db: AsyncSession, username: str, password: str) -> User | None:
     """Authenticate a user with username and password."""
     result = await db.execute(select(User).where(User.username == username))
     user = result.scalar_one_or_none()
@@ -88,13 +88,13 @@ async def authenticate_user(db: AsyncSession, username: str, password: str) -> O
     return user
 
 
-async def get_user_by_username(db: AsyncSession, username: str) -> Optional[User]:
+async def get_user_by_username(db: AsyncSession, username: str) -> User | None:
     """Get a user by username."""
     result = await db.execute(select(User).where(User.username == username))
     return result.scalar_one_or_none()
 
 
-async def get_user_by_email(db: AsyncSession, email: str) -> Optional[User]:
+async def get_user_by_email(db: AsyncSession, email: str) -> User | None:
     """Get a user by email."""
     result = await db.execute(select(User).where(User.email == email))
     return result.scalar_one_or_none()

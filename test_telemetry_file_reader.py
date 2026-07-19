@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 from services.TelemetryFileReader import TelemetryFileReader
+from services.SrtTelemetryParser import SrtTelemetryParser
 
 
 def test_offset_is_applied_before_tolerance_check(tmp_path):
@@ -47,3 +48,17 @@ def test_mp4new_lishi_0624_known_gap_is_not_filled():
 
     assert reader.get_nearest(800.0) is not None
     assert reader.get_nearest(820.0) is None
+
+
+def test_srt_offset_is_used_for_tolerance_and_out_of_range_returns_none(tmp_path):
+    path = tmp_path / "telemetry.srt"
+    path.write_text(
+        "1\n00:00:10,000 --> 00:00:10,033\n"
+        "FrameCnt: 1 2026-01-01 00:00:10.000\n"
+        "[latitude: 36.0] [longitude: 117.0] [rel_alt: 100] [abs_alt: 150]\n",
+        encoding="utf-8",
+    )
+    reader = SrtTelemetryParser(str(path), sync_tolerance_sec=0.1, time_offset_sec=10.0)
+
+    assert reader.get_nearest(0.0) is not None
+    assert reader.get_nearest(100.0) is None

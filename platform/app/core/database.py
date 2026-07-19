@@ -5,19 +5,18 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+from collections.abc import AsyncGenerator
 from pathlib import Path
-from typing import AsyncGenerator
 
 import asyncpg
-from alembic import command
 from alembic.config import Config
 from alembic.script import ScriptDirectory
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
 
+from alembic import command
 from app.core.config import settings
-
 
 logger = logging.getLogger(__name__)
 
@@ -129,7 +128,7 @@ async def init_db() -> bool:
                     User(
                         username="admin",
                         email="admin@trafficanalyzer.dev",
-                        hashed_password=get_password_hash("admin123"),
+                        hashed_password=get_password_hash(settings.bootstrap_admin_password),
                         role="admin",
                         is_active=True,
                     )

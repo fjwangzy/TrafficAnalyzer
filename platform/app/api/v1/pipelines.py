@@ -1,11 +1,61 @@
 """Pipeline management API — start/stop/monitor detection pipelines."""
 import logging
+
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
+
+from app.services.pipeline_manager import redact_video_source
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/pipelines", tags=["pipelines"])
+
+
+def _require_role(request: Request, *roles: str) -> dict:
+    user = getattr(request.state, "user", None) or {}
+    if user.get("role") not in roles:
+        logger.warning(
+            "audit actor=%s role=%s action=%s outcome=denied",
+            user.get("username") or user.get("sub") or "anonymous",
+            user.get("role") or "unknown",
+            request.url.path,
+        )
+        raise HTTPException(status_code=403, detail="Insufficient pipeline role")
+    return user
+
+
+async def _audit(
+    request: Request,
+    user: dict,
+    action: str,
+    resource: str,
+    after_value: dict | None = None,
+) -> None:
+    service = getattr(request.app.state, "audit_service", None)
+    if service is None:
+        raise HTTPException(status_code=503, detail="Persistent audit service unavailable")
+    await service.record(
+        actor=user,
+        action=action,
+        target_type="pipeline",
+        target_id=resource,
+        after_value=after_value,
+    )
+    logger.info(
+        "audit actor=%s role=%s action=%s resource=%s outcome=recorded",
+        user.get("username") or user.get("sub") or "unknown",
+        user.get("role") or "unknown",
+        action,
+        resource,
+    )
+
+
+def _audit_payload(body: BaseModel) -> dict:
+    payload = body.model_dump(mode="json")
+    video_src = payload.get("video_src")
+    if isinstance(video_src, str):
+        payload["video_src"] = redact_video_source(video_src)
+    return payload
 
 
 # ── Request / Response schemas ──
@@ -132,17 +182,28 @@ async def start_pipeline(body: PipelineCreateRequest, request: Request):
     ``statistics_{camera_id}``, ``track_complete_{camera_id}``, and
     ``conflicts_{camera_id}``.
     """
+    actor = _require_role(request, "operator", "admin")
     pm = _get_pm(request)
-    pipeline = await pm.start_pipeline(
-        drone_id=body.drone_id,
-        intersection_id=body.intersection_id,
-        video_src=body.video_src,
-        roads_json=_resolve_roads_json(request, body.intersection_id, body.roads_json),
-        telemetry_source=body.telemetry_source,
-        telemetry_file_path=body.telemetry_file_path,
-        telemetry_time_offset_sec=body.telemetry_time_offset_sec,
-        telemetry_sync_tolerance_sec=body.telemetry_sync_tolerance_sec,
+    await _audit(
+        request,
+        actor,
+        "pipeline.start",
+        body.intersection_id,
+        _audit_payload(body),
     )
+    try:
+        pipeline = await pm.start_pipeline(
+            drone_id=body.drone_id,
+            intersection_id=body.intersection_id,
+            video_src=body.video_src,
+            roads_json=_resolve_roads_json(request, body.intersection_id, body.roads_json),
+            telemetry_source=body.telemetry_source,
+            telemetry_file_path=body.telemetry_file_path,
+            telemetry_time_offset_sec=body.telemetry_time_offset_sec,
+            telemetry_sync_tolerance_sec=body.telemetry_sync_tolerance_sec,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     return pipeline.to_dict()
 
 
@@ -153,8 +214,8 @@ class PipelineRegisterRequest(BaseModel):
     intersection_id: str
     video_src: str
     roads_json: str = "configs/entry_exit_lanes.json"
-    camera_id: int | None = None
-    video_port: int | None = None
+    camera_id: int | None = Field(default=None, ge=1, le=65535)
+    video_port: int | None = Field(default=None, ge=1024, le=65535)
     topic_name: str | None = None
 
 
@@ -166,16 +227,27 @@ async def register_pipeline(body: PipelineRegisterRequest, request: Request):
     ``python main_optimized.py``) and the Platform container does not
     have the pipeline dependencies.
     """
+    actor = _require_role(request, "admin")
     pm = _get_pm(request)
-    pipeline = pm.register_pipeline(
-        drone_id=body.drone_id,
-        intersection_id=body.intersection_id,
-        video_src=body.video_src,
-        roads_json=body.roads_json,
-        camera_id=body.camera_id,
-        video_port=body.video_port,
-        topic_name=body.topic_name,
+    await _audit(
+        request,
+        actor,
+        "pipeline.register",
+        body.intersection_id,
+        _audit_payload(body),
     )
+    try:
+        pipeline = pm.register_pipeline(
+            drone_id=body.drone_id,
+            intersection_id=body.intersection_id,
+            video_src=body.video_src,
+            roads_json=body.roads_json,
+            camera_id=body.camera_id,
+            video_port=body.video_port,
+            topic_name=body.topic_name,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     return pipeline.to_dict()
 
 
@@ -211,7 +283,9 @@ async def get_pipeline_status(pipeline_id: str, request: Request):
 @router.delete("/{pipeline_id}", summary="Stop and remove a pipeline")
 async def stop_pipeline(pipeline_id: str, request: Request):
     """Gracefully stop a pipeline.  Sends SIGTERM, then SIGKILL after 10s."""
+    actor = _require_role(request, "operator", "admin")
     pm = _get_pm(request)
+    await _audit(request, actor, "pipeline.stop", pipeline_id)
     pipeline = await pm.stop_pipeline(pipeline_id)
     if not pipeline:
         raise HTTPException(status_code=404, detail="Pipeline not found")

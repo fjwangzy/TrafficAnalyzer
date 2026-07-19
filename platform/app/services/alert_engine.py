@@ -4,12 +4,11 @@
   新增 high_avg_speed (P3): avg_speed > 60km/h 持续 3 帧
   新增 multiple_conflicts (P2): conflict_count > 3/min 滑动窗口
 """
-import asyncio
 import logging
 import time
 import uuid
 from collections import deque
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import select
@@ -31,15 +30,16 @@ class Alert:
         title: str,
         description: str | None = None,
         track_ids: list[int] | None = None,
+        alert_id: str | None = None,
     ):
-        self.id = str(uuid.uuid4())[:8]
+        self.id = alert_id or str(uuid.uuid4())[:8]
         self.intersection_id = intersection_id
         self.alert_type = alert_type
         self.severity = severity
         self.title = title
         self.description = description
         self.status = "open"
-        self.timestamp = datetime.now(timezone.utc).isoformat()
+        self.timestamp = datetime.now(UTC).isoformat()
         self.track_ids = track_ids or []
         self.snapshot_url = None
         self.video_clip_url = None
@@ -70,7 +70,7 @@ class Alert:
     def acknowledge(self, user: str):
         self.status = "acknowledged"
         self.acknowledged_by = user
-        self.acknowledged_at = datetime.now(timezone.utc).isoformat()
+        self.acknowledged_at = datetime.now(UTC).isoformat()
 
     @classmethod
     def from_dict(cls, data: dict) -> "Alert":
@@ -142,7 +142,7 @@ class SqlAlertStore:
         record.acknowledged_by = alert.get("acknowledged_by")
         record.acknowledged_at = alert.get("acknowledged_at")
         record.push_logs = alert.get("push_logs") or []
-        record.updated_at = datetime.now(timezone.utc)
+        record.updated_at = datetime.now(UTC)
 
     @staticmethod
     def _record_to_dict(record: AlertRecord) -> dict:
@@ -195,6 +195,7 @@ class AlertEngine:
         # T-104: multiple_conflicts 规则参数 — 滑动窗口(60s)
         self._conflict_threshold_per_min = 3
         self._conflict_windows: dict[str, deque] = {}  # intersection_id → deque of timestamps
+        self._recorded_conflict_events: set[str] = set()
 
     @property
     def alerts(self) -> dict[str, Alert]:
@@ -331,13 +332,17 @@ class AlertEngine:
         else:
             self._consecutive_high_speed[intersection_id] = 0
 
-    def record_conflict(self, intersection_id: str):
+    def record_conflict(self, intersection_id: str, event_id: str | None = None):
         """Record a conflict event for the multiple_conflicts rate tracker.
 
         T-104: 调用此方法记录冲突事件时间戳，用于滑动窗口检测。
         """
-        now = time.time()
         window = self._conflict_windows.setdefault(intersection_id, deque(maxlen=100))
+        if event_id and event_id in self._recorded_conflict_events:
+            return len(window)
+        if event_id:
+            self._recorded_conflict_events.add(event_id)
+        now = time.time()
         window.append(now)
 
         # 清理 60s 前的记录
@@ -406,8 +411,15 @@ class AlertEngine:
         description: str | None = None,
         track_ids: list[int] | None = None,
         event_context: dict | None = None,
+        event_id: str | None = None,
     ):
         """Create a new alert, broadcast via WebSocket."""
+        alert_id = uuid.uuid5(
+            uuid.NAMESPACE_URL,
+            f"uav-alert:{event_id}:{alert_type}",
+        ).hex if event_id else None
+        if alert_id and alert_id in self._alerts:
+            return
         # Deduplicate: don't create duplicate alerts within 60s
         for existing in self._alerts.values():
             if (
@@ -424,6 +436,7 @@ class AlertEngine:
             title=title,
             description=description,
             track_ids=track_ids,
+            alert_id=alert_id,
         )
         self._alerts[alert.id] = alert
         payload = alert.to_dict()

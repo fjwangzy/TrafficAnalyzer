@@ -3,8 +3,9 @@ import asyncio
 import json
 import re
 import time
-from fastapi import WebSocket
 from typing import Any
+
+from fastapi import WebSocket
 
 
 class WSManager:
@@ -112,35 +113,15 @@ class WSManager:
                 }))
 
         elif action == "publish":
-            # Broadcast a message to all subscribers of a channel.
-            # Used for dev/testing: inject mock data to verify frontend displays.
-            # The message must contain "channel", "type", and "data" fields.
-            channel = msg.get("channel", "")
-            message_type = str(msg.get("type", ""))
-            if not self._is_canonical_channel(channel):
-                await ws.send_text(json.dumps({"error": "unsupported_channel"}))
-                return
-            if not self._is_canonical_message_type(message_type):
-                await ws.send_text(json.dumps({"error": "unsupported_message_type"}))
-                return
-            broadcast_msg = {
-                "channel": channel,
-                "type": message_type,
-                "data": msg.get("data", {}),
-                "ts": time.time(),
-            }
-            await self.broadcast(channel, broadcast_msg)
-            await ws.send_text(json.dumps({
-                "action": "published",
-                "channel": channel,
-                "ts": time.time(),
-            }))
+            await ws.send_text(json.dumps({"error": "unsupported_action"}))
 
         elif action == "ping":
             await ws.send_text(json.dumps({
                 "action": "pong",
                 "ts": time.time(),
             }))
+        else:
+            await ws.send_text(json.dumps({"error": "unsupported_action"}))
 
     @property
     def channel_stats(self) -> dict[str, int]:

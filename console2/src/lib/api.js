@@ -22,6 +22,7 @@ export function clearAccessToken() {
 export const api = axios.create({
   baseURL: import.meta.env.VITE_API_BASE || '/api/v1',
   timeout: 10_000,
+  withCredentials: true,
   headers: { 'Content-Type': 'application/json' },
 })
 
@@ -49,6 +50,7 @@ const remove = (path, config) => api.delete(path, config).then((response) => res
 
 export const platformApi = {
   login: (username, password) => post('/auth/login', { username, password }),
+  logout: () => post('/auth/logout'),
   currentUser: () => get('/auth/me'),
 
   intersections: () => get('/intersections'),

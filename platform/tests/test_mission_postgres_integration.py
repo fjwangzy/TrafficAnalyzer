@@ -16,10 +16,15 @@ from app.models.mission import (
     TelemetrySourceRecord,
     VideoSourceRecord,
 )
-from app.schemas.mission import DroneCreate, FlightPlanCreate, OnceSchedule, SourceInput, SourcePairCreate
+from app.schemas.mission import (
+    DroneCreate,
+    FlightPlanCreate,
+    OnceSchedule,
+    SourceInput,
+    SourcePairCreate,
+)
 from app.services.mission_orchestrator import MissionError, MissionOrchestrator
 from app.services.road_context import FixtureRoadContextAdapter, RoadContext, RoadContextResult
-
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("RUN_PG_INTEGRATION") != "1",

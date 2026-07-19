@@ -22,7 +22,6 @@ from app.models.survey import (
 )
 from app.services.survey_service import SurveyService, _identifier
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -47,12 +46,11 @@ class SurveyWorker:
     async def _run(self) -> None:
         while self._running:
             try:
-                progressed = await self.run_once()
+                await self.run_once()
             except asyncio.CancelledError:
                 raise
             except Exception:
                 logger.exception("Survey worker iteration failed")
-                progressed = False
             await asyncio.sleep(settings.survey_worker_poll_sec)
 
     async def run_once(self) -> bool:

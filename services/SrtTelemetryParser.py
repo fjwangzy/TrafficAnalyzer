@@ -75,7 +75,7 @@ class SrtTelemetryParser:
                 if not frame_line.startswith("FrameCnt:"):
                     continue
                 parts = frame_line.split(None, 2)
-                frame_cnt = int(parts[1])
+                int(parts[1])
                 timestamp_str = parts[2] if len(parts) > 2 else ""
 
                 # 元数据行
@@ -163,13 +163,13 @@ class SrtTelemetryParser:
         best_diff = float("inf")
         for candidate in [idx - 1, idx, idx + 1]:
             if 0 <= candidate < len(self._timestamps):
-                diff = abs(self._timestamps[candidate] - frame_timestamp)
+                diff = abs(self._timestamps[candidate] - lookup_t)
                 if diff < best_diff:
                     best_diff = diff
                     best_idx = candidate
         if best_diff <= self.sync_tolerance_sec:
             return self._records[best_idx]
-        return self._records[best_idx]
+        return None
 
     @property
     def buffer_count(self) -> int:

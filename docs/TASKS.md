@@ -1,6 +1,26 @@
 # TASKS.md — TrafficAnalyzer 任务追踪
 
-> 最后更新：2026-07-16（ADR-019 本机纯净切换已完成；生产与外部合同阻断保持开放）
+> 最后更新：2026-07-19（Console2 启动 P1 已关闭；剩余 1 个 P1、4 个 P2，当前仍 No-Go）
+
+## 2026-07-18 客户演示前全面测试
+
+- [x] 完成客户演示前全面测试方案、角色/业务/异常/视觉/恢复矩阵、问题分级和 Go/No-Go 门禁；详见 [`DEMO_TEST_PLAN_2026-07-18.md`](DEMO_TEST_PLAN_2026-07-18.md)。
+- [x] 冻结当前工作树与数据基线，按当前工作树重建根 Compose，记录镜像 ID、Alembic head 和最终运行状态。
+- [x] 执行自动化、管理员全业务主链、`operator/viewer` 权限矩阵、管理员角色预览、两轮全路由、四档视口、键盘和故障恢复测试。
+- [x] 生成 [`DEMO_READINESS_REPORT_2026-07-18.md`](DEMO_READINESS_REPORT_2026-07-18.md) 并给出 **No-Go** 结论。
+- [x] **DEMO-20260718-001 / P1 / Console2**：`console2/nginx.conf:29` 资产正则已整体引用并增加回归测试；镜像 `sha256:3e82e867e9084ccd6266694f9a867c1e9dd3ad2627c56f45a06deb11282cd1d0` 的 `nginx -t`、容器稳定性、`8080`、`/health`、安全头和 API 代理已于 2026-07-19 复验通过。
+- [ ] **DEMO-20260718-002 / P1 / Platform**：readiness 改为实时探测 Kafka/road9；关键依赖断开返回非 2xx，恢复后回 200，并补故障注入测试。
+- [ ] **DEMO-20260718-003 / P2 / Console2**：实时监测遥测 REST 轮询使用真实 Pipeline `drone_id`，清除 `/telemetry/drone_10` 周期性 404。
+- [ ] **DEMO-20260718-004 / P2 / Console2**：候选区域/规则弹窗补初始焦点、焦点环、Esc 和关闭后焦点恢复。
+- [ ] **DEMO-20260718-005 / P2 / Supply chain**：Vite 6.4.2 升级到已修复版本并重跑测试、构建和官方 npm audit。
+- [ ] **DEMO-20260718-006 / P2 / Data**：为 `/gis` 准备并验证可下钻的历史轨迹、世界坐标和冲突事实，完成跨模块 lineage 复验。
+
+## 2026-07-17 UAT 发布前全量审查
+
+- [x] **Gate A / P0 清零**：关闭匿名管理员注册、WebSocket 客户端消息注入和 SRT 遥测超容差/越界返回。
+- [x] **应用 Gate B 完成**：认证与 active-user 回查、Pipeline/视频 RBAC、媒体鉴权、持久审计、Kafka 可恢复 dispatch、测绘错误态/复核、Demo 隔离、暂停语义、拆包、可访问性、Nginx 安全头和 Ruff/CI 门禁已统一落地。
+- [x] 本机 canonical 栈已迁移到唯一 Alembic head `20260717_0013`；Platform、显式 PostgreSQL/TimescaleDB、Console2、根回归、`inter_xqh 56 PASS` 和 ADR-019 strict audit 均复核通过。
+- [ ] **完整发布 UAT 仍 No-Go**：按确认范围延期 GPU/Platform/Console 镜像修复、干净制品 digest、SBOM/签名、共享 UAT secret/TLS/SASL、容器最小权限/healthcheck 和 HA/容量门禁；详见 [`UAT_FULL_REVIEW_2026-07-17.md`](UAT_FULL_REVIEW_2026-07-17.md)。
 
 ## PRD/UI 滚动交付
 
@@ -200,6 +220,7 @@
 | T-454 | 四路口验收测试坐标与无人机地图标记 | ✅ | 从四路口已登记遥测读取真实 GPS 中位点，写入 `RoadContext.coordinate_reference` 的 `status=test/usage=local_acceptance_only`；DashboardReadModel 单独返回 4 个 test 点位且整体健康保持 degraded，Console2 首页用四旋翼无人机图标、测试坐标标签和四点中心视野展示。正式道路坐标仍为 unverified，不以本机验收点替代权威坐标。 |
 | T-455 | 轨迹研判首次加载假性 0 数据修复 | ✅ | `DashboardReadModel._facts()` 对 RoadContext、路口指标和无人机遥测使用 PostgreSQL `DISTINCT ON`，在数据库侧只返回每个分组最新事实；`/dashboard/intersections` 本机实测由 2.46–2.93s 降到 9.2–16.4ms。Console2 加载期显示“路口加载中 / 轨迹等待路口”，不再显示“0 个路口 · 0 条轨迹”，失败态可重新加载真实数据；浏览器强制刷新 3.97s 内显示 4 个路口、500 条轨迹且 console 0 error/warn。Platform 103 passed、Console2 55 passed、production build 通过。 |
 | T-456 | GIS 历史轨迹真实投放修复 | ✅ | 根因是轨迹接口先按 `ended_at DESC LIMIT 500` 截取最新降级记录：`INT_camera_1` 虽有 6,397 条带世界坐标轨迹，最新 500 条却全是 5 点、移动中位长度约 0.68m 的短片段，地图只能看到终点。`query_tracks` 新增 `spatial_ready` / `min_world_points` 并在 PostgreSQL 的 LIMIT 前过滤；Console2 GIS 固定请求至少 6 个世界坐标点，同时使用嵌入面板安全 fit padding。最终接口返回 285/285 条完整轨迹，点数中位数 50、最大 99；真实任务 `MSN-3421232DD4B9` 页面投放 149/149 条彩色折线，浏览器 console 0 error/warn。Platform 104 passed、Console2 56 passed、production build 通过。 |
+| T-457 | 测绘标注图与实时边长 | ✅ | `/survey/**` 量算画布使用后端下发的 BEV→ENU 变换，在鼠标跟随预览边和已保存几何的每条边中点显示米制距离；报告页及已完成历史任务展示带标注 BEV。报告生成同步固化 `survey_report_annotated_image` JPEG、写入 SHA-256 证据引用并嵌入 PDF；旧报告从原 BEV 与版本化量算只读重绘，不迁移或改写历史。前后端聚焦回归和完整验证见本次交付记录。 |
 | T-438 | GIS 历史轨迹与冲突复盘 | ✅ | `traffic-fly-console/src/features/gis/index.tsx` — 选中路口后调用 `/api/v1/trajectories/{intersection_id}?period=1h&limit=200` 和 `/api/v1/trajectories/{intersection_id}/conflicts?period=1h&limit=200`，显示历史轨迹数量、Track ID、转向、车辆类型、均速、时长、轨迹点数，以及历史冲突 pair、TTC/PET、场景、证据和风险分；`traffic-fly-console/src/features/gis/index.test.tsx` 覆盖 `INT_camera_1` 历史轨迹与冲突证据复盘详情 |
 | T-439 | Dashboard pipelines_active 真实数据 | ✅ | `traffic-fly-console/src/features/dashboard/index.tsx` — 首页活跃管道数优先使用 `system_metrics.pipelines_active` WebSocket 实时值，列表未加载时回退 `/intersections/summary.pipelines_active`，列表加载后使用 `/pipelines` running 数；`traffic-fly-console/src/features/dashboard/index.test.tsx` 覆盖 WebSocket 更新和 summary fallback；当前前端回归 `npm test` 通过 27 个测试文件 / 160 个测试，`npm run build` 通过 |
 | T-430 | PipelineManager 正常结束状态修正 | ✅ | `platform/app/services/pipeline_manager.py` — 子进程 `return_code == 0` 时标记为 `stopped` 且清空 `error_message`，非零退出才标记 `error` 并保留 stderr 尾部；`platform/tests/test_pipeline_manager.py` 覆盖正常结束与异常退出两个状态分支 |

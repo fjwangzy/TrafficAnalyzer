@@ -5,7 +5,7 @@ from elements.FrameElement import FrameElement
 from elements.TrackElement import TrackElement
 from elements.VideoEndBreakElement import VideoEndBreakElement
 from utils_local.utils import profile_time, intersects_central_point
-from utils_local.homography import pixel_to_world, is_valid_homography, undistort_points
+from utils_local.homography import is_valid_homography, undistort_points
 from utils_local.motion_compensation import pixel_to_world_compensated
 
 logger = logging.getLogger("buffer_tracks")

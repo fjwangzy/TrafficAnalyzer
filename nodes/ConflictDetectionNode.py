@@ -1,5 +1,4 @@
 import logging
-import time as _time
 import numpy as np
 
 from elements.FrameElement import FrameElement

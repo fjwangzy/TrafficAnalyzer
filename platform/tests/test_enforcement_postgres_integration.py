@@ -8,11 +8,22 @@ import pytest
 from sqlalchemy import delete
 
 from app.core.database import async_session_maker
-from app.models.enforcement import EnforcementClue, EnforcementReviewAudit, EnforcementRule, EnforcementZone
+from app.models.enforcement import (
+    EnforcementClue,
+    EnforcementReviewAudit,
+    EnforcementRule,
+    EnforcementZone,
+)
 from app.models.survey import AiEvent, AuditLog, EvidenceItem, EvidencePackage, RuleVersion
-from app.schemas.enforcement import ClueIngest, ClueReview, EvidenceReference, RuleCreate, ZoneCreate, ZoneUpdate
+from app.schemas.enforcement import (
+    ClueIngest,
+    ClueReview,
+    EvidenceReference,
+    RuleCreate,
+    ZoneCreate,
+    ZoneUpdate,
+)
 from app.services.enforcement_service import EnforcementError, EnforcementService
-
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("RUN_PG_INTEGRATION") != "1",

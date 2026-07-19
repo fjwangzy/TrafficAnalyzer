@@ -1,264 +1,149 @@
-# PROJECT_STRUCTURE.md — TrafficAnalyzer 项目结构
+# PROJECT_STRUCTURE.md — TrafficAnalyzer 当前项目结构
 
-> 基于 commit `84c6bd6` 的真实代码分析。
+> 当前状态：2026-07-17。本文只描述 ADR-019 之后的 canonical 运行代码；已退役资产仅在“历史与保留边界”中列出。
 
-## 目录结构
+## 1. 顶层结构
 
-```
+```text
 TrafficAnalyzer/
-├── main.py                        # 单进程顺序入口（调试用）
-├── main_optimized.py              # 多进程并行入口（唯一生产入口，含健康检查）
-├── generate_lanes.py              # 交互式道路多边形标注工具
-├── export_dashboards.py           # Grafana 仪表盘导出脚本
-├── fetch_dashboard.py             # Grafana 仪表盘获取脚本
-├── update_dashboards.py           # Grafana 仪表盘翻译/更新脚本
-├── requirements.txt               # Python 依赖清单（11 个）
-├── create_ppt.py                  # 项目汇报PPT自动生成（PPTX格式）
-├── create_ppt_v3.py               # PPT生成v3（简化版）
-├── Dockerfile                     # GPU 容器镜像构建
-├── docker-compose.yaml            # 完整微服务栈编排
-├── dashboard_backup.json          # Grafana 仪表盘 JSON 备份
-│
-├── elements/                      # 数据模型层
-│   ├── FrameElement.py            #   帧数据载体（管道核心数据结构）
-│   ├── TrackElement.py            #   单条轨迹状态
-│   └── VideoEndBreakElement.py    #   视频流结束哨兵
-│
-├── nodes/                         # 管道节点层
-│   ├── VideoReader.py             #   视频帧读取（MP4/RTSP/摄像头）+ 遥测注入
-│   ├── DetectionTrackingNodes.py  #   YOLO11 检测 + ByteTrack 跟踪（保留YOLO原始类别）
-│   ├── HomographyCalibrationNode.py # 单应性矩阵计算（遥测/参考点/auto模式）
-│   ├── MotionCompensationNode.py  #   无人机运动补偿（GPS锚定+位移+速度+悬停检测）
-│   ├── TrackerInfoUpdateNode.py   #   轨迹缓冲区 + 道路分配 + motor/non_motor + 完成轨迹发射
-│   ├── SpeedEstimationNode.py     #   车速估计（km/h，减去无人机速度）
-│   ├── DirectionFlowNode.py       #   方向流量分类（左转/直行/右转/掉头）
-│   ├── LaneAnalysisNode.py        #   车道级分析（流量/排队/车头时距，数据驱动）
-│   ├── LaneDetectionNode.py       #   YOLO分割模型车道检测（标线/路面→稳定车道多边形）
-│   ├── TrajectoryNode.py          #   轨迹转向分类 + 世界坐标轨迹输出
-│   ├── AutoLaneInferenceNode.py   #   自动车道推断（轨迹聚类→中心线→各方向指标，无需标注）
-│   ├── ConflictDetectionNode.py   #   机非未来轨迹碰撞预测（默认启用）
-│   ├── CalcStatisticsNode.py      #   统计计算（车辆数 + 道路活跃度）
-│   ├── KafkaProducerNode.py       #   Kafka 多topic消息发送
-│   ├── ShowNode.py                #   supervision 可视化渲染（圆角边框/标签/轨迹尾迹/道路遮罩/统计面板）
-│   ├── VideoSaverNode.py          #   视频文件保存
-│   └── FlaskServerVideoNode.py    #   Flask MJPEG 视频流服务
-│
-├── byte_tracker/                  # ByteTrack 跟踪算法（第三方移植）
-│   ├── byte_tracker_model.py      #   STrack + BYTETracker 核心
-│   └── utils/
-│       ├── basetrack.py           #   轨迹基类 + TrackState 枚举
-│       ├── kalman_filter.py       #   8 维恒速卡尔曼滤波器
-│       └── matching.py            #   IOU 计算 + 线性分配（lap 库）
-│
-├── utils_local/                   # 工具层
-│   ├── utils.py                   #   环境变量、FPS 计数器、几何判定
-│   ├── homography.py              #   单应性矩阵计算（遥测/参考点）、像素↔世界坐标变换
-│   ├── motion_compensation.py     #   无人机运动补偿（GPS→ENU、速度矢量、补偿变换）
-│   ├── trajectory_classifier.py   #   转向行为分类（直行/左转/右转/掉头）
-│   ├── lane_geometry.py           #   车道多边形操作、排队长度计算
-│   ├── auto_lane_inference.py     #   自动车道推断（轨迹聚类、中心线拟合、标签生成）
-│   └── templates/
-│       └── index.html             #   Flask 视频流页面模板
-│
-├── services/                      # 微服务配置 + 运行时服务
-│   ├── TelemetrySubscriber.py     #   MQTT遥测订阅器（paho-mqtt v2，时间戳同步缓冲区）
-│   ├── TelemetryFileReader.py     #   文件遥测加载器（DJI Cloud API JSON，离线回放）
-│   └── SrtTelemetryParser.py      #   SRT遥测解析器（DJI视频字幕，逐帧同步）
-│
-├── configs/                       # 配置层
-│   ├── app_config.yaml            #   Hydra 主配置（中文版）
-│   ├── app_config copy.yaml       #   Hydra 主配置（俄语备份）
-│   ├── entry_exit_lanes.json      #   路口 A 道路多边形（5 条路）
-│   ├── inter1_lanes.json          #   路口 1 道路多边形（5 条路）
-│   ├── inter2_lanes.json          #   路口 2 道路多边形（2 条路）
-│   └── hydra/
-│       └── job_logging/
-│           └── custom.yaml        #   Hydra 日志格式配置
-│
-├── weights/                       # 模型权重
-│   ├── uav_best.pt                #   自定义无人机视角 YOLO11 模型
-│   ├── lane_detect.pt             #   YOLO 分割模型（车道标线/路面检测）
-│   ├── yolov8m.pt                 #   YOLOv8 Medium 预训练模型（旧版，已弃用）
-│   └── YOLOv8_TensorRT_converter.ipynb  # TensorRT 转换工具（旧版）
-│
-├── services/                      # 微服务配置
+├── main_optimized.py              # 唯一生产检测入口：reader+detection / tracker+stats+kafka / show+save+flask
+├── main.py                        # 本机调试入口，不作为生产入口
+├── docker-compose.yaml            # 唯一本机完整 canonical 拓扑
+├── Dockerfile                     # GPU 检测镜像（镜像修复属于后续发布门禁）
+├── requirements.txt               # 根检测管道依赖
+├── configs/                       # Hydra、道路/车道与检测配置
+├── elements/                      # FrameElement、TrackElement、EOF sentinel
+├── nodes/                         # 检测、跟踪、标定、统计、冲突、Kafka 与展示节点
+├── services/                      # 遥测源与 canonical Nginx/Kafka 辅助配置
+├── utils_local/                   # 几何、轨迹、车道、单应性和运动补偿工具
+├── byte_tracker/                  # ByteTrack 实现
+├── platform/                      # FastAPI 单体、Alembic、road9/TimescaleDB 访问与测试
+├── console2/                      # React/Vite 正式前端
+├── scripts/                       # ADR-019、备份恢复、性能/soak/故障演练脚本
+├── docs/                          # current-state 契约、ADR、任务与验收证据
+├── test_videos/                   # 本机大文件视频/SRT/Cloud JSON 资产（通常不进 Git）
+└── test_*.py                      # 根检测、契约与真实管道回归
+```
+
+## 2. 检测管道
+
+`main_optimized.py` 组织三进程拓扑，`FrameElement` 逐节点富化，`VideoEndBreakElement` 必须沿全链透传：
+
+```text
+VideoReader
+  → DetectionTrackingNodes
+  → HomographyCalibrationNode
+  → MotionCompensationNode
+  → TrackerInfoUpdateNode
+  → SpeedEstimationNode
+  → DirectionFlowNode
+  → LaneDetectionNode
+  → LaneAnalysisNode
+  → TrajectoryNode
+  → AutoLaneInferenceNode
+  → ConflictDetectionNode
+  → CalcStatisticsNode
+  → KafkaProducerNode
+  → ShowNode
+  → VideoSaverNode / FlaskServerVideoNode
+```
+
+关键目录：
+
+| 路径 | 责任 |
+|---|---|
+| `elements/` | 帧、轨迹与 EOF 数据结构 |
+| `nodes/VideoReader.py` | MP4/RTSP、道路 JSON、SRT/JSON/MQTT 遥测注入；启用遥测时 fail-fast |
+| `nodes/DetectionTrackingNodes.py` | YOLO11 + ByteTrack |
+| `nodes/HomographyCalibrationNode.py`、`nodes/MotionCompensationNode.py` | 世界坐标与无人机运动补偿 |
+| `nodes/Lane*`、`nodes/AutoLaneInferenceNode.py` | `manual > model > auto` 车道链 |
+| `nodes/ConflictDetectionNode.py` | 路径交点 TTC/PET、同一时空占用与证据评分 |
+| `nodes/KafkaProducerNode.py` | 只生成 canonical `uav_*` Topic 与 `msg_type` |
+| `services/TelemetrySubscriber.py` | DJI Cloud API MQTT 实时遥测 |
+| `services/TelemetryFileReader.py` | JSON/TXT 离线遥测 |
+| `services/SrtTelemetryParser.py` | DJI SRT 帧级遥测，严格 offset/tolerance |
+
+## 3. Platform 单体
+
+```text
+platform/
+├── alembic/
+│   └── versions/                  # 当前唯一 head：20260717_0013
+├── app/
+│   ├── main.py                    # lifespan、路由、strict readiness、HLS 受控挂载、WebSocket
+│   ├── core/
+│   │   ├── config.py              # local/uat/production 配置和 UAT fail-closed 校验
+│   │   └── database.py            # road9、Alembic、async session
+│   ├── middleware/auth.py         # REST Bearer + 媒体/WS HttpOnly Cookie + active-user 回查
+│   ├── api/v1/                    # auth、dashboard、survey、mission、pipeline、video、enforcement 等
 │   ├── kafka/
-│   │   ├── kafka_server_jaas.conf #   Kafka JAAS 认证
-│   │   └── init-kafka-broker.sh   #   Kafka 初始化脚本
-│   ├── telegraf/
-│   │   └── telegraf.conf          #   Telegraf Kafka→InfluxDB 配置
-│   ├── nginx/
-│   │   └── nginx.conf             #   Nginx 视频流反向代理
-│   └── grafana/
-│       └── provisioning/
-│           ├── datasources/
-│           │   └── datasource.yaml # Grafana InfluxDB/PostgreSQL 数据源配置
-│           └── dashboards/
-│               ├── dashboard.yaml #   Grafana provisioning 配置
-│               ├── camera-1.json  #   摄像头 1 仪表盘
-│               └── camera-2.json  #   摄像头 2 仪表盘
-│
-├── test_videos/                   # 测试数据
-│   ├── rtsp_streaming/            #   RTSP 流测试环境
-│   │   ├── docker-compose.yaml    #     MediaMTX 容器
-│   │   ├── mediamtx.yml           #     MediaMTX 配置
-│   │   └── ffmpeg_rtsp.ipynb      #     FFmpeg 推流 notebook
-│   ├── inter_xqh/                 #   济南小清河北路无人机采集（4K+SRT遥测）
-│   │   ├── DJI_*.mp4              #     4K@30fps, 16.5min 飞行视频
-│   │   ├── telemetry.srt          #     29,741 条逐帧遥测记录
-│   │   └── 航线计划*.txt           #     DJI 飞行计划
-│   └── 交通路口数据采集2/          #   济南路口采集记录
-│
-├── test_pipeline_inter_xqh.py     # 管道端到端测试（4K视频+SRT遥测，49项检查）
-├── test_pipeline_no_yolo.py       # 管道测试（无YOLO，CI用）
-│
-├── platform/                      # Web 管理平台（FastAPI 单体应用）
-│   ├── app/
-│   │   ├── main.py                #   FastAPI 入口 + lifespan
-│   │   ├── api/v1/
-│   │   │   ├── pipelines.py       #   管道管理 REST API
-│   │   │   ├── drones.py          #   无人机管理
-│   │   │   ├── intersections.py   #   路口管理（含无人机分配）
-│   │   │   └── system.py          #   系统健康 + GPU 指标
-│   │   ├── kafka/
-│   │   │   ├── consumer.py        #   Kafka 消费者（stats/track/conflict/telemetry）
-│   │   │   └── ws_manager.py      #   WebSocket 频道 pub/sub
-│   │   ├── services/
-│   │   │   ├── pipeline_manager.py #  管道生命周期管理（子进程）
-│   │   │   └── alert_engine.py    #   告警规则引擎
-│   │   └── models/
-│   │       └── drone_store.py     #   无人机状态存储（Kafka双源更新）
-│   ├── scripts/
-│   │   └── run_local.py           #   本地开发启动脚本
-│   └── pyproject.toml             #   平台依赖清单
-│
-└── content_for_readme/            # README 素材
-    └── architecture.drawio        #   架构图源文件
+│   │   ├── consumer.py            # earliest、手动 offset、持久化后可恢复 dispatch
+│   │   └── ws_manager.py          # 只允许 subscribe/unsubscribe，拒绝客户端 publish
+│   ├── models/                    # 所有自建表使用 `uav_` 前缀
+│   ├── schemas/                   # Pydantic 输入/输出合同
+│   └── services/
+│       ├── metric_store.py        # inbox、事实、死信、dispatch 状态机
+│       ├── audit_service.py       # `uav_audit_logs` 持久审计
+│       ├── pipeline_manager.py    # 子进程/端口/资产/RTSP allowlist 与生命周期
+│       ├── survey_service.py      # 测绘、证据、量算、六项复核门禁
+│       ├── mission_orchestrator.py# Mission/Pipeline 调度和终态同步
+│       └── ...                    # dashboard、alert、enforcement、road context 等领域模块
+├── tests/                         # 单元、契约和显式 PostgreSQL/TimescaleDB integration
+├── pyproject.toml                 # 应用与 dev 依赖、Ruff/pytest 配置
+└── Dockerfile                     # Platform 镜像；本轮未修改
 ```
 
-## 文件数量统计
+Platform 唯一数据库是 PostgreSQL connection database `road9` + TimescaleDB。当前 Alembic 单 head 为 `20260717_0013`，`uav_message_inbox` 记录事实处理和可恢复派发状态。
 
-| 类别 | 数量 | 说明 |
-|------|------|------|
-| Python 源码 | 52 | 核心业务逻辑（含14个节点+工具+测试+PPT生成脚本） |
-| 配置文件 | 12 | YAML/JSON/CONF |
-| 文档 | 22 | README + 设计文档 + 架构文档 + 测试报告 + POC规划 |
-| 基础设施 | 4 | Dockerfile + Compose + 服务配置 |
-| 平台 | 32 | FastAPI 单体应用（API/Kafka/Services/Models + 遗留微服务） |
-| 工具脚本 | 4 | 标注/导出/获取/更新 |
-| 模型权重 | 3 | .pt 二进制文件（目标检测 + 车道分割） |
-| 测试数据 | 6+ | 视频 + SRT遥测 + 采集记录 |
+## 4. Console2
 
-## 核心依赖关系
-
-```
-main*.py → elements/* → nodes/* → byte_tracker/*
-                                  ↓
-                          utils_local/utils.py
-                                  ↓
-                     configs/*.yaml + configs/*.json
-```
-
----
-
-## 平台目录结构（platform/）
-
-> 2026-05-29 从微服务重构为单体架构。
-
-```
-platform/
-├── app/                             # 单体应用
-│   ├── main.py                      #   FastAPI 应用入口 + lifespan
-│   ├── __init__.py
-│   │
-│   ├── core/                        #   核心配置
-│   │   ├── config.py                #     Pydantic Settings（统一配置）
-│   │   └── database.py              #     SQLAlchemy async engine + session
-│   │
-│   ├── api/                         #   API 路由层
-│   │   └── v1/
-│   │       ├── auth.py              #     认证端点（register/login/me）
-│   │       ├── intersections.py     #     路口管理
-│   │       ├── drones.py            #     无人机管理
-│   │       ├── trajectories.py      #     车辆轨迹查询
-│   │       ├── alerts.py            #     告警规则和告警历史
-│   │       ├── video.py             #     视频流管理
-│   │       ├── calibration.py       #     摄像头标定
-│   │       └── system.py            #     系统健康检查
-│   │
-│   ├── kafka/                       #   Kafka 集成
-│   │   ├── consumer.py              #     Kafka 消费者（aiokafka）
-│   │   └── ws_manager.py            #     WebSocket pub/sub 管理器
-│   │
-│   ├── middleware/                  #   中间件
-│   │   └── auth.py                  #     JWT 认证中间件
-│   │
-│   ├── services/                    #   业务逻辑层
-│   │   ├── auth_service.py          #     用户认证（PyJWT + bcrypt）
-│   │   ├── alert_engine.py          #     告警规则引擎
-│   │   ├── lane_annotation_store.py #     悬停生成车道标注任务 + 人工标注参数持久化
-│   │   └── pipeline_manager.py      #     检测管道生命周期管理
-│   │
-│   ├── models/                      #   数据模型
-│   │   ├── user.py                  #     User SQLAlchemy 模型
-│   │   └── drone_store.py           #     无人机内存存储
-│   │
-│   ├── schemas/                     #   Pydantic 模式
-│   │   └── auth.py                  #     认证相关 schema
-│   │
-│   └── utils/                       #   工具函数
-│       └── influx_query.py          #     InfluxDB 查询封装
-│
-├── docker/                          # Docker 配置
-│   └── docker-compose.platform.yml  #   平台完整栈（platform + postgres + kafka + influxdb + frontend）
-│
-├── scripts/                         # 开发脚本
-│   ├── run_local.py                 #   本地启动脚本（设置默认环境变量）
-│   ├── fix_kafka_and_restart.sh     #   Kafka 基础设施修复脚本（清除 stale data + 重建 topics）
-│   └── inject_test_data.py          #   WebSocket 测试数据注入（Kafka 不可用时验证前端）
-│
-├── Dockerfile                       # 平台容器镜像
-├── pyproject.toml                   # 依赖清单（hatchling 构建）
-├── README.md                        # 平台说明文档
-├── MONOLITH.md                      # 单体架构迁移说明
-└── REFACTORING_SUMMARY.md           # 重构总结
-```
-
-### 遗留目录（待删除）
-
-以下目录是微服务架构遗留代码，已不再使用：
-
-```
-platform/
-├── gateway/                         # [已弃用] API 网关
-├── services/                        # [已弃用] 微服务（flight/vision/operations）
-├── shared/                          # [已弃用] 共享库
-└── frontend/                        # [已弃用] 前端（现行前端为 console2/）
-```
-
-### 已退役前端目录（traffic-fly-console/）
-
-`traffic-fly-console/` 仅保留迁移审计和历史回归证据，不再进入 Compose、Nginx 或发布构建；不得为其旧路由、Cookie/Token 或组件增加兼容层。
-
-### 现行前端目录（console2/）
-
-`console2/` 是基于 PRD v2.1（S1–S9）的 React/Vite 生产前端。正式导航冻结为全域态势、智能研判、事故测绘、执法线索、飞行任务、平台治理六个工作域，并统一为“左侧一级业务域 + 顶部当前域二级页面”的共享壳层。登录、实时监测、标定中心和系统与身份已接入 Platform REST/WebSocket/MJPEG；这些模块禁止读取模拟数据。其余页面在后续迁移前继续使用契约化稳定模拟数据。旧前端地址不保留兼容。
-
-```
+```text
 console2/
-├── src/RouterApp.jsx                # 正式路由、认证守卫与权限边界
-├── src/App.jsx                      # 真实实时监测检测器/BEV 主屏
-├── src/auth/                        # 会话恢复、登录、退出、角色映射
-├── src/lib/                         # Platform API Client 与 WS 消息规范化
-├── src/hooks/useWebSocket.js        # 可重连订阅、退订和消息去重
-├── src/components/                  # 全局壳层、地图与通用领域组件
-├── src/pages/                       # 态势、研判、任务、测绘、执法、治理页面
-├── src/data/mockData.js             # 仅供尚未迁移页面使用的模拟数据
-├── src/state/AppState.jsx           # Context + reducer 内存业务状态
-├── src/styles.css                   # 深色指挥中心基础视觉
-├── src/full.css                     # 全版壳层和业务页面样式
-├── public/assets/                   # 夜间无人机路口视觉资产
-├── Dockerfile / nginx.conf          # 生产构建及 API/WS/MJPEG 代理
-├── README.md                        # 路由、真实/模拟边界、运行和验证说明
-└── design-qa.md                     # 参考图与浏览器实现的视觉验收记录
+├── index.html                     # `zh-CN` 正式页面元数据
+├── nginx.conf                     # 8GB 上限、API/WS/HLS 代理、安全头与缓存策略
+├── vite.config.mjs                # 业务域 lazy chunk、vendor 分组与 bundle budget
+└── src/
+    ├── RouterApp.jsx              # 路由、认证守卫、ErrorBoundary、lazy pages
+    ├── App.jsx                    # 实时监测；暂停冻结 WS/REST/可见时间
+    ├── auth/AuthContext.jsx       # REST token 与媒体 Cookie 会话生命周期
+    ├── hooks/useWebSocket.js      # Cookie 鉴权 WebSocket，不在 URL 携带 token
+    ├── lib/api.js                 # REST 客户端与统一错误处理
+    ├── config/features.js         # UAT 默认关闭 Demo 治理
+    ├── components/                # AppShell、地图、共享可访问组件
+    └── pages/                     # dashboard、survey、mission、insight、enforcement、admin
 ```
+
+`IntegrationPage.jsx` 与正式管理页面物理分离；默认 `VITE_ENABLE_DEMO_GOVERNANCE=false` 时不进入可执行 UAT 能力和构建 chunk。
+
+## 5. 本机 canonical 拓扑
+
+根 `docker-compose.yaml` 是唯一完整拓扑：
+
+| Service | 端口 | 责任 |
+|---|---:|---|
+| `road9` | 5432 | PostgreSQL + TimescaleDB，稳定卷 `traffic_road9_data` |
+| `kafka` | 9092 | Apache Kafka KRaft |
+| `platform` | 8000 | FastAPI 单体 |
+| `console2` | 8080 | React SPA |
+| `nginx` | 8009 | API/WS/MJPEG/HLS 统一入口 |
+| `kafka-ui` | profile `ops` | 可选运维 UI |
+| detector/MPS | profile `gpu-only` | 可选 GPU 检测链；镜像门禁仍延期 |
+
+不得新增第二套完整 Compose、旧 PostgreSQL、旧/实验 TimescaleDB、InfluxDB/Telegraf/Grafana 运行服务或旧 Topic fallback。
+
+## 6. 验证与发布门禁
+
+| 路径 | 说明 |
+|---|---|
+| `.github/workflows/uat-code-gates.yml` | Platform/Console 测试、构建预算、Ruff、canonical 契约、ADR strict、whitespace |
+| `scripts/audit_adr019_retirement.py` | current-state 静态合同与本机证据审计 |
+| `scripts/validate_adr019_local_retirement.py` | canonical 容器、road9、Topic、旧存储隔离与恢复/soak 证据 |
+| `test_pipeline_inter_xqh.py` | 真实 4K MP4 + DJI SRT 的 56 项管道回归 |
+| `docs/UAT_FULL_REVIEW_2026-07-17.md` | 发布前全量审查、修复状态和延期门禁 |
+
+## 7. 历史与保留边界
+
+- `services/influxdb_data` 只按 ADR-019 retention manifest 保留 7 天，禁止挂载、读取、迁移或校验内容；到期清理只能使用固定 allowlist 脚本。
+- `traffic-fly-console` 已退出运行、Compose、Nginx 和发布构建；当前工作树中的删除属于用户既有状态，本轮不恢复、不提交兼容层。
+- 旧 Grafana、Telegraf、InfluxDB、旧 Platform 微服务和无 `uav_` 前缀 Topic/channel 只可出现在明确标记的历史文档或审计证据中。
+- Docker/镜像 pin、SBOM/签名、共享 UAT secret/TLS/SASL、容器最小权限/healthcheck 属于下一阶段门禁；本文不把它们标记为已完成。

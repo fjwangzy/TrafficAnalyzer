@@ -998,7 +998,6 @@ class ShowNode:
         # 边框
         pts = []
         for angle in range(0, 361, 5):
-            rad = np.radians(angle)
             if angle <= 90:
                 ox, oy = x2 - r, y1 + r
             elif angle <= 180:
@@ -1018,4 +1017,3 @@ class ShowNode:
         cv2.ellipse(img, (x2 - r, y1 + r), (r, r), 270, 0, 90, border_color, border_thick)
         cv2.ellipse(img, (x2 - r, y2 - r), (r, r), 0, 0, 90, border_color, border_thick)
         cv2.ellipse(img, (x1 + r, y2 - r), (r, r), 90, 0, 90, border_color, border_thick)
-

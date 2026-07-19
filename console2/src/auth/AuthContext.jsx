@@ -13,17 +13,27 @@ export function AuthProvider({ children }) {
   const [user, setUser] = useState(null)
   const [status, setStatus] = useState(getAccessToken() ? 'checking' : 'anonymous')
 
-  const logout = useCallback(() => {
+  const clearSession = useCallback(() => {
     clearAccessToken()
     setUser(null)
     setStatus('anonymous')
   }, [])
 
+  const logout = useCallback(async () => {
+    try {
+      await platformApi.logout()
+    } catch {
+      // A failed server-side logout must never strand a local authenticated UI.
+    } finally {
+      clearSession()
+    }
+  }, [clearSession])
+
   useEffect(() => {
-    const handleUnauthorized = () => logout()
+    const handleUnauthorized = () => clearSession()
     window.addEventListener(UNAUTHORIZED_EVENT, handleUnauthorized)
     return () => window.removeEventListener(UNAUTHORIZED_EVENT, handleUnauthorized)
-  }, [logout])
+  }, [clearSession])
 
   useEffect(() => {
     if (!getAccessToken()) return
@@ -35,10 +45,10 @@ export function AuthProvider({ children }) {
         setStatus('authenticated')
       })
       .catch(() => {
-        if (active) logout()
+        if (active) clearSession()
       })
     return () => { active = false }
-  }, [logout])
+  }, [clearSession])
 
   const login = useCallback(async (username, password) => {
     const response = await platformApi.login(username, password)

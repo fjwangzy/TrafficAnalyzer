@@ -1,26 +1,44 @@
 """Traffic Platform Monolith — main FastAPI application."""
-import logging
 import hashlib
+import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
+from app.api.v1 import (
+    alerts,
+    auth,
+    calibration,
+    dashboard,
+    enforcement,
+    events,
+    intersections,
+    survey,
+    system,
+    trajectories,
+    users,
+    video,
+)
+from app.api.v1.drones import router as drones_router
+from app.api.v1.drones import telemetry_router
+from app.api.v1.pipelines import router as pipelines_router
 from app.core.config import settings
-from app.core.database import init_db, close_db, async_session_maker
-from app.middleware.auth import AuthMiddleware
-from app.kafka.ws_manager import WSManager
+from app.core.database import async_session_maker, close_db, init_db
 from app.kafka.consumer import KafkaConsumerService
+from app.kafka.ws_manager import WSManager
+from app.middleware.auth import AuthMiddleware
 from app.services.alert_engine import AlertEngine, SqlAlertStore
-from app.services.lane_annotation_store import LaneAnnotationStore
-from app.services.pipeline_manager import PipelineManager
-from app.services.survey_worker import SurveyWorker
-from app.services.mission_orchestrator import MissionOrchestrator, PipelineManagerAdapter
-from app.services.metric_store import PostgresMetricStoreAdapter
-from app.services.enforcement_service import EnforcementService
+from app.services.audit_service import AuditService
 from app.services.dashboard_read_model import DashboardReadModel
+from app.services.enforcement_service import EnforcementService
 from app.services.event_center import EventCenter
+from app.services.lane_annotation_store import LaneAnnotationStore
+from app.services.metric_store import PostgresMetricStoreAdapter
+from app.services.mission_orchestrator import MissionOrchestrator, PipelineManagerAdapter
+from app.services.pipeline_manager import PipelineManager
 from app.services.road_context import (
     FallbackRoadContextAdapter,
     FixtureRoadContextAdapter,
@@ -28,10 +46,7 @@ from app.services.road_context import (
     RoadContext,
     RoadContextResult,
 )
-from app.api.v1 import intersections, alerts, system, trajectories, video, calibration, auth, users, survey, enforcement, dashboard, events
-from app.api.v1.drones import router as drones_router
-from app.api.v1.drones import telemetry_router
-from app.api.v1.pipelines import router as pipelines_router
+from app.services.survey_worker import SurveyWorker
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -68,6 +83,7 @@ async def lifespan(app: FastAPI):
     )
 
     metric_store = PostgresMetricStoreAdapter(async_session_maker) if db_available else None
+    audit_service = AuditService(async_session_maker) if db_available else None
     enforcement_service = EnforcementService(async_session_maker) if db_available else None
     dashboard_read_model = DashboardReadModel(async_session_maker) if db_available else None
 
@@ -146,6 +162,7 @@ async def lifespan(app: FastAPI):
     app.state.alert_engine = alert_engine
     app.state.lane_annotation_store = lane_annotation_store
     app.state.metric_store = metric_store
+    app.state.audit_service = audit_service
     app.state.enforcement_service = enforcement_service
     app.state.dashboard_read_model = dashboard_read_model
     app.state.event_center = event_center
@@ -213,6 +230,7 @@ app.include_router(survey.evidence_router, prefix="/api/v1")
 app.include_router(enforcement.router, prefix="/api/v1")
 app.include_router(dashboard.router, prefix="/api/v1")
 app.include_router(events.router, prefix="/api/v1")
+app.mount("/hls", StaticFiles(directory=settings.hls_output_dir, check_dir=False), name="hls")
 
 
 @app.get("/")
@@ -265,9 +283,8 @@ async def readiness_check():
     pipelines_active = pm.get_active_count() if pm else 0
 
     all_ready = all(
-        v in ("healthy", "not_configured")
-        for k, v in services.items()
-        if k != "pipelines_active"
+        services[name] == "healthy"
+        for name in ("database", "kafka", "timescaledb", "pipeline_manager")
     )
 
     return {

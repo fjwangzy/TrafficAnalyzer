@@ -5,7 +5,6 @@ from typing import Literal
 from fastapi import APIRouter, HTTPException, Query, Request
 from sqlalchemy.exc import SQLAlchemyError
 
-
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 
 

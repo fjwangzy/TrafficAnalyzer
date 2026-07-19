@@ -2,7 +2,6 @@ from pathlib import Path
 
 from scripts.bootstrap_mp4new_sources import LOCAL_REPLAY_CATALOG, MP4NEW_CATALOG
 
-
 ROOT = Path(__file__).resolve().parents[2]
 
 

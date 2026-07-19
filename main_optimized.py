@@ -24,7 +24,6 @@ main_stream_optimized_v2.py 的特性：
 import os
 os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")  # MPS设备NMS等操作回退CPU
 
-import signal
 from time import sleep, time
 from multiprocessing import Process, Queue, shared_memory, resource_tracker
 from queue import Empty

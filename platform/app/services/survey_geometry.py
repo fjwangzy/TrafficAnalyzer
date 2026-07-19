@@ -11,7 +11,6 @@ import math
 import cv2
 import numpy as np
 
-
 DEFAULT_CAMERA_INTRINSICS = {
     "focal_length_mm": 4.5,
     "sensor_width_mm": 6.4,

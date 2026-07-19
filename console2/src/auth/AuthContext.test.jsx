@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const apiMocks = vi.hoisted(() => ({
   token: '',
   login: vi.fn(),
+  logout: vi.fn(),
   currentUser: vi.fn(),
   setAccessToken: vi.fn((value) => { apiMocks.token = value }),
   clearAccessToken: vi.fn(() => { apiMocks.token = '' }),
@@ -16,6 +17,7 @@ vi.mock('../lib/api', () => ({
   clearAccessToken: apiMocks.clearAccessToken,
   platformApi: {
     login: apiMocks.login,
+    logout: apiMocks.logout,
     currentUser: apiMocks.currentUser,
   },
 }))
@@ -43,6 +45,7 @@ describe('AuthProvider', () => {
   beforeEach(() => {
     apiMocks.token = ''
     apiMocks.login.mockReset()
+    apiMocks.logout.mockReset()
     apiMocks.currentUser.mockReset()
     apiMocks.setAccessToken.mockClear()
     apiMocks.clearAccessToken.mockClear()
@@ -83,6 +86,23 @@ describe('AuthProvider', () => {
     await expect(capturedAuth.login('admin', 'wrong-password')).rejects.toThrow('Incorrect username or password')
     expect(apiMocks.setAccessToken).not.toHaveBeenCalled()
     expect(capturedAuth.status).toBe('anonymous')
+  })
+
+  it.each([
+    ['服务器成功响应', () => Promise.resolve()],
+    ['服务器请求失败', () => Promise.reject(new Error('network unavailable'))],
+  ])('clears the local session when logging out even if %s', async (_label, response) => {
+    apiMocks.token = 'stored-token'
+    apiMocks.currentUser.mockResolvedValue({ username: 'admin', role: 'admin' })
+    apiMocks.logout.mockImplementation(response)
+    render(<AuthProvider><AuthProbe /></AuthProvider>)
+    await waitFor(() => expect(screen.getByTestId('status')).toHaveTextContent('authenticated'))
+
+    fireEvent.click(screen.getByRole('button', { name: '退出' }))
+
+    await waitFor(() => expect(screen.getByTestId('status')).toHaveTextContent('anonymous'))
+    expect(apiMocks.logout).toHaveBeenCalledOnce()
+    expect(apiMocks.clearAccessToken).toHaveBeenCalled()
   })
 })
 

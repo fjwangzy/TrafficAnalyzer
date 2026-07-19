@@ -31,6 +31,15 @@ class AlertsApiTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload["acknowledged_by"], "operator")
         self.assertEqual(engine.called_with, ("alert_1", "operator"))
 
+    async def test_acknowledge_alert_reads_actor_from_auth_claim_dict(self):
+        engine = _AsyncAlertEngine()
+        request = SimpleNamespace(
+            app=SimpleNamespace(state=SimpleNamespace(alert_engine=engine)),
+            state=SimpleNamespace(user={"username": "operator"}),
+        )
+        payload = await alerts.acknowledge_alert("alert_2", request)
+        self.assertEqual(payload["acknowledged_by"], "operator")
+
 
 if __name__ == "__main__":
     unittest.main()

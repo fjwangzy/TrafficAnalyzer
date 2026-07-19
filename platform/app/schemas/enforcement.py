@@ -7,7 +7,6 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-
 ZoneType = Literal["truck_restriction", "no_parking", "speed_observation", "dwell", "occupation"]
 ClueType = Literal["truck_restriction", "speed_observation", "no_parking", "dwell", "occupation"]
 VehicleClass = Literal["truck", "non_truck", "unknown"]

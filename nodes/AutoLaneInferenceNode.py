@@ -11,7 +11,6 @@
 """
 
 import logging
-import time as _time
 from collections import defaultdict
 
 import numpy as np
@@ -31,7 +30,6 @@ from utils_local.auto_lane_inference import (
     compute_flow_per_min,
     compute_headway,
     circular_mean_deg,
-    DIRECTION_LABELS,
 )
 from utils_local.trajectory_classifier import classify_direction
 

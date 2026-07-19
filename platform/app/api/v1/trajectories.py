@@ -1,11 +1,10 @@
 """Trajectory API endpoints."""
-from fastapi import APIRouter, HTTPException, Request, Query
-from pydantic import BaseModel, Field
-from typing import Optional
 from datetime import datetime
 
-from app.services.metric_store import MessageIdentityConflict, MetricContractError
+from fastapi import APIRouter, HTTPException, Query, Request
+from pydantic import BaseModel, Field
 
+from app.services.metric_store import MessageIdentityConflict, MetricContractError
 
 router = APIRouter(prefix="/trajectories", tags=["trajectories"])
 
@@ -22,13 +21,13 @@ async def get_trajectories(
     request: Request,
     period: str = Query("1h"),
     limit: int = Query(500, le=2000),
-    class_name: Optional[str] = Query(None),
-    turn_behavior: Optional[str] = Query(None),
-    mission_id: Optional[str] = Query(None),
-    source_profile_id: Optional[str] = Query(None),
-    quality_status: Optional[str] = Query(None),
-    start_at: Optional[datetime] = Query(None),
-    end_at: Optional[datetime] = Query(None),
+    class_name: str | None = Query(None),
+    turn_behavior: str | None = Query(None),
+    mission_id: str | None = Query(None),
+    source_profile_id: str | None = Query(None),
+    quality_status: str | None = Query(None),
+    start_at: datetime | None = Query(None),
+    end_at: datetime | None = Query(None),
     spatial_ready: bool = Query(False),
     min_world_points: int = Query(2, ge=2, le=10000),
 ):

@@ -82,6 +82,7 @@ vi.mock('./lib/api', async (importOriginal) => {
         { profile_id: 'SRC-LOCAL-XQH', display_name: 'inter_xqh 早高峰', drone_id: 'UAV-M300-03', mode: 'local', enabled: true, validation_status: 'valid', revision: 1, video: { id: 'VID-1', source_type: 'mp4', location_hint: 'inter_xqh.mp4' }, telemetry: { id: 'TEL-1', source_type: 'srt', location_hint: 'telemetry.srt' } },
         { profile_id: 'SRC-LOCAL-XQH-PM', display_name: 'inter_xqh 晚高峰', drone_id: 'UAV-M300-03', mode: 'local', enabled: true, validation_status: 'valid', revision: 1, video: { id: 'VID-2', source_type: 'mp4', location_hint: 'inter_xqh-pm.mp4' }, telemetry: { id: 'TEL-2', source_type: 'file', location_hint: 'telemetry.txt' } },
       ]),
+      pipelines: vi.fn().mockResolvedValue([]),
       sourceResults: vi.fn().mockResolvedValue({ profile_id: 'SRC-LOCAL-XQH', telemetry_type: 'dji_srt', missions: [], survey_tasks: [], counts: { traffic_metrics: 0, tracks: 0, conflicts: 0, survey_frames: 0, scene_annotations: 0, survey_reports: 0, lane_annotations: 0 }, links: { situation: '/gis', monitoring: '/drones?tab=fleet', insight: '/insight', survey: '/survey', scene_annotation: '/survey', lane_annotation: '/admin/calibration?tab=lane' } }),
       flightPlans: vi.fn().mockResolvedValue([
         { id: 'FP-20260713-03', name: '夜间货车限行验证', drone_id: 'UAV-M300-03', state: 'draft', revision: 1, timezone: 'Asia/Shanghai', schedule: { type: 'once', start_at: '2026-07-15T22:30:00+08:00', end_at: '2026-07-16T00:30:00+08:00' } },
@@ -119,7 +120,10 @@ vi.mock('./lib/api', async (importOriginal) => {
 })
 
 vi.mock('./components/CityMap', () => ({
-  CityMap: ({ offline = false }) => <div data-testid='city-map'>{offline ? '城市底图服务不可用' : '演示地图'}</div>,
+  CityMap: ({ offline = false, onSelect, points = [] }) => <div data-testid='city-map'>
+    {offline ? '城市底图服务不可用' : '演示地图'}
+    {points[0] && <button aria-label={`打开路口 ${points[0].id}`} onClick={() => onSelect?.(points[0])}>路口点位</button>}
+  </div>,
 }))
 
 import { RouterApp } from './RouterApp'
@@ -151,11 +155,36 @@ describe('Console2 full prototype', () => {
     expect(container.querySelector('.page-heading')).not.toBeInTheDocument()
     expect(container.querySelector('.page-actions')).toBeInTheDocument()
     expect(screen.queryByText('I5 内部工程口径')).not.toBeInTheDocument()
-    expect(screen.getByText('无人机路口态势纵览')).toBeInTheDocument()
+    expect(screen.queryByText('无人机路口态势纵览')).not.toBeInTheDocument()
+    expect(container.querySelector('.map-master-panel > .panel-title')).not.toBeInTheDocument()
     expect(screen.getByText('待办任务')).toBeInTheDocument()
+    await waitFor(() => expect(platformApi.dashboardIntersections).toHaveBeenCalledWith({ limit: 500 }))
     expect(screen.getByRole('navigation', { name: '全域态势二级导航' })).toHaveTextContent('工作台首屏实时监测')
     expect(screen.getByRole('navigation', { name: '全域态势二级导航' })).not.toHaveTextContent('轨迹研判')
     expect(screen.getByRole('complementary', { name: '一级业务域' })).toBeInTheDocument()
+  })
+
+  it('opens the selected intersection monitoring screen from a dashboard map marker', async () => {
+    const source = { profile_id: 'SRC-MAP-1', display_name: '地图监测视频源', drone_id: 'UAV-MAP-1', enabled: true, validation_status: 'valid', video: { id: 'VID-MAP-1', source_type: 'mp4' } }
+    const drone = { id: 'UAV-MAP-1', name: '地图监测无人机', default_inter_id: 'INT-MAP-1', default_video_source_id: 'VID-MAP-1', intersection_name: '地图监测路口' }
+    const pipeline = { pipeline_id: 'PIPE-MAP-1', intersection_id: 'INT-MAP-1', source_profile_id: 'SRC-MAP-1', drone_id: 'UAV-MAP-1', camera_id: 17, status: 'running' }
+    platformApi.dashboardIntersections.mockResolvedValueOnce({ schema_version: 'uav.dashboard/v1', total: 1, map_eligible: 1, isolated: 0, items: [
+      { id: 'INT-MAP-1', inter_id: 'INT-MAP-1', name: '地图监测路口', lat: 36.67, lon: 116.99, map_eligible: true, map_coordinate_status: 'test', road_data_version: 'ROAD-MAP', monitor: 'running', risk: 'normal', quality: 'unverified', metric: {}, events: [], conflict_count: 0 },
+    ] })
+    platformApi.sources.mockResolvedValueOnce([source]).mockResolvedValueOnce([source])
+    platformApi.drones.mockResolvedValueOnce([drone]).mockResolvedValueOnce([drone])
+    platformApi.pipelines.mockResolvedValueOnce([pipeline]).mockResolvedValueOnce([pipeline])
+
+    open('/')
+    fireEvent.click(await screen.findByRole('button', { name: '打开路口 SRC-MAP-1' }))
+
+    await waitFor(() => expect(window.location.pathname).toBe('/monitoring'))
+    expect(new URLSearchParams(window.location.search).get('intersection_id')).toBe('INT-MAP-1')
+    expect(new URLSearchParams(window.location.search).get('source_profile_id')).toBe('SRC-MAP-1')
+    const sourceSelector = await screen.findByRole('combobox', { name: '选择无人机视频源' })
+    await waitFor(() => expect(sourceSelector).toHaveDisplayValue('地图监测视频源 · 地图监测无人机'))
+    expect(await screen.findByAltText('检测器输出视频流')).toHaveAttribute('src', expect.stringContaining('/camera_17'))
+    expect(await screen.findByLabelText('飞行姿态数据')).toBeInTheDocument()
   })
 
   it('uses the same first-level rail and domain secondary navigation on monitoring', async () => {
@@ -443,16 +472,9 @@ describe('Console2 full prototype', () => {
 
   it('isolates unverified coordinates instead of plotting demo points', async () => {
     open('/')
-    expect(await screen.findByText('暂无可上图的路口坐标')).toBeInTheDocument()
-    expect(await screen.findByText('1 个路口尚未具备权威或验收测试坐标。')).toBeInTheDocument()
+    expect(await screen.findByText('暂无可上图的无人机视频源')).toBeInTheDocument()
+    expect(await screen.findByText('已登记视频源尚未绑定可用路口或遥测坐标。')).toBeInTheDocument()
     expect(screen.queryByText('演示地图')).not.toBeInTheDocument()
-  })
-
-  it('applies dashboard risk filters through the server query contract', async () => {
-    open('/')
-    await screen.findByText('暂无可上图的路口坐标')
-    fireEvent.click(screen.getByRole('button', { name: '高风险' }))
-    await waitFor(() => expect(platformApi.dashboardIntersections).toHaveBeenCalledWith({ risk: 'critical', limit: 500 }))
   })
 
   it('does not invent global exceptions or a fixed freshness timestamp', () => {

@@ -13,6 +13,7 @@ import { Crosshair, MapPin, Minus, Plus, WarningCircle } from '@phosphor-icons/r
 import 'ol/ol.css'
 
 const colors = { critical: '#ff715b', warning: '#ffbe55', normal: '#5ad3e7' }
+const sourceColors = { running: '#58d6b0', ready: '#5ad3e7', degraded: '#ffbe55', invalid: '#ff715b', disabled: '#8290aa' }
 
 function droneDisplacement(item, points) {
   const nearby = points
@@ -58,7 +59,7 @@ export function CityMap({ points, selectedId, onSelect, offline = false, compact
       style: (feature) => {
         const item = feature.get('item')
         const selected = item.id === selectedId
-        const color = colors[item.risk] || '#8290aa'
+        const color = markerType === 'drone' && item.source_status ? sourceColors[item.source_status] || '#8290aa' : colors[item.risk] || '#8290aa'
         return new Style({
           image: markerType === 'drone' ? droneMarker(color, selected, droneDisplacement(item, points)) : new CircleStyle({
             radius: selected ? 12 : item.risk === 'critical' ? 10 : 8,

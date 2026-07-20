@@ -88,6 +88,18 @@ class MissionsApiTest(unittest.TestCase):
         self.assertEqual(response.status_code, 502)
         self.assertEqual(response.json()["detail"]["code"], "pipeline_start_failed")
 
+    def test_legacy_mission_rejects_lane_annotation_parameters(self):
+        response = self.client.post(
+            "/api/v1/missions",
+            json={
+                "drone_id": "drone_8",
+                "intersection_id": "INT_camera_8",
+                "video_src": "test_videos/inter_xqh/demo.mp4",
+                "roads_json": "configs/lanes.json",
+            },
+        )
+        self.assertEqual(response.status_code, 422)
+
     def test_non_admin_cannot_stop_mission(self):
         app = FastAPI()
         app.state.mission_orchestrator = self.orchestrator

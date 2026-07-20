@@ -32,6 +32,13 @@ function fillAndSubmit() {
 describe('LoginPage', () => {
   beforeEach(() => loginMocks.login.mockReset())
 
+  it('renders the Console 1.0 traffic-flow animation as a decorative backdrop', () => {
+    const { container } = open('/login')
+    expect(screen.getByTestId('login-traffic-flow')).toHaveAttribute('aria-hidden', 'true')
+    expect(container.querySelectorAll('animateMotion')).toHaveLength(12)
+    expect(screen.getByRole('heading', { name: '登录系统' })).toBeInTheDocument()
+  })
+
   it('uses valid internal redirects and rejects external redirect targets', async () => {
     loginMocks.login.mockResolvedValue({ username: 'admin', role: 'admin' })
     const first = open('/login?redirect=/monitoring')

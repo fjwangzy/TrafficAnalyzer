@@ -481,3 +481,122 @@ final result: passed
 - 无阻断性或 P3 跟进项。
 
 final result: passed
+
+## 2026-07-19 浏览器批注：页面纵向撑满与地图点位直达实时监测
+
+### Comparison target
+
+- Source visual truth：本轮浏览器批注 Comment 1/2，以及修改前留存 `.design-qa/2026-07-19-dashboard-before-fill.png`。
+- Implementation screenshots：`.design-qa/2026-07-19-dashboard-after-fill.png`、`.design-qa/2026-07-19-monitoring-from-marker.png`。
+- Combined comparison：`.design-qa/2026-07-19-dashboard-fill-comparison.jpg`。
+- Viewport/state：1357 × 912，深色主题，管理员登录态，首页使用同一 Console2/Platform 本机数据快照。
+- Full-view comparison：首页 KPI、地图、右侧卡片和底部状态条的视觉 token 与内容保持不变；主地图工作区向下吸收空余高度，底部深色空白带消失。
+- Focused comparison：地图无人机点位从“打开路口详情抽屉”改为单击直接进入对应 `/monitoring?intersection_id=...` 实时检测画面；重点路口列表仍保留详情抽屉入口。
+
+### Findings and fixes
+
+- P1：`.shell-main` 不是弹性容器，`.dashboard-grid` 固定为 540px，1357 × 912 下底部状态条之后留下 98px 空白。修复为共享纵向 flex 容器，并让各业务工作区及列表末级面板吸收剩余高度；首页地图网格由 540px 增至 620px，底部统一保留 18px。
+- P1：首页 `CityMap` 点位只更新 `intersection_id` 并打开详情抽屉，未进入用户要求的实时检测画面。修复为点位单击直接导航到 `/monitoring?intersection_id=...`，查询参数使用 URL 编码。
+- Post-fix representative pages：`/events` 末级面板 bottom=894px、`/gis` 工作区 bottom=894px，912px 视口下均为 18px 底部间距；两页 `scrollHeight === clientHeight === 848px`，无额外纵向溢出。
+- Interaction evidence：在真实首页点击无人机点位后进入 `/monitoring?intersection_id=INT_camera_1`；“实时监测”导航为 active，`飞行姿态数据` 区域可见。
+
+### Visual fidelity review
+
+- 字体与排版：字号、字重、导航层级和卡片标题未改动。
+- 间距与布局：只调整主内容的纵向分配和底部 gutter；横向网格、卡片间距、圆角与边框保持原值。
+- 色彩与资产：背景、状态色、OpenLayers 底图、无人机图标和现有图片资产未替换。
+- 文案与内容：未新增展示文案；路口事实、质量状态、实时画面空态和数据来源保持真实运行态。
+- Console：最终验收标签页 0 error / 0 warning。
+
+### Verification
+
+- [x] 同视口修改前后全图并排比较。
+- [x] 首页、事件列表、轨迹研判三类页面底部量测。
+- [x] 真实地图点位点击与监测页到达验证。
+- [x] Console2 全量 80/80 自动化测试。
+- [x] Vite production build。
+
+### Follow-up polish
+
+- 无阻断性或 P3 跟进项。
+
+final result: passed
+
+## 2026-07-19 浏览器批注：首页地图标题栏删除
+
+### Comparison target
+
+- Source visual truth：本轮浏览器批注 Comment 1，以及删除前留存 `.design-qa/2026-07-19-dashboard-map-header-before.png`。
+- Implementation screenshot：`.design-qa/2026-07-19-dashboard-map-header-after.png`。
+- Combined comparison：`.design-qa/2026-07-19-dashboard-map-header-comparison.jpg`。
+- Viewport/state：1357 × 912，深色主题，管理员登录态，首页使用同一 Console2/Platform 本机数据快照。
+- Full-view comparison：KPI、右侧三组业务卡片、地图图例、状态条和整体栅格保持不变；左侧地图从面板顶部开始显示。
+- Focused comparison：用户选中的标题、说明和三个筛选按钮整块消失，没有残留占位或空白标题区。
+
+### Findings and fixes
+
+- P1：删除标题 JSX 后若保留原 `.city-map { height: calc(100% - 48px) }`，地图底部会留下同等空位。同步改为 `height: 100%`，使地图占满面板。
+- P2：移除筛选控件后不再保留无入口的 `riskFilter` 状态和条件查询分支；Dashboard 固定请求当前授权范围 `{ limit: 500 }`。
+- Post-fix evidence：`.map-master-panel > .panel-title` 数量 0、`地图状态筛选` 数量 0、删除标题不可见；面板 `top=222px/height=620px`，地图 `top=223px/height=618px`，差异仅为 1px 面板边框。
+- Interaction evidence：点击真实无人机点位后进入 `/monitoring?intersection_id=INT_camera_1`，实时监测导航 active，飞行姿态区可见。
+
+### Visual fidelity review
+
+- 字体与排版：仅删除指定文案区，其余字号、字重和信息层级未改动。
+- 间距与布局：地图向上补齐原 48px 标题空间；横向栅格、卡片间距、圆角和底部 18px gutter 保持不变。
+- 色彩与资产：地图底图、无人机点位、状态色、图例和图标资产未替换。
+- 文案与内容：仅移除批注明确选中的标题、说明和筛选标签；路口事实和质量信息保持原运行态。
+- Console：最终验收标签页 0 error / 0 warning。
+
+### Verification
+
+- [x] 1357 × 912 同视口修改前后并排比较。
+- [x] DOM 与像素位置量测确认无标题残留和空白占位。
+- [x] 真实地图点位点击与监测页到达验证。
+- [x] Console2 全量 79/79 自动化测试。
+- [x] Vite production build。
+
+### Follow-up polish
+
+- 无阻断性或 P3 跟进项。
+
+final result: passed
+
+## 2026-07-19 浏览器批注：实时监测双侧栏默认展开
+
+### Comparison target
+
+- Source visual truth：本轮浏览器批注 Comment 1/2，以及修改前留存 `.design-qa/2026-07-19-monitoring-panels-before.png`。
+- Implementation screenshot：`.design-qa/2026-07-19-monitoring-panels-after.png`。
+- Combined comparison：`.design-qa/2026-07-19-monitoring-panels-comparison.jpg`。
+- Viewport/state：1357 × 912，深色主题，管理员登录态，`/monitoring?intersection_id=INT_camera_1`，相同路口与实时数据快照。
+- Full-view comparison：顶部路口上下文、中央检测画面、地图工具、时间轴和导航保持原布局；左右两侧由窄边缘状态变为完整信息面板。
+- Focused comparison：实时态势面板展示拥堵、四项指标、趋势和车型流量；BEV/实时事件面板展示轨迹投放和事件列表，两个边缘收缩按钮均保留。
+
+### Findings and fixes
+
+- P1：左右侧栏初始 `open=false`，进入实时监测后只能看到窄边缘，关键态势与事件事实需要额外悬停。修复为左右 `open=true`，首次进入即显示完整内容。
+- Post-fix evidence：刷新后左、右面板 `data-state` 均为 `expanded`；左栏宽 306px，右栏宽 340px；“收缩实时态势面板”和“收缩BEV与实时事件面板”按钮均存在。
+- Interaction evidence：自动化覆盖默认展开、手动收缩、悬停展开和锁定/取消锁定；真实浏览器刷新后双栏保持默认展开。
+
+### Visual fidelity review
+
+- 字体与排版：面板内原有字号、字重、图表标签与事件层级未改动。
+- 间距与布局：沿用既有 expanded 宽度和 40% 透明度；中央画面仍完整可见，时间轴与顶部上下文没有被遮挡或裁切。
+- 色彩与资产：玻璃面板、状态色、BEV 底图、图标和图表配色均未替换。
+- 文案与内容：未新增展示文案；实时态势、质量状态、BEV 轨迹和事件事实保持真实运行态。
+- Console：最终验收标签页 0 error / 0 warning。
+
+### Verification
+
+- [x] 1357 × 912 同视口修改前后并排比较。
+- [x] 左右面板默认状态、宽度和收缩按钮量测。
+- [x] 手动收缩、悬停展开与锁定行为自动化验证。
+- [x] Console2 全量 79/79 自动化测试。
+- [x] Vite production build。
+
+### Follow-up polish
+
+- 无阻断性或 P3 跟进项。
+
+final result: passed

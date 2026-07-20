@@ -806,7 +806,6 @@ class MissionOrchestrator:
 
     async def _runtime_params(self, session: AsyncSession, mission: MissionRecord) -> dict:
         legacy = mission.context_snapshot.get("legacy_source")
-        roads_json = ""
         if legacy:
             return {
                 "drone_id": mission.drone_id, "intersection_id": mission.inter_id,
@@ -825,10 +824,6 @@ class MissionOrchestrator:
         if video is None or telemetry is None:
             raise MissionError("mission source snapshot cannot be resolved", code="source_missing")
         context = await self._road_context.get(mission.inter_id, mission.road_data_version)
-        for binding in context.visual_bindings:
-            if binding.get("roads_json"):
-                roads_json = binding["roads_json"]
-                break
         mission.context_snapshot = {
             **mission.context_snapshot,
             "road_context": {
@@ -841,7 +836,7 @@ class MissionOrchestrator:
         }
         return {
             "drone_id": mission.drone_id, "intersection_id": mission.inter_id,
-            "video_src": video.location, "roads_json": roads_json,
+            "video_src": video.location, "roads_json": "",
             "telemetry_source": telemetry.source_type,
             "telemetry_file_path": telemetry.location if telemetry.mode == "local" else None,
             "telemetry_time_offset_sec": (telemetry.config or {}).get("time_offset_sec", 0.0),

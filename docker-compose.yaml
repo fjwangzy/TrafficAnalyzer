@@ -68,7 +68,7 @@ services:
 
   platform:
     build:
-      context: ./platform
+      context: .
       dockerfile: Dockerfile
     restart: unless-stopped
     init: true
@@ -89,14 +89,15 @@ services:
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:-local-road9-target-change-before-production}
       JWT_ALGORITHM: HS256
       JWT_ACCESS_TOKEN_EXPIRE_MINUTES: 30
-      PIPELINE_PROJECT_ROOT: /project
+      PIPELINE_PROJECT_ROOT: /app
       PIPELINE_FRAME_STRIDE: "${PIPELINE_FRAME_STRIDE:-10}"
       HLS_OUTPUT_DIR: /hls
       GEOJSON_OUTPUT_DIR: /pipeline-output
       CALIBRATION_DB_PATH: /calibration/calibration_db.json
+      LANE_ANNOTATION_AUTO_TASKS_ENABLED: "false"
       SURVEY_STORAGE_DIR: /survey
-      SURVEY_ASSET_ROOTS: '["/project/test_videos"]'
-      UAV_LOCAL_ASSET_ROOTS: '["/project/test_videos"]'
+      SURVEY_ASSET_ROOTS: '["/app/test_videos"]'
+      UAV_LOCAL_ASSET_ROOTS: '["/app/test_videos"]'
     ports:
       - "${PLATFORM_PORT:-8000}:8000"
     volumes:
@@ -105,7 +106,8 @@ services:
       - pipeline_spool_data:/pipeline-spool
       - calibration_data:/calibration
       - survey_data:/survey
-      - .:/project:ro
+      - ./weights:/app/weights:ro
+      - ./test_videos:/app/test_videos:ro
     healthcheck:
       test: ["CMD", "python", "-c", "import json, urllib.request; data=json.load(urllib.request.urlopen('http://127.0.0.1:8000/ready')); assert data['status'] == 'ready'"]
       interval: 5s
@@ -156,119 +158,6 @@ services:
     volumes:
       - nvidia_mps_pipes:/tmp/nvidia-mps
       - nvidia_mps_logs:/var/log/nvidia-mps
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
-    networks: [uav_target]
-
-  traffic_analyzer_camera_1:
-    build: .
-    image: traffic_analyzer:latest
-    restart: unless-stopped
-    profiles: ["gpu-only"]
-    command: python main_optimized.py
-    environment:
-      VIDEO_SRC: test_videos/inter1.mp4
-      ROADS_JSON: configs/inter1_lanes.json
-      TOPIC_NAME: uav_statistics_1
-      CAMERA_ID: "1"
-      KAFKA_BOOTSTRAP: kafka:29092
-      CUDA_MPS_PIPE_DIRECTORY: /tmp/nvidia-mps
-      CUDA_MPS_LOG_DIRECTORY: /var/log/nvidia-mps
-    volumes:
-      - ./configs:/app/configs:ro
-      - ./weights:/app/weights:ro
-      - ./test_videos:/app/test_videos:ro
-      - nvidia_mps_pipes:/tmp/nvidia-mps
-      - nvidia_mps_logs:/var/log/nvidia-mps
-    ports:
-      - "8101:8100"
-    depends_on:
-      kafka:
-        condition: service_healthy
-      nvidia-mps:
-        condition: service_started
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
-    networks: [uav_target]
-
-  traffic_analyzer_camera_2:
-    image: traffic_analyzer:latest
-    restart: unless-stopped
-    profiles: ["gpu-only"]
-    command: python main_optimized.py
-    environment:
-      VIDEO_SRC: test_videos/inter2.mp4
-      ROADS_JSON: configs/inter2_lanes.json
-      TOPIC_NAME: uav_statistics_2
-      CAMERA_ID: "2"
-      KAFKA_BOOTSTRAP: kafka:29092
-      CUDA_MPS_PIPE_DIRECTORY: /tmp/nvidia-mps
-      CUDA_MPS_LOG_DIRECTORY: /var/log/nvidia-mps
-    volumes:
-      - ./configs:/app/configs:ro
-      - ./weights:/app/weights:ro
-      - ./test_videos:/app/test_videos:ro
-      - nvidia_mps_pipes:/tmp/nvidia-mps
-      - nvidia_mps_logs:/var/log/nvidia-mps
-    ports:
-      - "8102:8100"
-    depends_on:
-      kafka:
-        condition: service_healthy
-      nvidia-mps:
-        condition: service_started
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
-    networks: [uav_target]
-
-  traffic_analyzer_camera_3:
-    image: traffic_analyzer:latest
-    restart: unless-stopped
-    profiles: ["gpu-only"]
-    command: >-
-      python main_optimized.py
-      telemetry.enabled=true
-      telemetry.source=srt
-      telemetry.file_path=test_videos/inter_xqh/telemetry.srt
-      telemetry.sync_tolerance_sec=0.033
-      telemetry.time_offset_sec=0
-      calibration.mode=telemetry
-    environment:
-      VIDEO_SRC: test_videos/inter_xqh/DJI_20260403142902_0001_V小清河北路与水屯路路口.mp4
-      ROADS_JSON: configs/entry_exit_lanes.json
-      TOPIC_NAME: uav_statistics_3
-      CAMERA_ID: "3"
-      KAFKA_BOOTSTRAP: kafka:29092
-      CUDA_MPS_PIPE_DIRECTORY: /tmp/nvidia-mps
-      CUDA_MPS_LOG_DIRECTORY: /var/log/nvidia-mps
-    volumes:
-      - ./configs:/app/configs:ro
-      - ./weights:/app/weights:ro
-      - ./test_videos:/app/test_videos:ro
-      - nvidia_mps_pipes:/tmp/nvidia-mps
-      - nvidia_mps_logs:/var/log/nvidia-mps
-    ports:
-      - "8103:8100"
-    depends_on:
-      kafka:
-        condition: service_healthy
-      nvidia-mps:
-        condition: service_started
     deploy:
       resources:
         reservations:

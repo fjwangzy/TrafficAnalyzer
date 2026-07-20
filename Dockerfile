@@ -1,23 +1,53 @@
-FROM python:3.10.13
+FROM python:3.12-slim
 
-RUN apt-get update && apt-get install -y \
+# Platform and detector runtime dependencies. The canonical image remains
+# CPU-compatible; GPU runtime exposure is an external deployment concern.
+RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
-    curl \
-    software-properties-common \
-    libgl1-mesa-glx \
+    libpq-dev \
+    ffmpeg \
+    libgl1 \
+    libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-RUN python3 -m pip install --upgrade pip
-RUN pip3 install "numpy<2" "setuptools<70.0" wheel cython
-RUN pip3 install --no-build-isolation cython_bbox==0.1.5 lap==0.4.0 
-RUN pip3 install torch==2.3.1 torchvision==0.18.1 
-# --index-url https://download.pytorch.org/whl/cu121
+# Copy dependency metadata first so source-only changes keep the dependency
+# layers cached.
+COPY platform/pyproject.toml platform/alembic.ini \
+    platform/pipeline-requirements.txt platform/pipeline-constraints.txt \
+    /app/platform/
+COPY platform/app /app/platform/app
+COPY platform/alembic /app/platform/alembic
 
-#首先，仅复制 requirements.txt 并安装依赖
-COPY requirements.txt /app/
-RUN pip3 install -r requirements.txt
+RUN python -m pip install --upgrade pip \
+    && pip install --no-cache-dir -e /app/platform \
+    && pip install --no-cache-dir "numpy<2" "setuptools<70.0" wheel cython \
+    && pip install --no-cache-dir torch==2.2.2 torchvision==0.17.2 \
+    && pip install --no-cache-dir --no-build-isolation \
+        -c /app/platform/pipeline-constraints.txt \
+        -r /app/platform/pipeline-requirements.txt
 
-#然后，复制剩余的代码
-COPY . /app
+# Bake the detector implementation into the Platform image. Large runtime
+# assets (weights and videos) are mounted read-only by Compose.
+COPY run_platform.py main_optimized.py /app/
+COPY configs /app/configs
+COPY elements /app/elements
+COPY nodes /app/nodes
+COPY byte_tracker /app/byte_tracker
+COPY utils_local /app/utils_local
+COPY services/*.py /app/services/
+
+RUN mkdir -p \
+    /app/logs \
+    /app/weights \
+    /app/test_videos \
+    /hls \
+    /calibration \
+    /pipeline-output \
+    /pipeline-spool \
+    /survey
+
+EXPOSE 8000
+
+CMD ["python", "run_platform.py"]

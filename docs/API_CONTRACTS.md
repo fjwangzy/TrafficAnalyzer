@@ -667,23 +667,23 @@ lon = anchor_lon + easting_m / (111320 × cos(radians(anchor_lat)))
 ### 路由规则
 ```nginx
 location ~ ^/camera_(\d+)$ {
-    resolver 127.0.0.11 [::1];
-    set $camera_id $1;
-    proxy_pass http://traffic_analyzer_camera_$camera_id:8100/video;
+    rewrite ^/camera_(\d+)$ /api/v1/video/camera/$1 break;
+    proxy_pass http://platform:8000;
+    proxy_buffering off;
 }
 ```
 
 ### 访问方式
 | URL | 代理到 |
 |-----|--------|
-| `http://localhost:8009/camera_1` | `traffic_analyzer_camera_1:8100/video` |
-| `http://localhost:8009/camera_2` | `traffic_analyzer_camera_2:8100/video` |
-| `http://localhost:8009/camera_N` | `traffic_analyzer_camera_N:8100/video` |
+| `http://localhost:8009/camera_1` | `platform:8000/api/v1/video/camera/1` |
+| `http://localhost:8009/camera_2` | `platform:8000/api/v1/video/camera/2` |
+| `http://localhost:8009/camera_N` | `platform:8000/api/v1/video/camera/N` |
 
 ### 约束
-- 容器名必须遵循 `traffic_analyzer_camera_{N}` 格式
-- Nginx 使用 Docker 内部 DNS（`127.0.0.11`）解析容器名
-- 只代理 `/video` 端点，不代理 `/`
+- camera ID 必须对应 PipelineManager 中状态为 `running` 的管道
+- Platform 在容器内访问该管道的 `127.0.0.1:{video_port}/video`
+- Nginx 只代理稳定的 Platform MJPEG 端点，不直接解析检测器容器名
 
 ## 4. 旧时序数据模型（历史快照，已退役）
 
@@ -1089,7 +1089,7 @@ Content-Type: application/json
 |---|---|---|
 | GET | `/api/v1/pipelines` | 登录用户列出所有管道实例 |
 | GET | `/api/v1/pipelines/summary` | 管道概览（running/stopped/error 计数） |
-| POST | `/api/v1/pipelines` | operator/admin 启动；视频、遥测、道路路径和 RTSP 必须通过 allowlist |
+| POST | `/api/v1/pipelines` | operator/admin 启动；视频、遥测和 RTSP 必须通过 allowlist；车道/道路标注参数固定为空 |
 | POST | `/api/v1/pipelines/register` | 仅 admin 登记外部管道；校验 camera、端口、canonical Topic 和重复占用 |
 | DELETE | `/api/v1/pipelines/{id}` | operator/admin 停止并记录审计 |
 | POST | `/api/v1/pipelines` | 启动新管道（201 Created） |
@@ -1103,30 +1103,38 @@ Content-Type: application/json
   "drone_id": "drone_001",
   "intersection_id": "INT_camera_1",
   "video_src": "rtsp://192.168.1.100:554/stream",
-  "roads_json": "configs/entry_exit_lanes.json",
+  "roads_json": "",
   "telemetry_source": "srt",
   "telemetry_file_path": "test_videos/inter_xqh/telemetry.srt"
 }
 ```
 
-`roads_json` 可传空字符串，平台会把子进程 `ROADS_JSON` 置空，检测管道按无道路标注模式运行。未显式传自定义道路文件且仍为默认 `configs/entry_exit_lanes.json` 时，平台会优先查找该路口已保存的人工车道标注导出文件。
+`roads_json` 必须为空字符串。Platform、Mission、SourceProfile、本机 MPS 回放和 Compose camera
+启动均固定注入 `ROADS_JSON=""`，检测管道按无车道/道路标注模式运行；非空值返回
+`422`，平台不再自动查找或加载已保存人工车道标注。
 
 本地开发可通过环境变量控制平台启动的检测器子进程：
 - `PIPELINE_PYTHON`：检测器 Python 解释器，例如 `/Users/yaoyao/miniconda3/envs/py312/bin/python`
 - `PIPELINE_FRAME_STRIDE`：写入检测器 `FRAME_STRIDE` 环境变量，例如 `3`
 - `KAFKA_BOOTSTRAP`：检测器和平台 Kafka 地址，例如 `localhost:9092`
 
-Docker 部署中，平台容器通过 `PIPELINE_PROJECT_ROOT=/project` 启动挂载的根
-`main_optimized.py`。镜像必须安装 `platform/pipeline-requirements.txt`
-中的检测器依赖，并用 `platform/pipeline-constraints.txt` 固定
-`numpy<2`、`torch==2.2.2`、`torchvision==0.17.2`；否则
-`POST /api/v1/pipelines` 会创建任务但很快进入 `error`，典型错误为
-`ModuleNotFoundError: No module named 'hydra'`，或因新版 Torch/CUDA/NumPy
-解析导致镜像过重、OpenCV 不兼容。由于 `/project` 为只读挂载，Platform 启动
-检测器时还会追加 `hydra/job_logging=disabled`，避免 Hydra 文件日志 handler
-尝试写入 `logs/app.log` 导致 `ValueError: Unable to configure handler 'file'`。
-检测器 multiprocessing 子进程也会检测 `FileHandler` 是否可写，不可写时自动移除
-file handler 并降级到 console，避免 reader/tracker/show worker 因同一日志配置退出。
+Apple Silicon 本机 MPS 回放使用 `scripts/run_native_mps_replays.py` 调用
+`POST /api/v1/pipelines/register` 登记宿主机外部进程；登记请求中的视频路径仍使用
+项目内 allowlist 相对路径，实际宿主机绝对路径只注入检测器的 `VIDEO_SRC`，不会写入 API
+或审计记录。外部进程必须携带返回的 `pipeline_id`、SourceProfile、`inter_id` 和
+RoadContext 质量字段写入 canonical 信封。验收产物以 `pipeline_id` 过滤，避免混入同 Topic
+历史消息。该批处理模式不承诺 Platform 容器内 `127.0.0.1:{video_port}` 的 MJPEG 代理。
+
+Docker 部署使用根 `Dockerfile` 构建 Platform 与检测器统一镜像。检测实现位于镜像
+`/app`，`PIPELINE_PROJECT_ROOT=/app`；权重与视频分别只读挂载到 `/app/weights` 和
+`/app/test_videos`，不再依赖整个仓库的 `/project` 挂载。镜像安装
+`platform/pipeline-requirements.txt` 并使用 `platform/pipeline-constraints.txt` 固定
+`numpy<2`、`torch==2.2.2`、`torchvision==0.17.2`。
+
+Platform 启动只初始化 PipelineManager；只有 Pipeline API 或 Mission 调度才会在容器内
+拉起 `main_optimized.py`。启动命令追加 `hydra/job_logging=disabled`，检测器
+multiprocessing 子进程也会检测 `FileHandler` 是否可写并在必要时降级到 console。
+原独立检测器镜像保存在 `Dockerfile.detector`，不属于 canonical Compose。
 
 平台会为每条检测管道创建独立进程组；停止管道时终止整个进程组，避免 `main_optimized.py` 的 multiprocessing worker 被父进程遗留后继续向 Kafka 写数据。
 后台健康检查会每 5 秒检查子进程退出状态：`return_code == 0` 表示视频处理自然结束，
@@ -1140,7 +1148,7 @@ file handler 并降级到 console，避免 reader/tracker/show worker 因同一�
   "drone_id": "drone_001",
   "intersection_id": "INT_camera_1",
   "video_src": "rtsp://...",
-  "roads_json": "configs/entry_exit_lanes.json",
+  "roads_json": "",
   "topic_name": "uav_statistics_10",
   "camera_id": 10,
   "video_port": 8101,
@@ -1292,9 +1300,11 @@ AlertEngine 创建告警和确认告警时写入 `road9` 中的 `uav_alerts`。P
 }
 ```
 
-后续飞行启动检测管道时，将该导出文件作为 `roads_json` 即可复用人工车道标注；`VideoReader` 会读取 `lanes` 并让 `LaneDetectionNode` 标记为 `lane_source="manual"`。
-
-平台 `POST /api/v1/pipelines` 在调用方未显式指定自定义 `roads_json`（仍为默认 `configs/entry_exit_lanes.json`）时，会优先查找该 `intersection_id` 的已保存车道标注，命中后自动把 `roads_json` 替换为导出文件路径。
+导出文件仅作为失效前标注审计格式保留，不再进入视频源启动参数。当前有效标注可用
+`python platform/scripts/invalidate_lane_annotations.py --apply` 统一失效：`road9` 中任务改为
+`invalidated`、视觉绑定改为 `retired` 且清空 `roads_json`，文件存储中的当前 annotation 清单
+清空，导出 JSON 移入 `invalidated_lane_annotations/<timestamp>/`。任务图片和失效快照保留用于审计，
+不会被检测器读取。
 
 ### 就绪检查 `/ready`
 

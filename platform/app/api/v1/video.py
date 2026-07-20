@@ -48,6 +48,20 @@ def _validate_stream_id(stream_id: str) -> str:
     return stream_id
 
 
+def _find_running_pipeline(request: Request, camera_id: int) -> dict | None:
+    manager = getattr(request.app.state, "pipeline_manager", None)
+    if manager is None:
+        return None
+    return next(
+        (
+            item
+            for item in manager.list_pipelines()
+            if item["camera_id"] == camera_id and item["status"] == "running"
+        ),
+        None,
+    )
+
+
 @router.get("/streams")
 async def list_streams():
     """List active video streams."""
@@ -80,17 +94,10 @@ async def proxy_camera_stream(camera_id: int, request: Request):
     cannot reach that port directly, so Platform performs the container-local
     hop and exposes a stable HTTP endpoint.
     """
-    pm = getattr(request.app.state, "pipeline_manager", None)
-    if pm is None:
+    if getattr(request.app.state, "pipeline_manager", None) is None:
         return JSONResponse({"error": "pipeline_manager_unavailable"}, status_code=503)
 
-    pipeline = next(
-        (
-            item for item in pm.list_pipelines()
-            if item["camera_id"] == camera_id and item["status"] == "running"
-        ),
-        None,
-    )
+    pipeline = _find_running_pipeline(request, camera_id)
     if pipeline is None:
         return JSONResponse({"error": "camera_not_running", "camera_id": camera_id}, status_code=404)
 
@@ -105,7 +112,7 @@ async def proxy_camera_stream(camera_id: int, request: Request):
 async def start_stream(stream_id: str, request: Request):
     """Start an HLS stream from a pipeline MJPEG source.
 
-    stream_id corresponds to the camera suffix: '1' -> traffic_analyzer_camera_1:8100
+    stream_id is the camera ID assigned by PipelineManager.
     """
     actor = _require_operator(request)
     stream_id = _validate_stream_id(stream_id)
@@ -116,8 +123,10 @@ async def start_stream(stream_id: str, request: Request):
     if sum(item.get("status") == "running" for item in _STREAMS.values()) >= settings.video_max_active_streams:
         raise HTTPException(status_code=409, detail="video stream concurrency limit reached")
     await _audit(request, actor, "video.stream.start", stream_id)
-    # Build source URL: http://traffic_analyzer_camera_{stream_id}:8100/video
-    source_url = f"http://traffic_analyzer_camera_{stream_id}:8100/video"
+    pipeline = _find_running_pipeline(request, int(stream_id))
+    if pipeline is None:
+        raise HTTPException(status_code=404, detail="camera_not_running")
+    source_url = f"http://127.0.0.1:{pipeline['video_port']}/video"
     output_dir = f"{settings.hls_output_dir}/{stream_id}"
 
     # Create output directory

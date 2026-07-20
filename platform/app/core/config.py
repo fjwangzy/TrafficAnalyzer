@@ -58,7 +58,7 @@ class Settings(BaseSettings):
 
     # ── Video ──
     hls_output_dir: str = "/hls"
-    pipeline_video_base: str = "http://traffic_analyzer_camera_1:8100/video"
+    pipeline_video_base: str = "http://127.0.0.1:8100/video"
     pipeline_python: str = "python"
     pipeline_frame_stride: int | None = None
     pipeline_max_active: int = 4
@@ -67,7 +67,7 @@ class Settings(BaseSettings):
     uav_rtsp_allowed_hosts: list[str] = ["localhost", "127.0.0.1"]
 
     # ── S9 Mission orchestration ──
-    uav_local_asset_roots: list[str] = ["test_videos", "/project/test_videos"]
+    uav_local_asset_roots: list[str] = ["test_videos", "/app/test_videos"]
     mission_scheduler_poll_sec: float = 5.0
     local_road_fixture_enabled: bool = True
     local_road_fixture_inter_id: str = "INT_camera_1"
@@ -77,12 +77,13 @@ class Settings(BaseSettings):
     # ── Calibration ──
     calibration_db_path: str = "/calibration/calibration_db.json"
     lane_annotation_db_path: str = "/calibration/lane_annotation_db.json"
+    lane_annotation_auto_tasks_enabled: bool = False
     lane_annotation_hover_seconds: float = 30.0
     lane_annotation_hover_radius_m: float = 1.5
 
     # ── Accident survey ──
     survey_storage_dir: str = "/tmp/traffic-survey-data"
-    survey_asset_roots: list[str] = ["../test_videos", "/project/test_videos"]
+    survey_asset_roots: list[str] = ["test_videos", "/app/test_videos"]
     survey_max_upload_mb: int = 8192
     survey_keyframe_count: int = 6
     survey_report_font_path: str = ""

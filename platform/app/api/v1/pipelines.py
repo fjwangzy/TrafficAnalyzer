@@ -71,8 +71,8 @@ class PipelineCreateRequest(BaseModel):
         description="Video source: RTSP URL, file path, or camera index",
     )
     roads_json: str = Field(
-        default="configs/entry_exit_lanes.json",
-        description="Path to road polygon JSON (relative to project root)",
+        default="",
+        description="Must be empty; pipelines start without road/lane annotation parameters",
     )
     telemetry_source: str | None = Field(
         default=None,
@@ -115,22 +115,6 @@ def _get_pm(request: Request):
             detail="PipelineManager not initialized",
         )
     return pm
-
-
-def _resolve_roads_json(request: Request, intersection_id: str, roads_json: str) -> str:
-    """Use saved lane annotation parameters when caller did not choose a file."""
-    if roads_json != "configs/entry_exit_lanes.json":
-        return roads_json
-
-    store = getattr(request.app.state, "lane_annotation_store", None)
-    if store is None:
-        return roads_json
-
-    annotation = store.get_annotation(intersection_id)
-    if not annotation:
-        return roads_json
-
-    return annotation.get("export_path") or roads_json
 
 
 # ── Endpoints ──
@@ -178,9 +162,9 @@ async def start_pipeline(body: PipelineCreateRequest, request: Request):
 
     The pipeline runs as a child process executing
     ``main_optimized.py`` with the provided video source and roads
-    configuration.  Results are published to Kafka topics
-    ``statistics_{camera_id}``, ``track_complete_{camera_id}``, and
-    ``conflicts_{camera_id}``.
+    configuration. Results are published using the canonical UAV Kafka
+    topics, including ``uav_statistics_{camera_id}``,
+    ``uav_track_complete_{camera_id}``, and ``uav_conflicts_{camera_id}``.
     """
     actor = _require_role(request, "operator", "admin")
     pm = _get_pm(request)
@@ -196,7 +180,7 @@ async def start_pipeline(body: PipelineCreateRequest, request: Request):
             drone_id=body.drone_id,
             intersection_id=body.intersection_id,
             video_src=body.video_src,
-            roads_json=_resolve_roads_json(request, body.intersection_id, body.roads_json),
+            roads_json=body.roads_json,
             telemetry_source=body.telemetry_source,
             telemetry_file_path=body.telemetry_file_path,
             telemetry_time_offset_sec=body.telemetry_time_offset_sec,
@@ -213,7 +197,7 @@ class PipelineRegisterRequest(BaseModel):
     drone_id: str
     intersection_id: str
     video_src: str
-    roads_json: str = "configs/entry_exit_lanes.json"
+    roads_json: str = ""
     camera_id: int | None = Field(default=None, ge=1, le=65535)
     video_port: int | None = Field(default=None, ge=1024, le=65535)
     topic_name: str | None = None

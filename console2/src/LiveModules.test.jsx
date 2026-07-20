@@ -11,7 +11,10 @@ const liveMocks = vi.hoisted(() => ({
     intersectionStats: vi.fn(),
     alerts: vi.fn(),
     acknowledgeAlert: vi.fn(),
+    createMission: vi.fn(),
     pipelines: vi.fn(),
+    sources: vi.fn(),
+    drones: vi.fn(),
     telemetry: vi.fn(),
     systemHealth: vi.fn(),
     gpu: vi.fn(),
@@ -73,11 +76,20 @@ function open(path) {
 
 function mockSuccessfulApis() {
   liveMocks.api.intersections.mockResolvedValue([{ id: 'INT-1', name: '小清河北路 × 水屯路' }])
+  liveMocks.api.sources.mockResolvedValue([
+    { profile_id: 'SRC-1', display_name: '小清河北路早高峰', drone_id: 'UAV-1', enabled: true, video: { id: 'VID-1', source_type: 'mp4', location_hint: 'xqh-am.mp4' } },
+    { profile_id: 'SRC-2', display_name: '崇华路晚高峰', drone_id: 'UAV-2', enabled: true, video: { id: 'VID-2', source_type: 'mp4', location_hint: 'ch-pm.mp4' } },
+  ])
+  liveMocks.api.drones.mockResolvedValue([
+    { id: 'UAV-1', name: '小清河无人机', default_inter_id: 'INT-1', default_video_source_id: 'VID-1', default_road_data_version: 'ROAD-1', intersection_name: '小清河北路 × 水屯路' },
+    { id: 'UAV-2', name: '崇华路无人机', default_inter_id: 'INT-2', default_video_source_id: 'VID-2', default_road_data_version: 'ROAD-2', intersection_name: '新泺大街 × 崇华路' },
+  ])
   liveMocks.api.intersection.mockResolvedValue({ id: 'INT-1', current_drone_id: 'UAV-1' })
   liveMocks.api.intersectionStats.mockResolvedValue([{ time: '2026-07-14T10:00:00Z', congestion_index: 4.8, cars: 20 }])
   liveMocks.api.alerts.mockResolvedValue([{ id: 'A-1', intersection_id: 'INT-1', alert_type: 'conflict', severity: 'P1', title: '机非冲突风险升高', description: '预测轨迹交汇', ttc_sec: 1.2, pet_sec: 0.8 }])
   liveMocks.api.acknowledgeAlert.mockResolvedValue({ id: 'A-1', status: 'acknowledged' })
-  liveMocks.api.pipelines.mockResolvedValue([{ pipeline_id: 'P-1', intersection_id: 'INT-1', drone_id: 'UAV-1', camera_id: 11, status: 'running' }])
+  liveMocks.api.createMission.mockResolvedValue({ id: 'MSN-DEMO-1', status: 'running' })
+  liveMocks.api.pipelines.mockResolvedValue([{ pipeline_id: 'P-1', intersection_id: 'INT-1', source_profile_id: 'SRC-1', drone_id: 'UAV-1', camera_id: 11, status: 'running' }])
   liveMocks.api.telemetry.mockResolvedValue({ drone_id: 'drone_11', height: 118.6, attitude_head: 36.2, attitude_pitch: -0.8, gimbal_roll: 0.4 })
   liveMocks.api.systemHealth.mockResolvedValue({ status: 'healthy', service: 'platform', kafka_connected: true, ws_connections: 2, pipelines_active: 1 })
   liveMocks.api.gpu.mockResolvedValue({ gpu_util_pct: 42, gpu_vram_used_mb: 2048 })
@@ -131,6 +143,44 @@ describe('Console2 live module migration', () => {
     expect(screen.queryByText('AI 事件研判')).not.toBeInTheDocument()
   })
 
+  it('aligns the monitoring selector with registered UAV video sources and their intersections', async () => {
+    open('/monitoring?intersection_id=INT-1')
+
+    const selector = await screen.findByRole('combobox', { name: '选择无人机视频源' })
+    await waitFor(() => expect(window.location.search).toContain('source_profile_id=SRC-1'))
+    expect(selector).toHaveDisplayValue('小清河北路早高峰 · 小清河无人机')
+    expect(selector).toHaveAttribute('title', '小清河北路早高峰 · 小清河无人机')
+    expect(selector.closest('.monitoring-source-picker')).not.toBeNull()
+    expect(screen.queryByRole('option', { name: /Camera 1/ })).not.toBeInTheDocument()
+
+    fireEvent.change(selector, { target: { value: 'SRC-2' } })
+    await waitFor(() => {
+      const params = new URLSearchParams(window.location.search)
+      expect(params.get('source_profile_id')).toBe('SRC-2')
+      expect(params.get('intersection_id')).toBe('INT-2')
+    })
+    expect(screen.getByText(/新泺大街 × 崇华路 · SRC-2 · 监测离线/)).toBeInTheDocument()
+  })
+
+  it('starts the selected source from the offline canvas and keeps target counts in the metric panel', async () => {
+    liveMocks.api.pipelines.mockResolvedValue([])
+    open('/monitoring?intersection_id=INT-1&source_profile_id=SRC-1')
+
+    const startButton = await screen.findByRole('button', { name: '启动演示检测' })
+    expect(screen.queryByText(/活动轨迹 ·/)).not.toBeInTheDocument()
+    expect(screen.getByText('当前目标').closest('.metric-card')).not.toBeNull()
+
+    fireEvent.click(startButton)
+    await waitFor(() => expect(liveMocks.api.createMission).toHaveBeenCalledWith(expect.objectContaining({
+      name: '快速演示 · 小清河北路 × 水屯路',
+      drone_id: 'UAV-1',
+      source_profile_id: 'SRC-1',
+      inter_id: 'INT-1',
+      road_data_version: 'ROAD-1',
+      scheduled_end_at: expect.any(String),
+    })))
+  })
+
   it('freezes visible REST, WebSocket, and clock updates while paused then restores them in order', async () => {
     const { queryClient } = open('/monitoring?intersection_id=INT-1')
     expect((await screen.findAllByText('20')).length).toBeGreaterThan(0)
@@ -153,19 +203,22 @@ describe('Console2 live module migration', () => {
     expect(screen.queryByText('30')).not.toBeInTheDocument()
   })
 
-  it('auto-collapses translucent monitoring side panels and lets operators lock them open', async () => {
+  it('opens monitoring side panels by default and keeps manual collapse and pin controls', async () => {
     open('/monitoring?intersection_id=INT-1&view=detector')
     await screen.findByAltText('检测器输出视频流')
 
     const leftPanel = screen.getByLabelText('实时态势面板')
     const rightPanel = screen.getByLabelText('BEV 与实时事件面板')
-    expect(leftPanel).toHaveAttribute('data-state', 'collapsed')
-    expect(rightPanel).toHaveAttribute('data-state', 'collapsed')
+    expect(leftPanel).toHaveAttribute('data-state', 'expanded')
+    expect(rightPanel).toHaveAttribute('data-state', 'expanded')
     expect(leftPanel).toHaveAttribute('data-transparency', '40')
     expect(rightPanel).toHaveAttribute('data-transparency', '40')
-    expect(document.querySelector('.main-feed-status')).toHaveClass('side-collapsed')
-    expect(document.querySelector('.map-tools')).toHaveClass('side-collapsed')
+    expect(document.querySelector('.main-feed-status')).not.toHaveClass('side-collapsed')
+    expect(document.querySelector('.map-tools')).not.toHaveClass('side-collapsed')
 
+    fireEvent.click(screen.getByRole('button', { name: '收缩实时态势面板' }))
+    expect(leftPanel).toHaveAttribute('data-state', 'collapsed')
+    expect(document.querySelector('.main-feed-status')).toHaveClass('side-collapsed')
     fireEvent.mouseEnter(leftPanel)
     expect(leftPanel).toHaveAttribute('data-state', 'expanded')
     expect(document.querySelector('.main-feed-status')).not.toHaveClass('side-collapsed')
@@ -178,6 +231,9 @@ describe('Console2 live module migration', () => {
     fireEvent.mouseLeave(leftPanel)
     expect(leftPanel).toHaveAttribute('data-state', 'collapsed')
 
+    fireEvent.click(screen.getByRole('button', { name: '收缩BEV与实时事件面板' }))
+    expect(rightPanel).toHaveAttribute('data-state', 'collapsed')
+    expect(document.querySelector('.map-tools')).toHaveClass('side-collapsed')
     fireEvent.mouseEnter(rightPanel)
     expect(rightPanel).toHaveAttribute('data-state', 'expanded')
     expect(document.querySelector('.map-tools')).not.toHaveClass('side-collapsed')

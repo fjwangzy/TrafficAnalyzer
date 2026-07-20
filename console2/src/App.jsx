@@ -1,14 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery } from '@tanstack/react-query'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { ConsoleFrame } from './components/AppShell'
 import { apiErrorMessage, platformApi } from './lib/api'
 import { alertChannels, intersectionChannels, telemetryChannels } from './lib/realtime'
 import { useWebSocket } from './hooks/useWebSocket'
 import { MonitoringBevMap } from './components/MonitoringBevMap'
+import { useAuth } from './auth/AuthContext'
 import {
-  ArrowsClockwise, CaretLeft, CaretRight, Crosshair, Drone, Gauge, ListBullets,
-  NavigationArrow, Pause, Play, Plus, PushPin, PushPinSlash, RoadHorizon,
+  ArrowsClockwise, CaretDown, CaretLeft, CaretRight, Crosshair, Drone, Gauge, ListBullets,
+  Pause, Play, Plus, PushPin, PushPinSlash, RoadHorizon,
   ShieldWarning, Stack, Target, TrendUp, Truck, VideoCamera, Warning,
 } from '@phosphor-icons/react'
 import {
@@ -65,11 +66,44 @@ function EventIcon({ type }) {
   return <Icon size={18} weight='fill' />
 }
 
+export function buildMonitoringSourceOptions({ sources = [], drones = [], intersections = [], pipelines = [] }) {
+  const droneById = new Map(drones.map((item) => [item.id, item]))
+  const intersectionById = new Map(intersections.map((item) => [item.id, item]))
+  return sources.map((source) => {
+    const drone = droneById.get(source.drone_id)
+    const runningPipeline = pipelines.find((item) => item.status === 'running' && item.source_profile_id === source.profile_id)
+    const intersectionId = runningPipeline?.intersection_id || drone?.default_inter_id || drone?.current_intersection_id || ''
+    const intersection = intersectionById.get(intersectionId)
+    const displayName = source.display_name || source.video?.location_hint || source.profile_id
+    const droneName = drone?.name || source.drone_id
+    return {
+      ...source,
+      drone,
+      droneName,
+      intersectionId,
+      intersectionName: drone?.intersection_name || intersection?.name || intersectionId || '未绑定路口',
+      isDefault: Boolean(drone?.default_video_source_id && drone.default_video_source_id === source.video?.id),
+      optionLabel: `${displayName} · ${droneName}`,
+    }
+  })
+}
+
+export function selectMonitoringSource(options, sourceProfileId, intersectionId) {
+  return options.find((item) => item.profile_id === sourceProfileId)
+    || options.find((item) => item.intersectionId === intersectionId && item.isDefault)
+    || options.find((item) => item.intersectionId === intersectionId)
+    || options.find((item) => item.enabled !== false && item.intersectionId)
+    || options[0]
+    || null
+}
+
 export function App() {
   const navigate = useNavigate()
   const location = useLocation()
+  const { platformRole } = useAuth()
   const params = new URLSearchParams(location.search)
   const intersectionId = params.get('intersection_id')
+  const sourceProfileId = params.get('source_profile_id')
   const requestedView = params.get('view')
   const primaryView = requestedView === 'bev' || requestedView === 'raw' ? requestedView : 'detector'
   const [mapMode, setMapMode] = useState('trajectory')
@@ -78,9 +112,9 @@ export function App() {
   const [live, setLive] = useState(true)
   const [droneOpen, setDroneOpen] = useState(false)
   const [layerOpen, setLayerOpen] = useState(false)
-  const [leftPanelOpen, setLeftPanelOpen] = useState(false)
+  const [leftPanelOpen, setLeftPanelOpen] = useState(true)
   const [leftPanelPinned, setLeftPanelPinned] = useState(false)
-  const [rightPanelOpen, setRightPanelOpen] = useState(false)
+  const [rightPanelOpen, setRightPanelOpen] = useState(true)
   const [rightPanelPinned, setRightPanelPinned] = useState(false)
   const [latestStats, setLatestStats] = useState(null)
   const [telemetry, setTelemetry] = useState(null)
@@ -101,21 +135,41 @@ export function App() {
   const pausedBuffer = useRef({ trendRows: null, telemetry: null, alerts: null, realtime: [] })
 
   const intersectionsQuery = useQuery({ queryKey: ['monitoring-intersections'], queryFn: platformApi.intersections })
-  const intersections = Array.isArray(intersectionsQuery.data) ? intersectionsQuery.data : []
-  const selectedIntersection = intersections.find((item) => item.id === intersectionId) || intersections[0] || null
-  const selectedId = selectedIntersection?.id || ''
-  const intersectionQuery = useQuery({ queryKey: ['monitoring-intersection', selectedId], queryFn: () => platformApi.intersection(selectedId), enabled: Boolean(selectedId) })
+  const sourcesQuery = useQuery({ queryKey: ['monitoring-sources'], queryFn: platformApi.sources })
+  const dronesQuery = useQuery({ queryKey: ['monitoring-drones'], queryFn: platformApi.drones })
   const pipelinesQuery = useQuery({ queryKey: ['monitoring-pipelines'], queryFn: platformApi.pipelines, refetchInterval: 5_000 })
+  const intersections = Array.isArray(intersectionsQuery.data) ? intersectionsQuery.data : []
+  const sources = Array.isArray(sourcesQuery.data) ? sourcesQuery.data : []
+  const drones = Array.isArray(dronesQuery.data) ? dronesQuery.data : []
+  const pipelines = Array.isArray(pipelinesQuery.data) ? pipelinesQuery.data : []
+  const monitoringSources = useMemo(
+    () => buildMonitoringSourceOptions({ sources, drones, intersections, pipelines }),
+    [sources, drones, intersections, pipelines],
+  )
+  const selectedSource = useMemo(
+    () => selectMonitoringSource(monitoringSources, sourceProfileId, intersectionId),
+    [monitoringSources, sourceProfileId, intersectionId],
+  )
+  const selectedId = selectedSource?.intersectionId || intersectionId || intersections[0]?.id || ''
+  const selectedIntersection = intersections.find((item) => item.id === selectedId) || (selectedSource ? {
+    id: selectedId,
+    name: selectedSource.intersectionName,
+    center_lat: selectedSource.drone?.last_telemetry?.latitude,
+    center_lon: selectedSource.drone?.last_telemetry?.longitude,
+    current_drone_id: selectedSource.drone_id,
+  } : null)
+  const intersectionQuery = useQuery({ queryKey: ['monitoring-intersection', selectedId], queryFn: () => platformApi.intersection(selectedId), enabled: Boolean(selectedId) })
   const trendQuery = useQuery({ queryKey: ['monitoring-trend', selectedId], queryFn: () => platformApi.intersectionStats(selectedId), enabled: Boolean(selectedId), refetchInterval: 30_000 })
   const alertsQuery = useQuery({ queryKey: ['monitoring-alerts', selectedId], queryFn: () => platformApi.alerts({ limit: 20 }), enabled: Boolean(selectedId), refetchInterval: 10_000 })
 
   useEffect(() => {
-    if (!intersectionId && selectedId) {
+    if (selectedSource && (sourceProfileId !== selectedSource.profile_id || intersectionId !== selectedId)) {
       const next = new URLSearchParams(location.search)
       next.set('intersection_id', selectedId)
+      next.set('source_profile_id', selectedSource.profile_id)
       navigate(`${location.pathname}?${next.toString()}`, { replace: true })
     }
-  }, [intersectionId, selectedId, location.pathname, location.search, navigate])
+  }, [sourceProfileId, intersectionId, selectedSource, selectedId, location.pathname, location.search, navigate])
   useEffect(() => {
     const timer = window.setInterval(() => {
       if (liveRef.current) setNow(Date.now())
@@ -135,10 +189,26 @@ export function App() {
     return () => window.clearTimeout(timer)
   }, [videoError, videoRetry])
 
-  const pipelines = Array.isArray(pipelinesQuery.data) ? pipelinesQuery.data : []
-  const pipeline = pipelines.find((item) => item.intersection_id === selectedId && item.status === 'running') || null
+  const pipeline = pipelines.find((item) => item.status === 'running' && (
+    selectedSource
+      ? item.source_profile_id === selectedSource.profile_id
+      : item.intersection_id === selectedId
+  )) || null
+  const intersectionPipeline = pipelines.find((item) => item.status === 'running' && item.intersection_id === selectedId) || null
+  const quickStartMutation = useMutation({
+    mutationFn: ({ source, intersection }) => platformApi.createMission({
+      name: `快速演示 · ${source.intersectionName || intersection}`,
+      drone_id: source.drone_id,
+      source_profile_id: source.profile_id,
+      inter_id: intersection,
+      road_data_version: source.drone.default_road_data_version,
+      scheduled_end_at: new Date(Date.now() + 3_600_000).toISOString(),
+    }),
+    onSuccess: () => pipelinesQuery.refetch(),
+  })
   const cameraId = pipeline?.camera_id
-  const telemetryQuery = useQuery({ queryKey: ['monitoring-telemetry', cameraId], queryFn: () => platformApi.telemetry(`drone_${cameraId}`), enabled: cameraId != null, refetchInterval: 10_000 })
+  const telemetryDroneId = pipeline?.drone_id || selectedSource?.drone_id || (cameraId != null ? `drone_${cameraId}` : '')
+  const telemetryQuery = useQuery({ queryKey: ['monitoring-telemetry', telemetryDroneId], queryFn: () => platformApi.telemetry(telemetryDroneId), enabled: Boolean(telemetryDroneId), refetchInterval: 10_000 })
   const applyStatsSnapshot = useCallback((snapshot, merge = false) => {
     if (!snapshot) return
     const fingerprint = JSON.stringify(snapshot)
@@ -185,6 +255,7 @@ export function App() {
   }, [telemetryQuery.data, applyTelemetrySnapshot])
   const telemetryDroneIds = [...new Set([
     intersectionQuery.data?.current_drone_id,
+    selectedSource?.drone_id,
     pipeline?.drone_id,
     latestStats?.drone_id,
     cameraId != null ? `drone_${cameraId}` : null,
@@ -219,7 +290,14 @@ export function App() {
     next.set(key, value)
     navigate(`${location.pathname}?${next.toString()}`, { replace: true })
   }
-  const selectIntersection = (id) => setQueryValue('intersection_id', id)
+  const selectSource = (profileId) => {
+    const source = monitoringSources.find((item) => item.profile_id === profileId)
+    if (!source) return
+    const next = new URLSearchParams(location.search)
+    next.set('source_profile_id', profileId)
+    if (source.intersectionId) next.set('intersection_id', source.intersectionId)
+    navigate(`${location.pathname}?${next.toString()}`, { replace: true })
+  }
   const selectView = (view) => setQueryValue('view', view)
   const restAlerts = visibleRestAlerts.filter((item) => !selectedId || item.intersection_id === selectedId).map(normalizeAlert)
   const events = useMemo(() => {
@@ -252,9 +330,20 @@ export function App() {
   const pitch = asNumber(attitude.attitude_pitch ?? attitude.pitch ?? attitude.gimbal_pitch)
   const roll = asNumber(attitude.attitude_roll ?? attitude.roll ?? attitude.gimbal_roll)
   const streamActive = Boolean(pipeline)
+  const quickStartUnavailableReason = platformRole !== 'admin'
+    ? '仅管理员可启动演示检测'
+    : selectedSource?.enabled === false
+      ? '当前视频源已停用'
+      : !selectedSource?.drone_id || !selectedId
+        ? '当前视频源未绑定无人机或路口'
+        : !selectedSource?.drone?.default_road_data_version
+          ? '当前无人机未绑定 RoadContext 版本'
+          : intersectionPipeline
+            ? '当前路口已有其他检测任务运行'
+            : ''
   const mjpegSrc = cameraId != null ? `/camera_${cameraId}?retry=${videoNonce}` : ''
   const mainIsVideo = primaryView !== 'bev'
-  const monitoringError = intersectionsQuery.error || pipelinesQuery.error || trendQuery.error || alertsQuery.error
+  const monitoringError = sourcesQuery.error || dronesQuery.error || intersectionsQuery.error || pipelinesQuery.error || trendQuery.error || alertsQuery.error
   const selectedRaw = selectedEvent?.raw || {}
   const timestamp = new Date(now).toLocaleTimeString('zh-CN', { hour12: false })
   const toggleLive = () => {
@@ -279,11 +368,28 @@ export function App() {
 
   return <ConsoleFrame pageTitle='实时监测' immersive>
     <h1 className='sr-only'>实时监测</h1>
-    {mainIsVideo && streamActive && !videoError ? <img className={`map-image ${primaryView}`} src={mjpegSrc} alt={primaryView === 'raw' ? '原始视频流' : '检测器输出视频流'} onLoad={() => { setVideoError(false); setVideoRetry(0) }} onError={() => setVideoError(true)} /> : primaryView === 'bev' ? <MonitoringBevMap centerLat={mapCenterLat} centerLon={mapCenterLon} trajectories={worldTrajectories} activeCount={activeTrajectories.length} label='BEV 地图轨迹主视图' /> : <div className='map-image feed-unavailable'><strong>{streamActive ? (videoRetry >= 5 ? '视频流连接失败' : `视频流重连中 · ${videoRetry + 1}/5`) : '当前路口没有运行中的检测管道'}</strong><span>{monitoringError ? apiErrorMessage(monitoringError) : streamActive ? '每 3 秒重试一次，达到上限后保持错误态' : '请在飞行任务中启动执行记录后返回监控'}</span></div>}
+    {mainIsVideo && streamActive && !videoError ? <img className={`map-image ${primaryView}`} src={mjpegSrc} alt={primaryView === 'raw' ? '原始视频流' : '检测器输出视频流'} onLoad={() => { setVideoError(false); setVideoRetry(0) }} onError={() => setVideoError(true)} /> : primaryView === 'bev' ? <MonitoringBevMap centerLat={mapCenterLat} centerLon={mapCenterLon} trajectories={worldTrajectories} activeCount={activeTrajectories.length} label='BEV 地图轨迹主视图' /> : <div className='map-image feed-unavailable'><strong>{streamActive ? (videoRetry >= 5 ? '视频流连接失败' : `视频流重连中 · ${videoRetry + 1}/5`) : '当前路口没有运行中的检测管道'}</strong><span>{monitoringError ? apiErrorMessage(monitoringError) : streamActive ? '每 3 秒重试一次，达到上限后保持错误态' : '可直接启动当前视频源的一小时演示检测'}</span>{!streamActive && selectedSource && <div className='quick-start-actions'><button className='quick-start-button' type='button' title={quickStartUnavailableReason || '启动当前视频源的一小时演示检测'} disabled={Boolean(quickStartUnavailableReason) || quickStartMutation.isPending} onClick={() => quickStartMutation.mutate({ source: selectedSource, intersection: selectedId })}><Play size={15} weight='fill' />{quickStartMutation.isPending ? '正在启动…' : '启动演示检测'}</button>{quickStartMutation.error && <span className='quick-start-error' role='alert'>{apiErrorMessage(quickStartMutation.error, '演示检测启动失败')}</span>}</div>}</div>}
     <div className='map-vignette' />
 
     <section className='context-bar'>
-      <div className='context-title'><span className={`status-pulse ${statsStale ? 'stale' : ''}`} /><div><select aria-label='选择监测路口' value={selectedId} onChange={(event) => selectIntersection(event.target.value)} disabled={!intersections.length}>{intersections.length ? intersections.map((item) => <option value={item.id} key={item.id}>{item.name}</option>) : <option>正在加载路口</option>}</select><small>{selectedId || '—'} · {streamActive ? '实时分析中' : '监测离线'}</small></div></div>
+      <div className='context-title'>
+        <span className={`status-pulse ${statsStale ? 'stale' : ''}`} />
+        <div>
+          <div className='monitoring-source-picker'>
+            <select
+              aria-label='选择无人机视频源'
+              title={selectedSource?.optionLabel || '选择无人机视频源'}
+              value={selectedSource?.profile_id || ''}
+              onChange={(event) => selectSource(event.target.value)}
+              disabled={!monitoringSources.length}
+            >
+              {monitoringSources.length ? monitoringSources.map((item) => <option value={item.profile_id} key={item.profile_id} disabled={item.enabled === false}>{item.optionLabel}{item.enabled === false ? ' · 已停用' : ''}</option>) : <option>正在加载无人机视频源</option>}
+            </select>
+            <CaretDown className='monitoring-source-caret' size={14} weight='bold' aria-hidden='true' />
+          </div>
+          <small title={`${selectedSource?.intersectionName || selectedId || '—'} · ${selectedSource?.profile_id || '未绑定视频源'} · ${streamActive ? '实时分析中' : '监测离线'}`}>{selectedSource?.intersectionName || selectedId || '—'} · {selectedSource?.profile_id || '未绑定视频源'} · {streamActive ? '实时分析中' : '监测离线'}</small>
+        </div>
+      </div>
       <div className='flight-attitude' aria-label='飞行姿态数据'><div><span>高度</span><strong>{displayNumber(height, 1)}<small>m</small></strong></div><div><span>航向</span><strong>{displayNumber(heading, 1)}<small>°</small></strong></div><div><span>俯仰</span><strong>{displayNumber(pitch, 1)}<small>°</small></strong></div><div><span>横滚</span><strong>{displayNumber(roll, 1)}<small>°</small></strong></div><div><span>云台</span><strong>{telemetryStale ? '过期' : attitude.gimbal_mode || (attitude.is_hovering ? '锁定' : '跟随')}</strong></div></div>
       <div className='view-tabs'>{[['trajectory', '轨迹'], ['lane', '车道'], ['risk', '风险'], ['raw', '原始画面']].map(([id, label]) => <button key={id} className={(id === 'raw' ? primaryView === 'raw' : mapMode === id && primaryView !== 'raw') ? 'active' : ''} onClick={() => id === 'raw' ? selectView('raw') : (setMapMode(id), primaryView === 'raw' && selectView('detector'))}>{label}</button>)}</div>
       <div className='context-meta'><span>{wsStatus === 'connected' ? '实时链路已连接' : wsStatus}</span><i /><span>{statsStale ? '数据过期' : `推理 ${inferenceMs ?? '—'}ms`}</span></div>
@@ -305,13 +411,13 @@ export function App() {
       {(leftPanelOpen || leftPanelPinned) && <button className='side-panel-pin' aria-label={leftPanelPinned ? '取消锁定实时态势面板' : '锁定实时态势面板'} aria-pressed={leftPanelPinned} onClick={() => { setLeftPanelPinned((value) => !value); setLeftPanelOpen(true) }}>{leftPanelPinned ? <PushPinSlash size={16} /> : <PushPin size={16} />}</button>}
       <div className='panel-heading'><div><span>实时态势</span><small>{lastStatsAt ? eventTime(lastStatsAt) : '等待数据'}</small></div></div>
       <article className='congestion-card'><div className='score-ring'><strong>{displayNumber(congestion, 1)}</strong><small>/ 10</small></div><div className='score-copy'><span>拥堵指数</span><strong>{congestion == null ? '暂无数据' : congestion >= 7 ? '严重拥堵' : congestion >= 4 ? '中度拥堵' : '运行平稳'}</strong><small><TrendUp size={13} />{statsStale ? '实时数据已过期' : '实时计算'}</small></div><Gauge size={24} weight='duotone' /></article>
-      <div className='metrics-grid'><MetricCard icon={RoadHorizon} label='断面流量' value={displayNumber(cars)} unit='辆' delta='' /><MetricCard icon={ListBullets} label='最长排队' value={displayNumber(longestQueue)} unit='m' delta='' tone='amber' /><MetricCard icon={Gauge} label='平均车速' value={displayNumber(avgSpeed, 1)} unit='km/h' delta='' tone='cyan' /><MetricCard icon={ShieldWarning} label='活动风险' value={String(events.length)} unit='起' delta='' tone='red' /></div>
+      <div className='metrics-grid'><MetricCard icon={Target} label='当前目标' value={displayNumber(cars)} unit='辆' delta='' /><MetricCard icon={ListBullets} label='最长排队' value={displayNumber(longestQueue)} unit='m' delta='' tone='amber' /><MetricCard icon={Gauge} label='平均车速' value={displayNumber(avgSpeed, 1)} unit='km/h' delta='' tone='cyan' /><MetricCard icon={ShieldWarning} label='活动风险' value={String(events.length)} unit='起' delta='' tone='red' /></div>
       <article className='glass-card trend-card'><div className='card-title'><div><strong>态势趋势</strong><small>最近 30 分钟</small></div><span className='chip'>REST 5m</span></div><div className='chart-box'>{trendData.length ? <ResponsiveContainer width='100%' height='100%'><AreaChart data={trendData} margin={{ top: 8, right: 4, left: -28, bottom: 0 }}><CartesianGrid vertical={false} stroke='rgba(151,171,206,.12)' /><XAxis dataKey='time' tick={{ fill: '#8290aa', fontSize: 10 }} axisLine={false} tickLine={false} /><YAxis tick={{ fill: '#8290aa', fontSize: 10 }} axisLine={false} tickLine={false} /><Tooltip contentStyle={{ background: '#111a2a', border: '1px solid #33415b', borderRadius: 8, fontSize: 11 }} /><Area type='monotone' dataKey='value' stroke='#62a1ff' fill='#294c7b' fillOpacity={0.36} strokeWidth={2} /></AreaChart></ResponsiveContainer> : <div className='monitor-empty'>暂无历史态势数据</div>}</div></article>
       <article className='glass-card flow-card'><div className='card-title'><div><strong>车型流量</strong><small>真实分时统计</small></div><div className='legend'><span className='car'>机动车</span><span className='truck'>货车</span></div></div><div className='chart-box small'>{flowData.length ? <ResponsiveContainer width='100%' height='100%'><BarChart data={flowData} margin={{ top: 4, right: 0, left: -34, bottom: 0 }}><XAxis dataKey='time' tick={{ fill: '#8290aa', fontSize: 10 }} axisLine={false} tickLine={false} /><YAxis tick={{ fill: '#8290aa', fontSize: 10 }} axisLine={false} tickLine={false} /><Bar dataKey='car' fill='#6d9eff' radius={[2,2,0,0]} /><Bar dataKey='truck' fill='#c98cf4' radius={[2,2,0,0]} /></BarChart></ResponsiveContainer> : <div className='monitor-empty'>暂无分时车型数据</div>}</div></article>
     </section>
 
     {primaryView === 'detector' && mapMode === 'risk' && selectedEvent?.type === 'conflict' && <section className='map-overlay' aria-label='风险事件图层'><div className='risk-marker'><ShieldWarning size={16} weight='fill' /><span>高风险交汇</span><strong>TTC {selectedRaw.ttc_sec ?? '—'}s</strong></div></section>}
-    <div className='map-label label-north'><NavigationArrow size={15} weight='fill' /> 活动轨迹 · {activeTrajectories.length}</div><div className='map-label label-east'><Target size={15} weight='fill' /> 当前目标 · {displayNumber(cars)}</div><div className='map-label label-south'><Warning size={15} weight='fill' /> 数据质量 · {statsStale ? '过期' : '实时'}</div>
+    <div className='map-label label-south'><Warning size={15} weight='fill' /> 数据质量 · {statsStale ? '过期' : '实时'}</div>
     <div className={`map-tools ${rightPanelOpen || rightPanelPinned ? '' : 'side-collapsed'}`}><button onClick={() => setDroneOpen(!droneOpen)} className={droneOpen ? 'active' : ''} aria-label='无人机状态'><Drone size={19} /></button><button onClick={() => setLayerOpen(!layerOpen)} className={layerOpen ? 'active' : ''} aria-label='图层'><Stack size={19} /></button><button aria-label='放大'><Plus size={19} /></button><button aria-label='定位'><Crosshair size={19} /></button></div>
     {droneOpen && <div className={`floating-popover drone-popover ${rightPanelOpen || rightPanelPinned ? '' : 'side-collapsed'}`}><div><strong>{droneId || '未绑定无人机'}</strong><span className={telemetryStale ? '' : 'online'}>{telemetryStale ? '遥测过期' : '在线'}</span></div><dl><dt>高度</dt><dd>{displayNumber(height, 1)} m</dd><dt>电量</dt><dd>{displayNumber(asNumber(attitude.battery_percent ?? attitude.battery_pct))}%</dd><dt>卫星</dt><dd>{displayNumber(asNumber(attitude.satellites ?? attitude.gps_satellites))}</dd><dt>模式</dt><dd>{attitude.is_hovering ? '悬停' : '巡飞'}</dd></dl></div>}
     {layerOpen && <div className={`floating-popover layer-popover ${rightPanelOpen || rightPanelPinned ? '' : 'side-collapsed'}`}>{[['活动轨迹','trajectory'],['风险事件','risk'],['车道拓扑','lane']].map(([label,id]) => <label key={id}><input type='radio' name='map-layer' checked={mapMode === id} onChange={() => setMapMode(id)} /><span>{label}</span></label>)}</div>}

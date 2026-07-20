@@ -20,16 +20,15 @@ docker compose -p traffic_analyzer up -d --build
 | road9 / TimescaleDB | `localhost:5432` |
 | Kafka | `localhost:9092` |
 
-根 `docker-compose.yaml` 是唯一正式拓扑；`platform/docker/` 和旧微服务目录已退役删除。Kafka UI 通过 `ops` profile 可选启动，检测器和 NVIDIA MPS 通过 `gpu-only` profile 可选启动。
+根 `docker-compose.yaml` 是唯一正式拓扑；`platform/docker/` 和旧微服务目录已退役删除。Kafka UI 通过 `ops` profile 可选启动。检测器代码已写入统一 Platform 镜像，由 Pipeline API/Mission 按需作为子进程启动，不再作为独立 Compose camera 服务。
 
 ## 本地进程开发
 
 需要已运行的 `road9` 和 Kafka：
 
 ```bash
-cd platform
-pip install -e .
-python scripts/run_local.py
+pip install -e platform
+python run_platform.py
 ```
 
 本地启动脚本默认连接 `road9@localhost:5432` 和 `Kafka@localhost:9092`，仅订阅 canonical Topic。
@@ -123,10 +122,12 @@ platform/
 │   ├── models/
 │   └── schemas/
 ├── alembic/
-├── scripts/run_local.py
-├── Dockerfile
+├── pipeline-requirements.txt
+├── pipeline-constraints.txt
 └── pyproject.toml
 ```
+
+本机与容器统一入口为仓库根 `run_platform.py`；统一镜像定义为根 `Dockerfile`，原独立检测器构建定义保存在根 `Dockerfile.detector`。
 
 详细契约以 `docs/ARCHITECTURE.md`、`docs/API_CONTRACTS.md` 和 `docs/DATABASE_SCHEMA.md` 为准。
 

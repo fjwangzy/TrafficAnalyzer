@@ -141,6 +141,23 @@ class PipelineManagerTest(unittest.IsolatedAsyncioTestCase):
                 str(roads_path.resolve()),
             )
 
+    async def test_pipeline_start_rejects_nonempty_lane_annotation_parameters(self):
+        temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_dir.cleanup)
+        project_root = Path(temp_dir.name)
+        video_path = project_root / "test_videos/demo.mp4"
+        video_path.parent.mkdir(parents=True)
+        video_path.write_bytes(b"test")
+        manager = PipelineManager(project_root=project_root)
+
+        with self.assertRaisesRegex(ValueError, "roads_json must be empty"):
+            await manager.start_pipeline(
+                drone_id="drone_1",
+                intersection_id="INT-1",
+                video_src="test_videos/demo.mp4",
+                roads_json="configs/lanes.json",
+            )
+
     def test_pipeline_output_never_exposes_rtsp_credentials_or_query_secret(self):
         pipeline = PipelineInstance(
             pipeline_id="pipe-redacted",
@@ -202,10 +219,13 @@ class PipelineManagerTest(unittest.IsolatedAsyncioTestCase):
 class PlatformDeploymentConfigTest(unittest.TestCase):
     def test_platform_image_installs_pipeline_dependencies(self):
         root = Path(__file__).resolve().parents[2]
-        dockerfile = (root / "platform" / "Dockerfile").read_text()
+        dockerfile = (root / "Dockerfile").read_text()
         requirements = (root / "platform" / "pipeline-requirements.txt").read_text()
         constraints = (root / "platform" / "pipeline-constraints.txt").read_text()
 
+        self.assertIn("CMD [\"python\", \"run_platform.py\"]", dockerfile)
+        self.assertIn("COPY run_platform.py main_optimized.py /app/", dockerfile)
+        self.assertIn("COPY services/*.py /app/services/", dockerfile)
         self.assertIn("pipeline-requirements.txt", dockerfile)
         self.assertIn("pipeline-constraints.txt", dockerfile)
         self.assertIn("torch==2.2.2", dockerfile)
@@ -242,6 +262,32 @@ class PlatformDeploymentConfigTest(unittest.TestCase):
                 self.assertIn("track_complete", text)
                 self.assertIn("conflicts", text)
                 self.assertIn("telemetry", text)
+
+    def test_root_image_and_entrypoint_replace_platform_local_deployment_files(self):
+        root = Path(__file__).resolve().parents[2]
+        compose = (root / "docker-compose.yaml").read_text()
+        dockerignore = (root / ".dockerignore").read_text().splitlines()
+        detector_backup = (root / "Dockerfile.detector").read_text()
+        root_entry = (root / "run_platform.py").read_text()
+
+        self.assertFalse((root / "platform" / "Dockerfile").exists())
+        self.assertFalse((root / "platform" / "scripts" / "run_local.py").exists())
+        self.assertIn('PIPELINE_PROJECT_ROOT: /app', compose)
+        self.assertIn('./weights:/app/weights:ro', compose)
+        self.assertIn('./test_videos:/app/test_videos:ro', compose)
+        self.assertNotIn('.:/project:ro', compose)
+        self.assertIn("PIPELINE_PROJECT_ROOT", root_entry)
+        self.assertIn('CMD ["python", "main_optimized.py"]', detector_backup)
+        self.assertIn("test_videos", dockerignore)
+        self.assertIn("weights", dockerignore)
+        self.assertNotIn("services", dockerignore)
+
+    def test_lane_annotation_auto_tasks_are_disabled_by_default_and_in_compose(self):
+        root = Path(__file__).resolve().parents[2]
+        compose = (root / "docker-compose.yaml").read_text()
+
+        self.assertFalse(settings.lane_annotation_auto_tasks_enabled)
+        self.assertIn('LANE_ANNOTATION_AUTO_TASKS_ENABLED: "false"', compose)
 
 
 if __name__ == "__main__":

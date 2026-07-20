@@ -6,10 +6,12 @@
 
 ```text
 TrafficAnalyzer/
+├── run_platform.py                # Platform 根启动入口，本机与统一镜像共用
 ├── main_optimized.py              # 唯一生产检测入口：reader+detection / tracker+stats+kafka / show+save+flask
 ├── main.py                        # 本机调试入口，不作为生产入口
 ├── docker-compose.yaml            # 唯一本机完整 canonical 拓扑
-├── Dockerfile                     # GPU 检测镜像（镜像修复属于后续发布门禁）
+├── Dockerfile                     # Platform + 检测器统一 CPU-compatible 镜像
+├── Dockerfile.detector            # 独立检测器可构建备份，不进入 canonical Compose
 ├── requirements.txt               # 根检测管道依赖
 ├── configs/                       # Hydra、道路/车道与检测配置
 ├── elements/                      # FrameElement、TrackElement、EOF sentinel
@@ -24,6 +26,10 @@ TrafficAnalyzer/
 ├── test_videos/                   # 本机大文件视频/SRT/Cloud JSON 资产（通常不进 Git）
 └── test_*.py                      # 根检测、契约与真实管道回归
 ```
+
+统一镜像把 Platform 与检测代码写入 `/app`，Compose 仅将 `weights/` 和 `test_videos/`
+只读挂载到同名目录。检测器由 Pipeline API/Mission 在 Platform 容器内按需启动，不随
+Platform 自动运行；NVIDIA GPU 暴露仍是外部部署门禁。
 
 ## 2. 检测管道
 
@@ -127,7 +133,8 @@ console2/
 | `console2` | 8080 | React SPA |
 | `nginx` | 8009 | API/WS/MJPEG/HLS 统一入口 |
 | `kafka-ui` | profile `ops` | 可选运维 UI |
-| detector/MPS | profile `gpu-only` | 可选 GPU 检测链；镜像门禁仍延期 |
+| detector | Platform 子进程 | Pipeline API/Mission 按需启动；默认 CPU 可运行，GPU 门禁仍延期 |
+| `nvidia-mps` | profile `gpu-only` | 可选 MPS 控制进程；Platform GPU 暴露不在本次范围 |
 
 不得新增第二套完整 Compose、旧 PostgreSQL、旧/实验 TimescaleDB、InfluxDB/Telegraf/Grafana 运行服务或旧 Topic fallback。
 

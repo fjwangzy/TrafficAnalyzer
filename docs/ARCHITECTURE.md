@@ -289,17 +289,47 @@ Platform Consumer（校验、幂等、路网 ID 关联、持久化）
 `scripts/purge_adr019_legacy_storage.py` 的固定 allowlist、到期校验和显式确认人工清理；
 严禁把这些资产导入新 `road9`。
 
-平台容器会把项目根目录以 `/project` 只读挂载，并在镜像构建时安装
-`platform/pipeline-requirements.txt` 中的检测器依赖，并通过
-`platform/pipeline-constraints.txt` 锁定 `numpy<2`、`torch==2.2.2` 和
-`torchvision==0.17.2`，避免 `ultralytics` 自由解析到不兼容或过重的新版
-Torch/CUDA 包。依赖文件应覆盖根 `requirements.txt`，否则通过 `POST /api/v1/pipelines`
-启动 `main_optimized.py` 时会出现缺少 `hydra`、YOLO、OpenCV 等模块的错误。
-Platform 拉起的检测器命令会追加 `hydra/job_logging=disabled`，避免 Hydra 默认
-`logs/app.log` 文件 handler 在只读 `/project` 下创建日志失败；检测器 stdout/stderr
-由 PipelineManager 持续 drain 并保留尾部用于异常诊断。`main_optimized.py`
-的 multiprocessing 子进程会重新加载日志配置；若 `FileHandler` 目标不可写，会自动
-移除 file handler 并降级到 console，避免 reader/tracker/show worker 因日志文件不可写退出。
+根 `Dockerfile` 是 Platform 与检测器的统一镜像：Platform 包、Alembic、
+`main_optimized.py`、检测节点、配置和遥测实现一并写入 `/app`。镜像构建安装
+`platform/pipeline-requirements.txt`，并通过 `platform/pipeline-constraints.txt` 锁定
+`numpy<2`、`torch==2.2.2` 和 `torchvision==0.17.2`。权重与视频不进入镜像，Compose
+只读挂载到 `/app/weights` 和 `/app/test_videos`；`PIPELINE_PROJECT_ROOT=/app`。
+
+Platform 启动只初始化 PipelineManager，不自动创建检测任务。Pipeline API 或 Mission 调度
+通过该 seam 在同一容器内按需创建 `main_optimized.py` 进程组，Platform 退出时统一回收。
+启动命令追加 `hydra/job_logging=disabled`；检测器 stdout/stderr 由 PipelineManager 持续
+drain 并保留尾部用于异常诊断。multiprocessing 子进程若发现 `FileHandler` 目标不可写，
+会移除 file handler 并降级到 console，避免 reader/tracker/show worker 因日志配置退出。
+
+旧的独立检测器构建定义保存在 `Dockerfile.detector`，仅作为可构建备份，不属于 canonical
+Compose。统一镜像默认保持 CPU 可启动；NVIDIA GPU、MPS/CUDA 暴露和生产镜像 pin 仍是
+外部门禁。
+
+### Apple Silicon 原生 MPS 回放
+
+Mac 开发机不得用 x86_64/Rosetta Python 承担 YOLO 推理。仓库通过
+`scripts/bootstrap_native_mps.sh` 使用原生 arm64 `uv` 创建隔离的
+`.venv-mps`，按 Platform 检测器约束安装 PyTorch，并强制验证
+`platform.machine() == arm64`、`torch.backends.mps.is_built()` 和
+`torch.backends.mps.is_available()`。环境检查未通过时，不允许静默降级到 CPU。
+
+`scripts/run_native_mps_replays.py` 是本机批量验收入口：检测器在宿主机 MPS 上串行运行，
+通过 `localhost:9092` 向根 Compose Kafka 发送 canonical 消息，并通过
+`POST /api/v1/pipelines/register` 把外部进程登记到 Platform。运行器直接消费每次运行的
+`uav_statistics_*`、`uav_track_complete_*`、`uav_conflicts_*`，按 `pipeline_id`
+隔离并在 `output/native-mps/<run>/` 保存完整轨迹、TCC 事件、性能样本和汇总。
+Platform 继续独立消费同一 Topic 并写入 `road9`。
+批处理显式关闭悬停车道标注快照，避免每秒把重复 JPEG 编入态势消息；真实 TCC 事件的
+证据快照仍保留。交互式 Mission 默认继续开启悬停快照，车道标注流程不变。
+批量入口默认 `frame_stride=10`（约 3Hz 视频时间采样），与既有连续轨迹验收口径一致；
+需要逐帧精度评估时可显式降低，但不得把高 stride 结果作为模型精度证明。
+批量入口默认 `imgsz=640`，用于 Apple Silicon 长时间回放的速度优先配置；生产检测配置
+仍保持 `imgsz=960` 的小目标精度优先口径。两者结果不得直接作为同一精度基线比较。
+
+默认目录包含 `mp4new` 5 源和 `mp4new2` 3 源，共 8 个 SourceProfile；三组
+`mp4new2` 复用既有海右路、礼士路、崇华路 RoadContext，不创建假路口。TCC 验收只接受
+`prediction_type=path_intersection` 且 `distance_m≈0` 的真实事件；0 事件是允许的业务结果，
+不得通过放宽阈值制造正样本。
 
 ### Platform/Vite MJPEG 代理
 
@@ -328,6 +358,10 @@ Console2 实时监测的 BEV 主视图和右侧预览复用 Console 1.0 的 Open
 道路标注参数与 BEV 地图底图是两个独立边界：`ROADS_JSON=""` 只表示检测管道没有人工
 道路 ROI，不能关闭地图底图或把像素轨迹伪装为世界坐标。只有
 `trajectory_world_m` 才进入 BEV 世界坐标图层，`trajectory_px` 仍留在视频坐标语义内。
+所有 Platform、Mission、SourceProfile、本机 MPS 回放和 Compose camera 启动入口均固定为
+`ROADS_JSON=""`，不再从 `uav_visual_lane_bindings` 或 calibration 导出目录回填人工标注。
+Kafka 悬停消息自动生成车道任务默认关闭（`LANE_ANNOTATION_AUTO_TASKS_ENABLED=false`），
+避免失效后被持续运行的视频源立即重建；管理员仍可从持久化测绘关键帧显式建立审计任务。
 
 ### Nginx 视频流聚合
 

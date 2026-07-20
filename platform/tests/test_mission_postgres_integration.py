@@ -122,6 +122,8 @@ async def test_persistent_plan_concurrency_stop_and_restart_recovery():
     assert len(missions) == 1
     assert missions[0]["status"] == "running"
     assert len(pipeline_a.started) + len(pipeline_b.started) == 1
+    started = (pipeline_a.started + pipeline_b.started)[0]
+    assert started["roads_json"] == ""
     assert missions[0]["pipeline"]["topic_name"].startswith("uav_statistics_")
 
     stopped = await first.stop_mission(missions[0]["id"], "integration test")

@@ -131,7 +131,7 @@ class PipelineManager:
             drone_id="drone_001",
             intersection_id="INT_camera_1",
             video_src="rtsp://192.168.1.100:554/stream",
-            roads_json="configs/inter1_lanes.json",
+            roads_json="",
         )
         # ... later ...
         await pm.stop_pipeline(pipeline.pipeline_id)
@@ -211,7 +211,7 @@ class PipelineManager:
         drone_id: str,
         intersection_id: str,
         video_src: str,
-        roads_json: str = "configs/entry_exit_lanes.json",
+        roads_json: str = "",
         camera_id: int | None = None,
         video_port: int | None = None,
         topic_name: str | None = None,
@@ -224,9 +224,8 @@ class PipelineManager:
         """
         self._ensure_capacity()
         video_src = self._validate_video_source(video_src)
-        roads_json = self._validate_support_file(
-            roads_json, (".json",), roots=self._roads_roots()
-        ) or ""
+        if roads_json:
+            raise ValueError("road/lane annotation parameters are disabled; roads_json must be empty")
         if camera_id is not None and not 1 <= camera_id <= 65535:
             raise ValueError("camera_id must be between 1 and 65535")
         if video_port is not None and not 1024 <= video_port <= 65535:
@@ -274,7 +273,7 @@ class PipelineManager:
         drone_id: str,
         intersection_id: str,
         video_src: str,
-        roads_json: str = "configs/entry_exit_lanes.json",
+        roads_json: str = "",
         telemetry_source: str | None = None,
         telemetry_file_path: str | None = None,
         telemetry_time_offset_sec: float | None = None,
@@ -294,7 +293,7 @@ class PipelineManager:
             drone_id: The drone providing the video stream.
             intersection_id: The intersection to monitor.
             video_src: Video source — RTSP URL, file path, or camera index.
-            roads_json: Path to the roads polygon JSON file.
+            roads_json: Must be empty; video sources always start without road/lane annotations.
             telemetry_source: Optional telemetry source override.
             telemetry_file_path: Optional telemetry file path override.
             kafka_bootstrap: Override Kafka bootstrap servers.
@@ -304,9 +303,8 @@ class PipelineManager:
         """
         self._ensure_capacity()
         video_src = self._validate_video_source(video_src)
-        roads_json = self._validate_support_file(
-            roads_json, (".json",), roots=self._roads_roots()
-        ) or ""
+        if roads_json:
+            raise ValueError("road/lane annotation parameters are disabled; roads_json must be empty")
         telemetry_file_path = self._validate_support_file(
             telemetry_file_path,
             (".srt", ".json", ".txt"),

@@ -385,6 +385,7 @@ CREATE EXTENSION IF NOT EXISTS timescaledb;
 
 - `uav_road_context_snapshots` 只保存从 `road9` 路网数据读取的版本/缓存元数据，不能成为另一个无版本路网主库。
 - `uav_visual_lane_bindings` 保存 `local_lane_key -> inter_id + link_id + lane_id + road_data_version` 以及置信度、方法和人工确认信息。
+- 自 2026-07-20 起视频源固定无车道标注参数启动；已有 `uav_visual_lane_bindings` 以 `status=retired/retired_at` 失效并清空 `roads_json`，已有 `uav_lane_annotation_tasks` 以 `status=invalidated` 保留审计，不再作为 Pipeline 输入。
 - 主数据版本变化不得重写历史指标、轨迹或事件；每条事实保留产生时的 `road_data_version`。
 - 管道启动时读取已发布版本快照并缓存，不得逐帧查询远程/共享路网表。
 - `road9` 中具体路网表/视图路径仍为 `【验收阻断】【待确认】`；此前调查的 `road10.*` 不再作为目标引用。

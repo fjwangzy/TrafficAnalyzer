@@ -209,3 +209,23 @@ SRT文件 → SrtTelemetryParser → VideoReader(telemetry注入)
 ### Kafka 输出契约单元验证 ✅
 - `test_kafka_active_trajectories.py` 覆盖 KafkaProducerNode 在单帧处理中向 `statistics_*`、`track_complete_*`、`conflicts_*`、`telemetry_*` 四类 topic 入队，并校验统计、完成轨迹、冲突事件、无人机遥测的核心字段。
 - 2026-07-02 Kafka producer verification：`python -m pytest test_kafka_active_trajectories.py -q` 通过 3 个测试。
+
+---
+
+## 2026-07-20 视频源对齐全链路复验 ✅
+
+### 真实 Mission → 检测器 → Kafka → Console2
+
+- 通过 `POST /api/v1/missions` 启动 Mission `MSN-3854893D6874`，绑定 SourceProfile `SRC-INTER-XQH-0403-PM`、无人机 `UAV-INTER-XQH`、路口 `INT_camera_1`、Pipeline `pipe-c79f5aef`、camera `14` 和 video port `8105`。
+- Platform 统一镜像内出现一个 `main_optimized.py` 主进程和三个 worker；进程环境中的 `VIDEO_SRC`、`SOURCE_PROFILE_ID`、`INTERSECTION_ID`、`MISSION_ID`、`PIPELINE_ID`、`CAMERA_ID`、`VIDEO_PORT` 与任务绑定一致。
+- Kafka 实际消费到 `uav_statistics_14` 的 `uav_stats/v1` 与 `uav_telemetry_14` 的 `uav_telemetry` 消息；二者均携带正确的 source、mission、pipeline、drone 和 intersection 标识，统计消息包含真实 YOLO11 / ByteTrack 检测结果。
+- Console2 `/monitoring?intersection_id=INT_camera_1&source_profile_id=SRC-INTER-XQH-0403-PM` 精确选中该源，显示“实时分析中”，检测器图片地址为 `/camera_14`；工作台按 10 路已登记 SourceProfile 展示，并将运行源标为绿色。
+- 调用 Mission stop 后返回 `cancelled/manual_stop`，Pipeline 返回 `stopped`；容器中无 `main_optimized.py` 或 worker 残留，`/ready` 为 ready 且 `pipelines_active=0`。刷新监测页后保持同一源选中并显示“监测离线”，工作台点位回落为青色可用离线。
+
+### 自动化门禁
+
+- `cd console2 && npm test -- --run`：15 个测试文件、83 个测试通过；`npm run build` 成功。
+- `python -m pytest platform/tests -q`：142 passed、5 skipped、10 subtests passed。
+- `python -m pytest test_kafka_active_trajectories.py test_utils_local.py test_byte_tracker_core.py test_main_optimized_batch.py test_main_optimized_eof.py -q`：12 passed。
+- `python test_pipeline_inter_xqh.py`：56 PASS / 0 FAIL / 0 WARN；真实 4K 视频前 100 帧检测、遥测、H 矩阵均为 100/100，运动补偿为 90/100。
+- `python scripts/audit_adr019_retirement.py --scope local --strict`、`docker compose config --quiet`、`git diff --check`：全部通过。

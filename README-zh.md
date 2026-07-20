@@ -35,10 +35,26 @@ Console2 开发账号：`admin / admin123`。Kafka UI 为可选 profile：
 docker compose -p traffic_analyzer --profile ops up -d kafka-ui
 ```
 
-检测器需要 NVIDIA GPU，通过 `gpu-only` profile 启动：
+根 `Dockerfile` 是 Platform 与检测器的统一镜像。Platform 启动后不会自动创建检测任务；
+检测器由 Pipeline API 或 Mission 调度在 Platform 容器内按需拉起，并在任务停止或 Platform
+退出时回收。镜像默认保持 CPU 可启动，NVIDIA GPU 暴露仍属于外部部署门禁。
+
+本机不使用 Docker 时，从仓库根目录启动 Platform：
 
 ```bash
-docker compose -p traffic_analyzer --profile gpu-only up -d --build
+python run_platform.py
+```
+
+原独立检测器镜像保存在 `Dockerfile.detector`，不进入 canonical Compose。它不会内置模型
+权重和测试视频，单独运行时必须显式挂载：
+
+```bash
+docker build -f Dockerfile.detector -t traffic-analyzer-detector:backup .
+docker run --rm \
+  -v "$PWD/weights:/app/weights:ro" \
+  -v "$PWD/test_videos:/app/test_videos:ro" \
+  traffic-analyzer-detector:backup \
+  python main_optimized.py pipeline.send_info_kafka=False
 ```
 
 ## 本地运行检测管道
@@ -53,7 +69,7 @@ python main_optimized.py pipeline.send_info_kafka=False
 
 ```bash
 VIDEO_SRC="test_videos/inter_xqh/DJI_20260403142902_0001_V小清河北路与水屯路路口.mp4" \
-ROADS_JSON="configs/inter_xqh_lanes.json" \
+ROADS_JSON="" \
 TOPIC_NAME="uav_statistics_1" \
 CAMERA_ID=1 \
 KAFKA_BOOTSTRAP="localhost:9092" \

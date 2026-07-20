@@ -98,7 +98,9 @@ async def lifespan(app: FastAPI):
             topics_pattern=settings.kafka_topics_pattern,
             ws_manager=ws_manager,
             alert_engine=alert_engine,
-            lane_annotation_store=lane_annotation_store,
+            lane_annotation_store=(
+                lane_annotation_store if settings.lane_annotation_auto_tasks_enabled else None
+            ),
             metric_store=metric_store,
         )
         await kafka_service.start()

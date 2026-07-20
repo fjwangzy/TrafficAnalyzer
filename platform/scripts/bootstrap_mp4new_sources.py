@@ -13,7 +13,6 @@ from pathlib import Path
 
 from sqlalchemy import select
 
-
 PLATFORM_DIR = Path(__file__).resolve().parents[1]
 PROJECT_ROOT = PLATFORM_DIR.parent
 sys.path.insert(0, str(PLATFORM_DIR))
@@ -27,7 +26,6 @@ from app.models.mission import (  # noqa: E402
 )
 from app.models.survey import EvidenceItem, SurveyCaptureBatch  # noqa: E402
 from app.services.mission_orchestrator import SourceValidator  # noqa: E402
-
 
 MP4NEW_CATALOG = (
     {
@@ -54,6 +52,12 @@ MP4NEW_CATALOG = (
                 "telemetry": "test_videos/mp4new/srt/解放东路-海右路0625早高峰 srt文件.txt",
                 "time_offset_sec": 178.129,
                 "default": True,
+            },
+            {
+                "profile_id": "SRC-MP4NEW2-HY-0715-PM",
+                "video": "test_videos/mp4new2/解放东路-海右路路口晚高峰.mp4",
+                "telemetry": "test_videos/mp4new2/srt/解放东路-海右路  解放东路-礼士路srt.txt",
+                "time_offset_sec": 169.004,
             },
         ),
     },
@@ -83,6 +87,12 @@ MP4NEW_CATALOG = (
                 "time_offset_sec": 132.032,
                 "default": True,
             },
+            {
+                "profile_id": "SRC-MP4NEW2-LS-0715-PM",
+                "video": "test_videos/mp4new2/解放东路-礼士路路口晚高峰.mp4",
+                "telemetry": "test_videos/mp4new2/srt/解放东路-海右路  解放东路-礼士路srt.txt",
+                "time_offset_sec": 691.247,
+            },
         ),
     },
     {
@@ -104,6 +114,12 @@ MP4NEW_CATALOG = (
                 "time_offset_sec": 247.096,
                 "default": True,
             },
+            {
+                "profile_id": "SRC-MP4NEW2-CH-0715-PM",
+                "video": "test_videos/mp4new2/解放东路-崇华路路口晚高峰.mp4",
+                "telemetry": "test_videos/mp4new2/srt/新泺大街-崇华路路口srt数据.txt",
+                "time_offset_sec": 334.868,
+            },
         ),
     },
 )
@@ -115,7 +131,6 @@ INTER_XQH_CATALOG = (
         "intersection_name": "小清河北路与水屯路路口",
         "drone_id": "UAV-INTER-XQH",
         "drone_name": "回放无人机 · 小清河北路与水屯路",
-        "roads_json": "configs/bak/inter_xqh_lanes.json",
         "test_coordinate": {
             "lat": 36.7029090,
             "lon": 117.0223260,
@@ -147,15 +162,15 @@ def _context_payload(item: dict) -> dict:
     return {
         "intersection": {
             "name": item["intersection_name"],
-            "roads_json": item.get("roads_json", ""),
-            "calibration_status": "candidate" if item.get("roads_json") else "not_started",
+            "roads_json": "",
+            "calibration_status": "not_started",
             "center_lat": test_coordinate.get("lat"),
             "center_lon": test_coordinate.get("lon"),
             "coordinate_usage": "local_acceptance_only" if test_coordinate else "unavailable",
         },
         "links": [],
         "lanes": [],
-        "acceptance_scope": "local_replay_full_flow" if item.get("roads_json") else "detection_tracking_telemetry_only",
+        "acceptance_scope": "detection_tracking_telemetry_only",
     }
 
 

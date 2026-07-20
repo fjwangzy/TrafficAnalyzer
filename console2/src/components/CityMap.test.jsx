@@ -62,12 +62,20 @@ describe('CityMap failure boundary', () => {
   })
 
   it('renders acceptance intersections with a drone SVG marker', () => {
-    render(<CityMap markerType='drone' coordinateLabel='验收测试坐标 4 处' points={[{ id: 'INT-1', lat: 36.7, lon: 117, risk: 'normal' }]} />)
+    render(<CityMap markerType='drone' coordinateLabel='验收测试坐标 4 处' points={[{ id: 'SRC-1', lat: 36.7, lon: 117, source_status: 'running' }]} />)
     const layer = mapMocks.vectorLayers[0]
     const feature = layer.options.source.options.features[0]
     const style = layer.options.style(feature)
     expect(style.options.image.options.src).toMatch(/^data:image\/svg\+xml/)
+    expect(style.options.image.options.src).toContain('%2358d6b0')
     expect(screen.getByText(/验收测试坐标 4 处/)).toBeInTheDocument()
+  })
+
+  it('uses distinct marker colors for degraded UAV video sources', () => {
+    render(<CityMap markerType='drone' points={[{ id: 'SRC-D', lat: 36.7, lon: 117, source_status: 'degraded' }]} />)
+    const layer = mapMocks.vectorLayers[0]
+    const feature = layer.options.source.options.features[0]
+    expect(layer.options.style(feature).options.image.options.src).toContain('%23ffbe55')
   })
 
   it('centers the view across all acceptance intersections', () => {

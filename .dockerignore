@@ -1,9 +1,30 @@
-docker-compose.yaml
+.git
 .gitignore
 .env
-README.md
-test_videos/videos_out
-test_videos/videos_extra
+.DS_Store
+**/.DS_Store
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+**/.ruff_cache
+.venv
+.venv-*
+
+# Runtime assets are mounted read-only; never send them in the build context.
+test_videos
+weights
+
+# Generated, historical, and non-image artifacts.
+services/influxdb_data
+output
+logs
 secrets.txt
-services
-.git
+docs
+console2
+traffic-fly-console
+platform/tests
+platform/scripts
+test_*.py
+docker-compose*.yaml
+README.md
+README-zh.md

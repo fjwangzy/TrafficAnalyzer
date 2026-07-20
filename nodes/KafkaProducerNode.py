@@ -106,6 +106,11 @@ class KafkaProducerNode:
         self._snapshot_jpeg_quality = config.get("kafka_producer_node", {}).get(
             "annotation_snapshot_jpeg_quality", 75
         )
+        self._hover_annotation_snapshot_enabled = bool(
+            config.get("kafka_producer_node", {}).get(
+                "hover_annotation_snapshot_enabled", True
+            )
+        )
         self._active_trajectory_tail_points = int(
             config.get("kafka_producer_node", {}).get("active_trajectory_tail_points", 30)
         )
@@ -513,7 +518,7 @@ class KafkaProducerNode:
                     "northing_m": round(float(drone_disp[1]), 2),
                 }
             data["is_hovering"] = getattr(frame_element, "is_hovering", False)
-            if data["is_hovering"]:
+            if data["is_hovering"] and self._hover_annotation_snapshot_enabled:
                 snapshot = self._encode_annotation_snapshot(frame_element)
                 if snapshot:
                     data.update(snapshot)

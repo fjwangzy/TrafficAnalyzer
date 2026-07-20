@@ -300,16 +300,27 @@ def proc_tracker_update_and_calc(
             break
 
 
+def _requires_render_output(config: dict) -> bool:
+    return bool(
+        config["pipeline"]["save_video"]
+        or config["video_saver_node"].get("save_conflict_clips", False)
+        or config["pipeline"]["show_in_web"]
+        or config["show_node"].get("imshow", False)
+    )
+
+
 def proc_show_node(queue_in: Queue, config: dict, tracker_pid: int):
     """进程 3: 可视化渲染 + 视频保存 + MJPEG 串流
 
     健康检查：通过 get(timeout) + _is_pid_alive(tracker_pid) 检测追踪进程崩溃。
     """
     _setup_logging_in_subprocess()
-    show_node = ShowNode(config)
     save_video = config["pipeline"]["save_video"]
     save_conflict_clips = config["video_saver_node"].get("save_conflict_clips", False)
     show_in_web = config["pipeline"]["show_in_web"]
+    render_output = _requires_render_output(config)
+    if render_output:
+        show_node = ShowNode(config)
     if save_video or save_conflict_clips:
         video_saver_node = VideoSaverNode(config["video_saver_node"])
     if show_in_web:
@@ -325,21 +336,24 @@ def proc_show_node(queue_in: Queue, config: dict, tracker_pid: int):
             continue
         ts1 = time()
         
-        # ── 新增：附加共享内存供渲染 ──
+        # 只有确实需要预览/保存时才渲染 4K 标注。批量数据回放仍消费并释放
+        # shared memory，但跳过成本很高的框、标签和轨迹绘制。
         _shm_show = None
         if hasattr(frame_element, "shm_name") and frame_element.shm_name:
             try:
                 _shm_show = shared_memory.SharedMemory(name=frame_element.shm_name)
-                # 直接使用原图进行渲染（就地修改），从而节约内存和拷贝
-                frame_element.frame = np.ndarray(
-                    frame_element.shm_shape, 
-                    dtype=np.dtype(frame_element.shm_dtype), 
-                    buffer=_shm_show.buf
-                )
+                if render_output:
+                    # 直接使用原图进行渲染（就地修改），从而节约内存和拷贝
+                    frame_element.frame = np.ndarray(
+                        frame_element.shm_shape,
+                        dtype=np.dtype(frame_element.shm_dtype),
+                        buffer=_shm_show.buf,
+                    )
             except Exception as e:
                 print(f"[proc_show] Failed to attach shm: {e}")
                 frame_element.frame = None
-        frame_element = show_node.process(frame_element)
+        if render_output:
+            frame_element = show_node.process(frame_element)
         if save_video or save_conflict_clips:
             video_saver_node.process(frame_element, save_video=save_video)
         if show_in_web:

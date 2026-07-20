@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { ArrowRight, Broadcast, Buildings, CheckCircle, ClipboardText, Database, Drone, Funnel, MapPin, Pulse, ShieldWarning, WarningCircle } from '@phosphor-icons/react'
@@ -27,22 +27,66 @@ function kpiValue(item) {
   return '待冻结'
 }
 
+export function dashboardSourceStatus(source, pipeline) {
+  if (pipeline?.status === 'running') return 'running'
+  if (source.enabled === false) return 'disabled'
+  if (source.validation_status === 'invalid') return 'invalid'
+  if (source.validation_status === 'degraded') return 'degraded'
+  return 'ready'
+}
+
+export function buildDashboardSourcePoints({ sources = [], drones = [], intersections = [], pipelines = [] }) {
+  const droneById = new Map(drones.map((item) => [item.id, item]))
+  const intersectionById = new Map(intersections.map((item) => [item.id, item]))
+  return sources.flatMap((source) => {
+    const drone = droneById.get(source.drone_id)
+    const pipeline = pipelines.find((item) => item.source_profile_id === source.profile_id && item.status === 'running')
+    const intersectionId = pipeline?.intersection_id || drone?.default_inter_id || drone?.current_intersection_id
+    const intersection = intersectionById.get(intersectionId)
+    const lat = Number(intersection?.lat ?? drone?.last_telemetry?.latitude)
+    const lon = Number(intersection?.lon ?? drone?.last_telemetry?.longitude)
+    if (!intersectionId || !Number.isFinite(lat) || !Number.isFinite(lon)) return []
+    return [{
+      id: source.profile_id,
+      source_profile_id: source.profile_id,
+      intersection_id: intersectionId,
+      drone_id: source.drone_id,
+      name: source.display_name || source.video?.location_hint || source.profile_id,
+      drone_name: drone?.name || source.drone_id,
+      intersection_name: drone?.intersection_name || intersection?.name || intersectionId,
+      lat,
+      lon,
+      source_status: dashboardSourceStatus(source, pipeline),
+      validation_status: source.validation_status,
+      map_coordinate_status: intersection?.map_coordinate_status || 'telemetry',
+    }]
+  })
+}
+
 export function DashboardPage() {
   const navigate = useNavigate()
   const location = useLocation()
   const initialIntersectionId = new URLSearchParams(location.search).get('intersection_id')
   const [selectedId, setSelectedId] = useState(initialIntersectionId)
-  const [riskFilter, setRiskFilter] = useState('all')
-  const intersectionParams = riskFilter === 'critical' ? { risk: 'critical', limit: 500 } : riskFilter === 'degraded' ? { monitor: 'degraded', limit: 500 } : { limit: 500 }
+  const intersectionParams = { limit: 500 }
   const queryOptions = { refetchInterval: 15_000, retry: (count, error) => error?.response?.status !== 401 && count < 2 }
   const overviewQuery = useQuery({ queryKey: ['dashboard', 'overview'], queryFn: platformApi.dashboardOverview, ...queryOptions })
   const intersectionsQuery = useQuery({ queryKey: ['dashboard', 'intersections', intersectionParams], queryFn: () => platformApi.dashboardIntersections(intersectionParams), placeholderData: (previous) => previous, ...queryOptions })
   const dronesQuery = useQuery({ queryKey: ['dashboard', 'drones'], queryFn: platformApi.dashboardDrones, ...queryOptions })
+  const sourcesQuery = useQuery({ queryKey: ['dashboard', 'sources'], queryFn: platformApi.sources, ...queryOptions })
+  const sourceDronesQuery = useQuery({ queryKey: ['dashboard', 'source-drones'], queryFn: platformApi.drones, ...queryOptions })
+  const pipelinesQuery = useQuery({ queryKey: ['dashboard', 'pipelines'], queryFn: platformApi.pipelines, ...queryOptions })
   const overview = overviewQuery.data
   const intersections = intersectionsQuery.data?.items || []
   const selected = intersections.find((item) => item.id === selectedId) || null
-  const mapPoints = intersections.filter((item) => item.map_eligible)
-  const testCoordinateCount = mapPoints.filter((item) => item.map_coordinate_status === 'test').length
+  const sources = Array.isArray(sourcesQuery.data) ? sourcesQuery.data : []
+  const sourceDrones = Array.isArray(sourceDronesQuery.data) ? sourceDronesQuery.data : []
+  const pipelines = Array.isArray(pipelinesQuery.data) ? pipelinesQuery.data : []
+  const mapPoints = useMemo(
+    () => buildDashboardSourcePoints({ sources, drones: sourceDrones, intersections, pipelines }),
+    [sources, sourceDrones, intersections, pipelines],
+  )
+  const testCoordinateCount = new Set(mapPoints.filter((item) => item.map_coordinate_status === 'test').map((item) => item.intersection_id)).size
   const selectIntersection = (item) => {
     const id = item?.id || null
     setSelectedId(id)
@@ -51,9 +95,12 @@ export function DashboardPage() {
     else params.delete('intersection_id')
     navigate(`${location.pathname}${params.size ? `?${params.toString()}` : ''}`, { replace: true })
   }
-  const firstIntersection = mapPoints[0] || intersections[0]
-  const loading = overviewQuery.isLoading || intersectionsQuery.isLoading || dronesQuery.isLoading
-  const loadError = overviewQuery.error || intersectionsQuery.error || dronesQuery.error
+  const openSourceMonitoring = (item) => {
+    if (item?.source_profile_id && item?.intersection_id) navigate(`/monitoring?intersection_id=${encodeURIComponent(item.intersection_id)}&source_profile_id=${encodeURIComponent(item.source_profile_id)}`)
+  }
+  const firstSource = mapPoints[0]
+  const loading = overviewQuery.isLoading || intersectionsQuery.isLoading || dronesQuery.isLoading || sourcesQuery.isLoading || sourceDronesQuery.isLoading || pipelinesQuery.isLoading
+  const loadError = overviewQuery.error || intersectionsQuery.error || dronesQuery.error || sourcesQuery.error || sourceDronesQuery.error || pipelinesQuery.error
   const asOf = overview?.as_of ? new Date(overview.as_of).toLocaleString('zh-CN', { hour12: false }) : '等待 road9 快照'
   const asOfTime = overview?.as_of ? new Date(overview.as_of).toLocaleTimeString('zh-CN', { hour12: false }) : '等待快照'
   const roadVersion = overview?.road_data_versions?.join('、') || '无可用版本'
@@ -63,7 +110,7 @@ export function DashboardPage() {
     <AppShell pageTitle='工作台首屏' topContext={{ scope: overview?.project_scope || '授权范围未加载', window: '最近 30 分钟 · 固定工程窗口', asOf: asOfTime }}>
       <PageHeader eyebrow='S8 · 全域态势' title='无人机交通态势工作台' description='以 road9 事实纵览当前授权范围；验收测试坐标明确标记，不冒充权威坐标，也不使用无来源随机点位。'
         meta={`road_data_version · ${roadVersion} · ${asOf}`}
-        actions={<div className='heading-button-row'><button className='primary-button' disabled={!firstIntersection} onClick={() => firstIntersection && navigate(`/monitoring?intersection_id=${firstIntersection.id}`)}>进入值守模式 <ArrowRight size={15} /></button></div>} />
+        actions={<div className='heading-button-row'><button className='primary-button' disabled={!firstSource} onClick={() => firstSource && openSourceMonitoring(firstSource)}>进入值守模式 <ArrowRight size={15} /></button></div>} />
 
       {loading && <QualityNotice title='正在加载态势数据'>正在同步 KPI、路口、任务和无人机数据。</QualityNotice>}
       {loadError && <QualityNotice tone='danger' title='主任首屏聚合不可用'>{apiErrorMessage(loadError, 'DashboardReadModel 暂不可用')}</QualityNotice>}
@@ -74,10 +121,9 @@ export function DashboardPage() {
       </div>
 
       <div className='dashboard-grid'>
-        <Panel className='map-master-panel' title='无人机路口态势纵览' subtitle='展示权威坐标或可追溯的验收测试坐标'
-          action={<div className='map-filter-chips' role='group' aria-label='地图状态筛选'>{[['all', '全部'], ['critical', '高风险'], ['degraded', '降级']].map(([id, label]) => <button key={id} className={riskFilter === id ? 'active' : ''} onClick={() => setRiskFilter(id)}>{label}</button>)}</div>}>
-          {mapPoints.length > 0 ? <CityMap points={mapPoints} selectedId={selected?.id} onSelect={selectIntersection} markerType='drone' coordinateLabel={testCoordinateCount ? `验收测试坐标 ${testCoordinateCount} 处 · 遥测中位点 · WGS84` : '已验证 WGS84 · OSM 开发底图'} /> : <div className='map-offline'><WarningCircle size={38} weight='duotone' /><strong>暂无可上图的路口坐标</strong><span>{intersectionsQuery.data?.isolated || 0} 个路口尚未具备权威或验收测试坐标。</span></div>}
-          <div className='map-legend'><span><Drone size={15} weight='fill' />无人机测试点位</span><span><i className='risk-critical' />高风险</span><span><i className='risk-warning' />关注</span><span><i className='risk-normal' />正常</span><span><b className='ring-running' />正在监测</span><span><b className='ring-degraded' />运行降级</span></div>
+        <Panel className='map-master-panel'>
+          {mapPoints.length > 0 ? <CityMap points={mapPoints} onSelect={openSourceMonitoring} markerType='drone' coordinateLabel={testCoordinateCount ? `无人机视频源 ${mapPoints.length} 路 · 验收测试坐标 ${testCoordinateCount} 处 · WGS84` : `无人机视频源 ${mapPoints.length} 路 · 遥测坐标 · WGS84`} /> : <div className='map-offline'><WarningCircle size={38} weight='duotone' /><strong>暂无可上图的无人机视频源</strong><span>已登记视频源尚未绑定可用路口或遥测坐标。</span></div>}
+          <div className='map-legend'><span><Drone size={15} weight='fill' />无人机视频源</span><span><i className='source-running' />运行中</span><span><i className='source-ready' />可用离线</span><span><i className='source-degraded' />数据降级</span><span><i className='source-invalid' />无效</span><span><i className='source-disabled' />已停用</span></div>
         </Panel>
 
         <div className='dashboard-side'>
@@ -91,7 +137,7 @@ export function DashboardPage() {
             {(overview?.pending_tasks || []).length === 0 ? <EmptyState icon={ClipboardText} title='暂无平台内待办' description='不复制主平台派警、处置、结案或处罚任务。' /> : <div className='todo-list'>{overview.pending_tasks.map((task) => <button key={task.task_type} onClick={() => navigate(task.target_route)}><span className={`todo-icon ${task.quality}`}><ClipboardText size={16} weight='fill' /></span><div><strong>{taskLabels[task.task_type] || task.task_type}</strong><span>{task.count} 项 · {task.quality}</span></div><ArrowRight size={14} /></button>)}</div>}
           </Panel>
           <Panel title='监测保障与系统健康' subtitle='只展示会影响主任判断的事实摘要'>
-            <div className='health-list'><InfoRow label='项目路口快照' value={overview?.health?.project_intersections ?? '—'} badge={overview?.health?.project_intersections ? 'unverified' : 'missing'} /><InfoRow label='可上图路口' value={overview?.health?.map_eligible_intersections ?? '—'} badge={overview?.health?.map_eligible_intersections ? 'verified' : 'missing'} /><InfoRow label='验收测试坐标' value={overview?.health?.test_coordinate_intersections ?? 0} badge={overview?.health?.test_coordinate_intersections ? 'unverified' : 'missing'} /><InfoRow label='新鲜遥测无人机' value={`${onlineDrones} / ${dronesQuery.data?.items?.length ?? 0}`} badge={onlineDrones ? 'unverified' : 'offline'} /><InfoRow label='road9 聚合' value={overview?.health?.database || 'unavailable'} badge={overview?.health?.database || 'degraded'} /></div>
+            <div className='health-list'><InfoRow label='已登记视频源' value={sources.length} badge={sources.length ? 'unverified' : 'missing'} /><InfoRow label='可上图视频源' value={mapPoints.length} badge={mapPoints.length ? 'verified' : 'missing'} /><InfoRow label='验收测试坐标' value={overview?.health?.test_coordinate_intersections ?? 0} badge={overview?.health?.test_coordinate_intersections ? 'unverified' : 'missing'} /><InfoRow label='新鲜遥测无人机' value={`${onlineDrones} / ${dronesQuery.data?.items?.length ?? 0}`} badge={onlineDrones ? 'unverified' : 'offline'} /><InfoRow label='road9 聚合' value={overview?.health?.database || 'unavailable'} badge={overview?.health?.database || 'degraded'} /></div>
             <QualityNotice tone={overview?.health?.status === 'healthy' ? 'success' : 'warning'} title={overview?.health?.status === 'healthy' ? '当前聚合链路可用' : '当前项目范围降级'}>{overview?.health?.test_coordinate_intersections || 0} 个验收测试坐标，{overview?.health?.isolated_intersections || 0} 个坐标隔离，{overview?.health?.failed_delivery_items || 0} 个投递失败项；测试点位不作为权威路网坐标。</QualityNotice>
           </Panel>
         </div>

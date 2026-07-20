@@ -104,6 +104,7 @@ kafka_producer_node: #// 摄像头 id
   free_flow_speed_kmh: 40.0     # 自由流速度（km/h）
   annotation_snapshot_width: 960 # 悬停生成标注任务时随stats发送的JPEG快照宽度
   annotation_snapshot_jpeg_quality: 75 # 标注任务快照JPEG质量
+  hover_annotation_snapshot_enabled: true # 交互式运行携带悬停快照；纯数据批处理可关闭
 
 # ------------------------------------------------- TRAFFIC SITUATION AWARENESS --------------------------------------------------
 

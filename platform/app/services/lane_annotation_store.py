@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 
 class LaneAnnotationStore:
-    """Tracks hover-created annotation tasks and reusable lane parameters."""
+    """Tracks hover-created annotation tasks and saved lane parameters."""
 
     def __init__(
         self,
@@ -47,6 +47,51 @@ class LaneAnnotationStore:
 
     def get_annotation(self, intersection_id: str) -> dict[str, Any] | None:
         return self._load().get("annotations", {}).get(intersection_id)
+
+    def invalidate_all(self, reason: str = "video_sources_without_lane_annotations") -> dict[str, Any]:
+        """Make every current lane annotation inert while preserving an audit snapshot."""
+        now = time.time()
+        db = self._load()
+        annotations = db.get("annotations", {})
+        invalidated = db.setdefault("invalidated_annotations", [])
+        for annotation in annotations.values():
+            invalidated.append(
+                {
+                    **annotation,
+                    "status": "invalidated",
+                    "invalidated_at": now,
+                    "invalidation_reason": reason,
+                }
+            )
+        db["annotations"] = {}
+
+        invalidated_tasks = 0
+        for task in db.get("tasks", []):
+            if task.get("status") == "invalidated":
+                continue
+            task["status"] = "invalidated"
+            task["invalidated_at"] = now
+            task["invalidation_reason"] = reason
+            invalidated_tasks += 1
+
+        archived_exports: list[str] = []
+        export_paths = sorted(self.export_dir.glob("*.json")) if self.export_dir.exists() else []
+        if export_paths:
+            archive_dir = self.db_path.parent / "invalidated_lane_annotations" / str(int(now))
+            archive_dir.mkdir(parents=True, exist_ok=True)
+            for source in export_paths:
+                destination = archive_dir / source.name
+                os.replace(source, destination)
+                archived_exports.append(str(destination))
+
+        self._hover_state.clear()
+        self._write(db)
+        return {
+            "invalidated_annotations": len(annotations),
+            "invalidated_tasks": invalidated_tasks,
+            "archived_exports": archived_exports,
+            "reason": reason,
+        }
 
     def get_task(self, task_id: str) -> dict[str, Any] | None:
         for task in self._load().get("tasks", []):

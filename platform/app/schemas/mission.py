@@ -148,6 +148,8 @@ class MissionCreate(BaseModel):
             raise ValueError("source_profile_id or legacy video_src is required")
         if self.source_profile_id and self.video_src:
             raise ValueError("source_profile_id and legacy video_src are mutually exclusive")
+        if self.roads_json:
+            raise ValueError("roads_json must be empty; missions start without road/lane annotations")
         return self
 
 

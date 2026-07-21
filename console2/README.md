@@ -5,7 +5,7 @@
 ## 当前数据边界
 
 - 真实模块：`/login`、`/monitoring`、`/admin/calibration`、`/admin/system`。
-- 真实数据来源：Platform `/api/v1`、`/ws/realtime` 和 `/camera_{camera_id}` MJPEG 代理。
+- 真实数据来源：Platform `/api/v1`、`/ws/realtime`，以及 Pipeline/Mission 登记的检测器 `video_stream_url` MJPEG 直连。
 - 其余工作台、轨迹研判、AI 事件、事故测绘、执法线索、飞行任务和集成交付页面暂时保留契约化模拟数据。
 - 四个真实模块请求失败时只显示 `loading/empty/stale/error/unauthorized`，不回退模拟数据。
 - 数据架构遵循 ADR-019：目标数据库为 PostgreSQL `road9` + TimescaleDB，内部 Topic、消息类型和 WebSocket channel 使用 `uav_` 前缀；当前未完成改名的数据链路由实时消息适配器双识别。
@@ -50,7 +50,7 @@ npm install
 npm run dev
 ```
 
-Vite 默认代理 `/api`、`/ws` 和 `/camera_*` 到 `http://localhost:8000`。生产镜像使用同样的 Nginx 路径约定。
+Vite 只代理 `/api` 和 `/ws` 到 `http://localhost:8000`。监控屏和无人机屏直接使用 Platform 返回的 `video_stream_url`，本机默认为检测器 `http://127.0.0.1:{video_port}/video`；UAT/生产需配置浏览器可达的 HTTPS 地址模板。
 
 ## 验证
 
@@ -59,7 +59,7 @@ npm test
 npm run build
 ```
 
-当前前端回归覆盖统一两级页面壳、正式路由、角色权限、登录成功/失败/恢复/失效、安全跳转、监控 REST/WS/MJPEG、视频重试、消息重连/退订/去重、告警确认、系统部分失败、只读身份、标注自然尺寸坐标与多车道保存，以及保留的原型工作流。桌面设计基线为 1440×900；1366×768 与 1920×1080 的浏览器像素验收记录在 `design-qa.md`。
+当前前端回归覆盖统一两级页面壳、正式路由、角色权限、登录成功/失败/恢复/失效、安全跳转、监控 REST/WS/检测器直连 MJPEG、首帧重试、监控与无人机双屏地址一致性、消息重连/退订/去重、告警确认、系统部分失败、只读身份、标注自然尺寸坐标与多车道保存，以及保留的原型工作流。桌面设计基线为 1440×900；1366×768 与 1920×1080 的浏览器像素验收记录在 `design-qa.md`。
 
 ## 结构
 

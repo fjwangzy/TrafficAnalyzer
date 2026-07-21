@@ -38,6 +38,7 @@ from app.schemas.mission import (
     SourcePairUpdate,
 )
 from app.services.road_context import RoadContext
+from app.services.pipeline_manager import detector_video_stream_url
 
 logger = logging.getLogger(__name__)
 
@@ -1006,9 +1007,12 @@ class MissionOrchestrator:
             "created_at": row.created_at, "updated_at": row.updated_at,
         }
 
-    @staticmethod
-    async def _mission_dict(session: AsyncSession, row: MissionRecord) -> dict:
+    async def _mission_dict(self, session: AsyncSession, row: MissionRecord) -> dict:
         pipeline = await session.get(PipelineRecord, row.pipeline_id) if row.pipeline_id else None
+        runtime = self._pipeline.get(row.pipeline_id) if row.pipeline_id else None
+        video_stream_url = (runtime or {}).get("video_stream_url")
+        if not video_stream_url and pipeline and pipeline.video_port:
+            video_stream_url = detector_video_stream_url(pipeline.video_port)
         return {
             "id": row.id, "name": row.name, "flight_plan_id": row.flight_plan_id,
             "parent_mission_id": row.parent_mission_id, "retry_index": row.retry_index,
@@ -1022,6 +1026,7 @@ class MissionOrchestrator:
                 "id": pipeline.id, "desired_status": pipeline.desired_status,
                 "observed_status": pipeline.observed_status, "topic_name": pipeline.topic_name,
                 "camera_id": pipeline.camera_id, "video_port": pipeline.video_port,
+                "video_stream_url": video_stream_url,
                 "error_message": pipeline.error_message,
             } if pipeline else None,
             "context_snapshot": row.context_snapshot,

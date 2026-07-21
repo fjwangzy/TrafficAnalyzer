@@ -137,8 +137,8 @@ function eventMetricTiles(event) {
 
 const eventEvidenceLabels = {
   conflict_original_frame: '原始画面',
-  conflict_detector_frame: '检测器输出画面',
-  conflict_trajectory_reconstruction: '同期轨迹还原画面',
+  conflict_detector_frame: '检测器输出的 TCC 画面帧',
+  conflict_trajectory_reconstruction: '轨迹投放 BEV 视图',
   conflict_keyframe: '关键帧证据',
 }
 

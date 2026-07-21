@@ -23,28 +23,26 @@ import asyncio
 import logging
 import os
 import re
-import signal
 import time
 import uuid
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urlunsplit
 
 from app.core.config import settings
 from app.models.drone_store import assign_drone_to_intersection
+from app.services.pipeline_executor import (
+    LocalPipelineExecutor,
+    PipelineExecutor,
+    PipelineLaunchSpec,
+)
 
 logger = logging.getLogger(__name__)
 
 # Path to the TrafficAnalyzer root (parent of platform/)
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
-
-
-def _hydra_string(value: str) -> str:
-    """Quote a path/URL as one Hydra override value, including spaces and CJK."""
-    escaped = value.replace("\\", "\\\\").replace("'", "\\'")
-    return f"'{escaped}'"
 
 
 def redact_video_source(value: str) -> str:
@@ -57,6 +55,40 @@ def redact_video_source(value: str) -> str:
         host = f"[{host}]"
     port = f":{parsed.port}" if parsed.port is not None else ""
     return f"{parsed.scheme.lower()}://{host}{port}{parsed.path}"
+
+
+def detector_video_stream_url(video_port: int, base_url: str | None = None) -> str:
+    """Build the browser-reachable detector MJPEG URL registered at launch."""
+    template = (base_url or settings.pipeline_video_base).strip()
+    if not template:
+        raise ValueError("pipeline_video_base must not be empty")
+    candidate = template.replace("{video_port}", str(video_port))
+    parsed = urlsplit(candidate)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise ValueError("pipeline video stream URL must use http or https")
+    if parsed.username or parsed.password or parsed.query or parsed.fragment:
+        raise ValueError("pipeline video stream URL must not contain credentials, query, or fragment")
+    if "{video_port}" not in template:
+        host = parsed.hostname
+        if ":" in host and not host.startswith("["):
+            host = f"[{host}]"
+        candidate = urlunsplit(
+            (parsed.scheme, f"{host}:{video_port}", parsed.path or "/video", "", "")
+        )
+        parsed = urlsplit(candidate)
+    if not parsed.path or parsed.path == "/":
+        candidate = urlunsplit((parsed.scheme, parsed.netloc, "/video", "", ""))
+    return candidate
+
+
+def validate_detector_video_stream_url(value: str) -> str:
+    """Validate an explicitly registered external detector address."""
+    parsed = urlsplit(value.strip())
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise ValueError("video_stream_url must use http or https")
+    if parsed.username or parsed.password or parsed.query or parsed.fragment:
+        raise ValueError("video_stream_url must not contain credentials, query, or fragment")
+    return value.strip()
 
 
 class PipelineStatus(StrEnum):
@@ -78,6 +110,7 @@ class PipelineInstance:
     topic_name: str
     camera_id: int
     video_port: int = 8100  # MJPEG server port
+    video_stream_url: str = ""
     mission_id: str | None = None
     source_profile_id: str | None = None
     inter_id: str | None = None
@@ -103,6 +136,7 @@ class PipelineInstance:
             "topic_name": self.topic_name,
             "camera_id": self.camera_id,
             "video_port": self.video_port,
+            "video_stream_url": self.video_stream_url,
             "mission_id": self.mission_id,
             "source_profile_id": self.source_profile_id,
             "inter_id": self.inter_id,
@@ -143,6 +177,8 @@ class PipelineManager:
         kafka_bootstrap: str = "kafka:9092",
         pipeline_python: str | None = None,
         frame_stride: int | None = None,
+        executor: PipelineExecutor | None = None,
+        video_public_base: str | None = None,
     ):
         # Priority: explicit arg > PIPELINE_PROJECT_ROOT env var > fallback
         env_root = os.environ.get("PIPELINE_PROJECT_ROOT")
@@ -155,6 +191,18 @@ class PipelineManager:
         self._kafka_bootstrap = kafka_bootstrap
         self._pipeline_python = pipeline_python or os.environ.get("PIPELINE_PYTHON") or "python"
         self._frame_stride = frame_stride
+        self._video_public_base = video_public_base or settings.pipeline_video_base
+        self._executor = executor or LocalPipelineExecutor(
+            self._root,
+            self._pipeline_python,
+            device=settings.pipeline_device,
+            imgsz=settings.pipeline_imgsz,
+            extra_env=(
+                {"PYTORCH_ENABLE_MPS_FALLBACK": "1"}
+                if settings.pipeline_device == "mps"
+                else None
+            ),
+        )
         self._pipelines: dict[str, PipelineInstance] = {}
         self._next_camera_id = 10  # start from 10 to avoid collision with static cameras
         self._next_video_port = 8101  # 8100 reserved for manually-started pipelines
@@ -215,6 +263,7 @@ class PipelineManager:
         camera_id: int | None = None,
         video_port: int | None = None,
         topic_name: str | None = None,
+        video_stream_url: str | None = None,
     ) -> PipelineInstance:
         """Register an externally-running pipeline (e.g. started locally).
 
@@ -247,6 +296,11 @@ class PipelineManager:
         if video_port is None:
             self._next_video_port += 1
         topic = topic_name or f"uav_statistics_{cid}"
+        registered_stream_url = (
+            validate_detector_video_stream_url(video_stream_url)
+            if video_stream_url
+            else detector_video_stream_url(port, self._video_public_base)
+        )
 
         pipeline = PipelineInstance(
             pipeline_id=pipeline_id,
@@ -257,6 +311,7 @@ class PipelineManager:
             topic_name=topic,
             camera_id=cid,
             video_port=port,
+            video_stream_url=registered_stream_url,
             status=PipelineStatus.RUNNING,
             started_at=time.time(),
         )
@@ -264,7 +319,7 @@ class PipelineManager:
         assign_drone_to_intersection(drone_id, intersection_id)
         logger.info(
             f"Registered external pipeline {pipeline_id} "
-            f"camera={cid} port={port} intersection={intersection_id}"
+            f"camera={cid} port={port} stream={registered_stream_url} intersection={intersection_id}"
         )
         return pipeline
 
@@ -316,6 +371,7 @@ class PipelineManager:
         video_port = self._next_video_port
         self._next_video_port += 1
         topic_name = topic_name or f"uav_statistics_{camera_id}"
+        video_stream_url = detector_video_stream_url(video_port, self._video_public_base)
 
         pipeline = PipelineInstance(
             pipeline_id=pipeline_id,
@@ -326,6 +382,7 @@ class PipelineManager:
             topic_name=topic_name,
             camera_id=camera_id,
             video_port=video_port,
+            video_stream_url=video_stream_url,
             mission_id=mission_id,
             source_profile_id=source_profile_id,
             inter_id=inter_id or intersection_id,
@@ -334,67 +391,36 @@ class PipelineManager:
             quality_status=quality_status,
         )
 
-        # Build environment for the child process
-        env = {
-            **os.environ,
-            "VIDEO_SRC": video_src,
-            "ROADS_JSON": roads_json,
-            "TOPIC_NAME": topic_name,
-            "CAMERA_ID": str(camera_id),
-            "DRONE_ID": drone_id,
-            "INTERSECTION_ID": intersection_id,  # pass real intersection ID (e.g. INT_camera_1)
-            "INTER_ID": inter_id or intersection_id,
-            "MISSION_ID": mission_id or "",
-            "PIPELINE_ID": pipeline_id,
-            "RUN_ID": pipeline_id,
-            "SOURCE_PROFILE_ID": source_profile_id or "",
-            "ROAD_DATA_VERSION": road_data_version or "",
-            "ROAD_CONTEXT_STATUS": road_context_status,
-            "QUALITY_STATUS": quality_status,
-            "VIDEO_PORT": str(video_port),  # unique MJPEG port per pipeline
-        }
-        if self._frame_stride is not None:
-            env["FRAME_STRIDE"] = str(self._frame_stride)
-        if kafka_bootstrap:
-            env["KAFKA_BOOTSTRAP"] = kafka_bootstrap
+        launch = PipelineLaunchSpec(
+            pipeline_id=pipeline_id,
+            video_src=video_src,
+            topic_name=topic_name,
+            camera_id=camera_id,
+            video_port=video_port,
+            drone_id=drone_id,
+            intersection_id=intersection_id,
+            inter_id=inter_id or intersection_id,
+            mission_id=mission_id or "",
+            source_profile_id=source_profile_id or "",
+            road_data_version=road_data_version or "",
+            road_context_status=road_context_status,
+            quality_status=quality_status,
+            frame_stride=self._frame_stride,
+            kafka_bootstrap=kafka_bootstrap or self._kafka_bootstrap,
+            telemetry_source=telemetry_source,
+            telemetry_file_path=telemetry_file_path,
+            telemetry_time_offset_sec=telemetry_time_offset_sec,
+            telemetry_sync_tolerance_sec=telemetry_sync_tolerance_sec,
+        )
 
-        # Spawn the pipeline process
         try:
-            cmd = [
-                self._pipeline_python,
-                "main_optimized.py",
-                "pipeline.send_info_kafka=True",
-                "hydra/job_logging=disabled",
-            ]
-            if telemetry_source:
-                cmd.extend([
-                    "telemetry.enabled=True",
-                    f"telemetry.source={telemetry_source}",
-                ])
-            if telemetry_file_path:
-                cmd.append(f"telemetry.file_path={_hydra_string(telemetry_file_path)}")
-            if telemetry_time_offset_sec is not None:
-                cmd.append(f"telemetry.time_offset_sec={telemetry_time_offset_sec}")
-            if telemetry_sync_tolerance_sec is not None:
-                cmd.append(f"telemetry.sync_tolerance_sec={telemetry_sync_tolerance_sec}")
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                cwd=str(self._root),
-                env=env,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                start_new_session=True,
-            )
-            pipeline.process = proc
-            pipeline.io_tasks = [
-                asyncio.create_task(self._drain_stream(proc.stdout, pipeline, "stdout")),
-                asyncio.create_task(self._drain_stream(proc.stderr, pipeline, "stderr")),
-            ]
+            execution = await self._executor.start(launch)
+            pipeline.process = execution
             pipeline.status = PipelineStatus.RUNNING
             pipeline.started_at = time.time()
             logger.info(
-                f"Pipeline {pipeline_id} started (PID={proc.pid}) "
-                f"drone={drone_id} intersection={intersection_id}"
+                f"Pipeline {pipeline_id} started (PID={execution.pid}) "
+                f"drone={drone_id} intersection={intersection_id} stream={video_stream_url}"
             )
         except Exception as e:
             pipeline.status = PipelineStatus.ERROR
@@ -424,24 +450,8 @@ class PipelineManager:
 
         if pipeline.process and pipeline.process.returncode is None:
             logger.info(f"Stopping pipeline {pipeline_id} (PID={pipeline.process.pid})")
-            try:
-                try:
-                    os.killpg(pipeline.process.pid, signal.SIGTERM)
-                except ProcessLookupError:
-                    pipeline.process.terminate()
-                try:
-                    await asyncio.wait_for(pipeline.process.wait(), timeout=10)
-                except TimeoutError:
-                    logger.warning(f"Pipeline {pipeline_id} did not exit, sending SIGKILL")
-                    try:
-                        os.killpg(pipeline.process.pid, signal.SIGKILL)
-                    except ProcessLookupError:
-                        pipeline.process.kill()
-                    await pipeline.process.wait()
-            except ProcessLookupError:
-                pass  # Already dead
-            for task in pipeline.io_tasks:
-                task.cancel()
+            await self._executor.stop(pipeline.process)
+            self._sync_execution_output(pipeline)
 
         pipeline.status = PipelineStatus.STOPPED
         pipeline.stopped_at = time.time()
@@ -469,24 +479,6 @@ class PipelineManager:
 
     # ── Internal ──
 
-    async def _drain_stream(self, stream: Any, pipeline: PipelineInstance, name: str) -> None:
-        """Drain child process output so verbose detector logs never block it."""
-        if stream is None:
-            return
-        tail_limit = 4000
-        try:
-            while True:
-                chunk = await stream.read(4096)
-                if not chunk:
-                    break
-                text = chunk.decode("utf-8", errors="replace")
-                if name == "stderr":
-                    pipeline.stderr_tail = (pipeline.stderr_tail + text)[-tail_limit:]
-                else:
-                    pipeline.stdout_tail = (pipeline.stdout_tail + text)[-tail_limit:]
-        except asyncio.CancelledError:
-            pass
-
     async def _monitor_loop(self) -> None:
         """Background task: poll pipeline processes for unexpected exits."""
         while True:
@@ -497,12 +489,25 @@ class PipelineManager:
                 proc = pipeline.process
                 if proc is None:
                     continue
+                try:
+                    await self._executor.inspect(proc)
+                except Exception as exc:
+                    logger.warning(
+                        "Pipeline %s executor status unavailable: %s",
+                        pipeline.pipeline_id,
+                        exc,
+                    )
+                    continue
+                self._sync_execution_output(pipeline)
                 if proc.returncode is not None:
-                    try:
-                        os.killpg(proc.pid, signal.SIGTERM)
-                    except ProcessLookupError:
-                        pass
                     self._handle_process_exit(pipeline, proc.returncode)
+
+    @staticmethod
+    def _sync_execution_output(pipeline: PipelineInstance) -> None:
+        if pipeline.process is None:
+            return
+        pipeline.stdout_tail = pipeline.process.stdout_tail
+        pipeline.stderr_tail = pipeline.process.stderr_tail
 
     def _handle_process_exit(self, pipeline: PipelineInstance, return_code: int) -> None:
         """Reflect a child process exit in pipeline state."""

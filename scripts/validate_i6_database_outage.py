@@ -29,6 +29,10 @@ def _compose(*arguments: str, check: bool = True) -> subprocess.CompletedProcess
     environment = os.environ.copy()
     environment["ROAD9_PORT"] = DB_PORT
     environment["ROAD9_VOLUME_NAME"] = f"{PROJECT}_road9_data"
+    environment.setdefault("ROAD9_PASSWORD", "traffic123")
+    environment.setdefault("JWT_SECRET_KEY", "local-i6-compose-validation-only")
+    environment.setdefault("BOOTSTRAP_ADMIN_PASSWORD", "local-i6-admin-only")
+    environment.setdefault("CORS_ORIGINS", '["http://127.0.0.1:18006"]')
     return subprocess.run(
         ["docker", "compose", "-f", str(COMPOSE_FILE), "-p", PROJECT, *arguments],
         cwd=ROOT,

@@ -248,6 +248,7 @@ class PlatformClient:
                 "roads_json": "",
                 "camera_id": camera_id,
                 "video_port": video_port,
+                "video_stream_url": f"http://127.0.0.1:{video_port}/video",
                 "topic_name": f"uav_statistics_{camera_id}",
             },
         )

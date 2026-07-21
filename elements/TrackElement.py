@@ -37,6 +37,9 @@ class TrackElement:
         # ── 新增：分类 ──
         self.vehicle_class: str = "unknown"  # "motor"|"non_motor"|"unknown"
         self.yolo_class_id: int | None = None  # YOLO原始检测类别ID
+        self.yolo_class_name: str | None = None  # 推理时模型字典中的原始类别名
+        self.yolo_model_id: str | None = None  # 权重文件名 + 内容摘要
+        self.class_mapping_version: str | None = None  # 原始类别到业务类别的映射版本
 
         # ── 新增：冲突 ──
         self.in_conflict: bool = False

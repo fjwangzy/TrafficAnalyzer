@@ -148,6 +148,17 @@ def _period_start(period: str) -> datetime:
     return datetime.now(UTC) - delta
 
 
+def _granularity_seconds(granularity: str) -> int:
+    match = re.fullmatch(r"(\d+)([smh])", granularity)
+    if not match:
+        raise MetricContractError("granularity must match <number><s|m|h>")
+    value = int(match.group(1))
+    if value < 1:
+        raise MetricContractError("granularity must be greater than zero")
+    multiplier = {"s": 1, "m": 60, "h": 3600}[match.group(2)]
+    return value * multiplier
+
+
 class PostgresMetricStoreAdapter:
     """PostgreSQL/TimescaleDB adapter behind the MetricStore port."""
 
@@ -804,8 +815,31 @@ class PostgresMetricStoreAdapter:
         period: str,
         grain_type: str | None = None,
         source_profile_id: str | None = None,
+        granularity: str | None = None,
     ) -> list[dict]:
-        statement = select(TrafficMetric).where(
+        # Historical charts only consume typed dimensions. Selecting the ORM
+        # entity here also materializes the audit payload (hundreds of KB per
+        # sample), which can stall the API under a normal 30-minute refresh.
+        statement = select(
+            TrafficMetric.id,
+            TrafficMetric.observed_at,
+            TrafficMetric.intersection_id,
+            TrafficMetric.inter_id,
+            TrafficMetric.grain_type,
+            TrafficMetric.grain_key,
+            TrafficMetric.cars,
+            TrafficMetric.vehicle_count,
+            TrafficMetric.flow_veh_per_min,
+            TrafficMetric.avg_speed_kmh,
+            TrafficMetric.congestion_index,
+            TrafficMetric.queue_length_m,
+            TrafficMetric.headway_sec,
+            TrafficMetric.direction_flow,
+            TrafficMetric.quality_status,
+            TrafficMetric.time_quality,
+            TrafficMetric.source_profile_id,
+            TrafficMetric.pipeline_id,
+        ).where(
             TrafficMetric.inter_id == inter_id,
             TrafficMetric.observed_at >= _period_start(period),
         )
@@ -813,8 +847,30 @@ class PostgresMetricStoreAdapter:
             statement = statement.where(TrafficMetric.grain_type == grain_type)
         if source_profile_id:
             statement = statement.where(TrafficMetric.source_profile_id == source_profile_id)
-        rows = (await self._execute(statement.order_by(TrafficMetric.observed_at))).scalars().all()
-        return [self._traffic_dict(row) for row in rows]
+        rows = (await self._execute(
+            statement.order_by(TrafficMetric.observed_at)
+        )).mappings().all()
+        summaries = [self._traffic_summary_dict(row) for row in rows]
+        if granularity:
+            summaries = self._downsample_traffic(summaries, _granularity_seconds(granularity))
+        if not summaries:
+            return []
+
+        # TCC status is not a typed column yet. Preserve the existing API
+        # contract by reading the audit JSON for only the latest retained row.
+        latest = summaries[-1]
+        payload = (await self._execute(
+            select(TrafficMetric.payload).where(
+                TrafficMetric.id == latest["_id"],
+                TrafficMetric.observed_at == latest["_observed_at"],
+            )
+        )).scalar_one_or_none()
+        payload_data = payload.get("data", payload) if isinstance(payload, dict) else {}
+        latest["tcc_diagnostics"] = payload_data.get("tcc_diagnostics")
+        for item in summaries:
+            item.pop("_id", None)
+            item.pop("_observed_at", None)
+        return summaries
 
     async def query_tracks(
         self, inter_id: str, period: str, limit: int, class_name: str | None = None,
@@ -971,12 +1027,46 @@ class PostgresMetricStoreAdapter:
             "congestion_index": row.congestion_index,
             "queue_length_m": row.queue_length_m,
             "headway_sec": row.headway_sec,
+            "direction_flow": getattr(row, "direction_flow", None),
             "quality_status": row.quality_status,
             "time_quality": row.time_quality,
             "source_profile_id": row.source_profile_id,
             "pipeline_id": row.pipeline_id,
             "tcc_diagnostics": payload_data.get("tcc_diagnostics"),
         }
+
+    @staticmethod
+    def _traffic_summary_dict(row: Any) -> dict[str, Any]:
+        return {
+            "_id": row["id"],
+            "_observed_at": row["observed_at"],
+            "time": row["observed_at"].isoformat(),
+            "intersection_id": row["intersection_id"],
+            "inter_id": row["inter_id"],
+            "grain_type": row["grain_type"],
+            "grain_key": row["grain_key"],
+            "cars": row["cars"],
+            "total_vehicles": row["vehicle_count"],
+            "flow_veh_per_min": row["flow_veh_per_min"],
+            "avg_speed_kmh": row["avg_speed_kmh"],
+            "congestion_index": row["congestion_index"],
+            "queue_length_m": row["queue_length_m"],
+            "headway_sec": row["headway_sec"],
+            "direction_flow": row["direction_flow"],
+            "quality_status": row["quality_status"],
+            "time_quality": row["time_quality"],
+            "source_profile_id": row["source_profile_id"],
+            "pipeline_id": row["pipeline_id"],
+            "tcc_diagnostics": None,
+        }
+
+    @staticmethod
+    def _downsample_traffic(rows: list[dict[str, Any]], seconds: int) -> list[dict[str, Any]]:
+        buckets: dict[int, dict[str, Any]] = {}
+        for row in rows:
+            bucket = int(row["_observed_at"].timestamp()) // seconds
+            buckets[bucket] = row
+        return list(buckets.values())
 
     @staticmethod
     def _conflict_dict(row: ConflictEvent, review: ConflictReview | None = None) -> dict[str, Any]:

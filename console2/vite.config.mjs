@@ -19,11 +19,6 @@ export default defineConfig({
         ws: true,
         changeOrigin: true,
       },
-      '/camera': {
-        target: 'http://localhost:8000',
-        changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/camera_(\d+)/, '/api/v1/video/camera/$1'),
-      },
     },
     warmup: {
       clientFiles: ["./src/main.jsx"],

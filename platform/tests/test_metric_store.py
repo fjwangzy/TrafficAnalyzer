@@ -2,7 +2,7 @@ import base64
 import unittest
 from datetime import UTC, datetime
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from app.kafka.consumer import KafkaConsumerService
 from app.models.survey import EvidenceItem, EvidencePackage
@@ -194,6 +194,62 @@ class MetricStoreContractTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["tcc_diagnostics"], diagnostics)
         self.assertEqual(result["source_profile_id"], "SRC-1")
         self.assertEqual(result["pipeline_id"], "pipe-1")
+
+    async def test_historical_traffic_query_projects_out_payload_and_downsamples(self):
+        class _MappingResult:
+            def __init__(self, rows):
+                self._rows = rows
+
+            def mappings(self):
+                return self
+
+            def all(self):
+                return self._rows
+
+        class _ScalarResult:
+            def scalar_one_or_none(self):
+                return {"data": {"tcc_diagnostics": {"status": "ok"}}}
+
+        base = datetime(2026, 7, 21, 4, 0, tzinfo=UTC)
+        rows = [
+            {
+                "id": f"metric-{index}",
+                "observed_at": base.replace(minute=index),
+                "intersection_id": "INT-1",
+                "inter_id": "INT-1",
+                "grain_type": "intersection",
+                "grain_key": "INT-1",
+                "cars": index,
+                "vehicle_count": index,
+                "flow_veh_per_min": None,
+                "avg_speed_kmh": 18.0,
+                "congestion_index": 2.0 + index,
+                "queue_length_m": 0.0,
+                "headway_sec": None,
+                "direction_flow": {"straight": index, "left": 1, "right": 2, "uturn": 0},
+                "quality_status": "unverified",
+                "time_quality": "ingest_only",
+                "source_profile_id": "SRC-1",
+                "pipeline_id": "pipe-1",
+            }
+            for index in range(7)
+        ]
+        statements = []
+
+        async def execute(statement):
+            statements.append(statement)
+            return _MappingResult(rows) if len(statements) == 1 else _ScalarResult()
+
+        self.adapter._execute = AsyncMock(side_effect=execute)
+
+        result = await self.adapter.query_traffic(
+            "INT-1", "30m", grain_type="intersection", source_profile_id="SRC-1", granularity="5m"
+        )
+
+        self.assertEqual([row["cars"] for row in result], [4, 6])
+        self.assertEqual(result[-1]["direction_flow"]["straight"], 6)
+        self.assertEqual(result[-1]["tcc_diagnostics"], {"status": "ok"})
+        self.assertNotIn("payload", str(statements[0]).lower())
 
     @staticmethod
     def _stats_payload(message_id: str, cars: int) -> dict:

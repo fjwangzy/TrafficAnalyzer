@@ -27,9 +27,10 @@ TrafficAnalyzer/
 └── test_*.py                      # 根检测、契约与真实管道回归
 ```
 
-统一镜像把 Platform 与检测代码写入 `/app`，Compose 仅将 `weights/` 和 `test_videos/`
-只读挂载到同名目录。检测器由 Pipeline API/Mission 在 Platform 容器内按需启动，不随
-Platform 自动运行；NVIDIA GPU 暴露仍是外部部署门禁。
+生产统一镜像把 Platform 与检测代码写入 `/app`，Compose 仅将 `weights/` 和 `test_videos/`
+只读挂载到同名目录。Mac 开发态直接从工作树启动原生 Platform；两种模式下检测器都由
+Pipeline API/Mission 在 Platform 所在环境按需启动，不随 Platform 自动运行。NVIDIA GPU
+暴露仍是外部部署门禁。
 
 ## 2. 检测管道
 
@@ -122,7 +123,8 @@ console2/
 
 ## 5. 本机 canonical 拓扑
 
-根 `docker-compose.yaml` 是唯一完整拓扑：
+根 `docker-compose.yaml` 是生产发布的唯一完整拓扑；Apple Silicon 开发态由
+`scripts/mac_local_platform.sh` 原生启动 Platform：
 
 | Service | 端口 | 责任 |
 |---|---:|---|
@@ -132,8 +134,8 @@ console2/
 | `console2` | 8080 | React SPA |
 | `nginx` | 8009 | API/WS/MJPEG/HLS 统一入口 |
 | `kafka-ui` | profile `ops` | 可选运维 UI |
-| detector | Platform 子进程 | Pipeline API/Mission 按需启动；默认 CPU 可运行，GPU 门禁仍延期 |
-| `nvidia-mps` | profile `gpu-only` | 可选 MPS 控制进程；Platform GPU 暴露不在本次范围 |
+| detector | 本地子进程 | Mac 开发使用原生 arm64/MPS；生产容器使用 Linux CPU/CUDA |
+| `nvidia-mps` | profile `gpu-only` | 可选 NVIDIA CUDA Multi-Process Service；不是 Apple Metal/MPS |
 
 不得新增第二套完整 Compose、旧 PostgreSQL、旧/实验 TimescaleDB、InfluxDB/Telegraf/Grafana 运行服务或旧 Topic fallback。
 
@@ -146,6 +148,7 @@ console2/
 | `scripts/validate_adr019_local_retirement.py` | canonical 容器、road9、Topic、旧存储隔离与恢复/soak 证据 |
 | `test_pipeline_inter_xqh.py` | 真实 4K MP4 + DJI SRT 的 56 项管道回归 |
 | `scripts/run_native_mps_replays.py` | Apple Silicon 原生 MPS 多源检测、Kafka 直采、轨迹/TCC 诊断与断点续跑 |
+| `scripts/mac_local_platform.sh` | 以用户级 launchd 启停原生 macOS Platform，并强制检测子进程使用 MPS |
 | `docs/test_report_five_source_trajectory_tcc_full_flow_20260721.md` | 五源轨迹检测、Console 回放、TCC 三图证据全流程验收 |
 | `docs/UAT_FULL_REVIEW_2026-07-17.md` | 发布前全量审查、修复状态和延期门禁 |
 

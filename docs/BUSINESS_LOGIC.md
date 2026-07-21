@@ -224,6 +224,10 @@ Kafka 继续承担检测管道到平台之间的异步传输与削峰，但所�
    分别对应权威 `inter_id`、`link_id`、`lane_id`；不再为不同粒度另建同义指标表。
    系统指标与遥测分别写入 `uav_system_metrics`、`uav_telemetry_metrics`。三者均为
    TimescaleDB hypertable，以业务观测时间为时序主时间，接收时间单独保留用于计算链路延迟。
+   监控页读取历史态势时必须同时限定 `inter_id` 与当前 `source_profile_id`，使用类型化指标列
+   并按 `granularity` 降采样；转向图直接展示 `direction_flow` 中的直行、左转、右转计数，
+   不得用不存在的车型字段补零。监控近期事件同样要求当前 SourceProfile lineage，无法证明
+   来源的全局告警不能进入该视频源视图。
 5. 完成轨迹的摘要写入普通业务表 `uav_track_events`，轨迹采样点写入 hypertable
    `uav_track_points`；冲突时序事件写入 hypertable `uav_conflict_events`。
 6. 统一 AI 事件写入 `uav_ai_events`；可靠投递、每次尝试、主平台反馈和死信分别写入
@@ -371,6 +375,7 @@ PostgreSQL/TimescaleDB 读取。分区粒度、压缩、保留期、连续聚合
 **MJPEG 输出清晰度**：
 - `FlaskServerVideoNode` 默认输出 `[1280, 720]`，避免 4K 航拍画面被压缩到 800px 宽后目标和标签不可读。
 - JPEG 编码质量默认 `92`，标签框线和文字按 720p 输出加粗。
+- Pipeline 启动或外部进程登记时必须返回浏览器可达的 `video_stream_url`；实时监控屏和无人机回放屏共用该地址直连检测器，不经 Vite/Platform 转发视频字节。
 
 **轨迹可视化过滤**：
 - `ShowNode` 在绘制前会裁剪 bbox 到画面范围，并过滤 NaN/Inf、完全越界、面积过小的框，避免异常 Kalman 预测框被画到左上角。
@@ -437,6 +442,8 @@ near-miss 证据：
 `ttc_sec` 表示预测冲突时间；`pet_sec` 表示双方到达冲突点的时间差近似值；路径交叉点场景下同时输出 `motor_arrival_ttc_sec` / `non_motor_arrival_ttc_sec` 和 `arrival_time_delta_sec`。事件附加输出 `conflict_scene`、`conflict_angle_deg`、`evidence`、`risk_score`。`motor_id` / `non_motor_id` 轨迹对同级别事件不重复上报，但允许从 `warning` 升级为 `critical` 再次上报；直到任一轨迹从 `buffer_tracks` 清理后释放状态。
 
 冲突事件在 `KafkaProducerNode` 阶段、进入 `ShowNode` 之前调用 `utils_local/event_evidence.py`。该深模块只读取同一个 `FrameElement`，分别复制生成原始画面、带目标框/类别/轨迹 ID 的检测器输出画面，以及叠加同期 `buffer_tracks.trajectory_points`、高亮冲突 pair 的轨迹还原画面；它不修改共享内存原帧。三图以一个有序证据包可靠发布，Platform 必须完整校验三项后再登记内容地址和 SHA-256，检测图与轨迹图通过 `derived_from_id` 回指原图。旧事件若只存在 `conflict_keyframe` 仍可查询展示，但不会凭空补造缺失画面。
+
+Console2 的事件证据展示按业务语义标注三图：`conflict_original_frame` 为“原始画面”，`conflict_detector_frame` 为“检测器输出的 TCC 画面帧”，`conflict_trajectory_reconstruction` 为“轨迹投放 BEV 视图”。显示名称不改变底层 kind、派生关系、内容哈希或证据访问契约。
 
 节点每帧同时写入 `FrameElement.tcc_diagnostics`，记录检测开关、单应性有效性、motor/non_motor 输入数、双方合格轨迹数、候选配对、预测候选、证据通过、去重、正式路径交点事件和实验事件数量。诊断状态区分 `disabled`、`missing_calibration`、`no_eligible_candidates`、`no_prediction_candidates`、`no_evidence`、`deduplicated` 与 `events_emitted`。该漏斗随 `uav_stats.data.tcc_diagnostics` 发布，用于解释合法零检出；它只描述检测过程，不替代事件事实或召回率真值。
 

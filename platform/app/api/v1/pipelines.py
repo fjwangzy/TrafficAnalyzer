@@ -96,6 +96,8 @@ class PipelineResponse(BaseModel):
     roads_json: str
     topic_name: str
     camera_id: int
+    video_port: int
+    video_stream_url: str
     status: str
     started_at: float
     stopped_at: float
@@ -142,11 +144,7 @@ async def pipeline_summary(request: Request):
 
 @router.get("/proxy-map", summary="Camera ID → MJPEG port mapping")
 async def proxy_map(request: Request):
-    """Return a mapping of {camera_id: video_port} for running pipelines.
-
-    Used by the Vite dev proxy to route ``/camera_N`` requests to the
-    correct MJPEG server port (each pipeline binds to a unique port).
-    """
+    """Return the legacy diagnostic mapping of running camera IDs to ports."""
     pm = _get_pm(request)
     pipelines = pm.list_pipelines()
     return {
@@ -201,6 +199,7 @@ class PipelineRegisterRequest(BaseModel):
     camera_id: int | None = Field(default=None, ge=1, le=65535)
     video_port: int | None = Field(default=None, ge=1024, le=65535)
     topic_name: str | None = None
+    video_stream_url: str | None = None
 
 
 @router.post("/register", status_code=201, summary="Register an externally-running pipeline")
@@ -229,6 +228,7 @@ async def register_pipeline(body: PipelineRegisterRequest, request: Request):
             camera_id=body.camera_id,
             video_port=body.video_port,
             topic_name=body.topic_name,
+            video_stream_url=body.video_stream_url,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc

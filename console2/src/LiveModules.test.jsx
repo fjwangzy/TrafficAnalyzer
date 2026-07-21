@@ -88,7 +88,7 @@ function mockSuccessfulApis() {
     { id: 'UAV-2', name: '崇华路无人机', default_inter_id: 'INT-2', default_video_source_id: 'VID-2', default_road_data_version: 'ROAD-2', intersection_name: '新泺大街 × 崇华路' },
   ])
   liveMocks.api.intersection.mockResolvedValue({ id: 'INT-1', current_drone_id: 'UAV-1' })
-  liveMocks.api.intersectionStats.mockResolvedValue([{ time: '2026-07-14T10:00:00Z', congestion_index: 4.8, cars: 20 }])
+  liveMocks.api.intersectionStats.mockResolvedValue([{ time: '2026-07-14T10:00:00Z', congestion_index: 4.8, cars: 20, direction_flow: { straight: { count: 14 }, left_turn: { count: 4 }, right_turn: { count: 2 }, u_turn: { count: 0 } } }])
   liveMocks.api.alerts.mockResolvedValue([{ id: 'A-1', intersection_id: 'INT-1', alert_type: 'conflict', severity: 'P1', title: '机非冲突风险升高', description: '预测轨迹交汇', ttc_sec: 1.2, pet_sec: 0.8 }])
   liveMocks.api.conflicts.mockResolvedValue([
     { id: 'DB-C-1', message_id: 'C-1', source_profile_id: 'SRC-1', pipeline_id: 'P-old', prediction_type: 'path_intersection', distance_m: 0.0, motor_id: 96, non_motor_id: 88, severity: 'critical', title: '历史路径交点事件', occurred_at: '2026-07-14T09:59:58Z', ttc_sec: 1.1, pet_sec: 0.3 },
@@ -100,7 +100,7 @@ function mockSuccessfulApis() {
   ])
   liveMocks.api.acknowledgeAlert.mockResolvedValue({ id: 'A-1', status: 'acknowledged' })
   liveMocks.api.createMission.mockResolvedValue({ id: 'MSN-DEMO-1', status: 'running' })
-  liveMocks.api.pipelines.mockResolvedValue([{ pipeline_id: 'P-1', intersection_id: 'INT-1', source_profile_id: 'SRC-1', drone_id: 'UAV-1', camera_id: 11, status: 'running' }])
+  liveMocks.api.pipelines.mockResolvedValue([{ pipeline_id: 'P-1', intersection_id: 'INT-1', source_profile_id: 'SRC-1', drone_id: 'UAV-1', camera_id: 11, video_stream_url: 'http://127.0.0.1:8101/video', status: 'running' }])
   liveMocks.api.telemetry.mockResolvedValue({ drone_id: 'drone_11', height: 118.6, attitude_head: 36.2, attitude_pitch: -0.8, gimbal_roll: 0.4 })
   liveMocks.api.systemHealth.mockResolvedValue({ status: 'healthy', service: 'platform', kafka_connected: true, ws_connections: 2, pipelines_active: 1 })
   liveMocks.api.gpu.mockResolvedValue({ gpu_util_pct: 42, gpu_vram_used_mb: 2048 })
@@ -131,28 +131,66 @@ describe('Console2 live module migration', () => {
   it('drives monitoring from REST and realtime data and preserves detector/BEV switching', async () => {
     open('/monitoring')
 
-    await waitFor(() => expect(window.location.search).toContain('intersection_id=INT-1'))
-    expect(await screen.findByAltText('检测器输出视频流')).toHaveAttribute('src', expect.stringContaining('/camera_11'))
+    await waitFor(
+      () => expect(window.location.search).toContain('intersection_id=INT-1'),
+      { timeout: 10_000 },
+    )
+    expect(await screen.findByAltText('检测器输出视频流', {}, { timeout: 10_000 })).toHaveAttribute('src', expect.stringMatching(/^http:\/\/127\.0\.0\.1:8101\/video\?retry=/))
     expect(liveMocks.wsChannels).toContain('uav_telemetry:UAV-1')
     expect(liveMocks.wsChannels).toContain('uav_telemetry:drone_11')
     expect((await screen.findAllByText('20')).length).toBeGreaterThan(0)
     expect(screen.getByLabelText('飞行姿态数据')).toHaveTextContent('118.6')
 
-    act(() => liveMocks.wsCallback({ type: 'uav_stats', data: { congestion_index: 6.3, cars: 842, avg_speed_kmh: 27.4, fps: 29.7, inference_ms: 33, lane_stats: [{ queue_length_m: 186 }] } }))
+    act(() => liveMocks.wsCallback({
+      type: 'uav_stats',
+      data: {
+        congestion_index: 6.3,
+        cars: 842,
+        avg_speed_kmh: 27.4,
+        fps: 29.7,
+        inference_ms: 33,
+        lane_stats: [{ queue_length_m: 186 }],
+        active_trajectories: [{ track_id: 101 }, { track_id: 102 }],
+      },
+    }))
     act(() => liveMocks.wsCallback({ type: 'uav_telemetry', data: { drone_id: 'drone_11', height: 112.4, attitude_head: 37.8, attitude_pitch: -1.2, gimbal_roll: 0.6, gimbal_mode: '锁定' } }))
 
     expect(screen.getByLabelText('飞行姿态数据')).toHaveTextContent('112.4')
     expect(screen.getByLabelText('飞行姿态数据')).toHaveTextContent('37.8')
     expect(screen.getByText('842')).toBeInTheDocument()
     expect(screen.getByText('186')).toBeInTheDocument()
+    const trajectoryCard = screen.getByText('实时轨迹数量').closest('.congestion-card')
+    expect(trajectoryCard).toHaveTextContent('2')
+    expect(screen.queryByText('拥堵指数')).not.toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: /切为主视图/ }))
     expect(window.location.search).toContain('view=bev')
     expect(await screen.findByRole('img', { name: 'BEV 地图轨迹主视图' })).toBeInTheDocument()
     expect(screen.queryByAltText('BEV 鸟瞰轨迹投放图')).not.toBeInTheDocument()
 
-    fireEvent.click(screen.getByRole('button', { name: /机非冲突风险升高/ }))
+    expect(screen.getByText('转向流量')).toBeInTheDocument()
+    expect(screen.getByText('直行')).toBeInTheDocument()
+    expect(liveMocks.api.alerts).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByRole('button', { name: /历史路径交点事件/ }))
     expect(screen.queryByText('AI 事件研判')).not.toBeInTheDocument()
+  })
+
+  it('rejects realtime alerts without current SourceProfile lineage', async () => {
+    open('/monitoring?intersection_id=INT-1&source_profile_id=SRC-1')
+    expect(await screen.findByText('历史路径交点事件')).toBeInTheDocument()
+
+    act(() => liveMocks.wsCallback({
+      type: 'uav_alert_new',
+      data: { id: 'UNSCOPED-1', intersection_id: 'INT-1', title: '无来源固定告警', severity: 'P1' },
+    }))
+    expect(screen.queryByText('无来源固定告警')).not.toBeInTheDocument()
+
+    act(() => liveMocks.wsCallback({
+      type: 'uav_alert_new',
+      data: { id: 'SCOPED-1', intersection_id: 'INT-1', source_profile_id: 'SRC-1', title: '当前源实时告警', severity: 'P1' },
+    }))
+    expect(screen.getByText('当前源实时告警')).toBeInTheDocument()
   })
 
   it('backfills source-scoped path conflicts and deduplicates their realtime replay', async () => {
@@ -189,6 +227,7 @@ describe('Console2 live module migration', () => {
       min_world_points: 2,
     })
     expect(screen.getByText('BEV 历史轨迹回放 · 2 TRACKS')).toBeInTheDocument()
+    expect(screen.queryByText(/数据质量 ·/)).not.toBeInTheDocument()
   })
 
   it('shows explanatory TCC and WebSocket downgrade states', async () => {
@@ -223,6 +262,26 @@ describe('Console2 live module migration', () => {
       expect(params.get('intersection_id')).toBe('INT-2')
     })
     expect(screen.getByText(/新泺大街 × 崇华路 · SRC-2 · 监测离线/)).toBeInTheDocument()
+  })
+
+  it('follows the running source when the monitoring URL points to a stopped source at the same intersection', async () => {
+    liveMocks.api.sources.mockResolvedValue([
+      { profile_id: 'SRC-STOPPED', display_name: '崇华路晚高峰', drone_id: 'UAV-1', enabled: true, video: { id: 'VID-1', source_type: 'mp4', location_hint: 'ch-pm.mp4' } },
+      { profile_id: 'SRC-RUNNING', display_name: '崇华路早高峰', drone_id: 'UAV-1', enabled: true, video: { id: 'VID-3', source_type: 'mp4', location_hint: 'ch-am.mp4' } },
+    ])
+    liveMocks.api.pipelines.mockResolvedValue([
+      { pipeline_id: 'P-RUNNING', intersection_id: 'INT-1', source_profile_id: 'SRC-RUNNING', drone_id: 'UAV-1', camera_id: 13, video_stream_url: 'http://127.0.0.1:8103/video', status: 'running' },
+    ])
+
+    open('/monitoring?intersection_id=INT-1&source_profile_id=SRC-STOPPED')
+
+    await waitFor(
+      () => expect(new URLSearchParams(window.location.search).get('source_profile_id')).toBe('SRC-RUNNING'),
+      { timeout: 10_000 },
+    )
+    expect(screen.getByRole('combobox', { name: '选择无人机视频源' })).toHaveDisplayValue('崇华路早高峰 · 小清河无人机')
+    expect(await screen.findByAltText('检测器输出视频流')).toHaveAttribute('src', expect.stringMatching(/^http:\/\/127\.0\.0\.1:8103\/video\?retry=/))
+    expect(liveMocks.api.intersectionStats).toHaveBeenCalledWith('INT-1', '30m', '5m', 'SRC-RUNNING')
   })
 
   it('starts the selected source from the offline canvas and keeps target counts in the metric panel', async () => {
@@ -266,14 +325,32 @@ describe('Console2 live module migration', () => {
     expect(screen.queryByText('30')).not.toBeInTheDocument()
   })
 
+  it('auto-collapses the monitoring timeline and expands it while hovered', async () => {
+    open('/monitoring?intersection_id=INT-1&source_profile_id=SRC-1')
+    await screen.findByAltText('检测器输出视频流', {}, { timeout: 10_000 })
+
+    const timeline = screen.getByRole('region', { name: '实时数据时间轴' })
+    expect(timeline).toHaveAttribute('data-state', 'collapsed')
+
+    fireEvent.mouseEnter(timeline)
+    expect(timeline).toHaveAttribute('data-state', 'expanded')
+
+    fireEvent.mouseLeave(timeline)
+    expect(timeline).toHaveAttribute('data-state', 'collapsed')
+  })
+
   it('opens monitoring side panels by default and keeps manual collapse and pin controls', async () => {
     open('/monitoring?intersection_id=INT-1&view=detector')
-    await screen.findByAltText('检测器输出视频流')
+    await screen.findByAltText('检测器输出视频流', {}, { timeout: 10_000 })
 
     const leftPanel = screen.getByLabelText('实时态势面板')
     const rightPanel = screen.getByLabelText('BEV 与实时事件面板')
     expect(leftPanel).toHaveAttribute('data-state', 'expanded')
     expect(rightPanel).toHaveAttribute('data-state', 'expanded')
+    expect(leftPanel).toHaveClass('pinned')
+    expect(rightPanel).toHaveClass('pinned')
+    expect(screen.getAllByRole('button', { name: '取消锁定实时态势面板' })).toHaveLength(1)
+    expect(screen.getAllByRole('button', { name: '取消锁定BEV与实时事件面板' })).toHaveLength(1)
     expect(leftPanel).toHaveAttribute('data-transparency', '40')
     expect(rightPanel).toHaveAttribute('data-transparency', '40')
     expect(document.querySelector('.main-feed-status')).not.toHaveClass('side-collapsed')
@@ -325,6 +402,20 @@ describe('Console2 live module migration', () => {
 
     act(() => vi.advanceTimersByTime(3_000))
     expect(screen.getByAltText('检测器输出视频流')).toHaveAttribute('src', expect.stringContaining('retry='))
+    vi.useRealTimers()
+  })
+
+  it('restarts an MJPEG connection that never produces its first frame', async () => {
+    open('/monitoring?intersection_id=INT-1')
+    const video = await screen.findByAltText('检测器输出视频流')
+    vi.useFakeTimers()
+
+    fireEvent.error(video)
+    act(() => vi.advanceTimersByTime(3_000))
+    expect(screen.getByAltText('检测器输出视频流')).toBeInTheDocument()
+
+    act(() => vi.advanceTimersByTime(8_000))
+    expect(screen.getByText('视频流重连中 · 2/5')).toBeInTheDocument()
     vi.useRealTimers()
   })
 

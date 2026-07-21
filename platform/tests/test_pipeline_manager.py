@@ -56,7 +56,7 @@ class PipelineManagerTest(unittest.IsolatedAsyncioTestCase):
         )
 
         with patch(
-            "app.services.pipeline_manager.asyncio.create_subprocess_exec",
+            "app.services.pipeline_executor.asyncio.create_subprocess_exec",
             side_effect=fake_exec,
         ):
             pipeline = await manager.start_pipeline(
@@ -80,7 +80,7 @@ class PipelineManagerTest(unittest.IsolatedAsyncioTestCase):
         self._monitor_task = manager._monitor_task
 
         self.assertEqual(pipeline.status, PipelineStatus.RUNNING)
-        self.assertEqual(captured["cwd"], str(project_root))
+        self.assertEqual(captured["cwd"], str(project_root.resolve()))
         self.assertTrue(captured["start_new_session"])
         self.assertEqual(
             captured["cmd"],
@@ -111,9 +111,12 @@ class PipelineManagerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(captured["env"]["ROAD_CONTEXT_STATUS"], "complete")
         self.assertEqual(captured["env"]["QUALITY_STATUS"], "verified")
         self.assertEqual(captured["env"]["VIDEO_PORT"], "8101")
+        self.assertEqual(
+            pipeline.to_dict()["video_stream_url"],
+            "http://127.0.0.1:8101/video",
+        )
         self.assertEqual(captured["env"]["FRAME_STRIDE"], "12")
         self.assertEqual(captured["env"]["KAFKA_BOOTSTRAP"], "kafka:29092")
-
     def test_rtsp_and_roads_sources_use_explicit_allowlists(self):
         temp_dir = tempfile.TemporaryDirectory()
         self.addCleanup(temp_dir.cleanup)
@@ -156,6 +159,36 @@ class PipelineManagerTest(unittest.IsolatedAsyncioTestCase):
                 intersection_id="INT-1",
                 video_src="test_videos/demo.mp4",
                 roads_json="configs/lanes.json",
+            )
+
+    def test_external_pipeline_preserves_explicit_browser_stream_address(self):
+        temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_dir.cleanup)
+        project_root = Path(temp_dir.name)
+        video_path = project_root / "test_videos/demo.mp4"
+        video_path.parent.mkdir(parents=True)
+        video_path.write_bytes(b"test")
+        manager = PipelineManager(project_root=project_root)
+
+        pipeline = manager.register_pipeline(
+            drone_id="drone_1",
+            intersection_id="INT-1",
+            video_src="test_videos/demo.mp4",
+            camera_id=5701,
+            video_port=15701,
+            video_stream_url="http://detector.demo.local:15701/video",
+        )
+
+        self.assertEqual(
+            pipeline.to_dict()["video_stream_url"],
+            "http://detector.demo.local:15701/video",
+        )
+        with self.assertRaisesRegex(ValueError, "query"):
+            manager.register_pipeline(
+                drone_id="drone_2",
+                intersection_id="INT-2",
+                video_src="test_videos/demo.mp4",
+                video_stream_url="http://127.0.0.1:15702/video?token=secret",
             )
 
     def test_pipeline_output_never_exposes_rtsp_credentials_or_query_secret(self):
@@ -273,6 +306,8 @@ class PlatformDeploymentConfigTest(unittest.TestCase):
         self.assertFalse((root / "platform" / "Dockerfile").exists())
         self.assertFalse((root / "platform" / "scripts" / "run_local.py").exists())
         self.assertIn('PIPELINE_PROJECT_ROOT: /app', compose)
+        self.assertNotIn('PLATFORM_CONTAINER_PLATFORM', compose)
+        self.assertNotIn('PIPELINE_REMOTE_', compose)
         self.assertIn('./weights:/app/weights:ro', compose)
         self.assertIn('./test_videos:/app/test_videos:ro', compose)
         self.assertNotIn('.:/project:ro', compose)

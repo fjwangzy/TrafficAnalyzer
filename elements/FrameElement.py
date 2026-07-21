@@ -16,6 +16,7 @@ class FrameElement:
         detected_xyxy: list[list] | None = None,
         tracked_conf: list | None = None,
         tracked_cls: list | None = None,
+        tracked_cls_ids: list[int] | None = None,
         tracked_xyxy: list[list] | None = None,
         id_list: list | None = None,
         buffer_tracks: dict | None = None,
@@ -34,8 +35,10 @@ class FrameElement:
         # 跟踪算法修正结果：
         self.tracked_conf = tracked_conf  # 检测到的对象的置信度列表
         self.tracked_cls = tracked_cls  # 检测到的对象的类列表
+        self.tracked_cls_ids = tracked_cls_ids  # YOLO 原始类别 ID 列表
         self.tracked_xyxy = tracked_xyxy  # 带xyxy框坐标的列表
         self.id_list = id_list  # 检测到的可跟踪对象ID列表
+        self.yolo_model_id: str | None = None  # 权重文件名 + 内容摘要
         # 帧的后处理：
         self.buffer_tracks = buffer_tracks  # 选定分析时间段内的活动跟踪缓冲区
         self.info = {}  # 结果统计字典（道路拥堵程度+车辆数量）
@@ -76,4 +79,4 @@ class FrameElement:
         # ── 新增：SharedMemory 优化 ──
         self.shm_name: str | None = None
         self.shm_shape: tuple | None = None
-        self.shm_dtype: str | None = None
+        self.shm_dtype: str | None = None

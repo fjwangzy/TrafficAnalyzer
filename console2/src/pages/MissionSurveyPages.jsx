@@ -8,6 +8,7 @@ import { surveyTasks } from '../data/mockData'
 import { useAppState } from '../state/AppState'
 import { useAuth } from '../auth/AuthContext'
 import { apiErrorMessage, platformApi } from '../lib/api'
+import { detectorVideoStreamSrc } from '../lib/videoStream'
 
 const missionTabs = [
   { value: 'fleet', label: '无人机' }, { value: 'sources', label: '数据源' }, { value: 'plans', label: '飞行计划' }, { value: 'missions', label: '执行记录' },
@@ -180,12 +181,22 @@ function ReplayCameraControls({ drones, sources, missions, isAdmin, pending, onA
         const sourceProfileId = selection[drone.id] || defaultSource?.profile_id || ''
         const mission = missions.find((item) => item.drone_id === drone.id && ['pending', 'starting', 'running'].includes(item.status))
         const cameraId = mission?.pipeline?.camera_id
-        const ready = mission?.status === 'running' && mission?.pipeline?.observed_status === 'running' && cameraId != null
+        const videoStreamUrl = detectorVideoStreamSrc(mission?.pipeline)
+        const ready = mission?.status === 'running' && mission?.pipeline?.observed_status === 'running' && cameraId != null && Boolean(videoStreamUrl)
         return <article className='replay-camera-card' key={drone.id}>
           <header><div><Camera size={17} /><span><strong>{drone.intersection_name || drone.name}</strong><small>{drone.default_inter_id}</small></span></div><StatusBadge value={mission?.status || 'standby'} /></header>
-          <div className='replay-camera-feed'>{ready ? <img src={`/camera_${cameraId}`} alt={`${drone.intersection_name || drone.name} 实时检测画面`} /> : <div><Camera size={27} /><strong>{mission ? 'Pipeline 启动中' : '摄像头待命'}</strong><span>{mission ? '正在等待首个 MJPEG 检测帧' : '选择回放源后启动检测'}</span></div>}</div>
-          <label>回放源<select aria-label={`${drone.intersection_name || drone.name}回放源`} value={sourceProfileId} disabled={Boolean(mission)} onChange={(event) => setSelection((current) => ({ ...current, [drone.id]: event.target.value }))}>{options.map((source) => <option key={source.profile_id} value={source.profile_id}>{source.display_name || source.profile_id}</option>)}</select></label>
-          <footer><span>{drone.road_context_quality === 'unverified' ? '道路未标定 · 仅检测/跟踪/遥测' : drone.default_road_data_version}</span>{mission ? <button className='danger-button' disabled={!isAdmin || pending} onClick={() => onAction({ kind: 'stop', drone, mission })}><Pause size={14} />停止</button> : <button className='primary-button' disabled={!isAdmin || pending || !sourceProfileId || !drone.default_road_data_version} onClick={() => onAction({ kind: 'start', drone, sourceProfileId })}><Play size={14} />启动检测</button>}</footer>
+          <div className='replay-camera-feed'>
+            {ready
+              ? <img src={videoStreamUrl} alt={`${drone.intersection_name || drone.name} 实时检测画面`} />
+              : <div className='replay-camera-empty'><Camera size={27} /><strong>{mission ? 'Pipeline 启动中' : '摄像头待命'}</strong><span>{mission ? (mission.status === 'running' ? '正在等待检测器登记直连视频地址' : '正在等待首个 MJPEG 检测帧') : '选择回放源后启动检测'}</span></div>}
+            <div className='replay-camera-overlay'>
+              <label><span>回放源</span><select aria-label={`${drone.intersection_name || drone.name}回放源`} value={sourceProfileId} disabled={Boolean(mission)} onChange={(event) => setSelection((current) => ({ ...current, [drone.id]: event.target.value }))}>{options.map((source) => <option key={source.profile_id} value={source.profile_id}>{source.display_name || source.profile_id}</option>)}</select></label>
+              <span className='replay-camera-quality'>{drone.road_context_quality === 'unverified' ? '道路未标定 · 仅检测/跟踪/遥测' : drone.default_road_data_version}</span>
+              {mission
+                ? <button className='danger-button replay-camera-action' disabled={!isAdmin || pending} onClick={() => onAction({ kind: 'stop', drone, mission })}><Pause size={14} />停止</button>
+                : <button className='primary-button replay-camera-action' disabled={!isAdmin || pending || !sourceProfileId || !drone.default_road_data_version} onClick={() => onAction({ kind: 'start', drone, sourceProfileId })}><Play size={14} />启动检测</button>}
+            </div>
+          </div>
         </article>
       })}
     </div>

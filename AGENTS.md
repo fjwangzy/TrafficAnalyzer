@@ -24,9 +24,16 @@
 
 每次完成任务必须同步更新相关文档。若仓库存在 `.codegraph/`，理解或定位代码时先使用 CodeGraph。
 
-## 正式本机拓扑
+## 本机开发与生产发布拓扑
 
-根 `docker-compose.yaml` 是唯一完整拓扑：
+Apple Silicon 开发态的 Platform 必须使用原生 macOS arm64 Python 启动，检测器作为其
+本地子进程直接使用 Metal/MPS；不得在 Docker Desktop Linux 容器内运行开发态 Platform。
+
+- `scripts/mac_local_platform.sh up`：启动原生 Platform（端口 `8000`）并强制 MPS；
+- `cd console2 && npm run dev`：开发态 Console；
+- `road9` 与 Kafka 使用各自可访问的本机/开发基础设施端口 `5432`、`9092`。
+
+根 `docker-compose.yaml` 仅用于生产发布拓扑：
 
 - `road9`：TimescaleDB，正式端口 `5432`，稳定卷 `traffic_road9_data`；
 - `kafka`：Apache Kafka KRaft，正式端口 `9092`；
@@ -34,15 +41,23 @@
 - `console2`：React SPA，正式端口 `8080`；
 - `nginx`：API/WebSocket/MJPEG/HLS 入口，正式端口 `8009`；
 - `kafka-ui`：可选 `ops` profile；
-- NVIDIA MPS 与检测器：可选 `gpu-only` profile。
+- NVIDIA CUDA MPS 与检测器：可选 `gpu-only` profile，与 Apple Metal/MPS 无关。
 
 ```bash
+scripts/mac_local_platform.sh up
+cd console2 && npm run dev
+
+# 仅生产发布
 docker compose -p traffic_analyzer up -d --build
 docker compose -p traffic_analyzer --profile ops up -d kafka-ui
 docker compose -p traffic_analyzer --profile gpu-only up -d --build
 ```
 
-禁止重新加入旧 PostgreSQL、旧/实验 TimescaleDB、旧 Topic fallback 或退役观测服务。隔离验证必须复用根 Compose，使用独立 project、临时端口和独立卷名。
+生产 Compose 固定 `DEPLOYMENT_MODE=production`，未提供 `ROAD9_PASSWORD`、`JWT_SECRET_KEY`、
+`BOOTSTRAP_ADMIN_PASSWORD` 和 JSON `CORS_ORIGINS` 时必须拒绝解析/启动，不得用本地默认密码发布。
+
+禁止重新加入旧 PostgreSQL、旧/实验 TimescaleDB、旧 Topic fallback 或退役观测服务。生产
+隔离验证必须复用根 Compose，使用独立 project、临时端口和独立卷名。
 
 ## 快速验证
 

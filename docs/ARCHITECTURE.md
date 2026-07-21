@@ -227,6 +227,10 @@ Platform Consumer（校验、幂等、路网 ID 关联、持久化）
 - `uav_traffic_metrics` 统一通过 `grain_type`、`grain_key` 表达指标粒度：
   `grain_type` 取 `intersection`、`link`、`lane`，`grain_key` 分别保存对应的权威
   `inter_id`、`link_id`、`lane_id`。
+- 历史态势读模型使用 `uav_traffic_metrics` 已类型化列做轻量投影，并按请求
+  `granularity` 在应用层每桶保留最后一个观测；审计 `payload` 不进入批量查询，只允许为
+  最后一个返回点补读 TCC 诊断。这样趋势轮询不会把活动轨迹、标注快照等大对象反序列化进
+  Platform 进程。
 - `uav_message_inbox` 是长期 canonical 消费幂等表，不是迁移期临时表。Consumer 必须在
   同一 PostgreSQL 事务内先登记 `(source_system, message_id)` 唯一记录、校验 payload hash，
   再写事实数据并回填 fact references/status；同时保留 Topic、partition、offset。其保留期
@@ -294,17 +298,22 @@ Platform Consumer（校验、幂等、路网 ID 关联、持久化）
 `main_optimized.py`、检测节点、配置和遥测实现一并写入 `/app`。镜像构建安装
 `platform/pipeline-requirements.txt`，并通过 `platform/pipeline-constraints.txt` 锁定
 `numpy<2`、`torch==2.2.2` 和 `torchvision==0.17.2`。权重与视频不进入镜像，Compose
-只读挂载到 `/app/weights` 和 `/app/test_videos`；`PIPELINE_PROJECT_ROOT=/app`。
+只读挂载到 `/app/weights` 和 `/app/test_videos`；`PIPELINE_PROJECT_ROOT=/app`。镜像和根
+Compose 只用于生产发布，不是 Mac 开发启动入口。
+生产 Compose 固定 `DEPLOYMENT_MODE=production`，并要求显式提供数据库密码、JWT secret、
+管理员初始密码与 CORS allowlist；开发默认凭据不能进入容器发布态。
 
 Platform 启动只初始化 PipelineManager，不自动创建检测任务。Pipeline API 或 Mission 调度
-通过该 seam 在同一容器内按需创建 `main_optimized.py` 进程组，Platform 退出时统一回收。
-启动命令追加 `hydra/job_logging=disabled`；检测器 stdout/stderr 由 PipelineManager 持续
-drain 并保留尾部用于异常诊断。multiprocessing 子进程若发现 `FileHandler` 目标不可写，
-会移除 file handler 并降级到 console，避免 reader/tracker/show worker 因日志配置退出。
+只依赖 `start / inspect / stop` 执行 seam；`LocalPipelineExecutor` 在 Platform 所在操作系统
+创建 `main_optimized.py` 进程组。Apple Silicon 开发态 Platform 与检测器都运行于原生
+macOS arm64；生产发布态二者都运行于 Linux 容器，不跨主机委派。启动命令追加
+`hydra/job_logging=disabled`；检测器 stdout/stderr 持续 drain 并保留尾部用于异常诊断。multiprocessing
+子进程若发现 `FileHandler` 目标不可写，会移除 file handler 并降级到 console。
 
 旧的独立检测器构建定义保存在 `Dockerfile.detector`，仅作为可构建备份，不属于 canonical
-Compose。统一镜像默认保持 CPU 可启动；NVIDIA GPU、MPS/CUDA 暴露和生产镜像 pin 仍是
-外部门禁。
+Compose。Docker Desktop 普通 Linux 容器不具备 macOS Metal/MPS 后端，不能通过
+`platform: linux/arm64` 或 `device=mps` 获得 Apple GPU。生产通过构建系统选择目标架构和
+CPU/CUDA 设备；NVIDIA GPU/CUDA 和生产镜像 pin 仍是外部门禁。
 
 ### Apple Silicon 原生 MPS 回放
 
@@ -314,12 +323,21 @@ Mac 开发机不得用 x86_64/Rosetta Python 承担 YOLO 推理。仓库通过
 `platform.machine() == arm64`、`torch.backends.mps.is_built()` 和
 `torch.backends.mps.is_available()`。环境检查未通过时，不允许静默降级到 CPU。
 
+交互式开发使用 `scripts/mac_local_platform.sh up`。脚本先 fail closed 验证 Darwin、arm64、
+`mps.is_built()` 与 `mps.is_available()`，然后以用户级 `launchd` 运行 `run_platform.py`，注入
+原生 `.venv-mps`、`PIPELINE_DEVICE=mps`、默认 `PIPELINE_IMGSZ=960`、
+`PYTORCH_ENABLE_MPS_FALLBACK=1`、持久证据目录 `.runtime/survey` 以及本机 road9/Kafka 地址。
+本机证据目录不得回退到 `/tmp`；`uav_evidence_items.storage_key` 与内容寻址对象必须成对保留，
+切换运行拓扑时先以非破坏方式导入既有证据卷，不能只复用 road9 元数据。Platform 创建的检测器是同一
+macOS 环境中的进程组，因此 REST、Mission、MJPEG 与进程生命周期都保持本地回环，不需要
+agent、token、路径翻译或 `host.docker.internal`。`status|logs|stop|restart` 由同一脚本管理。
+
 `scripts/run_native_mps_replays.py` 是本机批量验收入口：检测器在宿主机 MPS 上串行运行，
-通过 `localhost:9092` 向根 Compose Kafka 发送 canonical 消息，并通过
+通过 `localhost:9092` 向开发 Kafka 发送 canonical 消息，并通过
 `POST /api/v1/pipelines/register` 把外部进程登记到 Platform。运行器直接消费每次运行的
 `uav_statistics_*`、`uav_track_complete_*`、`uav_conflicts_*`，按 `pipeline_id`
 隔离并在 `output/native-mps/<run>/` 保存完整轨迹、TCC 事件、性能样本和汇总。
-Platform 继续独立消费同一 Topic 并写入 `road9`。
+原生 Platform 继续独立消费同一 Topic 并写入 `road9`。
 批处理显式关闭悬停车道标注快照，避免每秒把重复 JPEG 编入态势消息；真实 TCC 事件的
 证据快照仍保留。交互式 Mission 默认继续开启悬停快照，车道标注流程不变。
 批量入口默认 `frame_stride=10`（约 3Hz 视频时间采样），与既有连续轨迹验收口径一致；
@@ -341,22 +359,35 @@ Console2 Monitoring 在存在运行中 Pipeline 时只投放当前会话 active/
 当前 SourceProfile 查询 24 小时内最多 500 条 `spatial_ready` 历史轨迹并标记为“BEV 历史轨迹回放”。
 页面上限用于保护 OpenLayers 渲染，不替代 Road9 总量对账。
 
-### Platform/Vite MJPEG 代理
+### 检测器 MJPEG 地址登记与浏览器直连
 
-Platform 通过 PipelineManager 启动检测器子进程时，每条管道分配独立 `VIDEO_PORT`。
-检测器 Flask MJPEG 服务绑定在 Platform 容器内部 `127.0.0.1:{video_port}`；
-宿主机 Vite dev server 不能直接访问该容器本地端口。实时页面的
-`/camera_N` 因此走两跳代理：
+Platform 通过 PipelineManager 启动检测器子进程时，每条管道分配独立 `VIDEO_PORT`，并按
+`PIPELINE_VIDEO_BASE` 生成浏览器可访问的 `video_stream_url`。本机默认模板为
+`http://127.0.0.1:{video_port}/video`；由 Platform 外部启动的检测进程必须在
+`POST /api/v1/pipelines/register` 时显式登记同一地址。Pipeline 列表、详情和 Mission 聚合响应
+都返回该字段。
+
+Console2 的实时监控屏和无人机回放屏直接把登记地址用作 `<img src>`，视频字节不再经过
+Vite 或 Platform：
 
 ```
-Browser <img src="/camera_10">
-  → Vite /camera_10
-  → Platform /api/v1/video/camera/10
-  → Platform container localhost:8101/video
+Browser <img src="http://127.0.0.1:8101/video">
+  → detector Flask MJPEG :8101/video
 ```
 
-`/api/v1/video/camera/{camera_id}` 是公开只读 MJPEG 端点，未运行对应管道时返回
-`camera_not_running`。这保证前端 `<img>` 不需要 Bearer token 也能显示检测画面。
+`/api` 和 `/ws` 仍由 Vite 转发到 Platform；Vite 不再配置 `/camera_*` 视频代理。
+`/api/v1/video/camera/{camera_id}` 暂保留为兼容诊断端点，不属于 Console2 运行时数据路径。
+
+Console2 监测页除处理明确的 `<img onError>` 外，还对 MJPEG 首帧设置 8 秒看门狗。
+Pipeline 已运行但连接迟迟没有产生可解码首帧时，页面按既有 3 秒间隔重建流连接，最多
+重试 5 次；已有 1280×720 等有效自然尺寸的画面不会被看门狗打断。飞行任务页和监测页
+共享 `video_stream_url` 登记合同。UAT/生产必须把 `PIPELINE_VIDEO_BASE` 配置为浏览器可达的
+HTTPS 地址模板，并在发布门禁中验证端口暴露、TLS 和网络访问策略；不得把本机回环默认值
+直接用于远端浏览器。
+
+监测页以运行中 Pipeline 的 SourceProfile 归属为展示真源：当 URL 指向同一路口已停止的
+视频源、但该路口存在运行中的其他视频源时，Console2 会同步替换 URL 与查询范围后再展示
+该 Pipeline 的 MJPEG，避免将一个视频源的画面与另一个视频源的统计、轨迹或事件混用。
 
 ### Console2 BEV 地图投放
 
@@ -364,6 +395,10 @@ Console2 实时监测的 BEV 主视图和右侧预览复用 Console 1.0 的 Open
 不再把静态夜景图片冒充地图。`trajectory_world_m` 按轨迹自身
 `world_anchor_lat_lon` 转换到经纬度；缺少轨迹锚点时仅回退到路口中心点，并在地图上
 叠加实时/完成轨迹和当前位置。没有轨迹时仍显示路口地图与 ENU 原点，不生成模拟轨迹。
+左侧实时态势主卡展示最近一条有效 `uav_stats.active_trajectories` 的数量；统计超过新鲜度
+窗口时显示无实时数据，不再把拥堵指数作为该主卡的展示指标。
+底部实时数据时间轴默认收缩为 12px 感应条，鼠标悬停或键盘聚焦时展开，移出或失焦后
+自动收回；暂停与恢复实时数据的行为不受收缩状态影响。
 
 道路标注参数与 BEV 地图底图是两个独立边界：`ROADS_JSON=""` 只表示检测管道没有人工
 道路 ROI，不能关闭地图底图或把像素轨迹伪装为世界坐标。只有
@@ -373,15 +408,15 @@ Console2 实时监测的 BEV 主视图和右侧预览复用 Console 1.0 的 Open
 Kafka 悬停消息自动生成车道任务默认关闭（`LANE_ANNOTATION_AUTO_TASKS_ENABLED=false`），
 避免失效后被持续运行的视频源立即重建；管理员仍可从持久化测绘关键帧显式建立审计任务。
 
-### Nginx 视频流聚合
+### Nginx 视频流兼容入口
 
 ```
 http://localhost:8009/camera_{n}
   → proxy_pass http://traffic_analyzer_camera_{n}:8100/video
 ```
 
-生产多 camera 容器模式使用正则 `~ ^/camera_(\d+)$` 动态路由到对应摄像头容器的
-Flask MJPEG 端点。
+该路由只为旧客户端兼容保留；Console2 不再引用 `/camera_{n}`。生产直连地址应通过
+`PIPELINE_VIDEO_BASE` 登记为浏览器可达的受控入口。
 
 ### WebSocket 频道模型
 
@@ -454,7 +489,7 @@ PipelineManager → main_optimized.py → Kafka uav_* → road9/TimescaleDB + We
 - SourceProfile 是 API 聚合，物理数据由 `uav_video_sources` 与 `uav_telemetry_sources` 承载；配对关系只能有一套状态真源。
 - DJI Cloud JSON 回放源在 `uav_telemetry_sources.config` 保存 `time_offset_sec/sync_tolerance_sec`，PipelineManager 将其作为 Hydra override 传给 `TelemetryFileReader`；原始空洞返回无有效遥测，不做插值伪造。
 - 根 `docker-compose.yaml` 为 Platform 启用 Docker init 进程，用于回收 EOF、人工停止或异常退出后的多进程检测 worker，避免反复切换摄像头积累僵尸进程。
-- Console2 `/drones` 从持久化 Drone/Source/Mission 聚合生成路口控制卡，通过手动 Mission 独立启停，并使用 `/api/v1/video/camera/{camera_id}` 代理检测子进程的真实 MJPEG。
+- Console2 `/drones` 从持久化 Drone/Source/Mission 聚合生成路口控制卡，通过手动 Mission 独立启停，并与 `/monitoring` 共用 Pipeline 启动时登记的 `video_stream_url` 直连检测器 MJPEG。
 - 本地路径经 realpath 规范化并限制在批准的 allowlist 根目录；RTSP/MQTT 凭据只保存 secret reference，API、日志和审计不得回显明文。
 - 平台启动时从数据库恢复当前窗口和 Pipeline 期望状态；进程句柄无法恢复，只能核对现存进程或幂等拉起。
 - 计划触发的是 AI 检测 Pipeline，不调用无人机航点、起降、返航或其他飞控接口。
@@ -475,7 +510,7 @@ Console2 /
 ```
 
 - DashboardReadModel 只在查询时聚合现有事实，不创建 Dashboard 业务表。后续缓存、物化视图或连续聚合必须以 `uav_` 命名、可重建且不得复制事件/任务状态机。
-- S8 口径未批准时 KPI 值为 null，同时返回事实分子/分母和阻断原因；前端显示“待冻结”，不把缺失解释为 0。
+- S8 口径未批准时 KPI 值为 null，同时返回事实分子/分母和阻断原因；主任首屏不展示无值或未验证的 KPI 卡片，也不把缺失解释为 0。阻断详情只保留在 API 和口径治理材料中。
 - 当前 OSM 开发底图接受 verified WGS84 RoadContext，以及由六组本机验收素材遥测中位点登记的 `status=test + usage=local_acceptance_only` WGS84 坐标。后者只用于本机验收，以无人机图标展示并单独计数；RoadContext 继续保持 unverified，不能冒充权威道路坐标。GCJ02、无可追溯测试来源或缺坐标记录仍只进入隔离计数/配置待办。
 - 正式首页顶部范围、窗口和 as_of 来自聚合响应，不再使用 AppState 中的试点原型常量。I5-B 内部查询已支持风险/监测/质量、WGS84 bbox、搜索和 offset/limit，并将 road9 超时统一为 503；Console2 保留上一成功快照、有限重试，OSM 瓦片连续失败时降级为列表/KPI。项目范围/权限、正式底图、点位聚合/zoom、全局增量/断线 REST 缺口回补和容量仍属后续或外部门禁。
 

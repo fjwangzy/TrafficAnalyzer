@@ -97,6 +97,7 @@ Topic 的单复数按上表固定。`msg_type` 必须与 Topic 映射一致；�
 - `uav_stats`：保留车辆数、活跃轨迹、速度、排队、方向流量、动态 `roads[]`、`lane_stats[]`、路网和质量字段。旧 `road_1`～`road_N` 不进入 canonical 主结构，也没有运行时迁移适配器。
 - `uav_track_complete`：保留轨迹 ID、车辆类别、转向、起止时间、速度、ENU/像素轨迹、入口/出口 Link/车道、地图匹配与质量字段。
 - `uav_conflict`：保留双方轨迹 ID、TTC/PET、最小距离、冲突角、场景、风险分、证据和预测位置；当前 near-miss 判定口径不因消息改名而变化。事件产生时必须从同一源帧同步生成 `evidence_images`，固定按 `conflict_original_frame`、`conflict_detector_frame`、`conflict_trajectory_reconstruction` 排序，每项携带 `jpeg_base64/width/height`。Platform 在同一事务中登记一个 `uav_evidence_packages` 和三条 `uav_evidence_items`，入库后的事件 payload 仅保留三项 `evidence_refs`，不得继续保存 Base64 大字段。
+- `evidence_refs[].url`：通过鉴权的 `GET /api/v1/survey-evidence/{id}/content` 返回不可变内容；数据库引用存在但内容寻址对象缺失时返回 `409`，不得以占位图伪装成功。本机原生 Platform 使用仓库忽略的持久目录 `.runtime/survey`，不得使用 `/tmp` 作为 managed 证据的默认长期存储。
 - `uav_telemetry`：保留无人机定位、姿态、云台、速度、悬停、任务/管道和定位质量。
 - `uav_system_metrics`：使用指标名、值、单位、实例和 labels，禁止继续按摄像头创建独立 measurement。
 - `uav_ai_event`：使用本节信封，并在 `data` 中携带 `source_event_id`、`idempotency_key`、业务事件、证据和投递所需字段。S1～S4 的路口态势、`lane_change`、`conflict`、`risk_hotspot`、`survey_result`、`enforcement_clue` 统一通过 `event_type` 区分，不为每个场景再建立无统一治理的独立 Topic。
@@ -665,13 +666,15 @@ lon = anchor_lon + easting_m / (111320 × cos(radians(anchor_lat)))
 
 #### Platform `GET /api/v1/video/camera/{camera_id}`
 - 返回：运行中 PipelineManager 管道的 MJPEG 流，`multipart/x-mixed-replace; boundary=frame`
-- 用途：浏览器 `<img src="/camera_N">` 无法携带 Bearer token，且检测器子进程绑定在 Platform 容器内 `127.0.0.1:{video_port}`；因此由 Platform 先在容器内访问 `http://127.0.0.1:{video_port}/video`，再把流转发给前端。
+- 用途：旧客户端兼容和运维诊断；Console2 实时监控屏与无人机屏不再调用该端点。
 - 无运行管道：返回 `404 {"error":"camera_not_running","camera_id":N}`
 - 认证：该端点为公开只读流端点，由 `AuthMiddleware.PUBLIC_PATHS` 放行。
 
-#### Vite dev `GET /camera_N`
-- 前端开发服务器将 `/camera_N` 转发到 `http://localhost:8000/api/v1/video/camera/{N}`。
-- 不再直接转发到宿主机 `localhost:{video_port}/video`，因为 Docker Platform 启动的检测器端口只在容器本地可达。
+#### Console2 检测器直连
+- Pipeline 启动时按 `PIPELINE_VIDEO_BASE` 登记 `video_stream_url`；本机默认值为 `http://127.0.0.1:{video_port}/video`。
+- 外部检测进程调用 `POST /api/v1/pipelines/register` 时可显式提交 `video_stream_url`。
+- `/monitoring` 和 `/drones` 只使用响应中的 `video_stream_url`；Vite 仅代理 `/api`、`/ws`，不代理 `/camera_*`。
+- 登记值仅接受无凭据、无 query/fragment 的 `http/https` URL。UAT/生产必须配置浏览器可达的 HTTPS 模板。
 
 ### 技术细节
 - 使用 Flask 的 `Response` 生成器实现流式推送
@@ -679,7 +682,7 @@ lon = anchor_lon + easting_m / (111320 × cos(radians(anchor_lat)))
 - 服务器在守护线程中运行（`Thread(daemon=True)`）
 - 帧更新通过 `self._frame` 实例变量，无锁保护（可能出现撕裂）
 
-## 3. Nginx 反向代理路由
+## 3. Nginx 旧客户端兼容路由
 
 ### 路由规则
 ```nginx
@@ -690,7 +693,7 @@ location ~ ^/camera_(\d+)$ {
 }
 ```
 
-### 访问方式
+### 兼容访问方式
 | URL | 代理到 |
 |-----|--------|
 | `http://localhost:8009/camera_1` | `platform:8000/api/v1/video/camera/1` |
@@ -700,7 +703,7 @@ location ~ ^/camera_(\d+)$ {
 ### 约束
 - camera ID 必须对应 PipelineManager 中状态为 `running` 的管道
 - Platform 在容器内访问该管道的 `127.0.0.1:{video_port}/video`
-- Nginx 只代理稳定的 Platform MJPEG 端点，不直接解析检测器容器名
+- Console2 不使用这些路径；新客户端以 Pipeline/Mission 响应的 `video_stream_url` 为准
 
 ## 4. 旧时序数据模型（历史快照，已退役）
 
@@ -1133,24 +1136,34 @@ Content-Type: application/json
 本地开发可通过环境变量控制平台启动的检测器子进程：
 - `PIPELINE_PYTHON`：检测器 Python 解释器，例如 `/Users/yaoyao/miniconda3/envs/py312/bin/python`
 - `PIPELINE_FRAME_STRIDE`：写入检测器 `FRAME_STRIDE` 环境变量，例如 `3`
+- `PIPELINE_DEVICE`：检测设备；Apple Silicon 开发态固定为 `mps`
+- `PIPELINE_IMGSZ`：检测分辨率；交互式开发默认 `960`
 - `KAFKA_BOOTSTRAP`：检测器和平台 Kafka 地址，例如 `localhost:9092`
+
+Apple Silicon 交互式运行使用 `scripts/mac_local_platform.sh up`。Platform 与检测器都使用
+原生 `.venv-mps`，Pipeline/Mission 请求不能覆盖设备、解释器或 `imgsz`。本地文件仍由
+Platform 在仓库 `test_videos/` allowlist 内解析；本机 MJPEG 直连地址由
+`PIPELINE_VIDEO_BASE=http://127.0.0.1:{video_port}/video` 生成。
 
 Apple Silicon 本机 MPS 回放使用 `scripts/run_native_mps_replays.py` 调用
 `POST /api/v1/pipelines/register` 登记宿主机外部进程；登记请求中的视频路径仍使用
 项目内 allowlist 相对路径，实际宿主机绝对路径只注入检测器的 `VIDEO_SRC`，不会写入 API
 或审计记录。外部进程必须携带返回的 `pipeline_id`、SourceProfile、`inter_id` 和
 RoadContext 质量字段写入 canonical 信封。验收产物以 `pipeline_id` 过滤，避免混入同 Topic
-历史消息。该批处理模式不承诺 Platform 容器内 `127.0.0.1:{video_port}` 的 MJPEG 代理。
+历史消息。批处理进程通过 register 接口登记，和由 Platform 直接启动的交互式本地管道仍是
+两种不同生命周期。登记请求同时提交浏览器可达的 `video_stream_url`，使监控屏和无人机屏
+无需经过 Platform/Vite 视频代理。
 
-Docker 部署使用根 `Dockerfile` 构建 Platform 与检测器统一镜像。检测实现位于镜像
+生产 Docker 发布使用根 `Dockerfile` 构建 Platform 与检测器统一镜像。检测实现位于镜像
 `/app`，`PIPELINE_PROJECT_ROOT=/app`；权重与视频分别只读挂载到 `/app/weights` 和
 `/app/test_videos`，不再依赖整个仓库的 `/project` 挂载。镜像安装
 `platform/pipeline-requirements.txt` 并使用 `platform/pipeline-constraints.txt` 固定
 `numpy<2`、`torch==2.2.2`、`torchvision==0.17.2`。
 
-Platform 启动只初始化 PipelineManager；只有 Pipeline API 或 Mission 调度才会在容器内
-拉起 `main_optimized.py`。启动命令追加 `hydra/job_logging=disabled`，检测器
-multiprocessing 子进程也会检测 `FileHandler` 是否可写并在必要时降级到 console。
+Platform 启动只初始化 PipelineManager；只有 Pipeline API 或 Mission 调度才会通过执行
+seam 拉起 `main_optimized.py`。开发和生产都使用同操作系统的本地子进程，差异仅由部署配置
+选择 macOS MPS 或 Linux CPU/CUDA。启动命令追加 `hydra/job_logging=disabled`，
+检测器 multiprocessing 子进程也会检测 `FileHandler` 是否可写并在必要时降级到 console。
 原独立检测器镜像保存在 `Dockerfile.detector`，不属于 canonical Compose。
 
 平台会为每条检测管道创建独立进程组；停止管道时终止整个进程组，避免 `main_optimized.py` 的 multiprocessing worker 被父进程遗留后继续向 Kafka 写数据。
@@ -1169,6 +1182,7 @@ multiprocessing 子进程也会检测 `FileHandler` 是否可写并在必要时�
   "topic_name": "uav_statistics_10",
   "camera_id": 10,
   "video_port": 8101,
+  "video_stream_url": "http://127.0.0.1:8101/video",
   "status": "running",
   "started_at": 1234567890.123,
   "stopped_at": 0,
@@ -1176,6 +1190,9 @@ multiprocessing 子进程也会检测 `FileHandler` 是否可写并在必要时�
   "uptime_seconds": 120.5
 }
 ```
+
+浏览器从 Pipeline 或 Mission 响应读取 `video_stream_url` 并直连检测器输出。远端部署不得使用
+`127.0.0.1` 默认值，必须通过 `PIPELINE_VIDEO_BASE` 登记浏览器可达的 HTTPS 地址。
 
 新建 Pipeline 返回 canonical `topic_name=uav_statistics_10`；consumer 不接收无前缀 Topic。
 
@@ -1186,8 +1203,13 @@ multiprocessing 子进程也会检测 `FileHandler` 是否可写并在必要时�
 | GET | `/api/v1/intersections` | 列出所有路口 |
 | GET | `/api/v1/intersections/summary` | 系统级概览（车流量/拥堵/告警/无人机在线/管道数） |
 | GET | `/api/v1/intersections/{id}` | 路口详情（含当前分配的无人机信息） |
-| GET | `/api/v1/intersections/{id}/stats` | 历史统计（I3 当前查询 `uav_traffic_metrics`） |
-| GET | `/api/v1/intersections/{id}/lane-stats` | 车道级历史统计 |
+| GET | `/api/v1/intersections/{id}/stats` | SourceProfile-scoped 历史统计；`period` 控制窗口，`granularity` 控制返回采样桶；响应含标量态势与 `direction_flow`，仅读最后一个保留点的 `tcc_diagnostics` |
+| GET | `/api/v1/intersections/{id}/lane-stats` | 车道级历史统计；`period` 与 `granularity` 同样生效 |
+
+历史统计查询不得为趋势图加载 `uav_traffic_metrics.payload` 全量审计 JSON。实现必须投影已类型化的
+标量列、按 `granularity` 每桶保留最新观测，并仅为最后一个返回点补读一次 TCC 诊断。Console2
+`/monitoring` 的趋势和转向流量只消费当前 `source_profile_id` 的响应；近期事件只展示具有同一
+SourceProfile lineage 的严格路径交点冲突或实时告警，不混入无法证明来源的全局固定告警。
 
 ### 无人机管理 `/api/v1/drones`（当前 S9 实现）
 

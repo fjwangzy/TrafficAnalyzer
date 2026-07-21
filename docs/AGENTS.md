@@ -11,6 +11,7 @@
 - 配置驱动：运行参数进入 `configs/app_config.yaml`，需要容器差异时通过环境变量或 Hydra override 注入。
 - 不回退用户已有改动：工作树可能包含并行修改，除非用户明确要求，不还原不相关文件。
 - 遵守 ADR-019：本机唯一数据库为 database=`road9` + TimescaleDB，UAV Topic、`msg_type`、WebSocket channel 和自建表使用 `uav_` 前缀；旧库与旧观测链路已退役，历史数据不迁移，不得恢复兼容或挂载旧存储。
+- 遵守 ADR-020：Apple Silicon 开发态 Platform 必须原生运行于 macOS arm64，并以本地子进程直接使用 MPS；Docker Compose 仅用于生产发布，不得作为 Mac 开发启动入口，也不得静默回退 CPU。
 
 ## 模块边界
 
@@ -21,6 +22,7 @@
 | `utils_local/` | 几何、单应性、车道推断等纯工具 |
 | `byte_tracker/` | ByteTrack 移植代码，参数优先从配置调整 |
 | `platform/app/` | FastAPI 单体平台，不重新拆回微服务 |
+| `platform/app/services/pipeline_executor.py` | Pipeline 本地子进程 `start/inspect/stop` 执行边界；Mac 开发与 Linux 生产通过配置选择设备 |
 | `console2/` | 当前 React 前端，使用 canonical REST/WebSocket 契约 |
 | `traffic-fly-console/` | 已退役子模块，仅保留历史审计，不进入 Compose、Nginx 或发布构建 |
 | `docs/` | 架构、业务逻辑、API、数据库和测试报告，完成任务后同步更新 |

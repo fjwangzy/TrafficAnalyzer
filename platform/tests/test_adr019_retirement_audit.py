@@ -43,3 +43,10 @@ def test_restore_drill_refuses_to_touch_docker_without_explicit_guard():
     result = subprocess.run([sys.executable, str(script)], cwd=ROOT, capture_output=True, text=True)
     assert result.returncode != 0
     assert "ALLOW_LOCAL_RESTORE_DRILL=1" in result.stderr
+
+
+def test_mac_local_platform_uses_persistent_evidence_storage():
+    script = (ROOT / "scripts" / "mac_local_platform.sh").read_text(encoding="utf-8")
+    assert 'LOCAL_SURVEY_STORAGE_DIR="${SURVEY_STORAGE_DIR:-$PROJECT_ROOT/.runtime/survey}"' in script
+    assert 'mkdir -p "$LOCAL_SURVEY_STORAGE_DIR"' in script
+    assert 'SURVEY_STORAGE_DIR="$LOCAL_SURVEY_STORAGE_DIR"' in script

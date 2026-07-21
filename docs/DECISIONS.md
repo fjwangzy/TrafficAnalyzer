@@ -647,3 +647,60 @@ Topic 命名和 Telegraf 路径、ADR-013 的 Grafana/Telegraf 兼容目标。Ka
 - 消息批量写入大小、重试退避、失败处理队列、最大可接受端到端延迟，以及
   `uav_message_inbox` 最大重放窗口和保留期。
 - 生产镜像、安全、HA、容量、RPO/RTO、试点、主平台联调和生产退役审批责任人。
+
+---
+
+## ADR-020: Apple Silicon 开发态原生运行 Platform 与 MPS 检测
+
+**状态**：Accepted（2026-07-21，本机开发态）
+
+### 背景
+
+Apple Metal/MPS 是 macOS 原生计算后端。Docker Desktop 在 Mac 上运行 Linux 虚拟机；即使
+镜像选择 `linux/arm64`，容器仍没有 macOS 内核、Metal 驱动或 PyTorch MPS backend。此前
+Platform 在容器内启动 YOLO 时只能走 CPU，真实任务常态 `inference_ms` 超过 2000ms。
+将 Platform 留在容器、再通过宿主机 agent 执行检测虽然可行，但额外引入 token、路径映射、
+双进程托管和 MJPEG 跨边界代理，开发态收益不足以抵消复杂度。
+
+### 决策
+
+1. Apple Silicon 开发态 Platform 必须使用原生 macOS arm64 `.venv-mps` 运行，不启动
+   Docker Platform。Console2 使用 Vite 本地开发服务器。
+2. `scripts/mac_local_platform.sh` 是正式开发入口：启动时 fail closed 校验 Darwin、arm64、
+   `mps.is_built()` 和 `mps.is_available()`，再由用户级 `launchd` 托管 `run_platform.py`。
+3. `PipelineManager` 只依赖本地 `start/inspect/stop` 执行边界，在 Platform 同一操作系统中
+   创建检测进程组。Mac 启动配置固定注入 `.venv-mps`、`PIPELINE_DEVICE=mps`、
+   `PIPELINE_IMGSZ=960` 与 `PYTORCH_ENABLE_MPS_FALLBACK=1`；设备预检失败不得回退 CPU。
+4. 本地 Platform 和检测器通过 `127.0.0.1` 访问开发 road9/Kafka，文件仍受仓库
+   `test_videos/` allowlist 约束，MJPEG/HLS 走本机回环，不存在 agent API 或路径翻译。
+5. 根 `docker-compose.yaml` 仅作为生产发布拓扑。生产 Platform 与检测器在同一 Linux 容器
+   环境中运行，由发布配置选择目标架构和 CPU/CUDA；不得携带 Mac remote-agent 特例。
+6. NVIDIA CUDA MPS 与 Apple Metal/MPS 是不同能力，生产 `gpu-only` profile 不作为本机
+   Apple MPS 开发入口。
+
+### 验收证据
+
+- 原生环境返回 Darwin/arm64、PyTorch 2.2.2、`mps_built=true`、`mps_available=true`。
+- 原生 Platform REST 启动的进程命令含 `detection_node.device=mps`、`imgsz=960`；43 个
+  Kafka `inference_ms` 样本为 P50 238.7ms、P95 388.1ms，仅 1 个首轮长尾超过 2000ms，
+  验收结束后管道正常停止。
+- Platform 回归为 149 passed、5 skipped；自动化覆盖本地执行器设备参数、进程组启停、
+  路径 allowlist 与视频代理。
+
+### 后果
+
+- 开发态消除 Docker Linux VM 与宿主机 agent 边界，Platform、检测器和 MJPEG 生命周期更直接。
+- 本机 Platform 由 `scripts/mac_local_platform.sh status|logs|stop|restart` 管理；road9 与 Kafka
+  仍是外部依赖，启动脚本不会隐式创建或替换数据服务。
+- `PYTORCH_ENABLE_MPS_FALLBACK=1` 只允许个别不受支持算子回退；设备预检和启动参数仍强制
+  MPS，性能验收需持续观察 P95 和长尾，不能只看设备字符串。
+- Docker Compose 不再承担开发启动职责，发布前必须单独执行生产镜像、secret、CPU/CUDA、
+  健康检查和架构门禁。该 ADR 不代表 Linux 生产环境获得 Apple MPS。
+
+### 拒绝的方案
+
+- 仅设置 `platform: linux/arm64` 后在容器内使用 `device=mps`：缺少 macOS/Metal 后端。
+- 容器 Platform 通过宿主机 HTTP agent 委派检测：可运行，但开发态引入不必要的鉴权、路径、
+  媒体代理和双生命周期复杂度。
+- 将 Docker socket 或任意宿主机命令执行能力暴露给 Platform：权限面过大。
+- 在 MPS 不可用时自动回退 CPU：会重新引入 2000ms 以上常态延迟且掩盖部署错误。

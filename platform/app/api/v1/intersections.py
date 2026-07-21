@@ -164,6 +164,7 @@ async def get_stats(
             period,
             grain_type="intersection",
             source_profile_id=source_profile_id,
+            granularity=granularity,
         )
         if rows:
             return rows
@@ -184,4 +185,6 @@ async def get_lane_stats(
 ):
     """Get lane-level metrics from road9."""
     metric_store = getattr(request.app.state, "metric_store", None)
-    return await metric_store.query_traffic(intersection_id, period, grain_type="lane") if metric_store else []
+    return await metric_store.query_traffic(
+        intersection_id, period, grain_type="lane", granularity=granularity
+    ) if metric_store else []

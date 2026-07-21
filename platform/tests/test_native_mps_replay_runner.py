@@ -163,6 +163,27 @@ def test_native_runner_forces_empty_lane_annotation_parameters():
     assert '"ROADS_JSON": ""' in runner
 
 
+def test_native_runner_registers_browser_reachable_detector_stream_address():
+    client = object.__new__(PlatformClient)
+    captured = {}
+
+    def request(method, path, body):
+        captured.update({"method": method, "path": path, "body": body})
+        return {"pipeline_id": "pipe-native"}
+
+    client.request = request
+    result = client.register(
+        {"drone_id": "UAV-1", "inter_id": "INT-1", "video": "test_videos/demo.mp4"},
+        camera_id=5701,
+        video_port=15701,
+    )
+
+    assert result == {"pipeline_id": "pipe-native"}
+    assert captured["method"] == "POST"
+    assert captured["path"] == "/api/v1/pipelines/register"
+    assert captured["body"]["video_stream_url"] == "http://127.0.0.1:15701/video"
+
+
 def test_stale_cleanup_only_stops_runner_reserved_registrations():
     client = object.__new__(PlatformClient)
     stopped = []

@@ -138,6 +138,9 @@ class KafkaActiveTrajectoriesTest(unittest.TestCase):
         track.timestamp_last = 3.0
         track.vehicle_class = "motor"
         track.yolo_class_id = 3
+        track.yolo_class_name = "car"
+        track.yolo_model_id = "yolo11s-visdrone.pt@0123456789ab"
+        track.class_mapping_version = "visdrone-business/v1"
         track.direction_class = "straight"
         track.turn_behavior = "left_turn"
         track.avg_speed_kmh = 18.4
@@ -154,6 +157,9 @@ class KafkaActiveTrajectoriesTest(unittest.TestCase):
                 "track_id": 7,
                 "vehicle_class": "motor",
                 "yolo_class_id": 3,
+                "yolo_class_name": "car",
+                "yolo_model_id": "yolo11s-visdrone.pt@0123456789ab",
+                "class_mapping_version": "visdrone-business/v1",
                 "direction_class": "straight",
                 "turn_behavior": "left_turn",
                 "duration_sec": 2.0,

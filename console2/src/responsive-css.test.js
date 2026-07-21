@@ -44,4 +44,13 @@ describe('1024 desktop layout contract', () => {
     expect(full).toMatch(/@media \(max-width:\s*1100px\)[^}]*\.replay-camera-grid\s*\{[^}]*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)/)
     expect(full).toMatch(/@media \(max-width:\s*760px\)[^}]*\.replay-camera-grid\s*\{[^}]*grid-template-columns:\s*1fr/)
   })
+
+  it('keeps replay camera frames at 16:9 with controls floating inside the feed', () => {
+    const full = readFileSync('src/full.css', 'utf8')
+    expect(full).toMatch(/\.replay-camera-feed\s*\{[^}]*position:\s*relative[^}]*aspect-ratio:\s*16\s*\/\s*9/)
+    expect(full).not.toMatch(/\.replay-camera-feed\s*\{[^}]*height:\s*158px/)
+    expect(full).toMatch(/\.replay-camera-overlay\s*\{[^}]*position:\s*absolute[^}]*inset:/)
+    expect(full).toMatch(/\.replay-camera-overlay\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s+auto/)
+    expect(full).toMatch(/\.replay-camera-action\s*\{[^}]*position:\s*static[^}]*grid-column:\s*2/)
+  })
 })

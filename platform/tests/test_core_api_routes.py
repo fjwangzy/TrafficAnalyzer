@@ -43,6 +43,7 @@ class _AlertEngine:
 class _MetricStore:
     def __init__(self):
         self.conflict_query_args = None
+        self.traffic_query_args = None
 
     async def query_tracks(self, *args, **kwargs):
         return []
@@ -60,6 +61,7 @@ class _MetricStore:
         }]
 
     async def query_traffic(self, *args, **kwargs):
+        self.traffic_query_args = (args, kwargs)
         return []
 
     async def query_system_metrics(self, *args, **kwargs):
@@ -128,6 +130,22 @@ class CoreApiRoutesTest(unittest.TestCase):
                     "prediction_type": "path_intersection",
                 },
             ),
+        )
+
+    def test_stats_endpoint_forwards_requested_granularity(self):
+        response = self.client.get(
+            "/api/v1/intersections/INT_camera_1/stats",
+            params={"period": "30m", "granularity": "5m", "source_profile_id": "SRC-1"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            self.client.app.state.metric_store.traffic_query_args,
+            (("INT_camera_1", "30m"), {
+                "grain_type": "intersection",
+                "source_profile_id": "SRC-1",
+                "granularity": "5m",
+            }),
         )
 
 

@@ -58,10 +58,12 @@ class Settings(BaseSettings):
 
     # ── Video ──
     hls_output_dir: str = "/hls"
-    pipeline_video_base: str = "http://127.0.0.1:8100/video"
+    pipeline_video_base: str = "http://127.0.0.1:{video_port}/video"
     pipeline_python: str = "python"
     pipeline_frame_stride: int | None = None
     pipeline_max_active: int = 4
+    pipeline_device: str | None = None
+    pipeline_imgsz: int | None = None
     video_max_active_streams: int = 4
     pipeline_roads_roots: list[str] = ["configs", "/calibration/lane_annotations"]
     uav_rtsp_allowed_hosts: list[str] = ["localhost", "127.0.0.1"]

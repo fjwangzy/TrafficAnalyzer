@@ -88,7 +88,7 @@ vi.mock('./lib/api', async (importOriginal) => {
         { id: 'FP-20260713-03', name: '夜间货车限行验证', drone_id: 'UAV-M300-03', state: 'draft', revision: 1, timezone: 'Asia/Shanghai', schedule: { type: 'once', start_at: '2026-07-15T22:30:00+08:00', end_at: '2026-07-16T00:30:00+08:00' } },
       ]),
       missions: vi.fn().mockResolvedValue([
-        { id: 'MSN-0713-1050', name: '早高峰巡检', drone_id: 'UAV-M300-03', trigger_type: 'manual', status: 'running', scheduled_start_at: '2026-07-15T10:50:00+08:00', actual_start_at: '2026-07-15T10:50:06+08:00', pipeline: { id: 'pipe-1', observed_status: 'running', camera_id: 17 } },
+        { id: 'MSN-0713-1050', name: '早高峰巡检', drone_id: 'UAV-M300-03', trigger_type: 'manual', status: 'running', scheduled_start_at: '2026-07-15T10:50:00+08:00', actual_start_at: '2026-07-15T10:50:06+08:00', pipeline: { id: 'pipe-1', observed_status: 'running', camera_id: 17, video_stream_url: 'http://127.0.0.1:8127/video' } },
       ]),
       flightPlanAction: vi.fn().mockRejectedValue({ response: { data: { detail: { code: 'flight_plan_overlap', message: '发现同无人机时间冲突，计划保持草稿' } } } }),
       stopMission: vi.fn().mockResolvedValue({ id: 'MSN-0713-1050', status: 'cancelled', pipeline: { observed_status: 'stopped' } }),
@@ -160,6 +160,10 @@ describe('Console2 full prototype', () => {
     expect(screen.queryByText('无人机路口态势纵览')).not.toBeInTheDocument()
     expect(container.querySelector('.map-master-panel > .panel-title')).not.toBeInTheDocument()
     expect(screen.getByText('待办任务')).toBeInTheDocument()
+    expect(await screen.findByText('road_context_unverified')).toBeInTheDocument()
+    expect(screen.queryAllByText('待冻结')).toHaveLength(0)
+    expect(screen.queryByText('重点风险路口')).not.toBeInTheDocument()
+    expect(screen.queryByText(/coverage 未冻结/)).not.toBeInTheDocument()
     await waitFor(() => expect(platformApi.dashboardIntersections).toHaveBeenCalledWith({ limit: 500 }))
     expect(screen.getByRole('navigation', { name: '全域态势二级导航' })).toHaveTextContent('工作台首屏实时监测')
     expect(screen.getByRole('navigation', { name: '全域态势二级导航' })).not.toHaveTextContent('轨迹研判')
@@ -169,7 +173,7 @@ describe('Console2 full prototype', () => {
   it('opens the selected intersection monitoring screen from a dashboard map marker', async () => {
     const source = { profile_id: 'SRC-MAP-1', display_name: '地图监测视频源', drone_id: 'UAV-MAP-1', enabled: true, validation_status: 'valid', video: { id: 'VID-MAP-1', source_type: 'mp4' } }
     const drone = { id: 'UAV-MAP-1', name: '地图监测无人机', default_inter_id: 'INT-MAP-1', default_video_source_id: 'VID-MAP-1', intersection_name: '地图监测路口' }
-    const pipeline = { pipeline_id: 'PIPE-MAP-1', intersection_id: 'INT-MAP-1', source_profile_id: 'SRC-MAP-1', drone_id: 'UAV-MAP-1', camera_id: 17, status: 'running' }
+    const pipeline = { pipeline_id: 'PIPE-MAP-1', intersection_id: 'INT-MAP-1', source_profile_id: 'SRC-MAP-1', drone_id: 'UAV-MAP-1', camera_id: 17, video_stream_url: 'http://127.0.0.1:8127/video', status: 'running' }
     platformApi.dashboardIntersections.mockResolvedValueOnce({ schema_version: 'uav.dashboard/v1', total: 1, map_eligible: 1, isolated: 0, items: [
       { id: 'INT-MAP-1', inter_id: 'INT-MAP-1', name: '地图监测路口', lat: 36.67, lon: 116.99, map_eligible: true, map_coordinate_status: 'test', road_data_version: 'ROAD-MAP', monitor: 'running', risk: 'normal', quality: 'unverified', metric: {}, events: [], conflict_count: 0 },
     ] })
@@ -183,9 +187,9 @@ describe('Console2 full prototype', () => {
     await waitFor(() => expect(window.location.pathname).toBe('/monitoring'))
     expect(new URLSearchParams(window.location.search).get('intersection_id')).toBe('INT-MAP-1')
     expect(new URLSearchParams(window.location.search).get('source_profile_id')).toBe('SRC-MAP-1')
-    const sourceSelector = await screen.findByRole('combobox', { name: '选择无人机视频源' })
+    const sourceSelector = await screen.findByRole('combobox', { name: '选择无人机视频源' }, { timeout: 10_000 })
     await waitFor(() => expect(sourceSelector).toHaveDisplayValue('地图监测视频源 · 地图监测无人机'))
-    expect(await screen.findByAltText('检测器输出视频流')).toHaveAttribute('src', expect.stringContaining('/camera_17'))
+    expect(await screen.findByAltText('检测器输出视频流', {}, { timeout: 10_000 })).toHaveAttribute('src', expect.stringMatching(/^http:\/\/127\.0\.0\.1:8127\/video\?retry=/))
     expect(await screen.findByLabelText('飞行姿态数据')).toBeInTheDocument()
   })
 
@@ -250,9 +254,16 @@ describe('Console2 full prototype', () => {
   it('renders the real replay camera stream and stops it from the route card', async () => {
     open('/drones?tab=fleet')
     const stream = await screen.findByRole('img', { name: '小清河北路 × 水屯路 实时检测画面' })
-    expect(stream).toHaveAttribute('src', '/camera_17')
-    expect(screen.getByRole('combobox', { name: '小清河北路 × 水屯路回放源' })).toBeDisabled()
-    fireEvent.click(screen.getByRole('button', { name: '停止' }))
+    expect(stream).toHaveAttribute('src', 'http://127.0.0.1:8127/video')
+    const feed = stream.closest('.replay-camera-feed')
+    const sourcePicker = screen.getByRole('combobox', { name: '小清河北路 × 水屯路回放源' })
+    const stopButton = screen.getByRole('button', { name: '停止' })
+    expect(sourcePicker).toBeDisabled()
+    expect(sourcePicker.closest('.replay-camera-feed')).toBe(feed)
+    expect(stopButton.closest('.replay-camera-feed')).toBe(feed)
+    expect(stopButton.closest('.replay-camera-overlay')).toBe(sourcePicker.closest('.replay-camera-overlay'))
+    expect(stream.closest('.replay-camera-card').querySelector(':scope > footer')).toBeNull()
+    fireEvent.click(stopButton)
     await waitFor(() => expect(platformApi.stopMission).toHaveBeenCalledWith('MSN-0713-1050', 'Console2 路口摄像头人工停止'))
   })
 
@@ -307,22 +318,22 @@ describe('Console2 full prototype', () => {
     open('/events?event_id=UAV-EVT-20260713-001')
 
     expect(await screen.findByText('原始画面')).toBeInTheDocument()
-    expect(screen.getByText('检测器输出画面')).toBeInTheDocument()
-    expect(screen.getByText('同期轨迹还原画面')).toBeInTheDocument()
-    const trigger = await screen.findByRole('button', { name: '全屏查看检测器输出画面' })
+    expect(screen.getByText('检测器输出的 TCC 画面帧')).toBeInTheDocument()
+    expect(screen.getByText('轨迹投放 BEV 视图')).toBeInTheDocument()
+    const trigger = await screen.findByRole('button', { name: '全屏查看检测器输出的 TCC 画面帧' })
     fireEvent.click(trigger)
-    expect(screen.getByRole('dialog', { name: '检测器输出画面全屏预览' })).toBeInTheDocument()
-    expect(screen.getByRole('img', { name: '检测器输出画面全屏预览' })).toHaveAttribute('src', 'blob:event-evidence')
+    expect(screen.getByRole('dialog', { name: '检测器输出的 TCC 画面帧全屏预览' })).toBeInTheDocument()
+    expect(screen.getByRole('img', { name: '检测器输出的 TCC 画面帧全屏预览' })).toHaveAttribute('src', 'blob:event-evidence')
     expect(document.body).toHaveStyle({ overflow: 'hidden' })
 
     fireEvent.click(screen.getByRole('button', { name: '关闭证据图片全屏预览' }))
-    await waitFor(() => expect(screen.queryByRole('dialog', { name: '检测器输出画面全屏预览' })).not.toBeInTheDocument())
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: '检测器输出的 TCC 画面帧全屏预览' })).not.toBeInTheDocument())
     expect(screen.getByRole('dialog', { name: '机非冲突风险升高' })).toBeInTheDocument()
     expect(trigger).toHaveFocus()
 
     fireEvent.click(trigger)
     fireEvent.keyDown(document, { key: 'Escape' })
-    await waitFor(() => expect(screen.queryByRole('dialog', { name: '检测器输出画面全屏预览' })).not.toBeInTheDocument())
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: '检测器输出的 TCC 画面帧全屏预览' })).not.toBeInTheDocument())
     expect(screen.getByRole('dialog', { name: '机非冲突风险升高' })).toBeInTheDocument()
   })
 

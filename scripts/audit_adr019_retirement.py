@@ -59,6 +59,7 @@ def audit(scope: str = "production") -> dict:
     realtime = _text("console2/src/lib/realtime.js")
     nginx = _text("services/nginx/nginx.conf")
     purge = _text("scripts/purge_adr019_legacy_storage.py")
+    mac_local_platform = _text("scripts/mac_local_platform.sh")
 
     checks = [
         {
@@ -72,7 +73,7 @@ def audit(scope: str = "production") -> dict:
                 ))
             ) else "blocker",
             "evidence": "docker-compose.yaml",
-            "detail": "根 Compose 仅保留 road9/TimescaleDB、KRaft、Platform、Console2、Nginx 与可选服务。",
+            "detail": "生产根 Compose 仅保留 road9/TimescaleDB、KRaft、Platform、Console2、Nginx 与可选服务。",
         },
         {
             "code": "stable_clean_road9_volume",
@@ -146,10 +147,22 @@ def audit(scope: str = "production") -> dict:
             "detail": "旧存储清理具有固定 allowlist、7 天到期校验和显式确认开关。",
         },
         {
+            "code": "native_mac_development_contract",
+            "status": "pass" if (
+                'DEPLOYMENT_MODE: "production"' in compose
+                and "PIPELINE_DEVICE=mps" in mac_local_platform
+                and "scripts/mac_local_platform.sh" not in compose
+                and "PIPELINE_REMOTE_" not in compose
+                and "host.docker.internal" not in compose
+            ) else "blocker",
+            "evidence": "docker-compose.yaml + scripts/mac_local_platform.sh",
+            "detail": "Mac 开发态原生运行 Platform/MPS，Docker Compose 只承担生产发布。",
+        },
+        {
             "code": "local_runtime_evidence",
             "status": "pass" if _report_passed() else "blocker",
             "evidence": str(LOCAL_REPORT.relative_to(ROOT)),
-            "detail": "本机 canonical 栈、空库、旧卷隔离、恢复与健康探测已有执行证据。",
+            "detail": "ADR-019 数据服务、空库、旧卷隔离、恢复与健康探测已有执行证据。",
         },
     ]
     if scope == "production":

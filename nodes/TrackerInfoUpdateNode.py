@@ -81,6 +81,9 @@ class TrackerInfoUpdateNode:
         self.min_track_duration = trajectory_cfg.get("min_track_duration_sec", 2.0)
         self.min_trajectory_points = 5
         self.vehicle_classification_cfg = config.get("vehicle_classification", {})
+        self.class_mapping_version = self.vehicle_classification_cfg.get(
+            "mapping_version", "vehicle-classification/v1"
+        )
 
     @profile_time
     def process(self, frame_element: FrameElement) -> FrameElement:
@@ -111,6 +114,11 @@ class TrackerInfoUpdateNode:
                         if tracked_cls_names and i < len(tracked_cls_names)
                         else None
                     )
+                    self.buffer_tracks[id].yolo_class_name = class_name
+                    self.buffer_tracks[id].yolo_model_id = getattr(
+                        frame_element, "yolo_model_id", None
+                    )
+                    self.buffer_tracks[id].class_mapping_version = self.class_mapping_version
                     self.buffer_tracks[id].vehicle_class = classify_vehicle(
                         tracked_cls_ids[i],
                         class_name,
@@ -188,6 +196,9 @@ class TrackerInfoUpdateNode:
                     "turn_behavior": track.turn_behavior,
                     "vehicle_class": track.vehicle_class,
                     "yolo_class_id": track.yolo_class_id,
+                    "yolo_class_name": track.yolo_class_name,
+                    "yolo_model_id": track.yolo_model_id,
+                    "class_mapping_version": track.class_mapping_version,
                     "duration_sec": round(duration, 2),
                     "avg_speed_kmh": round(track.avg_speed_kmh, 1),
                     "max_speed_kmh": round(track.max_speed_kmh, 1),

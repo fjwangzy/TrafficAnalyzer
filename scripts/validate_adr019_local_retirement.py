@@ -73,7 +73,19 @@ def _canonical_topics_only(topics: list[str]) -> bool:
 
 
 def _run(command: list[str]) -> str:
-    return subprocess.run(command, cwd=ROOT, check=True, capture_output=True, text=True).stdout.strip()
+    environment = os.environ.copy()
+    environment.setdefault("ROAD9_PASSWORD", "traffic123")
+    environment.setdefault("JWT_SECRET_KEY", "local-retirement-validation-only")
+    environment.setdefault("BOOTSTRAP_ADMIN_PASSWORD", "local-retirement-admin-only")
+    environment.setdefault("CORS_ORIGINS", '["http://127.0.0.1:8080"]')
+    return subprocess.run(
+        command,
+        cwd=ROOT,
+        env=environment,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
 
 
 def _http_json(url: str, *, body: dict[str, Any] | None = None) -> tuple[int, Any]:

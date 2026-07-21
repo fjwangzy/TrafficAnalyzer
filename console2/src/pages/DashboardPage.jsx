@@ -15,16 +15,19 @@ const kpiIcons = {
   data_trust: CheckCircle,
 }
 
+const kpiTones = {
+  monitoring_coverage: 'blue',
+  priority_risk: 'red',
+  severe_congestion: 'amber',
+  drone_assurance: 'cyan',
+  data_trust: 'green',
+}
+
 const taskLabels = {
   ai_review: 'AI 技术复核',
   survey_delivery: '事故测绘交付',
   integration_replay: '集成失败重放',
   configuration_check: '项目配置核验',
-}
-
-function kpiValue(item) {
-  if (item.value !== null && item.value !== undefined) return item.value
-  return '待冻结'
 }
 
 export function dashboardSourceStatus(source, pipeline) {
@@ -105,6 +108,7 @@ export function DashboardPage() {
   const asOfTime = overview?.as_of ? new Date(overview.as_of).toLocaleTimeString('zh-CN', { hour12: false }) : '等待快照'
   const roadVersion = overview?.road_data_versions?.join('、') || '无可用版本'
   const onlineDrones = (dronesQuery.data?.items || []).filter((item) => item.status === 'online').length
+  const verifiedKpis = (overview?.kpis || []).filter((item) => item.quality === 'verified' && item.value !== null && item.value !== undefined)
 
   return (
     <AppShell pageTitle='工作台首屏' topContext={{ scope: overview?.project_scope || '授权范围未加载', window: '最近 30 分钟 · 固定工程窗口', asOf: asOfTime }}>
@@ -116,9 +120,9 @@ export function DashboardPage() {
       {loadError && <QualityNotice tone='danger' title='主任首屏聚合不可用'>{apiErrorMessage(loadError, 'DashboardReadModel 暂不可用')}</QualityNotice>}
       {!loading && intersectionsQuery.isFetching && <QualityNotice title='正在更新当前范围'>保留上一版快照，查询完成后原位更新。</QualityNotice>}
 
-      <div className='kpi-grid five'>
-        {(overview?.kpis || []).map((item, index) => <KpiCard key={item.id} icon={kpiIcons[item.id] || Broadcast} label={item.label} value={kpiValue(item)} unit={item.value == null ? '' : item.id === 'data_trust' ? '%' : '处'} change={item.quality} detail={`${item.numerator ?? '—'} / ${item.denominator ?? '—'} · ${item.reason}`} tone={index === 1 ? 'red' : index === 2 ? 'amber' : index === 3 ? 'cyan' : index === 4 ? 'green' : 'blue'} />)}
-      </div>
+      {verifiedKpis.length > 0 && <div className='kpi-grid dashboard-kpis'>
+        {verifiedKpis.map((item) => <KpiCard key={item.id} icon={kpiIcons[item.id] || Broadcast} label={item.label} value={item.value} unit={item.id === 'data_trust' ? '%' : '处'} change={item.quality} detail={`${item.numerator ?? '—'} / ${item.denominator ?? '—'} · ${item.reason}`} tone={kpiTones[item.id] || 'blue'} />)}
+      </div>}
 
       <div className='dashboard-grid'>
         <Panel className='map-master-panel'>
@@ -145,7 +149,7 @@ export function DashboardPage() {
 
       <div className='dashboard-bottom-strip'>
         <div><Pulse size={16} weight='fill' /><span>连接状态</span><strong>{loadError ? 'REST 聚合不可用' : 'REST 聚合快照已加载'}</strong></div>
-        <div><Database size={16} /><span>数据窗口</span><strong>{overview ? `${new Date(overview.window_start).toLocaleTimeString('zh-CN', { hour12: false })}–${new Date(overview.window_end).toLocaleTimeString('zh-CN', { hour12: false })}` : '—'} · coverage 未冻结</strong></div>
+        <div><Database size={16} /><span>数据窗口</span><strong>{overview ? `${new Date(overview.window_start).toLocaleTimeString('zh-CN', { hour12: false })}–${new Date(overview.window_end).toLocaleTimeString('zh-CN', { hour12: false })}` : '—'}</strong></div>
         <div><Funnel size={16} /><span>当前范围</span><strong>{overview?.project_scope || '未加载'}</strong></div>
       </div>
 

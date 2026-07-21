@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from app.kafka.consumer import KafkaConsumerService
-from app.models.survey import EvidenceItem
+from app.models.survey import EvidenceItem, EvidencePackage
 from app.services.alert_engine import AlertEngine
 from app.services.metric_store import (
     InMemoryMetricStoreAdapter,
@@ -106,6 +106,94 @@ class MetricStoreContractTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(evidence.package)
         self.assertEqual(evidence.package_id, evidence.package.id)
         self.assertIn(evidence, evidence.package.items)
+
+    def test_conflict_evidence_bundle_persists_three_synchronized_images(self):
+        now = datetime.now(UTC).isoformat()
+        kinds = [
+            "conflict_original_frame",
+            "conflict_detector_frame",
+            "conflict_trajectory_reconstruction",
+        ]
+        payload = {
+            "message_id": "conflict-evidence-1",
+            "msg_type": "uav_conflict",
+            "schema_version": "uav_conflict/v1",
+            "occurred_at": now,
+            "produced_at": now,
+            "source_system": "uav_traffic_analyzer_ai",
+            "intersection_id": "INT_camera_1",
+            "data": {
+                "motor_id": 101,
+                "non_motor_id": 202,
+                "evidence_images": [
+                    {
+                        "kind": kind,
+                        "jpeg_base64": base64.b64encode(f"jpeg-{index}".encode()).decode(),
+                        "width": 960,
+                        "height": 540,
+                    }
+                    for index, kind in enumerate(kinds)
+                ],
+            },
+        }
+        envelope = MessageEnvelope(payload, "uav_conflicts_1", 0, 7)
+        normalized = self.adapter._normalize(envelope)
+        session = _RecordingSession()
+        stored = [
+            SimpleNamespace(
+                storage_key=f"objects/{index}/key",
+                sha256=str(index) * 64,
+                size_bytes=6,
+            )
+            for index in range(3)
+        ]
+
+        with patch(
+            "app.services.metric_store.ContentAddressedStore.ingest_bytes",
+            side_effect=stored,
+        ):
+            self.adapter._add_conflict(session, envelope, normalized)
+
+        package = next(row for row in session.rows if isinstance(row, EvidencePackage))
+        evidence = [row for row in session.rows if isinstance(row, EvidenceItem)]
+        self.assertEqual([item.kind for item in evidence], kinds)
+        self.assertEqual(len(package.items), 3)
+        self.assertIsNone(evidence[0].derived_from_id)
+        self.assertEqual(evidence[1].derived_from_id, evidence[0].id)
+        self.assertEqual(evidence[2].derived_from_id, evidence[0].id)
+        self.assertEqual(
+            [ref["kind"] for ref in normalized["data"]["evidence_refs"]],
+            kinds,
+        )
+        self.assertNotIn("evidence_images", normalized["data"])
+
+    def test_historical_traffic_snapshot_retains_tcc_diagnostics_and_lineage(self):
+        diagnostics = {"enabled": True, "status": "no_prediction_candidates"}
+        row = SimpleNamespace(
+            observed_at=datetime.now(UTC),
+            intersection_id="INT-1",
+            inter_id="INT-1",
+            grain_type="intersection",
+            grain_key="INT-1",
+            cars=12,
+            vehicle_count=12,
+            flow_veh_per_min=None,
+            avg_speed_kmh=18.0,
+            congestion_index=2.1,
+            queue_length_m=0.0,
+            headway_sec=None,
+            quality_status="unverified",
+            time_quality="ingest_only",
+            source_profile_id="SRC-1",
+            pipeline_id="pipe-1",
+            payload={"data": {"tcc_diagnostics": diagnostics}},
+        )
+
+        result = self.adapter._traffic_dict(row)
+
+        self.assertEqual(result["tcc_diagnostics"], diagnostics)
+        self.assertEqual(result["source_profile_id"], "SRC-1")
+        self.assertEqual(result["pipeline_id"], "pipe-1")
 
     @staticmethod
     def _stats_payload(message_id: str, cars: int) -> dict:

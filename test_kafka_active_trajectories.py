@@ -1,3 +1,5 @@
+import base64
+import cv2
 import numpy as np
 import unittest
 
@@ -33,7 +35,13 @@ class KafkaActiveTrajectoriesTest(unittest.TestCase):
         frame_element = FrameElement("test", frame, 2.0, 1, {"1": [0, 0, 1, 0, 1, 1, 0, 1]})
         frame_element.info = {"cars_amount": 4, "roads_activity": {1: 2.5}}
         frame_element.id_list = [101, 202]
-        frame_element.buffer_tracks = {}
+        frame_element.tracked_xyxy = [[2, 2, 8, 8], [11, 10, 18, 18]]
+        frame_element.tracked_cls = ["car", "bicycle"]
+        motor_track = TrackElement(id=101, timestamp_first=1.0)
+        motor_track.trajectory_points = [(2.0, 3.0), (5.0, 6.0), (7.0, 8.0)]
+        non_motor_track = TrackElement(id=202, timestamp_first=1.0)
+        non_motor_track.trajectory_points = [(15.0, 18.0), (13.0, 15.0), (12.0, 12.0)]
+        frame_element.buffer_tracks = {101: motor_track, 202: non_motor_track}
         frame_element.direction_stats = {"straight": {"count": 2, "avg_speed_kmh": 18.0}}
         frame_element.queue_count = 1
         frame_element.completed_tracks = [{
@@ -49,6 +57,7 @@ class KafkaActiveTrajectoriesTest(unittest.TestCase):
             "motor_id": 101,
             "non_motor_id": 202,
             "prediction_type": "path_intersection",
+            "distance_m": 0.0,
             "ttc_sec": 1.2,
             "pet_sec": 0.3,
             "severity": "critical",
@@ -85,9 +94,27 @@ class KafkaActiveTrajectoriesTest(unittest.TestCase):
         self.assertEqual(sent[1][1]["data"]["track_id"], 101)
         self.assertEqual(sent[2][1]["msg_type"], "uav_conflict")
         self.assertEqual(sent[2][1]["data"]["conflict_scene"], "suspected_right_turn_mv_nmv")
-        self.assertTrue(sent[2][1]["data"]["evidence_snapshot_jpeg"])
-        self.assertEqual(sent[2][1]["data"]["evidence_snapshot_width"], 20)
-        self.assertEqual(sent[2][1]["data"]["evidence_snapshot_height"], 20)
+        evidence_images = sent[2][1]["data"]["evidence_images"]
+        self.assertEqual(
+            [item["kind"] for item in evidence_images],
+            [
+                "conflict_original_frame",
+                "conflict_detector_frame",
+                "conflict_trajectory_reconstruction",
+            ],
+        )
+        self.assertTrue(all(item["width"] == 20 for item in evidence_images))
+        self.assertTrue(all(item["height"] == 20 for item in evidence_images))
+        decoded = [
+            cv2.imdecode(
+                np.frombuffer(base64.b64decode(item["jpeg_base64"]), dtype=np.uint8),
+                cv2.IMREAD_COLOR,
+            )
+            for item in evidence_images
+        ]
+        self.assertTrue(all(image is not None for image in decoded))
+        self.assertFalse(np.array_equal(decoded[0], decoded[1]))
+        self.assertFalse(np.array_equal(decoded[0], decoded[2]))
         self.assertEqual(sent[3][1]["msg_type"], "uav_telemetry")
         self.assertEqual(sent[3][1]["drone_id"], "drone_7")
         self.assertEqual(sent[3][1]["data"]["height"], 120.0)

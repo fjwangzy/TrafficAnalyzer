@@ -24,16 +24,18 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 import uuid
 
-import torch
 from kafka import KafkaConsumer
 
 
 ROOT = Path(__file__).resolve().parents[1]
 PLATFORM_DIR = ROOT / "platform"
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 if str(PLATFORM_DIR) not in sys.path:
     sys.path.insert(0, str(PLATFORM_DIR))
 
 from scripts.bootstrap_mp4new_sources import MP4NEW_CATALOG  # noqa: E402
+from utils_local.event_evidence import CONFLICT_EVIDENCE_KINDS  # noqa: E402
 
 
 def source_catalog() -> dict[str, dict]:
@@ -51,6 +53,8 @@ def source_catalog() -> dict[str, dict]:
 
 
 def verify_native_mps() -> dict:
+    import torch
+
     result = {
         "machine": platform.machine(),
         "python": platform.python_version(),
@@ -74,12 +78,28 @@ def validate_tcc_events(messages: list[dict]) -> list[dict]:
             distance = abs(float(data.get("distance_m")))
         except (TypeError, ValueError):
             distance = float("inf")
-        if data.get("prediction_type") != "path_intersection" or distance > 0.05:
+        evidence = data.get("evidence_images")
+        evidence_kinds = tuple(
+            item.get("kind") for item in evidence if isinstance(item, dict)
+        ) if isinstance(evidence, list) else ()
+        evidence_complete = (
+            evidence_kinds == CONFLICT_EVIDENCE_KINDS
+            and all(
+                isinstance(item.get("jpeg_base64"), str) and item["jpeg_base64"]
+                for item in evidence
+            )
+        )
+        if (
+            data.get("prediction_type") != "path_intersection"
+            or distance > 0.05
+            or not evidence_complete
+        ):
             invalid.append(
                 {
                     "message_id": message.get("message_id"),
                     "prediction_type": data.get("prediction_type"),
                     "distance_m": data.get("distance_m"),
+                    "evidence_kinds": list(evidence_kinds),
                 }
             )
     return invalid
@@ -108,6 +128,57 @@ def inference_summary(messages: list[dict]) -> dict:
         },
         "fps_median": round(statistics.median(fps), 2) if fps else None,
     }
+
+
+def tcc_diagnostics_summary(messages: list[dict]) -> dict:
+    """Summarize observable TCC funnel execution without inventing events."""
+    diagnostics = [
+        message.get("data", {}).get("tcc_diagnostics")
+        for message in messages
+    ]
+    diagnostics = [item for item in diagnostics if isinstance(item, dict)]
+    status_counts: dict[str, int] = {}
+    for item in diagnostics:
+        status = str(item.get("status") or "unknown")
+        status_counts[status] = status_counts.get(status, 0) + 1
+
+    def _positive(item: dict, key: str) -> bool:
+        try:
+            return float(item.get(key) or 0) > 0
+        except (TypeError, ValueError):
+            return False
+
+    def _count(item: dict, key: str) -> int:
+        try:
+            return max(0, int(item.get(key) or 0))
+        except (TypeError, ValueError):
+            return 0
+
+    return {
+        "samples": len(diagnostics),
+        "status_counts": dict(sorted(status_counts.items())),
+        "frames_with_candidate_pairs": sum(
+            _positive(item, "candidate_pairs") for item in diagnostics
+        ),
+        "frames_with_predictions": sum(
+            _positive(item, "prediction_candidates") for item in diagnostics
+        ),
+        "business_events_emitted": sum(
+            _count(item, "business_events_emitted") for item in diagnostics
+        ),
+    }
+
+
+def source_result_passed(result: dict) -> bool:
+    """Apply the per-source functional acceptance contract."""
+    return bool(
+        result.get("return_code") == 0
+        and not result.get("error")
+        and int(result.get("stats_count") or 0) > 0
+        and int(result.get("trajectory_count") or 0) > 0
+        and not result.get("invalid_tcc_events")
+        and int((result.get("tcc_diagnostics") or {}).get("samples") or 0) > 0
+    )
 
 
 class PlatformClient:
@@ -216,6 +287,7 @@ def _capture_message(buckets: dict[str, list[dict]], message, pipeline_id: str) 
                     "active_tracks": data.get("active_tracks"),
                     "cars": data.get("cars"),
                     "conflict_count": data.get("conflict_count"),
+                    "tcc_diagnostics": data.get("tcc_diagnostics"),
                 },
             }
         )
@@ -395,16 +467,11 @@ def run_source(
         "trajectory_count": len(buckets["tracks"]),
         "tcc_event_count": len(buckets["conflicts"]),
         "invalid_tcc_events": invalid_tcc,
+        "tcc_diagnostics": tcc_diagnostics_summary(buckets["stats"]),
         "performance": inference_summary(buckets["stats"]),
         "error": error,
     }
-    result["passed"] = bool(
-        return_code == 0
-        and not error
-        and result["stats_count"] > 0
-        and result["trajectory_count"] > 0
-        and not invalid_tcc
-    )
+    result["passed"] = source_result_passed(result)
     _write_json(source_dir / "result.json", result)
     return result
 
@@ -466,7 +533,7 @@ def main() -> int:
             ):
                 existing["error"] = None
                 existing["cleanup_recovered_on_resume"] = True
-                existing["passed"] = True
+                existing["passed"] = source_result_passed(existing)
                 _write_json(existing_path, existing)
             if existing.get("passed"):
                 results.append(existing)

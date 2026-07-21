@@ -1,6 +1,6 @@
 # PROJECT_STRUCTURE.md — TrafficAnalyzer 当前项目结构
 
-> 当前状态：2026-07-17。本文只描述 ADR-019 之后的 canonical 运行代码；已退役资产仅在“历史与保留边界”中列出。
+> 当前状态：2026-07-21。本文只描述 ADR-019 之后的 canonical 运行代码；已退役资产仅在“历史与保留边界”中列出。
 
 ## 1. 顶层结构
 
@@ -17,11 +17,11 @@ TrafficAnalyzer/
 ├── elements/                      # FrameElement、TrackElement、EOF sentinel
 ├── nodes/                         # 检测、跟踪、标定、统计、冲突、Kafka 与展示节点
 ├── services/                      # 遥测源与 canonical Nginx/Kafka 辅助配置
-├── utils_local/                   # 几何、轨迹、车道、单应性和运动补偿工具
+├── utils_local/                   # 几何、轨迹、车道、单应性、运动补偿与冲突三图证据渲染工具
 ├── byte_tracker/                  # ByteTrack 实现
 ├── platform/                      # FastAPI 单体、Alembic、road9/TimescaleDB 访问与测试
 ├── console2/                      # React/Vite 正式前端
-├── scripts/                       # ADR-019、备份恢复、性能/soak/故障演练脚本
+├── scripts/                       # ADR-019、备份恢复、性能/soak/故障演练与原生 MPS 五/八源验收脚本
 ├── docs/                          # current-state 契约、ADR、任务与验收证据
 ├── test_videos/                   # 本机大文件视频/SRT/Cloud JSON 资产（通常不进 Git）
 └── test_*.py                      # 根检测、契约与真实管道回归
@@ -96,7 +96,6 @@ platform/
 │       └── ...                    # dashboard、alert、enforcement、road context 等领域模块
 ├── tests/                         # 单元、契约和显式 PostgreSQL/TimescaleDB integration
 ├── pyproject.toml                 # 应用与 dev 依赖、Ruff/pytest 配置
-└── Dockerfile                     # Platform 镜像；本轮未修改
 ```
 
 Platform 唯一数据库是 PostgreSQL connection database `road9` + TimescaleDB。当前 Alembic 单 head 为 `20260717_0013`，`uav_message_inbox` 记录事实处理和可恢复派发状态。
@@ -146,6 +145,8 @@ console2/
 | `scripts/audit_adr019_retirement.py` | current-state 静态合同与本机证据审计 |
 | `scripts/validate_adr019_local_retirement.py` | canonical 容器、road9、Topic、旧存储隔离与恢复/soak 证据 |
 | `test_pipeline_inter_xqh.py` | 真实 4K MP4 + DJI SRT 的 56 项管道回归 |
+| `scripts/run_native_mps_replays.py` | Apple Silicon 原生 MPS 多源检测、Kafka 直采、轨迹/TCC 诊断与断点续跑 |
+| `docs/test_report_five_source_trajectory_tcc_full_flow_20260721.md` | 五源轨迹检测、Console 回放、TCC 三图证据全流程验收 |
 | `docs/UAT_FULL_REVIEW_2026-07-17.md` | 发布前全量审查、修复状态和延期门禁 |
 
 ## 7. 历史与保留边界

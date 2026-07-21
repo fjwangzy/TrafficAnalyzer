@@ -448,6 +448,7 @@ def _track(track_id, vehicle_class, velocity, history, speed_kmh=12.0):
     tr = TrackElement(id=track_id, timestamp_first=history[0][2])
     tr.vehicle_class = vehicle_class
     tr.avg_speed_kmh = speed_kmh
+    tr.max_speed_kmh = speed_kmh
     tr.velocity_ms = np.array(velocity, dtype=np.float64)
     tr.position_history = history
     tr.trajectory_points = [(p[0], p[1]) for p in history]

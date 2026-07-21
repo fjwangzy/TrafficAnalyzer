@@ -436,6 +436,10 @@ near-miss 证据：
 
 `ttc_sec` 表示预测冲突时间；`pet_sec` 表示双方到达冲突点的时间差近似值；路径交叉点场景下同时输出 `motor_arrival_ttc_sec` / `non_motor_arrival_ttc_sec` 和 `arrival_time_delta_sec`。事件附加输出 `conflict_scene`、`conflict_angle_deg`、`evidence`、`risk_score`。`motor_id` / `non_motor_id` 轨迹对同级别事件不重复上报，但允许从 `warning` 升级为 `critical` 再次上报；直到任一轨迹从 `buffer_tracks` 清理后释放状态。
 
+冲突事件在 `KafkaProducerNode` 阶段、进入 `ShowNode` 之前调用 `utils_local/event_evidence.py`。该深模块只读取同一个 `FrameElement`，分别复制生成原始画面、带目标框/类别/轨迹 ID 的检测器输出画面，以及叠加同期 `buffer_tracks.trajectory_points`、高亮冲突 pair 的轨迹还原画面；它不修改共享内存原帧。三图以一个有序证据包可靠发布，Platform 必须完整校验三项后再登记内容地址和 SHA-256，检测图与轨迹图通过 `derived_from_id` 回指原图。旧事件若只存在 `conflict_keyframe` 仍可查询展示，但不会凭空补造缺失画面。
+
+节点每帧同时写入 `FrameElement.tcc_diagnostics`，记录检测开关、单应性有效性、motor/non_motor 输入数、双方合格轨迹数、候选配对、预测候选、证据通过、去重、正式路径交点事件和实验事件数量。诊断状态区分 `disabled`、`missing_calibration`、`no_eligible_candidates`、`no_prediction_candidates`、`no_evidence`、`deduplicated` 与 `events_emitted`。该漏斗随 `uav_stats.data.tcc_diagnostics` 发布，用于解释合法零检出；它只描述检测过程，不替代事件事实或召回率真值。
+
 ## 事故测绘业务闭环（S3）
 
 1. 任务先完成任务上下文、作业授权、现场指挥、设备和存储五项前置核验；缺项进入 `precheck_failed`，不能开始采集。

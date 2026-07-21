@@ -49,6 +49,11 @@ CANONICAL_TOPIC_PATTERNS = {
     "uav_telemetry": r"uav_telemetry_[A-Za-z0-9._-]+",
     "uav_system_metrics": r"uav_system_metrics",
 }
+CONFLICT_EVIDENCE_KINDS = (
+    "conflict_original_frame",
+    "conflict_detector_frame",
+    "conflict_trajectory_reconstruction",
+)
 
 
 class MetricContractError(ValueError):
@@ -568,11 +573,88 @@ class PostgresMetricStoreAdapter:
         data = value["data"]
         occurred_at = value["occurred_at"]
         fact_id = hashlib.sha256(f"conflict:{value['message_id']}".encode()).hexdigest()[:40]
+        evidence_bundle = data.pop("evidence_images", None)
         snapshot_encoded = data.pop("evidence_snapshot_jpeg", None)
         snapshot_width = data.pop("evidence_snapshot_width", None)
         snapshot_height = data.pop("evidence_snapshot_height", None)
         references: list[str] = []
-        if snapshot_encoded:
+        if evidence_bundle is not None:
+            if not isinstance(evidence_bundle, list) or len(evidence_bundle) != len(CONFLICT_EVIDENCE_KINDS):
+                raise MetricContractError("conflict evidence bundle must contain exactly three images")
+            if tuple(item.get("kind") for item in evidence_bundle if isinstance(item, dict)) != CONFLICT_EVIDENCE_KINDS:
+                raise MetricContractError("conflict evidence bundle kinds or ordering are invalid")
+            try:
+                decoded_bundle = [
+                    (
+                        item,
+                        base64.b64decode(item["jpeg_base64"], validate=True),
+                    )
+                    for item in evidence_bundle
+                ]
+            except (KeyError, ValueError, TypeError) as exc:
+                raise MetricContractError("conflict evidence bundle contains invalid JPEG data") from exc
+            if any(not content for _, content in decoded_bundle):
+                raise MetricContractError("conflict evidence bundle contains an empty image")
+
+            storage = ContentAddressedStore(settings.survey_storage_dir)
+            stored_bundle = [storage.ingest_bytes(content) for _, content in decoded_bundle]
+            package_id = hashlib.sha256(f"conflict-package:{fact_id}".encode()).hexdigest()[:40]
+            manifest_hash = hashlib.sha256(
+                json.dumps(
+                    [
+                        {"kind": item["kind"], "sha256": stored.sha256}
+                        for (item, _), stored in zip(decoded_bundle, stored_bundle)
+                    ],
+                    separators=(",", ":"),
+                ).encode()
+            ).hexdigest()
+            package = EvidencePackage(
+                id=package_id,
+                task_id=None,
+                owner_type="conflict_event",
+                owner_id=fact_id,
+                source_event_id=value["message_id"],
+                integrity_status="hash_verified",
+                manifest_hash=manifest_hash,
+            )
+            session.add(package)
+            evidence_refs = []
+            original_id = hashlib.sha256(
+                f"conflict-frame:{CONFLICT_EVIDENCE_KINDS[0]}:{fact_id}".encode()
+            ).hexdigest()[:40]
+            for (item, _), stored in zip(decoded_bundle, stored_bundle):
+                kind = item["kind"]
+                evidence_id = hashlib.sha256(
+                    f"conflict-frame:{kind}:{fact_id}".encode()
+                ).hexdigest()[:40]
+                session.add(EvidenceItem(
+                    id=evidence_id,
+                    package_id=package_id,
+                    package=package,
+                    task_id=None,
+                    kind=kind,
+                    storage_backend="managed",
+                    storage_key=stored.storage_key,
+                    sha256=stored.sha256,
+                    media_type="image/jpeg",
+                    size_bytes=stored.size_bytes,
+                    derived_from_id=None if kind == CONFLICT_EVIDENCE_KINDS[0] else original_id,
+                    item_metadata={
+                        "width": item.get("width"),
+                        "height": item.get("height"),
+                        "frame_timestamp_sec": (value.get("source_time_raw") or {}).get("frame_timestamp_sec"),
+                    },
+                ))
+                evidence_refs.append({
+                    "id": evidence_id,
+                    "kind": kind,
+                    "url": f"/api/v1/survey-evidence/{evidence_id}/content",
+                    "sha256": stored.sha256,
+                })
+                references.append(f"uav_evidence_items:{evidence_id}")
+            data["evidence_refs"] = evidence_refs
+            data["evidence_status"] = "complete"
+        elif snapshot_encoded:
             try:
                 snapshot = base64.b64decode(snapshot_encoded, validate=True)
                 stored = ContentAddressedStore(settings.survey_storage_dir).ingest_bytes(snapshot)
@@ -716,13 +798,21 @@ class PostgresMetricStoreAdapter:
                 hypertables = sorted(row[0] for row in rows)
             return {"timescaledb": extension, "hypertables": hypertables}
 
-    async def query_traffic(self, inter_id: str, period: str, grain_type: str | None = None) -> list[dict]:
+    async def query_traffic(
+        self,
+        inter_id: str,
+        period: str,
+        grain_type: str | None = None,
+        source_profile_id: str | None = None,
+    ) -> list[dict]:
         statement = select(TrafficMetric).where(
             TrafficMetric.inter_id == inter_id,
             TrafficMetric.observed_at >= _period_start(period),
         )
         if grain_type:
             statement = statement.where(TrafficMetric.grain_type == grain_type)
+        if source_profile_id:
+            statement = statement.where(TrafficMetric.source_profile_id == source_profile_id)
         rows = (await self._execute(statement.order_by(TrafficMetric.observed_at))).scalars().all()
         return [self._traffic_dict(row) for row in rows]
 
@@ -774,11 +864,26 @@ class PostgresMetricStoreAdapter:
             for row in rows
         ]
 
-    async def query_conflicts(self, inter_id: str, period: str, limit: int) -> list[dict]:
+    async def query_conflicts(
+        self,
+        inter_id: str,
+        period: str,
+        limit: int,
+        source_profile_id: str | None = None,
+        pipeline_id: str | None = None,
+        prediction_type: str | None = None,
+    ) -> list[dict]:
         statement = select(ConflictEvent).where(
             ConflictEvent.inter_id == inter_id,
             ConflictEvent.occurred_at >= _period_start(period),
-        ).order_by(ConflictEvent.occurred_at.desc()).limit(limit)
+        )
+        if source_profile_id:
+            statement = statement.where(ConflictEvent.source_profile_id == source_profile_id)
+        if pipeline_id:
+            statement = statement.where(ConflictEvent.pipeline_id == pipeline_id)
+        if prediction_type:
+            statement = statement.where(ConflictEvent.prediction_type == prediction_type)
+        statement = statement.order_by(ConflictEvent.occurred_at.desc()).limit(limit)
         rows = (await self._execute(statement)).scalars().all()
         reviews: dict[str, ConflictReview] = {}
         if rows:
@@ -852,6 +957,7 @@ class PostgresMetricStoreAdapter:
 
     @staticmethod
     def _traffic_dict(row: TrafficMetric) -> dict[str, Any]:
+        payload_data = row.payload.get("data", row.payload) if isinstance(row.payload, dict) else {}
         return {
             "time": row.observed_at.isoformat(),
             "intersection_id": row.intersection_id,
@@ -867,6 +973,9 @@ class PostgresMetricStoreAdapter:
             "headway_sec": row.headway_sec,
             "quality_status": row.quality_status,
             "time_quality": row.time_quality,
+            "source_profile_id": row.source_profile_id,
+            "pipeline_id": row.pipeline_id,
+            "tcc_diagnostics": payload_data.get("tcc_diagnostics"),
         }
 
     @staticmethod
@@ -874,6 +983,7 @@ class PostgresMetricStoreAdapter:
         return dict(
             row.payload.get("data", row.payload),
             id=row.id,
+            message_id=row.source_message_id,
             occurred_at=row.occurred_at.isoformat(),
             inter_id=row.inter_id,
             road_data_version=row.road_data_version,

@@ -5,11 +5,14 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const liveMocks = vi.hoisted(() => ({
   wsCallback: null,
   wsChannels: [],
+  wsStatus: 'connected',
   api: {
     intersections: vi.fn(),
     intersection: vi.fn(),
     intersectionStats: vi.fn(),
     alerts: vi.fn(),
+    conflicts: vi.fn(),
+    trajectories: vi.fn(),
     acknowledgeAlert: vi.fn(),
     createMission: vi.fn(),
     pipelines: vi.fn(),
@@ -49,7 +52,7 @@ vi.mock('./hooks/useWebSocket', () => ({
   useWebSocket: ({ channels, onMessage }) => {
     liveMocks.wsCallback = onMessage
     liveMocks.wsChannels = channels
-    return 'connected'
+    return liveMocks.wsStatus
   },
 }))
 
@@ -87,6 +90,14 @@ function mockSuccessfulApis() {
   liveMocks.api.intersection.mockResolvedValue({ id: 'INT-1', current_drone_id: 'UAV-1' })
   liveMocks.api.intersectionStats.mockResolvedValue([{ time: '2026-07-14T10:00:00Z', congestion_index: 4.8, cars: 20 }])
   liveMocks.api.alerts.mockResolvedValue([{ id: 'A-1', intersection_id: 'INT-1', alert_type: 'conflict', severity: 'P1', title: '机非冲突风险升高', description: '预测轨迹交汇', ttc_sec: 1.2, pet_sec: 0.8 }])
+  liveMocks.api.conflicts.mockResolvedValue([
+    { id: 'DB-C-1', message_id: 'C-1', source_profile_id: 'SRC-1', pipeline_id: 'P-old', prediction_type: 'path_intersection', distance_m: 0.0, motor_id: 96, non_motor_id: 88, severity: 'critical', title: '历史路径交点事件', occurred_at: '2026-07-14T09:59:58Z', ttc_sec: 1.1, pet_sec: 0.3 },
+    { id: 'C-CPA', source_profile_id: 'SRC-1', prediction_type: 'same_time_cpa', distance_m: 0.4, motor_id: 7, non_motor_id: 8, severity: 'warning', title: '实验 CPA 事件', occurred_at: '2026-07-14T09:59:57Z' },
+  ])
+  liveMocks.api.trajectories.mockResolvedValue([
+    { id: 'TRK-HIST-1', track_id: 96, source_profile_id: 'SRC-1', pipeline_id: 'P-old', trajectory_world_m: [[0, 0], [5, 8], [12, 16]], world_anchor_lat_lon: [36.7, 117.0] },
+    { id: 'TRK-HIST-2', track_id: 88, source_profile_id: 'SRC-1', pipeline_id: 'P-old', trajectory_world_m: [[4, 0], [8, 7], [11, 15]], world_anchor_lat_lon: [36.7, 117.0] },
+  ])
   liveMocks.api.acknowledgeAlert.mockResolvedValue({ id: 'A-1', status: 'acknowledged' })
   liveMocks.api.createMission.mockResolvedValue({ id: 'MSN-DEMO-1', status: 'running' })
   liveMocks.api.pipelines.mockResolvedValue([{ pipeline_id: 'P-1', intersection_id: 'INT-1', source_profile_id: 'SRC-1', drone_id: 'UAV-1', camera_id: 11, status: 'running' }])
@@ -111,6 +122,7 @@ describe('Console2 live module migration', () => {
     Object.values(liveMocks.api).forEach((mock) => mock.mockReset())
     liveMocks.wsCallback = null
     liveMocks.wsChannels = []
+    liveMocks.wsStatus = 'connected'
     mockSuccessfulApis()
     Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: vi.fn(() => 'blob:lane-task') })
     Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: vi.fn() })
@@ -141,6 +153,57 @@ describe('Console2 live module migration', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /机非冲突风险升高/ }))
     expect(screen.queryByText('AI 事件研判')).not.toBeInTheDocument()
+  })
+
+  it('backfills source-scoped path conflicts and deduplicates their realtime replay', async () => {
+    open('/monitoring?intersection_id=INT-1&source_profile_id=SRC-1')
+
+    expect(await screen.findByText('历史路径交点事件')).toBeInTheDocument()
+    expect(liveMocks.api.conflicts).toHaveBeenCalledWith('INT-1', {
+      period: '24h',
+      limit: 20,
+      source_profile_id: 'SRC-1',
+      prediction_type: 'path_intersection',
+    })
+    expect(screen.queryByText('实验 CPA 事件')).not.toBeInTheDocument()
+
+    act(() => liveMocks.wsCallback({
+      type: 'uav_conflict',
+      occurredAt: '2026-07-14T09:59:58Z',
+      data: { message_id: 'C-1', source_profile_id: 'SRC-1', prediction_type: 'path_intersection', distance_m: 0.0, motor_id: 96, non_motor_id: 88, severity: 'critical', title: '历史路径交点事件', ttc_sec: 1.1, pet_sec: 0.3 },
+    }))
+
+    expect(screen.getAllByText('历史路径交点事件')).toHaveLength(1)
+  })
+
+  it('loads source-scoped historical trajectories for offline BEV replay', async () => {
+    liveMocks.api.pipelines.mockResolvedValue([])
+    open('/monitoring?intersection_id=INT-1&source_profile_id=SRC-1&view=bev')
+
+    await waitFor(() => expect(screen.getByRole('img', { name: 'BEV 地图轨迹主视图' })).toHaveAttribute('data-trajectory-count', '2'))
+    expect(liveMocks.api.trajectories).toHaveBeenCalledWith('INT-1', {
+      period: '24h',
+      limit: 500,
+      source_profile_id: 'SRC-1',
+      spatial_ready: true,
+      min_world_points: 2,
+    })
+    expect(screen.getByText('BEV 历史轨迹回放 · 2 TRACKS')).toBeInTheDocument()
+  })
+
+  it('shows explanatory TCC and WebSocket downgrade states', async () => {
+    liveMocks.wsStatus = 'disconnected'
+    liveMocks.api.intersectionStats.mockResolvedValue([{
+      time: '2026-07-14T10:00:00Z',
+      congestion_index: 4.8,
+      cars: 20,
+      tcc_diagnostics: { enabled: true, calibration_valid: true, eligible_motor_tracks: 3, eligible_non_motor_tracks: 2, prediction_candidates: 0, events_emitted: 0, status: 'no_prediction_candidates' },
+    }])
+
+    open('/monitoring?intersection_id=INT-1&source_profile_id=SRC-1')
+
+    expect(await screen.findByText('TCC 已启用：无合格预测候选')).toBeInTheDocument()
+    expect(screen.getByText('实时链路已断开，当前展示历史/REST 数据')).toBeInTheDocument()
   })
 
   it('aligns the monitoring selector with registered UAV video sources and their intersections', async () => {

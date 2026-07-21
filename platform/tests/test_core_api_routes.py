@@ -47,8 +47,8 @@ class _MetricStore:
     async def query_tracks(self, *args, **kwargs):
         return []
 
-    async def query_conflicts(self, intersection_id, period="1h", limit=200):
-        self.conflict_query_args = (intersection_id, period, limit)
+    async def query_conflicts(self, intersection_id, period="1h", limit=200, **filters):
+        self.conflict_query_args = (intersection_id, period, limit, filters)
         return [{
             "motor_id": 96,
             "non_motor_id": 88,
@@ -106,7 +106,13 @@ class CoreApiRoutesTest(unittest.TestCase):
     def test_conflict_history_endpoint_returns_replay_evidence(self):
         response = self.client.get(
             "/api/v1/trajectories/INT_camera_1/conflicts",
-            params={"period": "30m", "limit": 20},
+            params={
+                "period": "30m",
+                "limit": 20,
+                "source_profile_id": "SRC-1",
+                "pipeline_id": "pipe-1",
+                "prediction_type": "path_intersection",
+            },
         )
 
         self.assertEqual(response.status_code, 200)
@@ -114,7 +120,14 @@ class CoreApiRoutesTest(unittest.TestCase):
         self.assertEqual(response.json()[0]["evidence"], ["hard_ttc_or_pet"])
         self.assertEqual(
             self.client.app.state.metric_store.conflict_query_args,
-            ("INT_camera_1", "30m", 20),
+            (
+                "INT_camera_1", "30m", 20,
+                {
+                    "source_profile_id": "SRC-1",
+                    "pipeline_id": "pipe-1",
+                    "prediction_type": "path_intersection",
+                },
+            ),
         )
 
 

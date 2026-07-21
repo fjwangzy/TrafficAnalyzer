@@ -209,24 +209,24 @@ auto_lane:
 
 conflict_detection:
   enabled: true  # 新模型已提供非机动车识别；无有效单应性时节点会自动跳过
-  prediction_horizon_sec: 3.0   # 预测时域（秒），5s太远容易误报
+  prediction_horizon_sec: 5.0   # 未来路径交点预测时域（秒）
   critical_horizon_sec: 3.0     # 普通风险的 TTC 分界
-  hard_ttc_sec: 2.0             # TTC 极危险阈值（秒），适度收紧避免满屏
+  hard_ttc_sec: 1.5             # TTC 极危险阈值（秒）
   hard_pet_sec: 1.0             # PET 极危险阈值，可直接作为 near-miss 证据
   sample_interval_sec: 0.2      # 未来轨迹采样间隔
   collision_radius_m: 2.0       # 兼容保留的候选观察半径；同刻碰撞使用下方更严半径
-  enable_same_time_cpa: true    # 启用擦边和并行冲突检测 (原为 false)
-  same_time_collision_radius_m: 1.0 # 共同冲突区半径（米）
-  arrival_time_tolerance_sec: 1.5 # 放宽路径交点预测的到达时间差上限 (原 1.0)
+  enable_same_time_cpa: false   # 实验 CPA 扩展默认关闭，不计入正式 TCC 口径
+  same_time_collision_radius_m: 0.8 # 双方连续同刻进入的共同冲突区半径（米）
+  arrival_time_tolerance_sec: 1.0 # 路径交点预测的到达时间差上限
   relative_speed_min_ms: 0.5     # 相对速度低于该值时不计算 TTC，避免抖动误报
   min_history_points: 4          # 场景/避险证据需要的最少历史轨迹点
-  min_conflict_angle_deg: 35.0  # 角度下限，严格过滤同向行驶/追尾（单应性形变会导致平行轨迹产生 20-30 度夹角）
-  max_conflict_angle_deg: 175.0  # 放宽上限，允许对向/近对向冲突（closing_rate 已防误报）
+  min_conflict_angle_deg: 30.0  # 过滤同向行驶/追尾
+  max_conflict_angle_deg: 150.0 # 过滤近反向误交点
   turn_angle_threshold_deg: 45.0 # 无标注轨迹几何近似右转/左转
-  min_turn_leg_m: 1.0            # 转弯前后两段投影位移都需达到该值，过滤短窗口小折线
+  min_turn_leg_m: 2.0            # 转弯前后两段投影位移都需达到该值，过滤短窗口小折线
   straight_angle_threshold_deg: 25.0 # NMV 近似直行阈值
-  hard_deceleration_ms2: -2.0    # 急减速避险证据 (适度回调，原 -3.0 → -1.0 → -2.0)
-  hard_heading_change_deg: 45.0  # 急转向避险证据 (适度回调，原 60.0 → 30.0 → 45.0)
+  hard_deceleration_ms2: -3.0    # 急减速避险证据
+  hard_heading_change_deg: 60.0  # 急转向避险证据
   stop_speed_ms: 1.0             # 低速停止/让行判定阈值
   moving_speed_ms: 2.0           # 从移动降到低速才算停止/让行
   max_pair_distance_m: 15.0      # 新增：距离预过滤，两车距离超过此值直接跳过

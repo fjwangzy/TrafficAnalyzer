@@ -56,6 +56,24 @@ class ConflictDetectionNode:
         if isinstance(frame_element, VideoEndBreakElement):
             return frame_element
 
+        diagnostics = {
+            "enabled": bool(self.enabled),
+            "calibration_valid": False,
+            "motor_tracks": 0,
+            "non_motor_tracks": 0,
+            "eligible_motor_tracks": 0,
+            "eligible_non_motor_tracks": 0,
+            "candidate_pairs": 0,
+            "prediction_candidates": 0,
+            "evidence_passed": 0,
+            "deduplicated": 0,
+            "events_emitted": 0,
+            "business_events_emitted": 0,
+            "experimental_events_emitted": 0,
+            "status": "disabled" if not self.enabled else "pending",
+        }
+        frame_element.tcc_diagnostics = diagnostics
+
         if not self.enabled:
             frame_element.conflict_events = []
             return frame_element
@@ -63,7 +81,9 @@ class ConflictDetectionNode:
         H = frame_element.homography_matrix
         if not is_valid_homography(H):
             frame_element.conflict_events = []
+            diagnostics["status"] = "missing_calibration"
             return frame_element
+        diagnostics["calibration_valid"] = True
 
         # 分离机动车和非机动车轨迹
         motor_tracks = []
@@ -80,6 +100,11 @@ class ConflictDetectionNode:
                 self._velocity_ms(track),
                 motion_profile,
             )
+            if track.vehicle_class == "motor":
+                diagnostics["motor_tracks"] += 1
+            elif track.vehicle_class == "non_motor":
+                diagnostics["non_motor_tracks"] += 1
+
             # 过滤从未真正移动过的车辆（纯 bbox 抖动噪声）
             # 用 max_speed_kmh 而非 avg_speed_kmh：急停过的车依然保留
             if track.max_speed_kmh < 5.0:
@@ -106,6 +131,9 @@ class ConflictDetectionNode:
             elif track.vehicle_class == "non_motor":
                 non_motor_tracks.append(entry)
 
+        diagnostics["eligible_motor_tracks"] = len(motor_tracks)
+        diagnostics["eligible_non_motor_tracks"] = len(non_motor_tracks)
+
         # 冲突检测
         conflict_events = []
         now = frame_element.timestamp
@@ -119,6 +147,7 @@ class ConflictDetectionNode:
 
         for motor in motor_tracks:
             for non_motor in non_motor_tracks:
+                diagnostics["candidate_pairs"] += 1
                 pair_key = (
                     min(motor["track_id"], non_motor["track_id"]),
                     max(motor["track_id"], non_motor["track_id"]),
@@ -141,6 +170,7 @@ class ConflictDetectionNode:
                 )
                 if prediction is None:
                     continue
+                diagnostics["prediction_candidates"] += 1
 
                 scene = self._classify_scene(
                     motor["motion_profile"],
@@ -158,6 +188,7 @@ class ConflictDetectionNode:
                 )
                 if not evidence:
                     continue
+                diagnostics["evidence_passed"] += 1
 
                 severity = self._classify_severity(prediction, evidence, scene)
                 if severity and self._should_emit_pair(pair_key, severity, now):
@@ -208,11 +239,30 @@ class ConflictDetectionNode:
                             ]
 
                     conflict_events.append(event)
+                    diagnostics["events_emitted"] += 1
+                    if prediction["prediction_type"] == "path_intersection":
+                        diagnostics["business_events_emitted"] += 1
+                    else:
+                        diagnostics["experimental_events_emitted"] += 1
                     self._reported_pairs[pair_key] = {
                         "severity": severity, "timestamp": now
                     }
+                elif severity:
+                    diagnostics["deduplicated"] += 1
 
         frame_element.conflict_events = conflict_events
+        if diagnostics["events_emitted"]:
+            diagnostics["status"] = "events_emitted"
+        elif diagnostics["deduplicated"]:
+            diagnostics["status"] = "deduplicated"
+        elif not motor_tracks or not non_motor_tracks:
+            diagnostics["status"] = "no_eligible_candidates"
+        elif not diagnostics["prediction_candidates"]:
+            diagnostics["status"] = "no_prediction_candidates"
+        elif not diagnostics["evidence_passed"]:
+            diagnostics["status"] = "no_evidence"
+        else:
+            diagnostics["status"] = "no_events"
         return frame_element
 
     def _velocity_ms(self, track) -> np.ndarray | None:

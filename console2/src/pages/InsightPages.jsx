@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
@@ -134,11 +135,22 @@ function eventMetricTiles(event) {
   return [['事件类型', event.type], ['状态', event.status || 'open'], ['质量', event.quality], ['证据', event.evidence_refs?.length || 0]]
 }
 
-function EventEvidenceImage({ reference }) {
+const eventEvidenceLabels = {
+  conflict_original_frame: '原始画面',
+  conflict_detector_frame: '检测器输出画面',
+  conflict_trajectory_reconstruction: '同期轨迹还原画面',
+  conflict_keyframe: '关键帧证据',
+}
+
+function EventEvidenceImage({ reference, label }) {
   const [url, setUrl] = useState('')
+  const [expanded, setExpanded] = useState(false)
+  const triggerRef = useRef(null)
   useEffect(() => {
     let active = true
     let objectUrl = ''
+    setUrl('')
+    setExpanded(false)
     if (!reference?.id) return undefined
     platformApi.surveyEvidence(reference.id).then((blob) => {
       objectUrl = URL.createObjectURL(blob)
@@ -146,7 +158,46 @@ function EventEvidenceImage({ reference }) {
     }).catch(() => setUrl(''))
     return () => { active = false; if (objectUrl) URL.revokeObjectURL(objectUrl) }
   }, [reference?.id])
-  return url ? <img className='event-evidence-image' src={url} alt='冲突事件关键帧证据' /> : <div className='live-state'>正在读取关键帧证据…</div>
+  useEffect(() => {
+    if (!expanded) return undefined
+    const previousOverflow = document.body.style.overflow
+    const handleKeyDown = (event) => {
+      if (event.key !== 'Escape') return
+      event.preventDefault()
+      event.stopPropagation()
+      setExpanded(false)
+    }
+    document.body.style.overflow = 'hidden'
+    document.addEventListener('keydown', handleKeyDown, true)
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown, true)
+      document.body.style.overflow = previousOverflow
+      triggerRef.current?.focus()
+    }
+  }, [expanded])
+  if (!url) return <div className='live-state'>正在读取{label}…</div>
+  return <>
+    <button ref={triggerRef} className='event-evidence-trigger' type='button' aria-label={`全屏查看${label}`} onClick={() => setExpanded(true)}>
+      <img className='event-evidence-image' src={url} alt={label} />
+      <span>点击查看全屏</span>
+    </button>
+    {expanded && createPortal(<div className='event-evidence-lightbox' role='dialog' aria-modal='true' aria-label={`${label}全屏预览`} onMouseDown={(event) => { if (event.target === event.currentTarget) setExpanded(false) }}>
+      <button className='event-evidence-lightbox-close' type='button' aria-label='关闭证据图片全屏预览' autoFocus onClick={() => setExpanded(false)}><X size={20} /><span>关闭</span></button>
+      <img src={url} alt={`${label}全屏预览`} />
+    </div>, document.body)}
+  </>
+}
+
+function EventEvidenceGallery({ references }) {
+  return <div className='event-evidence-gallery'>
+    {references.map((reference, index) => {
+      const label = eventEvidenceLabels[reference.kind] || (index === 0 ? '关键帧证据' : `事件证据 ${index + 1}`)
+      return <article className='event-evidence-card' key={reference.id}>
+        <header><strong>{label}</strong><span>sha256:{reference.sha256?.slice(0, 12)}…</span></header>
+        <EventEvidenceImage reference={reference} label={label} />
+      </article>
+    })}
+  </div>
 }
 
 function eventColumns(onOpen) {
@@ -319,7 +370,7 @@ export function AlertsPage() {
     {selectedEvent && <DetailDrawer wide title={selectedEvent.title} subtitle={`${selectedEvent.type} · ${selectedEvent.id}`} onClose={() => openEvent(null)} footer={platformRole === 'admin' ? <><button className='danger-button' disabled={reviewMutation.isPending} onClick={() => reviewMutation.mutate({ event: selectedEvent, reviewStatus: 'rejected' })}><X size={15} /> 驳回 AI 结果</button><button className='primary-button' disabled={reviewMutation.isPending} onClick={() => reviewMutation.mutate({ event: selectedEvent, reviewStatus: 'confirmed' })}><Check size={15} /> 技术确认</button></> : <span className='muted'>仅管理员可执行技术复核</span>}>
       <div className='event-hero'><div className='event-primary-metrics'>{eventMetricTiles(selectedEvent).map(([label, value]) => <div key={label}><span>{label}</span><strong>{value}</strong></div>)}</div></div>
       {actionError && <QualityNotice tone='warning' title='技术复核失败'>{actionError}</QualityNotice>}
-      {selectedEvent.evidence_refs?.length > 0 && <Panel title='关键帧证据' subtitle={`sha256:${selectedEvent.evidence_refs[0].sha256?.slice(0, 16)}…`}><EventEvidenceImage reference={selectedEvent.evidence_refs[0]} /></Panel>}
+      {selectedEvent.evidence_refs?.length > 0 && <Panel title='事件画面证据' subtitle={`同一事件时刻 · ${selectedEvent.evidence_refs.length} 项内容寻址证据`}><EventEvidenceGallery references={selectedEvent.evidence_refs} /></Panel>}
       <div className='detail-two-col'><Panel title='事件与质量'><InfoRow label='业务时间' value={selectedEvent.occurredAt} /><InfoRow label='路口' value={projectIntersections.find((item) => item.id === selectedEvent.intersectionId)?.name || selectedEvent.intersectionId || '未匹配'} /><InfoRow label='任务 / Pipeline' value={`${selectedEvent.mission_id || '—'} / ${selectedEvent.pipeline_id || '—'}`} /><InfoRow label='数据源' value={selectedEvent.source_profile_id || '—'} /><InfoRow label='路网版本' value={selectedEvent.road_data_version || '—'} /><InfoRow label='质量' value={selectedEvent.quality} badge={selectedEvent.quality === 'verified' ? 'good' : 'degraded'} /></Panel><Panel title='投递与复核'><InfoRow label='投递状态' value={selectedEvent.delivery} badge={selectedEvent.delivery === 'blocked' ? 'blocked' : 'degraded'} /><InfoRow label='事实来源' value={selectedEvent.isConflict ? 'uav_conflict_events' : 'uav_ai_events'} /><InfoRow label='复核 revision' value={selectedEvent.review_revision || '—'} /><InfoRow label='技术复核' value={selectedEvent.review} badge={selectedEvent.review} /></Panel></div>
       {selectedEvent.related_tracks?.length > 0 && <Panel title='关联轨迹' subtitle={`同任务/事件窗口 ${selectedEvent.related_tracks.length} 条`}><div className='related-track-list'>{selectedEvent.related_tracks.slice(0, 8).map((track) => <button key={track.id} className='compact-event' onClick={() => navigate(`/gis?intersection_id=${selectedEvent.intersectionId}&mission_id=${track.mission_id || ''}&track_id=${track.id}`)}><StatusBadge value={track.quality_status || 'unverified'} /><div><strong>Track #{track.track_id}</strong><span>{track.vehicle_class || 'unknown'} · {track.turn_behavior || '未分类'} · {track.duration_sec ?? '—'}s</span></div></button>)}</div></Panel>}
       <Panel title='事实状态时间线'><div className='state-timeline'>{[`事实入库 ${selectedEvent.occurredAt}`, selectedEvent.delivery === 'not_queued' ? '主平台投递未启用' : `投递：${selectedEvent.delivery}`, selectedEvent.review === 'pending' ? '等待技术复核' : `技术复核：${selectedEvent.review}`].map((item, index) => <div key={item} className={index === 2 ? 'current' : ''}><i /><span>{item}</span></div>)}</div></Panel>

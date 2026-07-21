@@ -229,3 +229,25 @@ SRT文件 → SrtTelemetryParser → VideoReader(telemetry注入)
 - `python -m pytest test_kafka_active_trajectories.py test_utils_local.py test_byte_tracker_core.py test_main_optimized_batch.py test_main_optimized_eof.py -q`：12 passed。
 - `python test_pipeline_inter_xqh.py`：56 PASS / 0 FAIL / 0 WARN；真实 4K 视频前 100 帧检测、遥测、H 矩阵均为 100/100，运动补偿为 90/100。
 - `python scripts/audit_adr019_retirement.py --scope local --strict`、`docker compose config --quiet`、`git diff --check`：全部通过。
+
+---
+
+## 2026-07-20 TCC 检测链路可解释性复验 ✅
+
+### 修复与结果
+
+- `test_refactor_unit.py` 的 TCC 正样本夹具补齐 `max_speed_kmh`，恢复 `52 PASS / 0 FAIL`；既有 CPA、擦肩、车型同类配对和去重负样本门禁保持通过。
+- 默认业务配置恢复为 `path_intersection + 同时空共同冲突区`；`enable_same_time_cpa=false`，实验 CPA 不进入正式 `conflict_count` 或 Monitoring 默认展示。
+- `ConflictDetectionNode` 每帧输出标定、输入/合格机非轨迹、候选配对、预测、证据、去重、正式/实验事件计数；`uav_stats`、road9 历史统计和 Monitoring 均保留该漏斗。
+- 历史冲突 API 支持 `source_profile_id`、`pipeline_id`、`prediction_type`；Monitoring 按当前 SourceProfile 回填最近 24 小时严格路径交点事件，以 canonical `message_id` 与实时消息去重，并明确显示 WebSocket 历史/REST 降级状态。浏览器实机核对 `SRC-MP4NEW-CH-0625-AM` 在 road9 有 5 条严格路径交点事实；短于任务结束时间的 30 分钟窗口会误显示 0，因此采用 24 小时回填。
+- 浏览器验收已确认 Monitoring 会按选中源发起 `period=24h&source_profile_id=SRC-MP4NEW-CH-0625-AM&prediction_type=path_intersection` 请求，并展示明确的 WebSocket/TCC 状态。为避免中断当时正在运行的检测任务，仅以 `--no-deps` 更新 Console2，未重启 Platform；崇华路运行态在检测器高负载下出现 REST 10 秒超时，因此新漏斗在当前旧 Platform 进程中暂不可见，待安全维护窗口重建 Platform 后生效。
+- 小清河 `inter_xqh` 前 100 帧仍为 0 条冲突，这是通过标定、检测和跟踪后的合法零检出，不以放宽阈值或实验 CPA 制造事件。
+
+### 自动化门禁
+
+- `python test_refactor_unit.py`：`52 PASS / 0 FAIL`。
+- `python -m pytest test_tcc_diagnostics.py test_kafka_active_trajectories.py test_utils_local.py test_byte_tracker_core.py test_main_optimized_eof.py -q`：`14 passed`。
+- `python -m pytest platform/tests -q`：`143 passed / 5 skipped / 10 subtests passed`。
+- `cd console2 && npm test -- --run`：`15` 个测试文件、`89` 个测试通过；`npm run build` 成功。
+- `python test_pipeline_inter_xqh.py`：`56 PASS / 0 FAIL / 0 WARN`；100/100 帧有检测和有效 H，90/100 帧有运动补偿，冲突为 0。
+- `python scripts/audit_adr019_retirement.py --scope local --strict`、`docker compose config --quiet`、`git diff --check`：全部通过。

@@ -55,7 +55,7 @@ export const platformApi = {
 
   intersections: () => get('/intersections'),
   intersection: (id) => get(`/intersections/${encodeURIComponent(id)}`),
-  intersectionStats: (id, period = '30m', granularity = '5m') => get(`/intersections/${encodeURIComponent(id)}/stats`, { params: { period, granularity } }),
+  intersectionStats: (id, period = '30m', granularity = '5m', sourceProfileId) => get(`/intersections/${encodeURIComponent(id)}/stats`, { params: { period, granularity, ...(sourceProfileId ? { source_profile_id: sourceProfileId } : {}) } }),
   trajectories: (id, params = {}) => get(`/trajectories/${encodeURIComponent(id)}`, { params }),
   conflicts: (id, params = {}) => get(`/trajectories/${encodeURIComponent(id)}/conflicts`, { params }),
   reviewConflict: (intersectionId, eventId, body) => post(`/trajectories/${encodeURIComponent(intersectionId)}/conflicts/${encodeURIComponent(eventId)}/review`, body),

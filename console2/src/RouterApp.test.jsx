@@ -26,7 +26,7 @@ vi.mock('./lib/api', async (importOriginal) => {
   const frame = { id: 'FRM-01', task_id: task.id, batch_id: 'BATCH-01', frame_number: 18236, timestamp_sec: 10, has_metric_transform: true, metric_transform: [[0.1, 0, 0], [0, 0.1, 0], [0, 0, 1]], image_url: '/api/v1/survey-evidence/EVI-IMAGE/content', bev_url: '/api/v1/survey-evidence/EVI-BEV/content', quality: {}, telemetry: {} }
   const measurement = { id: 'M-01', revision: 1, frame_id: frame.id, geometry_type: 'line', category: '刹车痕迹', image_geometry: [[10, 10], [40, 40]], metric_geometry: [[1, 1], [4, 4]], display_value: '12.48m', quality_status: 'unverified', source: 'manual' }
   const report = { id: 'RPT-01', task_id: task.id, version: 1, status: 'generated', schema_version: 'uav.survey-result.v1', content_hash: 'a'.repeat(64), payload: {}, pdf_url: '/api/v1/survey-evidence/EVI-PDF/content', delivery_blocked_reason: 'survey quality thresholds are not approved' }
-  const conflictEvent = { id: 'UAV-EVT-20260713-001', source_kind: 'conflict', event_type: 'conflict', inter_id: 'INT-I5', title: '机非冲突风险升高', severity: 'critical', occurred_at: '2026-07-15T02:52:16Z', quality_status: 'unverified', review_status: 'pending', review_revision: 1, delivery_status: 'not_queued', payload: { conflict_scene: '机非冲突风险升高', ttc_sec: 1.2, pet_sec: 0.8, distance_m: 0, risk_score: 86, evidence: ['path_intersection'] } }
+  const conflictEvent = { id: 'UAV-EVT-20260713-001', source_kind: 'conflict', event_type: 'conflict', inter_id: 'INT-I5', title: '机非冲突风险升高', severity: 'critical', occurred_at: '2026-07-15T02:52:16Z', quality_status: 'unverified', review_status: 'pending', review_revision: 1, delivery_status: 'not_queued', evidence_refs: [{ id: 'EVI-CONFLICT-ORIGINAL', kind: 'conflict_original_frame', sha256: '0'.repeat(64) }, { id: 'EVI-CONFLICT-DETECTOR', kind: 'conflict_detector_frame', sha256: '1'.repeat(64) }, { id: 'EVI-CONFLICT-TRAJECTORY', kind: 'conflict_trajectory_reconstruction', sha256: '2'.repeat(64) }], payload: { conflict_scene: '机非冲突风险升高', ttc_sec: 1.2, pet_sec: 0.8, distance_m: 0, risk_score: 86, evidence: ['path_intersection'] } }
   const congestionEvent = { id: 'UAV-EVT-20260713-004', source_kind: 'ai_event', event_type: 'congestion', inter_id: 'INT-I5', title: '排队增长', severity: 'P2', occurred_at: '2026-07-15T02:50:00Z', quality_status: 'unverified', review_status: 'pending', review_revision: 1, delivery_status: 'not_queued', payload: { metrics: { congestion_index: 7.0 } } }
   const surveyEvent = { id: 'UAV-EVT-20260713-005', source_kind: 'ai_event', event_type: 'survey_result', inter_id: 'INT-I5', title: '事故测绘成果', severity: 'P3', occurred_at: '2026-07-15T02:49:00Z', quality_status: 'unverified', review_status: 'technical_reviewed', review_revision: 1, delivery_status: 'blocked', payload: { measurements: [{ id: 'M-01' }], task: { version: 'v7' } } }
   return {
@@ -139,6 +139,8 @@ function open(path) {
 
 describe('Console2 full prototype', () => {
   beforeEach(() => {
+    Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: vi.fn(() => 'blob:event-evidence') })
+    Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: vi.fn() })
     Object.assign(authState, {
       user: { username: 'admin', role: 'admin' },
       status: 'authenticated',
@@ -299,6 +301,29 @@ describe('Console2 full prototype', () => {
     fireEvent.click(screen.getByRole('button', { name: '技术确认' }))
     expect(await screen.findByText('AI 结果已技术确认')).toBeInTheDocument()
     expect(platformApi.reviewEvent).toHaveBeenCalledWith('UAV-EVT-20260713-001', expect.objectContaining({ review_status: 'confirmed', expected_revision: 1 }))
+  })
+
+  it('opens event evidence in a fullscreen preview and closes without dismissing the event', async () => {
+    open('/events?event_id=UAV-EVT-20260713-001')
+
+    expect(await screen.findByText('原始画面')).toBeInTheDocument()
+    expect(screen.getByText('检测器输出画面')).toBeInTheDocument()
+    expect(screen.getByText('同期轨迹还原画面')).toBeInTheDocument()
+    const trigger = await screen.findByRole('button', { name: '全屏查看检测器输出画面' })
+    fireEvent.click(trigger)
+    expect(screen.getByRole('dialog', { name: '检测器输出画面全屏预览' })).toBeInTheDocument()
+    expect(screen.getByRole('img', { name: '检测器输出画面全屏预览' })).toHaveAttribute('src', 'blob:event-evidence')
+    expect(document.body).toHaveStyle({ overflow: 'hidden' })
+
+    fireEvent.click(screen.getByRole('button', { name: '关闭证据图片全屏预览' }))
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: '检测器输出画面全屏预览' })).not.toBeInTheDocument())
+    expect(screen.getByRole('dialog', { name: '机非冲突风险升高' })).toBeInTheDocument()
+    expect(trigger).toHaveFocus()
+
+    fireEvent.click(trigger)
+    fireEvent.keyDown(document, { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: '检测器输出画面全屏预览' })).not.toBeInTheDocument())
+    expect(screen.getByRole('dialog', { name: '机非冲突风险升高' })).toBeInTheDocument()
   })
 
   it('links event filters across persisted event type, intersection, and search', async () => {

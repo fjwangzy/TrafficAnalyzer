@@ -91,6 +91,7 @@ TrafficAnalyzer 是智慧交通大项目下的无人机 AI 交通分析子系统
 ┌─────────────────────────────────────────────────────────┐
 │             ConflictDetectionNode（默认启用）             │
 │  右转/左转机非 near-miss 证据漏斗 + 冲突点世界坐标输出      │
+│  同帧输出标定/轨迹/配对/预测/证据/去重/事件诊断漏斗         │
 └─────────────────────┬───────────────────────────────────┘
                       ▼
 ┌─────────────────────────────────────────────────────────┐
@@ -102,7 +103,7 @@ TrafficAnalyzer 是智慧交通大项目下的无人机 AI 交通分析子系统
 │             KafkaProducerNode                            │
 │  uav_statistics_{n} / uav_track_complete_{n}              │
 │  uav_conflicts_{n} / uav_telemetry_{n}                     │
-│  含方向流量/车道统计/自动车道/车速/无人机位置/冲突计数   │
+│  含方向流量/车道统计/车速/无人机位置/正式冲突计数与 TCC 诊断│
 └─────────────────────┬───────────────────────────────────┘
                       ▼
 ┌─────────────────────────────────────────────────────────┐
@@ -330,6 +331,15 @@ Platform 继续独立消费同一 Topic 并写入 `road9`。
 `mp4new2` 复用既有海右路、礼士路、崇华路 RoadContext，不创建假路口。TCC 验收只接受
 `prediction_type=path_intersection` 且 `distance_m≈0` 的真实事件；0 事件是允许的业务结果，
 不得通过放宽阈值制造正样本。
+
+批量验收的每个 SourceProfile 必须同时满足：检测进程返回码为 0、Stats 与完成轨迹均非空、
+每条 Stats 都携带 TCC 漏斗诊断、且不存在不符合严格业务口径的 TCC 事件。若批量抽帧未产生
+正样本，必须再通过正常 Mission 验证 `path_intersection + distance_m≈0` 及固定三图证据包，
+不能把“0 事件”误报为链路未执行，也不能通过降低门槛制造事件。
+
+Console2 Monitoring 在存在运行中 Pipeline 时只投放当前会话 active/completed 世界轨迹；离线时按
+当前 SourceProfile 查询 24 小时内最多 500 条 `spatial_ready` 历史轨迹并标记为“BEV 历史轨迹回放”。
+页面上限用于保护 OpenLayers 渲染，不替代 Road9 总量对账。
 
 ### Platform/Vite MJPEG 代理
 
@@ -682,6 +692,8 @@ Console2 /enforcement/**
 Platform 的历史 API 直接查询 PostgreSQL/TimescaleDB；仓库不保留旧查询客户端、依赖或运行时配置。
 
 I3 的 `MetricStore` 是 Kafka 与存储之间的深模块边界：消费者只提交 canonical 信封，模块内部完成 schema/业务时间校验、payload hash、`uav_message_inbox` 判重、事实展开和同事务提交。旧信封直接拒绝并进入 dead letter。数据库成功后才手动提交 Kafka offset；瞬态失败 seek 回原 offset，成功重放由 inbox 返回既有事实引用且不重复广播。可变冲突复核单独进入 `uav_conflict_reviews`，不修改 `uav_conflict_events` 追加事实。
+
+冲突视觉证据的生成 seam 位于 `KafkaProducerNode → utils_local.event_evidence`，早于 `ShowNode` 且不改变三进程拓扑。每个冲突用同一帧生成“原图 / 检测器输出 / 同期轨迹还原”三项有序证据；`MetricStore` 将三项作为一个 `EvidencePackage` 在冲突事实事务内登记，两个派生项回指原图。Console2 只消费 `evidence_refs` 并通过鉴权证据接口读取，不在浏览器重新推断检测或轨迹画面。
 
 ### 关键设计决策
 

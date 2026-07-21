@@ -96,7 +96,7 @@ Topic 的单复数按上表固定。`msg_type` 必须与 Topic 映射一致；�
 
 - `uav_stats`：保留车辆数、活跃轨迹、速度、排队、方向流量、动态 `roads[]`、`lane_stats[]`、路网和质量字段。旧 `road_1`～`road_N` 不进入 canonical 主结构，也没有运行时迁移适配器。
 - `uav_track_complete`：保留轨迹 ID、车辆类别、转向、起止时间、速度、ENU/像素轨迹、入口/出口 Link/车道、地图匹配与质量字段。
-- `uav_conflict`：保留双方轨迹 ID、TTC/PET、最小距离、冲突角、场景、风险分、证据和预测位置；当前 near-miss 判定口径不因消息改名而变化。
+- `uav_conflict`：保留双方轨迹 ID、TTC/PET、最小距离、冲突角、场景、风险分、证据和预测位置；当前 near-miss 判定口径不因消息改名而变化。事件产生时必须从同一源帧同步生成 `evidence_images`，固定按 `conflict_original_frame`、`conflict_detector_frame`、`conflict_trajectory_reconstruction` 排序，每项携带 `jpeg_base64/width/height`。Platform 在同一事务中登记一个 `uav_evidence_packages` 和三条 `uav_evidence_items`，入库后的事件 payload 仅保留三项 `evidence_refs`，不得继续保存 Base64 大字段。
 - `uav_telemetry`：保留无人机定位、姿态、云台、速度、悬停、任务/管道和定位质量。
 - `uav_system_metrics`：使用指标名、值、单位、实例和 labels，禁止继续按摄像头创建独立 measurement。
 - `uav_ai_event`：使用本节信封，并在 `data` 中携带 `source_event_id`、`idempotency_key`、业务事件、证据和投递所需字段。S1～S4 的路口态势、`lane_change`、`conflict`、`risk_hotspot`、`survey_result`、`enforcement_clue` 统一通过 `event_type` 区分，不为每个场景再建立无统一治理的独立 Topic。
@@ -446,6 +446,22 @@ I4 通过 `EnforcementService` 将候选围栏、候选规则、统一 AI 事件
     "1": [1195, 361, 1297, 310, 1399, 315, 1350, 380]
   },
   "conflict_count": 0,
+  "tcc_diagnostics": {
+    "enabled": true,
+    "calibration_valid": true,
+    "motor_tracks": 12,
+    "non_motor_tracks": 4,
+    "eligible_motor_tracks": 8,
+    "eligible_non_motor_tracks": 3,
+    "candidate_pairs": 24,
+    "prediction_candidates": 0,
+    "evidence_passed": 0,
+    "deduplicated": 0,
+    "events_emitted": 0,
+    "business_events_emitted": 0,
+    "experimental_events_emitted": 0,
+    "status": "no_prediction_candidates"
+  },
   "drone_position": {
     "anchor_lat": 31.234567,
     "anchor_lon": 121.456789,
@@ -538,7 +554,8 @@ lon = anchor_lon + easting_m / (111320 × cos(radians(anchor_lat)))
 | `lane_stats` | dict \| null | 车道级统计（有标注或模型检测时输出） |
 | `lane_source` | string \| null | 车道数据来源：`"manual"` / `"model"` / `"auto"` / `null` |
 | `road_polygons` | dict | 当前检测配置中的道路多边形，供悬停生成标注任务后导出复用 |
-| `conflict_count` | int | 当前帧冲突事件数 |
+| `conflict_count` | int | 当前帧正式 TCC 事件数；只计 `prediction_type=path_intersection && distance_m≈0.0`，实验 `same_time_cpa` 不计入 |
+| `tcc_diagnostics` | dict \| null | TCC 轻量漏斗：检测/标定状态、输入及合格机非轨迹、候选配对、预测、证据、去重、正式/实验事件计数和可解释状态 |
 | `drone_position` | dict \| null | 无人机位置（有遥测时输出） |
 | `is_hovering` | bool | 是否悬停 |
 
@@ -1220,12 +1237,19 @@ multiprocessing 子进程也会检测 `FileHandler` 是否可写并在必要时�
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | GET | `/api/v1/trajectories/{intersection_id}` | 查询路口历史轨迹，支持 `period` / `limit`、任务、数据源、车型、方向以及空间投放筛选 |
-| GET | `/api/v1/trajectories/{intersection_id}/conflicts` | 查询路口历史冲突事件，支持 `period` / `limit`，返回 TTC/PET、场景、证据、风险分和预测位置 |
+| GET | `/api/v1/trajectories/{intersection_id}/conflicts` | 查询路口历史冲突事件，支持 `period` / `limit` 及可选 `source_profile_id`、`pipeline_id`、`prediction_type` 过滤，返回 TTC/PET、场景、证据、风险分和预测位置 |
 | POST | `/api/v1/trajectories/{intersection_id}/conflicts/{event_id}/review` | 管理员按 `expected_revision` 技术确认/驳回；409 表示 revision 冲突，结果不等同警情处置 |
 | GET | `/api/v1/trajectories/{intersection_id}/turn-summary` | 查询转向行为汇总 |
 
 Console GIS 页会在选中路口后调用 `GET /api/v1/trajectories/{intersection_id}?period=all&limit=500&spatial_ready=true&min_world_points=6`，展示历史轨迹数量、轨迹 ID、转向、车辆类型、均速、时长和轨迹点数，用于复盘 `track_complete` 写入后的路线形态。`spatial_ready=true` 要求 `trajectory_world_m` 点数达到 `min_world_points` 且 `world_anchor_lat_lon` 非空；过滤必须在 PostgreSQL 的 `ORDER BY/LIMIT` 前执行，避免最新的降级短片段挤掉库内可投放轨迹。通用查询默认 `spatial_ready=false`，不会隐式丢弃事实。
-同一页面还会调用 `GET /api/v1/trajectories/{intersection_id}/conflicts?period=1h&limit=200`，展示历史冲突 pair、TTC/PET、业务场景、证据和风险分。I3 当前实现查询 TimescaleDB hypertable `uav_conflict_events`，并从普通表 `uav_conflict_reviews` 合并复核状态；正式 `/gis`、`/events` 路由不再读取轨迹/事件 Mock。
+
+Console Monitoring 在无运行 Pipeline 时调用
+`GET /api/v1/trajectories/{intersection_id}?period=24h&limit=500&source_profile_id={profile_id}&spatial_ready=true&min_world_points=2`
+恢复当前视频源的 BEV 历史轨迹。该查询只用于离线回放窗口；运行中 Pipeline 仍以当前 WebSocket
+会话的 active/completed 轨迹为准，避免历史轨迹混入实时检测状态。
+同一页面还会调用 `GET /api/v1/trajectories/{intersection_id}/conflicts?period=1h&limit=200`，展示历史冲突 pair、TTC/PET、业务场景、证据和风险分。Monitoring 使用当前 `source_profile_id` 并固定 `prediction_type=path_intersection` 回填最近 24 小时事件；可在任务复盘时另加 `pipeline_id` 精确过滤。I3 当前实现查询 TimescaleDB hypertable `uav_conflict_events`，并从普通表 `uav_conflict_reviews` 合并复核状态；正式 `/gis`、`/events` 路由不再读取轨迹/事件 Mock。
+
+`GET /api/v1/intersections/{intersection_id}/stats` 额外支持可选 `source_profile_id`。历史统计响应保留 `pipeline_id`、`source_profile_id` 和 `tcc_diagnostics`，Monitoring 必须按当前 SourceProfile 请求，避免同一路口不同视频源的漏斗状态串线。
 
 ### 告警中心 `/api/v1/alerts`
 
@@ -1335,7 +1359,7 @@ AlertEngine 创建告警和确认告警时写入 `road9` 中的 `uav_alerts`。P
 
 ### `conflict` 消息
 通过 `intersection:{id}` 频道推送，与 Kafka conflicts topic 格式一致。
-- Monitoring 页面会保留并显示最近 20 个实时冲突 pair；同一 `motor_id` / `non_motor_id` 的重复消息会合并为一条事件行。点击事件行会在 BEV 上叠加 motor/non_motor 短时回放层，回放控制状态与实时 `active_trajectories` 投放解耦。页面只把 `prediction_type=path_intersection && distance_m≈0.0` 作为业务冲突回放；旧格式仅在 `distance_m` 近似 `0.0` 时兼容，`same_time_cpa`、旧 CPA 非零距离消息或畸形 path 非零距离消息会被过滤，避免仅中心点 0.9m~1.7m 擦肩事件进入机非冲突列表。BEV 回放中的风险圈和距离辅助线均使用事件预测位置，不能使用播放进度下两车当前点替代预测冲突点。
+- Monitoring 页面按当前 SourceProfile 回填最近 20 个历史路径交点事件，并与 WebSocket 实时冲突按事件 ID 去重；刷新、晚进入页面或实时链路暂时断开时仍可恢复事实。页面只把 `prediction_type=path_intersection && distance_m≈0.0` 作为业务冲突回放；旧格式仅在 `distance_m` 近似 `0.0` 时兼容，`same_time_cpa`、旧 CPA 非零距离消息或畸形 path 非零距离消息会被过滤。WebSocket 非 connected 状态明确标为历史/REST 降级展示，不能继续声称“实时”。
 - severity="critical" → AlertEngine 创建 P1 告警
 - severity="warning" → AlertEngine 创建 P2 告警
 

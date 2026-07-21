@@ -25,8 +25,20 @@ from utils_local.motion_compensation import pixel_to_world_compensated
 from elements.VideoEndBreakElement import VideoEndBreakElement
 from elements.FrameElement import FrameElement
 from nodes.ReliableKafkaPublisher import ReliableKafkaPublisher
+from utils_local.event_evidence import build_conflict_evidence_images
 
 logger = logging.getLogger(__name__)
+
+
+def is_business_tcc_event(event: dict) -> bool:
+    """Return whether an event belongs to the canonical path-intersection TCC count."""
+    prediction_type = event.get("prediction_type")
+    distance_m = event.get("distance_m")
+    try:
+        at_path_intersection = abs(float(distance_m)) <= 0.01
+    except (TypeError, ValueError):
+        at_path_intersection = False
+    return at_path_intersection and prediction_type in {None, "path_intersection"}
 
 
 class KafkaProducerNode:
@@ -505,7 +517,10 @@ class KafkaProducerNode:
 
             # 扩展字段：冲突事件
             conflicts = getattr(frame_element, "conflict_events", None)
-            data["conflict_count"] = len(conflicts) if conflicts else 0
+            data["conflict_count"] = sum(
+                1 for event in (conflicts or []) if is_business_tcc_event(event)
+            )
+            data["tcc_diagnostics"] = getattr(frame_element, "tcc_diagnostics", None)
 
             # 扩展字段：无人机位置（运动补偿）
             anchor = getattr(frame_element, "world_anchor_lat_lon", None)
@@ -543,11 +558,14 @@ class KafkaProducerNode:
         if conflict_events:
             for event in conflict_events:
                 event_msg = {"intersection_id": self.intersection_id, **event}
-                snapshot = self._encode_annotation_snapshot(frame_element)
-                if snapshot:
-                    event_msg["evidence_snapshot_jpeg"] = snapshot["annotation_snapshot_jpeg"]
-                    event_msg["evidence_snapshot_width"] = snapshot["annotation_snapshot_width"]
-                    event_msg["evidence_snapshot_height"] = snapshot["annotation_snapshot_height"]
+                evidence_images = build_conflict_evidence_images(
+                    frame_element,
+                    event,
+                    max_width=int(getattr(self, "_snapshot_width", 960)),
+                    jpeg_quality=int(getattr(self, "_snapshot_jpeg_quality", 75)),
+                )
+                if evidence_images:
+                    event_msg["evidence_images"] = evidence_images
                 event_msg = self._canonical_envelope("uav_conflict", event_msg, frame_element)
                 self._enqueue(self.conflicts_topic, event_msg, durable=True)
                 logger.info(f"KAFKA enqueued conflict: {event.get('severity')} topic={self.conflicts_topic}")

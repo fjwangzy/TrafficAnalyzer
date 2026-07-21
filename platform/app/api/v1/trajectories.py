@@ -55,10 +55,20 @@ async def get_conflict_history(
     request: Request,
     period: str = Query("1h"),
     limit: int = Query(200, le=2000),
+    source_profile_id: str | None = Query(None),
+    pipeline_id: str | None = Query(None),
+    prediction_type: str | None = Query(None),
 ):
     """Get historical conflict events for an intersection."""
     metric_store = getattr(request.app.state, "metric_store", None)
-    return await metric_store.query_conflicts(intersection_id, period, limit) if metric_store else []
+    return await metric_store.query_conflicts(
+        intersection_id,
+        period,
+        limit,
+        source_profile_id=source_profile_id,
+        pipeline_id=pipeline_id,
+        prediction_type=prediction_type,
+    ) if metric_store else []
 
 
 @router.post("/{intersection_id}/conflicts/{event_id}/review")

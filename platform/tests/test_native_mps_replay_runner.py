@@ -1,14 +1,32 @@
 from pathlib import Path
+import os
+import subprocess
+import sys
 
 from scripts.run_native_mps_replays import (
     PlatformClient,
     hydra_string,
     inference_summary,
+    source_result_passed,
     source_catalog,
+    tcc_diagnostics_summary,
     validate_tcc_events,
 )
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+def test_native_mps_runner_is_directly_executable_from_the_repository_root():
+    completed = subprocess.run(
+        [sys.executable, str(ROOT / "scripts/run_native_mps_replays.py"), "--help"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+        env={**os.environ, "OMP_NUM_THREADS": "1", "KMP_INIT_AT_FORK": "FALSE"},
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert "Run mp4new/mp4new2 sources serially" in completed.stdout
 
 
 def test_native_mps_runner_selects_exactly_eight_mp4new_sources():
@@ -24,10 +42,30 @@ def test_strict_tcc_validation_accepts_zero_events_and_path_intersections():
         [
             {
                 "message_id": "evt-1",
-                "data": {"prediction_type": "path_intersection", "distance_m": 0.0},
+                "data": {
+                    "prediction_type": "path_intersection",
+                    "distance_m": 0.0,
+                    "evidence_images": [
+                        {"kind": "conflict_original_frame", "jpeg_base64": "a"},
+                        {"kind": "conflict_detector_frame", "jpeg_base64": "b"},
+                        {"kind": "conflict_trajectory_reconstruction", "jpeg_base64": "c"},
+                    ],
+                },
             }
         ]
     ) == []
+
+
+def test_strict_tcc_validation_rejects_event_without_synchronized_three_image_evidence():
+    invalid = validate_tcc_events(
+        [
+            {
+                "message_id": "evt-no-evidence",
+                "data": {"prediction_type": "path_intersection", "distance_m": 0.0},
+            }
+        ]
+    )
+    assert [item["message_id"] for item in invalid] == ["evt-no-evidence"]
 
 
 def test_strict_tcc_validation_rejects_legacy_cpa_or_nonzero_distance():
@@ -57,6 +95,53 @@ def test_inference_summary_reports_distribution_without_warmup_assumptions():
         "inference_ms": {"min": 80.0, "median": 100.0, "p95": 120.0, "max": 120.0},
         "fps_median": 5.0,
     }
+
+
+def test_tcc_diagnostics_summary_proves_the_detector_funnel_ran():
+    messages = [
+        {
+            "data": {
+                "tcc_diagnostics": {
+                    "status": "no_prediction_candidates",
+                    "candidate_pairs": 12,
+                    "prediction_candidates": 0,
+                    "business_events_emitted": 0,
+                }
+            }
+        },
+        {
+            "data": {
+                "tcc_diagnostics": {
+                    "status": "events_emitted",
+                    "candidate_pairs": 9,
+                    "prediction_candidates": 2,
+                    "business_events_emitted": 1,
+                }
+            }
+        },
+        {"data": {"tcc_diagnostics": None}},
+    ]
+    assert tcc_diagnostics_summary(messages) == {
+        "samples": 2,
+        "status_counts": {"events_emitted": 1, "no_prediction_candidates": 1},
+        "frames_with_candidate_pairs": 2,
+        "frames_with_predictions": 1,
+        "business_events_emitted": 1,
+    }
+
+
+def test_source_result_requires_tcc_funnel_observation_even_when_zero_events_are_valid():
+    result = {
+        "return_code": 0,
+        "error": None,
+        "stats_count": 4,
+        "trajectory_count": 2,
+        "invalid_tcc_events": [],
+        "tcc_diagnostics": {"samples": 0},
+    }
+    assert source_result_passed(result) is False
+    result["tcc_diagnostics"] = {"samples": 4}
+    assert source_result_passed(result) is True
 
 
 def test_hydra_string_quotes_spaces_cjk_and_single_quotes():
@@ -109,6 +194,10 @@ def test_stats_capture_keeps_performance_fields_without_large_trajectory_snapsho
                     "fps": 3.0,
                     "active_tracks": 7,
                     "cars": 8,
+                    "tcc_diagnostics": {
+                        "status": "no_prediction_candidates",
+                        "candidate_pairs": 12,
+                    },
                     "active_trajectories": [{"trajectory": list(range(1000))}],
                 },
             }
@@ -116,4 +205,8 @@ def test_stats_capture_keeps_performance_fields_without_large_trajectory_snapsho
     )()
     assert _capture_message(buckets, message, "pipe-1") is True
     assert buckets["stats"][0]["data"]["inference_ms"] == 88.0
+    assert buckets["stats"][0]["data"]["tcc_diagnostics"] == {
+        "status": "no_prediction_candidates",
+        "candidate_pairs": 12,
+    }
     assert "active_trajectories" not in buckets["stats"][0]["data"]

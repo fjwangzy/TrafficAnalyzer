@@ -107,7 +107,7 @@ CREATE EXTENSION IF NOT EXISTS timescaledb;
 | `uav_dead_letters` | `id` | EventDelivery/outbox 对外投递超过重试上限后的人工补偿入口 |
 | `uav_message_dead_letters` | `(topic, partition, offset)` 唯一 | 入站 Kafka schema/身份冲突等永久错误的耐久隔离；成功写入后才可推进对应 offset |
 | `uav_evidence_packages` | `id`；`(source_system, source_event_id)` 索引 | 事件证据清单、对象存储引用、哈希和完整性元数据 |
-| `uav_evidence_items` | `id`；`package_id` 索引 | 单个图片/视频/测绘/结构化证据项；`storage_backend=managed|server_asset` 区分内容寻址对象与 allowlist 原文件引用；`survey_report_annotated_image` 保存报告固化的带逐边长度 JPEG，并以 `derived_from_id` 指向 BEV、metadata 记录报告版本/帧/量算数；server asset 的 `item_metadata.source_fingerprint` 保存 size/mtime/ctime，指纹变化后必须回退到完整 SHA-256 校验 |
+| `uav_evidence_items` | `id`；`package_id` 索引 | 单个图片/视频/测绘/结构化证据项；`storage_backend=managed|server_asset` 区分内容寻址对象与 allowlist 原文件引用；冲突事件使用 `conflict_original_frame`、`conflict_detector_frame`、`conflict_trajectory_reconstruction` 三项，后两项以 `derived_from_id` 指向原图并在 metadata 保存同一帧时间；`survey_report_annotated_image` 保存报告固化的带逐边长度 JPEG，并以 `derived_from_id` 指向 BEV、metadata 记录报告版本/帧/量算数；server asset 的 `item_metadata.source_fingerprint` 保存 size/mtime/ctime，指纹变化后必须回退到完整 SHA-256 校验 |
 | `uav_message_inbox` | `(source_system, message_id)` 唯一 | 长期 canonical 消费幂等、消息身份校验、处理状态与事实引用审计 |
 | `uav_road_context_snapshots` | `(road_data_version, inter_id)` | 路网只读版本快照/缓存元数据 |
 | `uav_visual_lane_bindings` | `(binding_id)`；业务唯一键待定 | 本地视觉车道到权威路口/Link/车道的版本化绑定 |

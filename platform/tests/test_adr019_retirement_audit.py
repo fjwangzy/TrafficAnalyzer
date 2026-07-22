@@ -50,3 +50,11 @@ def test_mac_local_platform_uses_persistent_evidence_storage():
     assert 'LOCAL_SURVEY_STORAGE_DIR="${SURVEY_STORAGE_DIR:-$PROJECT_ROOT/.runtime/survey}"' in script
     assert 'mkdir -p "$LOCAL_SURVEY_STORAGE_DIR"' in script
     assert 'SURVEY_STORAGE_DIR="$LOCAL_SURVEY_STORAGE_DIR"' in script
+
+
+def test_mac_local_platform_fails_closed_on_duplicate_uvicorn_instances():
+    script = (ROOT / "scripts" / "mac_local_platform.sh").read_text(encoding="utf-8")
+    assert "platform_instance_pids" in script
+    assert "launchd_platform_pid" in script
+    assert "assert_single_platform" in script
+    assert "Platform single-instance check failed" in script

@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from app.kafka.consumer import KafkaConsumerService
+from app.models.metrics import TrackEvent
 from app.models.survey import EvidenceItem, EvidencePackage
 from app.services.alert_engine import AlertEngine
 from app.services.metric_store import (
@@ -166,6 +167,42 @@ class MetricStoreContractTest(unittest.IsolatedAsyncioTestCase):
             kinds,
         )
         self.assertNotIn("evidence_images", normalized["data"])
+
+    def test_track_fact_persists_raw_yolo_and_local_movement_dimensions(self):
+        now = datetime.now(UTC).isoformat()
+        payload = {
+            "message_id": "track-yolo-provenance-1",
+            "msg_type": "uav_track_complete",
+            "schema_version": "uav_track_complete/v1",
+            "occurred_at": now,
+            "produced_at": now,
+            "source_system": "uav_traffic_analyzer_ai",
+            "intersection_id": "INT-1",
+            "data": {
+                "track_id": 17,
+                "vehicle_class": "motor",
+                "yolo_class_id": 3,
+                "yolo_class_name": "car",
+                "yolo_model_id": "yolo11s-visdrone.pt@0123456789ab",
+                "class_mapping_version": "visdrone-business/v1",
+                "start_road": 3,
+                "exit_road": 2,
+                "trajectory_enu_m": [[0, 0], [1, 1]],
+            },
+        }
+        envelope = MessageEnvelope(payload, "uav_track_complete_1", 0, 8)
+        normalized = self.adapter._normalize(envelope)
+        session = _RecordingSession()
+
+        self.adapter._add_track(session, envelope, normalized)
+
+        track = next(row for row in session.rows if isinstance(row, TrackEvent))
+        self.assertEqual(track.yolo_class_id, 3)
+        self.assertEqual(track.yolo_class_name, "car")
+        self.assertEqual(track.yolo_model_id, "yolo11s-visdrone.pt@0123456789ab")
+        self.assertEqual(track.class_mapping_version, "visdrone-business/v1")
+        self.assertEqual(track.start_road_id, "3")
+        self.assertEqual(track.exit_road_id, "2")
 
     def test_historical_traffic_snapshot_retains_tcc_diagnostics_and_lineage(self):
         diagnostics = {"enabled": True, "status": "no_prediction_candidates"}

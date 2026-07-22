@@ -31,6 +31,14 @@ class Settings(BaseSettings):
     db_name: str = "road9"
     db_bootstrap_database: str = "postgres"
 
+    # ── External YCX road network (strictly read-only) ──
+    ycx_db_host: str = ""
+    ycx_db_port: int = 5432
+    ycx_db_user: str = ""
+    ycx_db_password: str = ""
+    ycx_db_name: str = "ycx"
+    ycx_db_schema: str = "road9"
+
     @property
     def database_url(self) -> str:
         return f"postgresql+asyncpg://{self.db_user}:{self.db_password}@{self.db_host}:{self.db_port}/{self.db_name}"
@@ -60,28 +68,31 @@ class Settings(BaseSettings):
     hls_output_dir: str = "/hls"
     pipeline_video_base: str = "http://127.0.0.1:{video_port}/video"
     pipeline_python: str = "python"
+    pipeline_video_ready_timeout_sec: float = 45.0
     pipeline_frame_stride: int | None = None
     pipeline_max_active: int = 4
     pipeline_device: str | None = None
     pipeline_imgsz: int | None = None
+    mission_pipeline_missing_grace_sec: float = 15.0
     video_max_active_streams: int = 4
-    pipeline_roads_roots: list[str] = ["configs", "/calibration/lane_annotations"]
     uav_rtsp_allowed_hosts: list[str] = ["localhost", "127.0.0.1"]
 
     # ── S9 Mission orchestration ──
     uav_local_asset_roots: list[str] = ["test_videos", "/app/test_videos"]
     mission_scheduler_poll_sec: float = 5.0
-    local_road_fixture_enabled: bool = True
-    local_road_fixture_inter_id: str = "INT_camera_1"
-    local_road_fixture_version: str = "ROAD-LOCAL-INTER-XQH"
-    local_road_fixture_roads_json: str = "configs/bak/inter_xqh_lanes.json"
-
     # ── Calibration ──
     calibration_db_path: str = "/calibration/calibration_db.json"
     lane_annotation_db_path: str = "/calibration/lane_annotation_db.json"
     lane_annotation_auto_tasks_enabled: bool = False
     lane_annotation_hover_seconds: float = 30.0
     lane_annotation_hover_radius_m: float = 1.5
+    calibration_media_roots: list[str] = [
+        "/calibration",
+        "/tmp/traffic-survey-data",
+        ".runtime/calibration",
+        "test_videos",
+        "/app/test_videos",
+    ]
 
     # ── Accident survey ──
     survey_storage_dir: str = "/tmp/traffic-survey-data"

@@ -17,7 +17,6 @@ import numpy as np
 
 # 设置环境变量
 os.environ["VIDEO_SRC"] = "test_videos/inter_xqh/DJI_20260403142902_0001_V小清河北路与水屯路路口.mp4"
-os.environ["ROADS_JSON"] = ""
 os.environ["TOPIC_NAME"] = "uav_statistics_1"
 os.environ["CAMERA_ID"] = "1"
 
@@ -45,7 +44,6 @@ def build_test_config():
         "video_reader": {
             "src": os.environ["VIDEO_SRC"],
             "skip_secs": 0,
-            "roads_info": os.environ["ROADS_JSON"],
         },
         "detection_node": {
             "weight_pth": "weights/uav_best.pt",
@@ -86,7 +84,7 @@ def build_test_config():
         "motion_compensation": {
             "enabled": True,
             "hover_threshold_ms": 1.0,
-            "world_anchor": None,
+            "anchor_gcj02": None,
         },
         "speed_estimation": {
             "enabled": True,
@@ -334,7 +332,7 @@ def main():
         warmup_fe.telemetry = warmup_telem
         warmup_fe = homography_node.process(warmup_fe)
         warmup_fe = motion_comp_node.process(warmup_fe)
-    print(f"  锚点状态: {motion_comp_node._world_anchor}")
+    print(f"  GCJ-02 锚点状态: {motion_comp_node._anchor_gcj02}")
 
     # 测试3个时间点的遥测
     test_timestamps = [1.0, 10.0, 50.0]
@@ -375,8 +373,8 @@ def main():
                           f"disp=[{fe.drone_displacement_m[0]:.2f}, {fe.drone_displacement_m[1]:.2f}]m, "
                           f"vel=[{fe.drone_velocity_ms[0]:.2f}, {fe.drone_velocity_ms[1]:.2f}]m/s, "
                           f"hover={fe.is_hovering}")
-            results.check(f"世界锚点 (t={ts}s)", fe.world_anchor_lat_lon is not None,
-                          f"anchor={fe.world_anchor_lat_lon}")
+            results.check(f"GCJ-02 锚点 (t={ts}s)", fe.anchor_gcj02 is not None,
+                          f"anchor={fe.anchor_gcj02}")
         else:
             # 前10帧是锚点采集期，可能还没有位移输出
             results.warn(f"t={ts}s: drone_displacement_m=None (anchor collecting)")

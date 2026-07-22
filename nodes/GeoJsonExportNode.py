@@ -4,9 +4,7 @@
 投影到 BEV（鸟瞰图）世界坐标后，以 GeoJSON LineString 格式写入
 output 目录。
 
-坐标系：
-- 有 world_anchor_lat_lon 时：ENU 偏移 → WGS84 经纬度（标准 GeoJSON）
-- 无锚点时：使用本地米坐标（CRS: "Local")
+坐标系：公共 GeoJSON 固定为 GCJ-02；无 GCJ-02 锚点的轨迹不导出。
 """
 import json
 import logging
@@ -21,6 +19,7 @@ from elements.FrameElement import FrameElement
 from elements.VideoEndBreakElement import VideoEndBreakElement
 from utils_local.homography import is_valid_homography, undistort_points
 from utils_local.motion_compensation import pixel_to_world_compensated
+from utils_local.coordinates import enu_to_gcj02
 
 logger = logging.getLogger(__name__)
 
@@ -70,7 +69,7 @@ class GeoJsonExportNode:
 
         self._collected_tracks: list[dict] = []
         self._last_export_time = 0.0
-        self._world_anchor: tuple[float, float] | None = None
+        self._anchor_gcj02: tuple[float, float] | None = None
         self._export_count = 0
 
         # 确保输出目录存在
@@ -90,15 +89,15 @@ class GeoJsonExportNode:
         H = frame_element.homography_matrix
         has_H = is_valid_homography(H)
         drone_disp = getattr(frame_element, "drone_displacement_m", None)
-        world_anchor = getattr(frame_element, "world_anchor_lat_lon", None)
+        anchor_gcj02 = getattr(frame_element, "anchor_gcj02", None)
         dist_coeffs = getattr(frame_element, "dist_coeffs", None)
         cam_intrinsics = getattr(frame_element, "camera_intrinsics", None)
         img_h, img_w = frame_element.frame.shape[:2]
         img_size = (img_w, img_h)
 
         # 记住锚点（取第一个有效值）
-        if world_anchor and self._world_anchor is None:
-            self._world_anchor = tuple(world_anchor)
+        if anchor_gcj02 and self._anchor_gcj02 is None:
+            self._anchor_gcj02 = tuple(anchor_gcj02)
 
         trajectory_px = ct.get("trajectory_px", [])
         if not trajectory_px or len(trajectory_px) < 2:
@@ -117,20 +116,15 @@ class GeoJsonExportNode:
             pts_world = pixel_to_world_compensated(pts_px, H, drone_disp)
             bev_points = pts_world.tolist()
 
-        # ── 世界坐标（米）→ GPS 经纬度 ──────────────────────────
+        # ── ENU（米）→ GCJ-02 ──────────────────────────────────
         geo_coordinates = None
         crs = "Local"
-        if bev_points and self.use_gps and world_anchor:
-            anchor_lat, anchor_lon = world_anchor
+        if bev_points and self.use_gps and anchor_gcj02:
             geo_coordinates = []
             for pt in bev_points:
-                lat, lon = enu_to_gps(pt[0], pt[1], anchor_lat, anchor_lon)
+                lon, lat = enu_to_gcj02(pt[0], pt[1], anchor_gcj02)
                 geo_coordinates.append([round(lon, 8), round(lat, 8)])
-            crs = "WGS84"
-        elif bev_points:
-            # 无锚点，使用本地米坐标
-            geo_coordinates = [[round(p[0], 3), round(p[1], 3)] for p in bev_points]
-            crs = "Local_ENU_meters"
+            crs = "GCJ02"
 
         if not geo_coordinates or len(geo_coordinates) < 2:
             return None
@@ -169,14 +163,14 @@ class GeoJsonExportNode:
                 "point_count": len(geo_coordinates),
             })
             # 入口/出口世界坐标（米）
-            if "entry_point_m" in ct:
-                props["entry_point_m"] = ct["entry_point_m"]
-            if "exit_point_m" in ct:
-                props["exit_point_m"] = ct["exit_point_m"]
+            if "entry_point_enu_m" in ct:
+                props["entry_point_enu_m"] = ct["entry_point_enu_m"]
+            if "exit_point_enu_m" in ct:
+                props["exit_point_enu_m"] = ct["exit_point_enu_m"]
             # 世界锚点
-            if world_anchor:
-                props["world_anchor_lat_lon"] = [
-                    round(world_anchor[0], 6), round(world_anchor[1], 6)
+            if anchor_gcj02:
+                props["anchor_gcj02"] = [
+                    round(anchor_gcj02[0], 6), round(anchor_gcj02[1], 6)
                 ]
 
         return feature
@@ -239,12 +233,13 @@ class GeoJsonExportNode:
 
         geojson = {
             "type": "FeatureCollection",
+            "coordinate_system": "GCJ02",
             "features": self._collected_tracks,
             "metadata": {
                 "description": "BEV-projectd vehicle trajectories from TrafficAnalyzer",
                 "exported_at": datetime.now(timezone.utc).isoformat(),
                 "track_count": len(self._collected_tracks),
-                "source_crs": "pixel → homography → ENU meters → WGS84",
+                "source_crs": "pixel → homography → ENU meters → GCJ-02",
             },
         }
 

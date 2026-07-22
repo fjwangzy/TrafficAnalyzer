@@ -22,6 +22,7 @@ from json import dumps
 from utils_local.utils import profile_time
 from utils_local.homography import is_valid_homography, undistort_points
 from utils_local.motion_compensation import pixel_to_world_compensated
+from utils_local.coordinates import enu_to_gcj02, normalize_telemetry_position
 from elements.VideoEndBreakElement import VideoEndBreakElement
 from elements.FrameElement import FrameElement
 from nodes.ReliableKafkaPublisher import ReliableKafkaPublisher
@@ -318,7 +319,7 @@ class KafkaProducerNode:
             if dist_coeffs is not None and frame_element.frame is not None
             else None
         )
-        world_anchor = getattr(frame_element, "world_anchor_lat_lon", None)
+        anchor_gcj02 = getattr(frame_element, "anchor_gcj02", None)
 
         active = []
         for track_id, track in sorted(buffer_tracks.items(), key=lambda item: item[0]):
@@ -339,6 +340,9 @@ class KafkaProducerNode:
                 "track_id": track.id,
                 "vehicle_class": track.vehicle_class,
                 "yolo_class_id": track.yolo_class_id,
+                "yolo_class_name": track.yolo_class_name,
+                "yolo_model_id": track.yolo_model_id,
+                "class_mapping_version": track.class_mapping_version,
                 "direction_class": track.direction_class,
                 "turn_behavior": track.turn_behavior,
                 "duration_sec": round(track.timestamp_last - track.timestamp_first, 2),
@@ -361,13 +365,26 @@ class KafkaProducerNode:
                     [round(float(x), 2), round(float(y), 2)]
                     for x, y in pts_world
                 ]
-                item["trajectory_world_m"] = world_points
-                item["current_point_m"] = world_points[-1]
-                if world_anchor:
-                    item["world_anchor_lat_lon"] = [
-                        round(world_anchor[0], 6),
-                        round(world_anchor[1], 6),
+                item["trajectory_enu_m"] = world_points
+                item["current_point_enu_m"] = world_points[-1]
+                if anchor_gcj02:
+                    item["anchor_gcj02"] = [
+                        round(anchor_gcj02[0], 6),
+                        round(anchor_gcj02[1], 6),
                     ]
+                    item["trajectory_gcj02"] = [
+                        [round(lon, 8), round(lat, 8)]
+                        for lon, lat in (
+                            enu_to_gcj02(point[0], point[1], anchor_gcj02)
+                            for point in world_points
+                        )
+                    ]
+                item["map_version_id"] = getattr(track, "map_version_id", None)
+                item["matched_lane_key"] = getattr(track, "matched_lane_key", None)
+                item["source_lane_id"] = getattr(track, "source_lane_id", None)
+                item["matched_link_id"] = getattr(track, "matched_link_id", None)
+                item["movement_key"] = getattr(track, "movement_key", None)
+                item["map_match_confidence"] = getattr(track, "map_match_confidence", None)
 
             active.append(item)
 
@@ -523,15 +540,20 @@ class KafkaProducerNode:
             data["tcc_diagnostics"] = getattr(frame_element, "tcc_diagnostics", None)
 
             # 扩展字段：无人机位置（运动补偿）
-            anchor = getattr(frame_element, "world_anchor_lat_lon", None)
+            anchor = getattr(frame_element, "anchor_gcj02", None)
             drone_disp = getattr(frame_element, "drone_displacement_m", None)
             if anchor and drone_disp is not None:
-                data["drone_position"] = {
-                    "anchor_lat": round(anchor[0], 6),
-                    "anchor_lon": round(anchor[1], 6),
+                longitude, latitude = enu_to_gcj02(drone_disp[0], drone_disp[1], anchor)
+                data["position_gcj02"] = {
+                    "longitude": round(longitude, 8),
+                    "latitude": round(latitude, 8),
+                }
+                data["anchor_gcj02"] = [round(anchor[0], 8), round(anchor[1], 8)]
+                data["position_enu_m"] = {
                     "easting_m": round(float(drone_disp[0]), 2),
                     "northing_m": round(float(drone_disp[1]), 2),
                 }
+                data["coordinate_system"] = "GCJ02"
             data["is_hovering"] = getattr(frame_element, "is_hovering", False)
             if data["is_hovering"] and self._hover_annotation_snapshot_enabled:
                 snapshot = self._encode_annotation_snapshot(frame_element)
@@ -571,12 +593,16 @@ class KafkaProducerNode:
                 logger.info(f"KAFKA enqueued conflict: {event.get('severity')} topic={self.conflicts_topic}")
 
         # ── T-103: 遥测发布（5Hz 节流） ──
-        telemetry = getattr(frame_element, "telemetry", None)
+        telemetry = normalize_telemetry_position(getattr(frame_element, "telemetry", None))
         if telemetry and (current_time - self._last_telemetry_time > self._telemetry_interval):
+            public_telemetry = {
+                key: value for key, value in telemetry.items()
+                if key not in {"latitude", "longitude", "lat", "lon"}
+            }
             tel_msg = {
                 "drone_id": getattr(self, "drone_id", f"drone_{self.camera_id}"),
                 "intersection_id": self.intersection_id,
-                **telemetry,
+                **public_telemetry,
             }
             tel_msg = self._canonical_envelope("uav_telemetry", tel_msg, frame_element)
             self._enqueue(self.telemetry_topic, tel_msg)

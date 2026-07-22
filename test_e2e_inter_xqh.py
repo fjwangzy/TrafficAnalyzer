@@ -27,7 +27,6 @@ import requests
 os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"  # MPS设备NMS回退CPU
 
 VIDEO_SRC = "test_videos/inter_xqh/DJI_20260403142902_0001_V小清河北路与水屯路路口.mp4"
-ROADS_JSON = "configs/inter_xqh_lanes.json"
 TELEMETRY_FILE = "test_videos/inter_xqh/telemetry.srt"
 KAFKA_BOOTSTRAP = "localhost:9093"  # HOST listener (PLAINTEXT, no SASL)
 TOPIC_NAME = "uav_statistics_1"
@@ -180,7 +179,6 @@ def run_pipeline_subprocess(results: E2ETestResults, max_duration_sec=120):
     env = {
         **os.environ,
         "VIDEO_SRC": VIDEO_SRC,
-        "ROADS_JSON": ROADS_JSON,
         "TOPIC_NAME": TOPIC_NAME,
         "CAMERA_ID": CAMERA_ID,
         "KAFKA_BOOTSTRAP": KAFKA_BOOTSTRAP,

@@ -21,6 +21,7 @@ from nodes.ConflictDetectionNode import ConflictDetectionNode
 from nodes.MotionCompensationNode import MotionCompensationNode
 from nodes.AutoLaneInferenceNode import AutoLaneInferenceNode
 from nodes.GeoJsonExportNode import GeoJsonExportNode
+from nodes.RoadMapMatchingNode import RoadMapMatchingNode
 from utils_local.utils import check_and_set_env_var
 
 
@@ -36,6 +37,7 @@ def main(config) -> None:
     direction_flow_node = DirectionFlowNode(config)
     lane_analysis_node = LaneAnalysisNode(config)
     trajectory_node = TrajectoryNode(config)
+    road_map_matching_node = RoadMapMatchingNode(config)
     conflict_node = ConflictDetectionNode(config)
     calc_statistics_node = CalcStatisticsNode(config)
     show_node = ShowNode(config)
@@ -61,8 +63,9 @@ def main(config) -> None:
         frame_element = speed_node.process(frame_element)
         frame_element = lane_detection_node.process(frame_element)
         frame_element = direction_flow_node.process(frame_element)
-        frame_element = lane_analysis_node.process(frame_element)
         frame_element = trajectory_node.process(frame_element)
+        frame_element = road_map_matching_node.process(frame_element)
+        frame_element = lane_analysis_node.process(frame_element)
         frame_element = conflict_node.process(frame_element)
         frame_element = calc_statistics_node.process(frame_element)
         frame_element = geojson_export_node.process(frame_element)

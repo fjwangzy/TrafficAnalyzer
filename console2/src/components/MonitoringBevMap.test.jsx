@@ -1,26 +1,85 @@
-import { describe, expect, it } from 'vitest'
-import { mapFitPadding, trajectoryLonLats, validMapCenter, worldToLonLat } from './MonitoringBevMap'
+import { render, waitFor } from '@testing-library/react'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-describe('MonitoringBevMap world-coordinate projection', () => {
-  it('converts ENU points around the trajectory anchor', () => {
-    const [lon, lat] = worldToLonLat(100, 50, 36.7, 117.0)
-    expect(lat).toBeCloseTo(36.700449, 6)
-    expect(lon).toBeCloseTo(117.00112, 5)
+const mapMocks = vi.hoisted(() => ({
+  add: vi.fn(),
+  destroy: vi.fn(),
+  remove: vi.fn(),
+  setCenter: vi.fn(),
+  setFitView: vi.fn(),
+}))
+
+vi.mock('../lib/amap', () => ({
+  loadAmap: vi.fn(async () => window.AMap),
+}))
+
+import { MonitoringBevMap, mapFitDuration, mapFitPadding, trajectoryGcj02, validMapCenter } from './MonitoringBevMap'
+
+beforeEach(() => {
+  Object.values(mapMocks).forEach((mock) => mock.mockClear())
+  window.AMap = {
+    Map: class {
+      constructor() { return mapMocks }
+    },
+    Polyline: class {
+      constructor(options) { this.options = options }
+    },
+    CircleMarker: class {
+      constructor(options) { this.options = options }
+    },
+  }
+})
+
+describe('MonitoringBevMap GCJ-02 contract', () => {
+  it('consumes canonical GCJ-02 trajectories directly', () => {
+    expect(trajectoryGcj02({ trajectory_gcj02: [[117.1, 36.7], [117.2, 36.8]] }))
+      .toEqual([[117.1, 36.7], [117.2, 36.8]])
   })
 
-  it('uses the intersection center when a trajectory has no own anchor', () => {
-    const points = trajectoryLonLats({ trajectory_world_m: [[0, 0], [10, 20]] }, 36.7029, 117.0223)
-    expect(points).toHaveLength(2)
-    expect(points[0]).toEqual([117.0223, 36.7029])
-    expect(points[1][0]).toBeGreaterThan(points[0][0])
-    expect(points[1][1]).toBeGreaterThan(points[0][1])
+  it('does not interpret ENU-only trajectories as map coordinates', () => {
+    expect(trajectoryGcj02({ trajectory_enu_m: [[0, 0], [10, 20]] })).toEqual([])
   })
 
-  it('falls back from invalid zero coordinates to the configured monitoring center', () => {
-    expect(validMapCenter(0, 0)).toEqual({ lat: 36.7029, lon: 117.0223 })
+  it('falls back from invalid zero coordinates to the configured GCJ-02 center', () => {
+    expect(validMapCenter(0, 0)).toEqual({ lat: 36.703222, lon: 117.028285 })
   })
 
-  it('uses panel-safe fit padding when the map is embedded in trajectory analysis', () => {
-    expect(mapFitPadding({ compact: false, embedded: true })).toEqual([32, 32, 32, 32])
+  it('keeps fit helpers stable', () => {
+    expect(mapFitPadding({ embedded: true })).toEqual([32, 32, 32, 32])
+    expect(mapFitDuration(true)).toBe(0)
+  })
+
+  it('does not rebuild and refit unchanged trajectory overlays', async () => {
+    const trajectory = { id: 'TRK-1', trajectory_gcj02: [[117.1, 36.7], [117.2, 36.8]] }
+    const { rerender } = render(
+      <MonitoringBevMap compact trajectories={[trajectory]} label='BEV test map' />,
+    )
+
+    await waitFor(() => expect(mapMocks.add).toHaveBeenCalledTimes(1))
+    rerender(
+      <MonitoringBevMap compact trajectories={[{ ...trajectory, trajectory_gcj02: trajectory.trajectory_gcj02.map((point) => [...point]) }]} label='BEV test map' />,
+    )
+
+    expect(mapMocks.add).toHaveBeenCalledTimes(1)
+    expect(mapMocks.remove).not.toHaveBeenCalled()
+    expect(mapMocks.setFitView).toHaveBeenCalledTimes(1)
+  })
+
+  it('swaps changed trajectory overlays without a blank frame or camera refit', async () => {
+    const firstTrajectory = { id: 'TRK-1', trajectory_gcj02: [[117.1, 36.7], [117.2, 36.8]] }
+    const secondTrajectory = { id: 'TRK-2', trajectory_gcj02: [[117.2, 36.8], [117.3, 36.9]] }
+    const { rerender } = render(
+      <MonitoringBevMap embedded trajectories={[firstTrajectory]} label='BEV test map' />,
+    )
+
+    await waitFor(() => expect(mapMocks.add).toHaveBeenCalledTimes(1))
+    rerender(
+      <MonitoringBevMap embedded trajectories={[secondTrajectory]} label='BEV test map' />,
+    )
+
+    await waitFor(() => expect(mapMocks.add).toHaveBeenCalledTimes(2))
+    expect(mapMocks.remove).toHaveBeenCalledTimes(1)
+    expect(mapMocks.add.mock.invocationCallOrder[1]).toBeLessThan(mapMocks.remove.mock.invocationCallOrder[0])
+    expect(mapMocks.setFitView).toHaveBeenCalledTimes(1)
   })
 })

@@ -13,6 +13,7 @@ import json
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from math import ceil
 from typing import Any, Protocol
 
 from sqlalchemy import func, select, text, update
@@ -33,6 +34,7 @@ from app.models.metrics import (
 from app.models.mission import MessageDeadLetter, MessageInbox
 from app.models.survey import EvidenceItem, EvidencePackage
 from app.services.survey_storage import ContentAddressedStore
+from app.services.trajectory_analysis import build_trajectory_analysis
 
 SOURCE_SYSTEM = "uav_traffic_analyzer_ai"
 CANONICAL_TYPES = {
@@ -518,7 +520,8 @@ class PostgresMetricStoreAdapter:
         ended_at = value["occurred_at"]
         track_id = str(data.get("track_id", "unknown"))
         event_id = hashlib.sha256(f"track:{value['message_id']}".encode()).hexdigest()[:40]
-        trajectory_world = data.get("trajectory_world_m") or data.get("positions_bev") or []
+        trajectory_enu = data.get("trajectory_enu_m") or []
+        trajectory_gcj02 = data.get("trajectory_gcj02") or []
         trajectory_px = data.get("trajectory_px") or []
         time_offsets = data.get("trajectory_time_offsets_sec") or []
         duration_sec = _float(data.get("duration_sec"))
@@ -532,6 +535,10 @@ class PostgresMetricStoreAdapter:
             road_data_version=value.get("road_data_version"),
             track_id=track_id,
             vehicle_class=data.get("vehicle_class", data.get("class_name")),
+            yolo_class_id=_int(data.get("yolo_class_id")),
+            yolo_class_name=data.get("yolo_class_name"),
+            yolo_model_id=data.get("yolo_model_id"),
+            class_mapping_version=data.get("class_mapping_version"),
             turn_behavior=data.get("turn_behavior"),
             started_at=started_at,
             ended_at=ended_at,
@@ -539,24 +546,34 @@ class PostgresMetricStoreAdapter:
             avg_speed_kmh=_float(data.get("avg_speed_kmh")),
             max_speed_kmh=_float(data.get("max_speed_kmh")),
             trajectory_px=trajectory_px,
-            trajectory_world_m=trajectory_world,
-            entry_point_m=data.get("entry_point_m"),
-            exit_point_m=data.get("exit_point_m"),
+            trajectory_enu_m=trajectory_enu,
+            trajectory_gcj02=trajectory_gcj02,
+            entry_point_enu_m=data.get("entry_point_enu_m"),
+            exit_point_enu_m=data.get("exit_point_enu_m"),
             start_link_id=data.get("start_link_id"),
             end_link_id=data.get("end_link_id"),
-            start_lane_id=str(data["start_lane"]) if data.get("start_lane") is not None else data.get("start_lane_id"),
-            end_lane_id=str(data["end_lane"]) if data.get("end_lane") is not None else data.get("end_lane_id"),
-            world_anchor_lat_lon=data.get("world_anchor_lat_lon"),
+            start_lane_id=data.get("source_lane_id"),
+            end_lane_id=data.get("source_lane_id"),
+            start_road_id=(str(data["start_road"]) if data.get("start_road") is not None else data.get("start_road_id")),
+            exit_road_id=(str(data["exit_road"]) if data.get("exit_road") is not None else data.get("exit_road_id")),
+            anchor_gcj02=data.get("anchor_gcj02"),
+            map_version_id=data.get("map_version_id"),
+            matched_lane_key=data.get("matched_lane_key"),
+            source_lane_id=data.get("source_lane_id"),
+            matched_link_id=data.get("matched_link_id"),
+            movement_key=data.get("movement_key"),
+            map_match_confidence=_float(data.get("map_match_confidence")),
             map_match_quality=data.get("map_match_quality"),
             **lineage,
             **common,
         ))
         refs = [f"uav_track_events:{event_id}"]
-        point_count = max(len(trajectory_world), len(trajectory_px))
+        point_count = max(len(trajectory_enu), len(trajectory_gcj02), len(trajectory_px))
         for index in range(point_count):
-            world = trajectory_world[index] if index < len(trajectory_world) else None
+            enu = trajectory_enu[index] if index < len(trajectory_enu) else None
+            gcj02 = trajectory_gcj02[index] if index < len(trajectory_gcj02) else None
             pixel = trajectory_px[index] if index < len(trajectory_px) else None
-            point_time = _parse_datetime(world[2]) if isinstance(world, list) and len(world) > 2 else None
+            point_time = _parse_datetime(enu[2]) if isinstance(enu, list) and len(enu) > 2 else None
             if point_time is None and index < len(time_offsets):
                 offset = _float(time_offsets[index])
                 if offset is not None and duration_sec is not None:
@@ -572,8 +589,12 @@ class PostgresMetricStoreAdapter:
                 point_seq=index,
                 pixel_x=_float(pixel[0]) if isinstance(pixel, list) and len(pixel) > 1 else None,
                 pixel_y=_float(pixel[1]) if isinstance(pixel, list) and len(pixel) > 1 else None,
-                world_x_m=_float(world[0]) if isinstance(world, list) and len(world) > 1 else None,
-                world_y_m=_float(world[1]) if isinstance(world, list) and len(world) > 1 else None,
+                enu_x_m=_float(enu[0]) if isinstance(enu, list) and len(enu) > 1 else None,
+                enu_y_m=_float(enu[1]) if isinstance(enu, list) and len(enu) > 1 else None,
+                position_gcj02=(
+                    {"longitude": _float(gcj02[0]), "latitude": _float(gcj02[1])}
+                    if isinstance(gcj02, list) and len(gcj02) > 1 else None
+                ),
                 **lineage,
                 **common,
             ))
@@ -720,9 +741,10 @@ class PostgresMetricStoreAdapter:
             conflict_angle_deg=_float(data.get("conflict_angle_deg")),
             risk_score=_float(data.get("risk_score")),
             evidence=data.get("evidence"),
-            motor_position_m=data.get("motor_position_m"),
-            non_motor_position_m=data.get("non_motor_position_m"),
-            world_anchor_lat_lon=data.get("world_anchor_lat_lon"),
+            motor_position_enu_m=data.get("motor_position_enu_m"),
+            non_motor_position_enu_m=data.get("non_motor_position_enu_m"),
+            conflict_position_gcj02=data.get("conflict_position_gcj02"),
+            anchor_gcj02=data.get("anchor_gcj02"),
             **lineage,
             **common,
         ))
@@ -739,8 +761,8 @@ class PostgresMetricStoreAdapter:
             mission_id=data.get("mission_id"),
             pipeline_id=data.get("pipeline_id"),
             source_profile_id=data.get("source_profile_id"),
-            latitude=_float(data.get("latitude", data.get("lat"))),
-            longitude=_float(data.get("longitude", data.get("lon"))),
+            position_gcj02=data.get("position_gcj02"),
+            coordinate_transform_version=data.get("coordinate_transform_version"),
             altitude_m=_float(data.get("altitude_m", data.get("altitude"))),
             relative_altitude_m=_float(data.get("relative_altitude_m")),
             speed_ms=_float(data.get("speed_ms")),
@@ -878,7 +900,7 @@ class PostgresMetricStoreAdapter:
         source_profile_id: str | None = None, quality_status: str | None = None,
         start_at: datetime | None = None, end_at: datetime | None = None,
         spatial_ready: bool = False,
-        min_world_points: int = 2,
+        min_gcj02_points: int = 2,
     ) -> list[dict]:
         statement = select(TrackEvent).where(
             TrackEvent.inter_id == inter_id,
@@ -898,8 +920,8 @@ class PostgresMetricStoreAdapter:
             statement = statement.where(TrackEvent.quality_status == quality_status)
         if spatial_ready:
             statement = statement.where(
-                func.json_array_length(TrackEvent.trajectory_world_m) >= min_world_points,
-                TrackEvent.world_anchor_lat_lon.is_not(None),
+                func.json_array_length(TrackEvent.trajectory_gcj02) >= min_gcj02_points,
+                TrackEvent.anchor_gcj02.is_not(None),
             )
         rows = (await self._execute(statement.order_by(TrackEvent.ended_at.desc()).limit(limit))).scalars().all()
         return [
@@ -910,6 +932,17 @@ class PostgresMetricStoreAdapter:
                 pipeline_id=row.pipeline_id,
                 source_profile_id=row.source_profile_id,
                 inter_id=row.inter_id,
+                coordinate_system="GCJ02",
+                anchor_gcj02=row.anchor_gcj02,
+                trajectory_enu_m=row.trajectory_enu_m,
+                trajectory_gcj02=row.trajectory_gcj02,
+                map_version_id=row.map_version_id,
+                matched_lane_key=row.matched_lane_key,
+                source_lane_id=row.source_lane_id,
+                matched_link_id=row.matched_link_id,
+                movement_key=row.movement_key,
+                map_match_confidence=row.map_match_confidence,
+                map_match_quality=row.map_match_quality,
                 road_data_version=row.road_data_version,
                 road_context_status=row.road_context_status,
                 quality_status=row.quality_status,
@@ -919,6 +952,159 @@ class PostgresMetricStoreAdapter:
             )
             for row in rows
         ]
+
+    async def query_trajectory_analysis(
+        self,
+        inter_id: str,
+        *,
+        period: str = "all",
+        start_at: datetime | None = None,
+        end_at: datetime | None = None,
+        slice_start_at: datetime | None = None,
+        slice_end_at: datetime | None = None,
+        bucket_sec: int = 10,
+        mission_id: str | None = None,
+        source_profile_id: str | None = None,
+        vehicle_class: str | None = None,
+        yolo_class_id: int | None = None,
+        yolo_class_name: str | None = None,
+        turn_behavior: str | None = None,
+        quality_status: str | None = None,
+        movement_key: str | None = None,
+        track_limit: int = 500,
+    ) -> dict[str, Any]:
+        """Return one bounded, lineage-safe trajectory analysis snapshot."""
+        effective_start = start_at
+        effective_end = end_at
+        track_filters = [TrackEvent.inter_id == inter_id]
+        if mission_id:
+            track_filters.append(TrackEvent.mission_id == mission_id)
+        if source_profile_id:
+            track_filters.append(TrackEvent.source_profile_id == source_profile_id)
+        anchor_filters = list(track_filters)
+        if vehicle_class:
+            anchor_filters.append(TrackEvent.vehicle_class == vehicle_class)
+        if yolo_class_id is not None:
+            anchor_filters.append(TrackEvent.yolo_class_id == yolo_class_id)
+        if yolo_class_name:
+            anchor_filters.append(TrackEvent.yolo_class_name == yolo_class_name)
+        if turn_behavior:
+            anchor_filters.append(TrackEvent.turn_behavior == turn_behavior)
+        if quality_status:
+            anchor_filters.append(TrackEvent.quality_status == quality_status)
+
+        if effective_start is None and period == "latest30m":
+            latest_result = await self._execute(
+                select(func.max(TrackEvent.ended_at)).where(
+                    *anchor_filters,
+                    func.json_array_length(TrackEvent.trajectory_gcj02) >= 2,
+                    TrackEvent.anchor_gcj02.is_not(None),
+                )
+            )
+            effective_end = latest_result.scalar_one_or_none()
+            if effective_end is None:
+                fallback_result = await self._execute(
+                    select(func.max(TrackEvent.ended_at)).where(*anchor_filters)
+                )
+                effective_end = fallback_result.scalar_one_or_none() or datetime.now(UTC)
+            effective_start = effective_end - timedelta(minutes=30)
+        elif effective_start is None and period != "all":
+            effective_start = _period_start(period)
+            effective_end = datetime.now(UTC)
+
+        track_statement = select(TrackEvent).where(*track_filters)
+        if effective_start is not None:
+            track_statement = track_statement.where(TrackEvent.ended_at >= effective_start)
+        if effective_end is not None:
+            track_statement = track_statement.where(
+                func.coalesce(TrackEvent.started_at, TrackEvent.ended_at) <= effective_end
+            )
+        track_rows = (await self._execute(
+            track_statement.order_by(TrackEvent.ended_at, TrackEvent.track_id)
+        )).scalars().all()
+
+        if effective_start is None or effective_end is None:
+            if track_rows:
+                effective_start = min(row.started_at or row.ended_at for row in track_rows)
+                effective_end = max(row.ended_at for row in track_rows)
+            else:
+                effective_end = datetime.now(UTC)
+                effective_start = effective_end - timedelta(seconds=bucket_sec)
+        if effective_start == effective_end:
+            effective_end = effective_start + timedelta(seconds=bucket_sec)
+
+        duration_sec = max((effective_end - effective_start).total_seconds(), 1)
+        effective_bucket_sec = max(bucket_sec, ceil(duration_sec / 720))
+        slice_was_requested = slice_start_at is not None and slice_end_at is not None
+        if not slice_was_requested:
+            replayable_rows = [
+                row for row in track_rows
+                if isinstance(row.trajectory_gcj02, list)
+                and len(row.trajectory_gcj02) >= 2
+                and row.anchor_gcj02
+            ]
+            slice_anchor = max(
+                (row.ended_at for row in replayable_rows),
+                default=effective_end,
+            )
+            bucket_count = max(1, ceil(duration_sec / effective_bucket_sec))
+            bucket_index = min(
+                bucket_count - 1,
+                max(0, int((slice_anchor - effective_start).total_seconds() // effective_bucket_sec)),
+            )
+            slice_start_at = effective_start + timedelta(
+                seconds=bucket_index * effective_bucket_sec
+            )
+            slice_end_at = min(
+                effective_end,
+                slice_start_at + timedelta(seconds=effective_bucket_sec),
+            )
+
+        conflict_statement = select(ConflictEvent).where(
+            ConflictEvent.inter_id == inter_id,
+            ConflictEvent.occurred_at >= effective_start,
+            ConflictEvent.occurred_at <= effective_end,
+        )
+        if mission_id:
+            conflict_statement = conflict_statement.where(ConflictEvent.mission_id == mission_id)
+        if source_profile_id:
+            conflict_statement = conflict_statement.where(
+                ConflictEvent.source_profile_id == source_profile_id
+            )
+        conflict_rows = (await self._execute(
+            conflict_statement.order_by(ConflictEvent.occurred_at)
+        )).scalars().all()
+
+        result = build_trajectory_analysis(
+            intersection_id=inter_id,
+            tracks=list(track_rows),
+            conflicts=list(conflict_rows),
+            start_at=effective_start,
+            end_at=effective_end,
+            slice_start_at=slice_start_at,
+            slice_end_at=slice_end_at,
+            bucket_sec=effective_bucket_sec,
+            movement_key=movement_key,
+            track_limit=track_limit,
+            vehicle_class=vehicle_class,
+            yolo_class_id=yolo_class_id,
+            yolo_class_name=yolo_class_name,
+            turn_behavior=turn_behavior,
+            quality_status=quality_status,
+            prefer_latest_active_slice=not slice_was_requested,
+        )
+        result["query"].update({
+            "period": period,
+            "requested_bucket_sec": bucket_sec,
+            "mission_id": mission_id,
+            "source_profile_id": source_profile_id,
+            "vehicle_class": vehicle_class,
+            "yolo_class_id": yolo_class_id,
+            "yolo_class_name": yolo_class_name,
+            "turn_behavior": turn_behavior,
+            "quality_status": quality_status,
+        })
+        return result
 
     async def query_conflicts(
         self,

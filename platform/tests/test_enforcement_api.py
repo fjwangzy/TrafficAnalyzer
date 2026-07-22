@@ -55,8 +55,8 @@ def app_for(role="admin"):
 
 ZONE = {
     "name": "本地候选限行区", "zone_type": "truck_restriction",
-    "geometry": {"type": "Polygon", "coordinates": [[[0, 0], [1, 0], [1, 1], [0, 0]]]},
-    "coordinate_system": "ENU", "road_data_version": "ROAD-TEST",
+    "geometry": {"type": "Polygon", "coordinates": [[[117, 36.7], [117.001, 36.7], [117.001, 36.701], [117, 36.7]]]},
+    "coordinate_system": "GCJ02", "road_data_version": "ROAD-TEST",
 }
 
 

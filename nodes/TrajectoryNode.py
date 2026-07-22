@@ -7,6 +7,7 @@ from utils_local.utils import profile_time
 from utils_local.trajectory_classifier import classify_turning_movement
 from utils_local.homography import is_valid_homography
 from utils_local.motion_compensation import pixel_to_world_compensated
+from utils_local.coordinates import enu_to_gcj02
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +48,7 @@ class TrajectoryNode:
         H = frame_element.homography_matrix
         has_H = is_valid_homography(H)
         drone_disp = getattr(frame_element, "drone_displacement_m", None)
-        world_anchor = getattr(frame_element, "world_anchor_lat_lon", None)
+        anchor_gcj02 = getattr(frame_element, "anchor_gcj02", None)
         can_convert_world = has_H and drone_disp is not None
 
         for ct in completed:
@@ -68,25 +69,50 @@ class TrajectoryNode:
             # 简化轨迹点（降采样以减少Kafka消息体积）
             if len(trajectory_px) > 50:
                 step = len(trajectory_px) // 50
-                ct["trajectory_px"] = trajectory_px[::step]
+                indices = list(range(0, len(trajectory_px), step))
+                ct["trajectory_px"] = [trajectory_px[index] for index in indices]
+                for key in (
+                    "ground_contact_points_px",
+                    "trajectory_enu_m",
+                    "trajectory_gcj02",
+                ):
+                    values = ct.get(key)
+                    if isinstance(values, list) and len(values) == len(trajectory_px):
+                        ct[key] = [values[index] for index in indices]
                 if len(trajectory_timestamps) == len(trajectory_px):
-                    ct["trajectory_timestamps_sec"] = trajectory_timestamps[::step]
+                    ct["trajectory_timestamps_sec"] = [
+                        trajectory_timestamps[index] for index in indices
+                    ]
                     ct["trajectory_time_offsets_sec"] = [
                         round(value - trajectory_timestamps[0], 3)
-                        for value in trajectory_timestamps[::step]
+                        for value in ct["trajectory_timestamps_sec"]
                     ]
 
-            # 世界坐标转换：像素→东北偏移（米）
-            if can_convert_world:
-                pts_px = np.array(ct["trajectory_px"])  # Nx2（降采样后）
+            # Canonical world points were accumulated with each frame's transform.
+            # Only use the old final-frame reprojection as a non-runtime fallback.
+            if can_convert_world and not ct.get("trajectory_enu_m"):
+                pts_px = np.array(
+                    ct.get("ground_contact_points_px") or ct["trajectory_px"]
+                )
                 pts_world = pixel_to_world_compensated(pts_px, H, drone_disp)
-                ct["trajectory_world_m"] = [
+                ct["trajectory_enu_m"] = [
                     [round(float(p[0]), 2), round(float(p[1]), 2)]
                     for p in pts_world
                 ]
-                if world_anchor:
-                    ct["world_anchor_lat_lon"] = [
-                        round(world_anchor[0], 6), round(world_anchor[1], 6)
+
+            if ct.get("trajectory_enu_m") and anchor_gcj02:
+                ct["anchor_gcj02"] = [
+                    round(anchor_gcj02[0], 6), round(anchor_gcj02[1], 6)
+                ]
+                if len(ct.get("trajectory_gcj02") or []) != len(
+                    ct["trajectory_enu_m"]
+                ):
+                    ct["trajectory_gcj02"] = [
+                        [round(lon, 8), round(lat, 8)]
+                        for lon, lat in (
+                            enu_to_gcj02(point[0], point[1], anchor_gcj02)
+                            for point in ct["trajectory_enu_m"]
+                        )
                     ]
 
         frame_element.completed_tracks = completed

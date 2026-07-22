@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import hashlib
 import json
 import sys
 from datetime import UTC, datetime
@@ -20,7 +19,6 @@ sys.path.insert(0, str(PLATFORM_DIR))
 from app.core.database import async_session_maker, close_db, init_db  # noqa: E402
 from app.models.mission import (  # noqa: E402
     DroneRecord,
-    RoadContextSnapshot,
     TelemetrySourceRecord,
     VideoSourceRecord,
 )
@@ -29,8 +27,8 @@ from app.services.mission_orchestrator import SourceValidator  # noqa: E402
 
 MP4NEW_CATALOG = (
     {
-        "inter_id": "INT_mp4new_haiyou",
-        "road_data_version": "ROAD-MP4NEW-HY-UNVERIFIED-V1",
+        "inter_id": "011wwe28dm500001",
+        "road_data_version": "20260501-IMAGERY-FIT-V1",
         "intersection_name": "解放东路-海右路",
         "drone_id": "UAV-MP4NEW-HY",
         "drone_name": "回放摄像头 · 解放东路-海右路",
@@ -62,8 +60,8 @@ MP4NEW_CATALOG = (
         ),
     },
     {
-        "inter_id": "INT_mp4new_lishi",
-        "road_data_version": "ROAD-MP4NEW-LS-UNVERIFIED-V1",
+        "inter_id": "011wwe28dr400003",
+        "road_data_version": "20260501-IMAGERY-FIT-V1",
         "intersection_name": "解放东路-礼士路",
         "drone_id": "UAV-MP4NEW-LS",
         "drone_name": "回放摄像头 · 解放东路-礼士路",
@@ -96,8 +94,8 @@ MP4NEW_CATALOG = (
         ),
     },
     {
-        "inter_id": "INT_mp4new_chonghua",
-        "road_data_version": "ROAD-MP4NEW-CH-UNVERIFIED-V1",
+        "inter_id": "011wwe29k1q00001",
+        "road_data_version": "20260501-IMAGERY-FIT-V1",
         "intersection_name": "新泺大街-崇华路",
         "drone_id": "UAV-MP4NEW-CH",
         "drone_name": "回放摄像头 · 新泺大街-崇华路",
@@ -126,8 +124,8 @@ MP4NEW_CATALOG = (
 
 INTER_XQH_CATALOG = (
     {
-        "inter_id": "INT_camera_1",
-        "road_data_version": "ROAD-LOCAL-INTER-XQH",
+        "inter_id": "011wwe0z19700001",
+        "road_data_version": "20260501-IMAGERY-FIT-V1",
         "intersection_name": "小清河北路与水屯路路口",
         "drone_id": "UAV-INTER-XQH",
         "drone_name": "回放无人机 · 小清河北路与水屯路",
@@ -157,35 +155,6 @@ def _source_id(prefix: str, profile_id: str) -> str:
     return f"{prefix}-{profile_id.removeprefix('SRC-')}"
 
 
-def _context_payload(item: dict) -> dict:
-    test_coordinate = item.get("test_coordinate") or {}
-    return {
-        "intersection": {
-            "name": item["intersection_name"],
-            "roads_json": "",
-            "calibration_status": "not_started",
-            "center_lat": test_coordinate.get("lat"),
-            "center_lon": test_coordinate.get("lon"),
-            "coordinate_usage": "local_acceptance_only" if test_coordinate else "unavailable",
-        },
-        "links": [],
-        "lanes": [],
-        "acceptance_scope": "detection_tracking_telemetry_only",
-    }
-
-
-def _coordinate_reference(item: dict) -> dict:
-    test_coordinate = item.get("test_coordinate")
-    if not test_coordinate:
-        return {"status": "unverified", "display": "unknown", "metric": "ENU"}
-    return {
-        "status": "test",
-        "display": "WGS84",
-        "metric": "ENU",
-        "source": test_coordinate["source"],
-        "usage": "local_acceptance_only",
-    }
-
 
 async def bootstrap(check_only: bool = False) -> dict:
     if not await init_db():
@@ -195,41 +164,6 @@ async def bootstrap(check_only: bool = False) -> dict:
     checked = 0
     async with async_session_maker() as session:
         for item in LOCAL_REPLAY_CATALOG:
-            payload = _context_payload(item)
-            checksum = hashlib.sha256(
-                json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
-            ).hexdigest()
-            context = (
-                await session.execute(
-                    select(RoadContextSnapshot).where(
-                        RoadContextSnapshot.inter_id == item["inter_id"],
-                        RoadContextSnapshot.road_data_version == item["road_data_version"],
-                    )
-                )
-            ).scalar_one_or_none()
-            if context is None:
-                if check_only:
-                    raise RuntimeError(f"missing RoadContext {item['inter_id']}")
-                context = RoadContextSnapshot(
-                    id=f"CTX-{item['drone_id'].removeprefix('UAV-')}",
-                    inter_id=item["inter_id"],
-                    road_data_version=item["road_data_version"],
-                    source="local_replay_fixture",
-                    checksum=checksum,
-                    coordinate_reference=_coordinate_reference(item),
-                    payload=payload,
-                    quality_status="unverified",
-                    effective_at=datetime.now(UTC),
-                )
-                session.add(context)
-                changed += 1
-            elif not check_only:
-                context.source = "local_replay_fixture"
-                context.checksum = checksum
-                context.coordinate_reference = _coordinate_reference(item)
-                context.payload = payload
-                context.quality_status = "unverified"
-
             drone = await session.get(DroneRecord, item["drone_id"])
             if drone is None:
                 if check_only:

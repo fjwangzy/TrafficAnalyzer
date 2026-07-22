@@ -12,8 +12,8 @@ _INTERSECTIONS: dict[str, dict] = {
     "INT_camera_1": {
         "id": "INT_camera_1",
         "name": "路口 1 (Camera 1)",
-        "center_lat": 36.7029,
-        "center_lon": 117.0223,
+        "center_gcj02": {"longitude": 117.0223, "latitude": 36.7029},
+        "coordinate_system": "GCJ02",
         "lane_count": 0,
         "status": "active",
         "current_drone_id": None,
@@ -22,8 +22,8 @@ _INTERSECTIONS: dict[str, dict] = {
     "INT_camera_2": {
         "id": "INT_camera_2",
         "name": "路口 2 (Camera 2)",
-        "center_lat": 36.7050,
-        "center_lon": 117.0250,
+        "center_gcj02": {"longitude": 117.0250, "latitude": 36.7050},
+        "coordinate_system": "GCJ02",
         "lane_count": 0,
         "status": "active",
         "current_drone_id": None,
@@ -32,8 +32,8 @@ _INTERSECTIONS: dict[str, dict] = {
     "INT_camera_3": {
         "id": "INT_camera_3",
         "name": "小清河北路与水屯路路口",
-        "center_lat": 36.7040,
-        "center_lon": 117.0230,
+        "center_gcj02": {"longitude": 117.0230, "latitude": 36.7040},
+        "coordinate_system": "GCJ02",
         "lane_count": 0,
         "status": "active",
         "current_drone_id": None,
@@ -48,8 +48,8 @@ def update_intersection(int_id: str, data: dict):
         _INTERSECTIONS[int_id] = {
             "id": int_id,
             "name": f"路口 ({int_id})",
-            "center_lat": 0.0,
-            "center_lon": 0.0,
+            "center_gcj02": None,
+            "coordinate_system": "GCJ02",
             "lane_count": 0,
             "status": "active",
             "current_drone_id": None,

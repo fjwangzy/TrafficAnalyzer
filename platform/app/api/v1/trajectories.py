@@ -29,7 +29,7 @@ async def get_trajectories(
     start_at: datetime | None = Query(None),
     end_at: datetime | None = Query(None),
     spatial_ready: bool = Query(False),
-    min_world_points: int = Query(2, ge=2, le=10000),
+    min_gcj02_points: int = Query(2, ge=2, le=10000),
 ):
     """Get track events for an intersection."""
     metric_store = getattr(request.app.state, "metric_store", None)
@@ -45,8 +45,69 @@ async def get_trajectories(
         start_at=start_at,
         end_at=end_at,
         spatial_ready=spatial_ready,
-        min_world_points=min_world_points,
+        min_gcj02_points=min_gcj02_points,
     ) if metric_store else []
+
+
+@router.get("/{intersection_id}/analysis")
+async def get_trajectory_analysis(
+    intersection_id: str,
+    request: Request,
+    period: str = Query("all"),
+    start_at: datetime | None = Query(None),
+    end_at: datetime | None = Query(None),
+    slice_start_at: datetime | None = Query(None),
+    slice_end_at: datetime | None = Query(None),
+    bucket_sec: int = Query(10, ge=1, le=300),
+    mission_id: str | None = Query(None),
+    source_profile_id: str | None = Query(None),
+    vehicle_class: str | None = Query(None),
+    yolo_class_id: int | None = Query(None),
+    yolo_class_name: str | None = Query(None),
+    turn_behavior: str | None = Query(None),
+    quality_status: str | None = Query(None),
+    movement_key: str | None = Query(None),
+    track_limit: int = Query(500, ge=1, le=2000),
+):
+    """Aggregate a bounded trajectory-analysis window and return its replay slice."""
+    if (start_at is None) != (end_at is None):
+        raise HTTPException(status_code=422, detail="start_at and end_at must be provided together")
+    if (slice_start_at is None) != (slice_end_at is None):
+        raise HTTPException(
+            status_code=422, detail="slice_start_at and slice_end_at must be provided together"
+        )
+    if start_at is not None and end_at is not None and start_at >= end_at:
+        raise HTTPException(status_code=422, detail="start_at must be earlier than end_at")
+    if slice_start_at is not None and slice_end_at is not None and slice_start_at >= slice_end_at:
+        raise HTTPException(status_code=422, detail="slice_start_at must be earlier than slice_end_at")
+    if (
+        start_at is not None and end_at is not None
+        and slice_start_at is not None and slice_end_at is not None
+        and (slice_start_at < start_at or slice_end_at > end_at)
+    ):
+        raise HTTPException(status_code=422, detail="time slice must be contained in the analysis window")
+
+    metric_store = getattr(request.app.state, "metric_store", None)
+    if not metric_store:
+        raise HTTPException(status_code=503, detail="MetricStore unavailable")
+    return await metric_store.query_trajectory_analysis(
+        intersection_id,
+        period=period,
+        start_at=start_at,
+        end_at=end_at,
+        slice_start_at=slice_start_at,
+        slice_end_at=slice_end_at,
+        bucket_sec=bucket_sec,
+        mission_id=mission_id,
+        source_profile_id=source_profile_id,
+        vehicle_class=vehicle_class,
+        yolo_class_id=yolo_class_id,
+        yolo_class_name=yolo_class_name,
+        turn_behavior=turn_behavior,
+        quality_status=quality_status,
+        movement_key=movement_key,
+        track_limit=track_limit,
+    )
 
 
 @router.get("/{intersection_id}/conflicts")
@@ -115,7 +176,7 @@ async def get_trajectory_heatmap(
     tracks = await metric_store.query_tracks(intersection_id, period, 2000) if metric_store else []
     grid: dict[str, int] = {}
     for track in tracks:
-        positions = track.get("trajectory_world_m") or track.get("positions_bev") or []
+        positions = track.get("trajectory_gcj02") or []
         for position in positions if isinstance(positions, list) else []:
             if isinstance(position, list) and len(position) >= 2:
                 key = f"{int(position[0])},{int(position[1])}"

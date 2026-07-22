@@ -1,0 +1,59 @@
+{
+  "mode": "execute",
+  "schema_version": "uav.replay-finalization-report/v1",
+  "output_dir": "output/native-mps/gcj02-map-projection-v3-20260722",
+  "completed_missions": 5,
+  "trajectory_count": 13042,
+  "items": [
+    {
+      "profile_id": "SRC-INTER-XQH-0403-PM",
+      "mission_id": "MIS-GCJ02-DEMO-f156fc00be86a68e52e0",
+      "pipeline_id": "pipe-1762eff3",
+      "map_version_id": "CMV-1d3dedffa32145dca68c148d",
+      "trajectory_count": 3629,
+      "video_sha256": "342dea78baf9acdb526a969333ec1c319b6aa39dc92a010548194b5c99b3fcbc",
+      "telemetry_sha256": "12ea683bafe9b69066438e02211de30dcb1780924b406e35e63dcb90188010ac",
+      "model_sha256": "22143c349e183401b6e6f779219a4cbeb046b10a61a49dbd447bb8c6eb74b21b"
+    },
+    {
+      "profile_id": "SRC-MP4NEW-HY-0624-PM",
+      "mission_id": "MIS-GCJ02-DEMO-955750af5328c90388d1",
+      "pipeline_id": "pipe-771caebe",
+      "map_version_id": "CMV-5442ffb9608c483bbc11c92e",
+      "trajectory_count": 3429,
+      "video_sha256": "bdc4b38c94d3e781fe564693074d4b6a09b13cd23c3506da7a9bcfa62c8be052",
+      "telemetry_sha256": "db982c57c7ccbee3fdd80cf2014ce2af0b7b944909c1de7799180ab966a33129",
+      "model_sha256": "22143c349e183401b6e6f779219a4cbeb046b10a61a49dbd447bb8c6eb74b21b"
+    },
+    {
+      "profile_id": "SRC-MP4NEW-HY-0625-AM",
+      "mission_id": "MIS-GCJ02-DEMO-79fefe5cf2dc5878b2c4",
+      "pipeline_id": "pipe-efa57ffd",
+      "map_version_id": "CMV-5442ffb9608c483bbc11c92e",
+      "trajectory_count": 2557,
+      "video_sha256": "750af62f497c5b0e50d849d6d2897baeff4bb18374d23fde36c9cc762f8f9421",
+      "telemetry_sha256": "5d781212a2993e5f89c6863fef7064a323528c72dfe9110e8d24c58fb464b332",
+      "model_sha256": "22143c349e183401b6e6f779219a4cbeb046b10a61a49dbd447bb8c6eb74b21b"
+    },
+    {
+      "profile_id": "SRC-MP4NEW2-HY-0715-PM",
+      "mission_id": "MIS-GCJ02-DEMO-e136040ec4d08be38292",
+      "pipeline_id": "pipe-956c4f4a",
+      "map_version_id": "CMV-5442ffb9608c483bbc11c92e",
+      "trajectory_count": 1750,
+      "video_sha256": "dc7e27f719f225d14433bc39fc5ef0ecdd9444dc7bc74ce6aaeaf51163e52a36",
+      "telemetry_sha256": "a7171948b3df2bddc48f1f1c63a5d717062e3f37c120eeacabe00f9fb7adbdfe",
+      "model_sha256": "22143c349e183401b6e6f779219a4cbeb046b10a61a49dbd447bb8c6eb74b21b"
+    },
+    {
+      "profile_id": "SRC-MP4NEW-LS-0624-PM",
+      "mission_id": "MIS-GCJ02-DEMO-3bb328e7b3ac472a467b",
+      "pipeline_id": "pipe-2dd542b7",
+      "map_version_id": "CMV-3d95098d2a7d4705992c93a8",
+      "trajectory_count": 1677,
+      "video_sha256": "0d89314afcb1b907a9cc721478c64ee1bec48d003285034bd56817bbae47c073",
+      "telemetry_sha256": "0fdc7be361aca41412c11e10fad883fc35300a1cd801481a35878cfcde2a363a",
+      "model_sha256": "22143c349e183401b6e6f779219a4cbeb046b10a61a49dbd447bb8c6eb74b21b"
+    }
+  ]
+}

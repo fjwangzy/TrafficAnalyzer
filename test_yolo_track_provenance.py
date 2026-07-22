@@ -1,12 +1,24 @@
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 import numpy as np
 
 from elements.FrameElement import FrameElement
+from nodes.DetectionTrackingNodes import build_yolo_model_id
 from nodes.TrackerInfoUpdateNode import TrackerInfoUpdateNode
 
 
 class YoloTrackProvenanceTest(unittest.TestCase):
+    def test_model_identifier_uses_weight_name_and_content_digest(self):
+        with TemporaryDirectory() as directory:
+            weight = Path(directory) / "traffic.pt"
+            weight.write_bytes(b"stable-weight-content")
+
+            model_id = build_yolo_model_id(weight)
+
+        self.assertEqual(model_id, "traffic.pt@3d1ed41c9c48")
+
     def test_completed_track_retains_raw_yolo_class_and_mapping_provenance(self):
         node = TrackerInfoUpdateNode({
             "general": {"buffer_analytics": 0, "min_time_life_track": 5},

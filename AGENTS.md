@@ -79,7 +79,7 @@ git diff --check
 ```text
 VideoReader → DetectionTrackingNodes → HomographyCalibrationNode → MotionCompensationNode
   → TrackerInfoUpdateNode → SpeedEstimationNode → DirectionFlowNode → LaneDetectionNode
-  → LaneAnalysisNode → TrajectoryNode → AutoLaneInferenceNode → ConflictDetectionNode
+  → LaneAnalysisNode → TrajectoryNode → RoadMapMatchingNode → AutoLaneInferenceNode → ConflictDetectionNode
   → CalcStatisticsNode → KafkaProducerNode → ShowNode → VideoSaverNode/FlaskServerVideoNode
 ```
 
@@ -89,11 +89,11 @@ VideoReader → DetectionTrackingNodes → HomographyCalibrationNode → MotionC
 
 | 模块 | 文件 | 责任 |
 |---|---|---|
-| 视频读取 | `nodes/VideoReader.py` | MP4/RTSP、道路 JSON、遥测和车道注入 |
+| 视频读取 | `nodes/VideoReader.py` | MP4/RTSP、遥测和固定 Runtime Road Map Bundle 注入 |
 | 检测跟踪 | `nodes/DetectionTrackingNodes.py` | YOLO11 + ByteTrack |
-| 世界坐标 | `nodes/HomographyCalibrationNode.py`、`nodes/MotionCompensationNode.py` | H 矩阵和无人机运动补偿 |
+| 世界坐标 | `nodes/HomographyCalibrationNode.py`、`nodes/MotionCompensationNode.py` | pixel→ENU 矩阵、GCJ-02 展示坐标和无人机运动补偿 |
 | 轨迹/速度/方向 | `TrackerInfoUpdateNode.py`、`SpeedEstimationNode.py`、`DirectionFlowNode.py`、`TrajectoryNode.py` | 车辆状态、世界轨迹和转向分类 |
-| 车道 | `LaneDetectionNode.py`、`LaneAnalysisNode.py`、`AutoLaneInferenceNode.py` | manual > model > auto |
+| 车道 | `RoadMapMatchingNode.py`、`LaneDetectionNode.py`、`LaneAnalysisNode.py`、`AutoLaneInferenceNode.py` | `lane_verified` 地图正式匹配；模型/自动结果仅作候选 |
 | 冲突 | `nodes/ConflictDetectionNode.py` | 未来路径交点 TTC/PET、证据和风险分 |
 | Kafka | `nodes/KafkaProducerNode.py` | canonical 多 Topic 消息信封 |
 
@@ -103,7 +103,7 @@ VideoReader → DetectionTrackingNodes → HomographyCalibrationNode → MotionC
 python main_optimized.py pipeline.send_info_kafka=False
 ```
 
-关键环境变量为 `VIDEO_SRC`、`ROADS_JSON`、`TOPIC_NAME`、`CAMERA_ID`、`KAFKA_BOOTSTRAP`。`TOPIC_NAME` 示例必须使用 `uav_statistics_1`。
+关键环境变量为 `VIDEO_SRC`、`RUNTIME_MAP_BUNDLE_JSON`、`TOPIC_NAME`、`CAMERA_ID`、`KAFKA_BOOTSTRAP`。正式轨迹运行必须注入不可变的 `lane_verified` Runtime Road Map Bundle；`TOPIC_NAME` 示例必须使用 `uav_statistics_1`。
 
 ## canonical 消息契约
 

@@ -106,7 +106,6 @@ class PipelineInstance:
     drone_id: str
     intersection_id: str
     video_src: str
-    roads_json: str
     topic_name: str
     camera_id: int
     video_port: int = 8100  # MJPEG server port
@@ -117,6 +116,7 @@ class PipelineInstance:
     road_data_version: str | None = None
     road_context_status: str = "missing"
     quality_status: str = "unverified"
+    map_version_id: str | None = None
     status: PipelineStatus = PipelineStatus.PENDING
     process: Any = field(default=None, repr=False)
     started_at: float = 0.0
@@ -132,7 +132,6 @@ class PipelineInstance:
             "drone_id": self.drone_id,
             "intersection_id": self.intersection_id,
             "video_src": redact_video_source(self.video_src),
-            "roads_json": self.roads_json,
             "topic_name": self.topic_name,
             "camera_id": self.camera_id,
             "video_port": self.video_port,
@@ -143,6 +142,7 @@ class PipelineInstance:
             "road_data_version": self.road_data_version,
             "road_context_status": self.road_context_status,
             "quality_status": self.quality_status,
+            "map_version_id": self.map_version_id,
             "status": self.status.value,
             "started_at": self.started_at,
             "stopped_at": self.stopped_at,
@@ -165,7 +165,6 @@ class PipelineManager:
             drone_id="drone_001",
             intersection_id="INT_camera_1",
             video_src="rtsp://192.168.1.100:554/stream",
-            roads_json="",
         )
         # ... later ...
         await pm.stop_pipeline(pipeline.pipeline_id)
@@ -195,6 +194,7 @@ class PipelineManager:
         self._executor = executor or LocalPipelineExecutor(
             self._root,
             self._pipeline_python,
+            video_ready_timeout_sec=settings.pipeline_video_ready_timeout_sec,
             device=settings.pipeline_device,
             imgsz=settings.pipeline_imgsz,
             extra_env=(
@@ -221,12 +221,6 @@ class PipelineManager:
         return tuple(
             (self._root / value).resolve() if not Path(value).is_absolute() else Path(value).resolve()
             for value in settings.uav_local_asset_roots
-        )
-
-    def _roads_roots(self) -> tuple[Path, ...]:
-        return tuple(
-            (self._root / value).resolve() if not Path(value).is_absolute() else Path(value).resolve()
-            for value in settings.pipeline_roads_roots
         )
 
     def _validate_video_source(self, value: str) -> str:
@@ -259,7 +253,7 @@ class PipelineManager:
         drone_id: str,
         intersection_id: str,
         video_src: str,
-        roads_json: str = "",
+        map_version_id: str | None = None,
         camera_id: int | None = None,
         video_port: int | None = None,
         topic_name: str | None = None,
@@ -273,8 +267,8 @@ class PipelineManager:
         """
         self._ensure_capacity()
         video_src = self._validate_video_source(video_src)
-        if roads_json:
-            raise ValueError("road/lane annotation parameters are disabled; roads_json must be empty")
+        if not map_version_id:
+            raise ValueError("lane_verified map_version_id is required")
         if camera_id is not None and not 1 <= camera_id <= 65535:
             raise ValueError("camera_id must be between 1 and 65535")
         if video_port is not None and not 1024 <= video_port <= 65535:
@@ -307,12 +301,12 @@ class PipelineManager:
             drone_id=drone_id,
             intersection_id=intersection_id,
             video_src=video_src,
-            roads_json=roads_json,
             topic_name=topic,
             camera_id=cid,
             video_port=port,
             video_stream_url=registered_stream_url,
             status=PipelineStatus.RUNNING,
+            map_version_id=map_version_id,
             started_at=time.time(),
         )
         self._pipelines[pipeline_id] = pipeline
@@ -328,7 +322,7 @@ class PipelineManager:
         drone_id: str,
         intersection_id: str,
         video_src: str,
-        roads_json: str = "",
+        runtime_map_bundle: dict | None = None,
         telemetry_source: str | None = None,
         telemetry_file_path: str | None = None,
         telemetry_time_offset_sec: float | None = None,
@@ -348,7 +342,7 @@ class PipelineManager:
             drone_id: The drone providing the video stream.
             intersection_id: The intersection to monitor.
             video_src: Video source — RTSP URL, file path, or camera index.
-            roads_json: Must be empty; video sources always start without road/lane annotations.
+            runtime_map_bundle: Optional immutable lane-verified channelized map bundle.
             telemetry_source: Optional telemetry source override.
             telemetry_file_path: Optional telemetry file path override.
             kafka_bootstrap: Override Kafka bootstrap servers.
@@ -358,8 +352,8 @@ class PipelineManager:
         """
         self._ensure_capacity()
         video_src = self._validate_video_source(video_src)
-        if roads_json:
-            raise ValueError("road/lane annotation parameters are disabled; roads_json must be empty")
+        if runtime_map_bundle is not None and runtime_map_bundle.get("map_status") != "lane_verified":
+            raise ValueError("runtime_map_bundle must be lane_verified when provided")
         telemetry_file_path = self._validate_support_file(
             telemetry_file_path,
             (".srt", ".json", ".txt"),
@@ -378,7 +372,6 @@ class PipelineManager:
             drone_id=drone_id,
             intersection_id=intersection_id,
             video_src=video_src,
-            roads_json=roads_json,
             topic_name=topic_name,
             camera_id=camera_id,
             video_port=video_port,
@@ -389,6 +382,9 @@ class PipelineManager:
             road_data_version=road_data_version,
             road_context_status=road_context_status,
             quality_status=quality_status,
+            map_version_id=(
+                runtime_map_bundle.get("map_version_id") if runtime_map_bundle else None
+            ),
         )
 
         launch = PipelineLaunchSpec(
@@ -405,6 +401,7 @@ class PipelineManager:
             road_data_version=road_data_version or "",
             road_context_status=road_context_status,
             quality_status=quality_status,
+            runtime_map_bundle=runtime_map_bundle,
             frame_stride=self._frame_stride,
             kafka_bootstrap=kafka_bootstrap or self._kafka_bootstrap,
             telemetry_source=telemetry_source,

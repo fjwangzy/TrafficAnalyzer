@@ -47,7 +47,7 @@ class KafkaActiveTrajectoriesTest(unittest.TestCase):
         frame_element.completed_tracks = [{
             "track_id": 101,
             "trajectory_px": [[1, 2], [3, 4]],
-            "trajectory_world_m": [[0.1, 0.2], [0.3, 0.4]],
+            "trajectory_enu_m": [[0.1, 0.2], [0.3, 0.4]],
             "turn_behavior": "straight",
             "avg_speed_kmh": 18.0,
             "entry_point_m": [0.1, 0.2],
@@ -132,7 +132,7 @@ class KafkaActiveTrajectoriesTest(unittest.TestCase):
         frame_element = FrameElement("test", frame, 3.0, 90, {})
         frame_element.homography_matrix = np.eye(3, dtype=np.float64)
         frame_element.drone_displacement_m = np.array([100.0, 200.0], dtype=np.float64)
-        frame_element.world_anchor_lat_lon = (36.7029, 117.0223)
+        frame_element.anchor_gcj02 = (117.0223, 36.7029)
 
         track = TrackElement(id=7, timestamp_first=1.0)
         track.timestamp_last = 3.0
@@ -152,8 +152,8 @@ class KafkaActiveTrajectoriesTest(unittest.TestCase):
 
         active = producer._build_active_trajectories(frame_element)
 
-        self.assertEqual(active, [
-            {
+        self.assertEqual(len(active), 1)
+        self.assertEqual(active[0], {
                 "track_id": 7,
                 "vehicle_class": "motor",
                 "yolo_class_id": 3,
@@ -169,13 +169,20 @@ class KafkaActiveTrajectoriesTest(unittest.TestCase):
                 "trajectory_point_count": 3,
                 "trajectory_tail_start": 0,
                 "is_trajectory_tail": False,
-                "trajectory_world_m": [[110.0, 220.0], [112.0, 224.0], [114.0, 228.0]],
-                "current_point_m": [114.0, 228.0],
-                "world_anchor_lat_lon": [36.7029, 117.0223],
+                "trajectory_enu_m": [[110.0, 220.0], [112.0, 224.0], [114.0, 228.0]],
+                "current_point_enu_m": [114.0, 228.0],
+                "anchor_gcj02": [117.0223, 36.7029],
+                "trajectory_gcj02": active[0]["trajectory_gcj02"],
+                "map_version_id": None,
+                "matched_lane_key": None,
+                "source_lane_id": None,
+                "matched_link_id": None,
+                "movement_key": None,
+                "map_match_confidence": None,
                 "timestamp_first": 1.0,
                 "timestamp_last": 3.0,
-            }
-        ])
+            })
+        self.assertEqual(len(active[0]["trajectory_gcj02"]), 3)
 
     def test_build_active_trajectories_limits_realtime_payload_to_tail_points(self):
         frame = np.zeros((100, 100, 3), dtype=np.uint8)
@@ -194,7 +201,7 @@ class KafkaActiveTrajectoriesTest(unittest.TestCase):
         active = producer._build_active_trajectories(frame_element)
 
         self.assertEqual(active[0]["trajectory_px"], [[3.0, 6.0], [4.0, 8.0]])
-        self.assertEqual(active[0]["trajectory_world_m"], [[3.0, 6.0], [4.0, 8.0]])
+        self.assertEqual(active[0]["trajectory_enu_m"], [[3.0, 6.0], [4.0, 8.0]])
         self.assertEqual(active[0]["trajectory_point_count"], 5)
         self.assertEqual(active[0]["trajectory_tail_start"], 3)
         self.assertTrue(active[0]["is_trajectory_tail"])

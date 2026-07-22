@@ -10,6 +10,7 @@ limited by REST pagination.
 from __future__ import annotations
 
 import argparse
+import cv2
 from datetime import UTC, datetime
 import json
 import os
@@ -34,14 +35,14 @@ if str(ROOT) not in sys.path:
 if str(PLATFORM_DIR) not in sys.path:
     sys.path.insert(0, str(PLATFORM_DIR))
 
-from scripts.bootstrap_mp4new_sources import MP4NEW_CATALOG  # noqa: E402
+from scripts.bootstrap_mp4new_sources import LOCAL_REPLAY_CATALOG  # noqa: E402
 from utils_local.event_evidence import CONFLICT_EVIDENCE_KINDS  # noqa: E402
 
 
 def source_catalog() -> dict[str, dict]:
-    """Return only the eight mp4new/mp4new2 source profiles."""
+    """Return every registered local replay source profile."""
     result: dict[str, dict] = {}
-    for intersection in MP4NEW_CATALOG:
+    for intersection in LOCAL_REPLAY_CATALOG:
         shared = {
             key: value
             for key, value in intersection.items()
@@ -50,6 +51,20 @@ def source_catalog() -> dict[str, dict]:
         for source in intersection["sources"]:
             result[source["profile_id"]] = {**shared, **source}
     return result
+
+
+def video_fps(path: Path) -> float:
+    """Read the source FPS used to derive a stable temporal sample rate."""
+    capture = cv2.VideoCapture(str(path))
+    if not capture.isOpened():
+        raise RuntimeError(f"cannot open video for FPS probe: {path}")
+    try:
+        fps = float(capture.get(cv2.CAP_PROP_FPS))
+    finally:
+        capture.release()
+    if not fps or fps <= 0:
+        raise RuntimeError(f"invalid video FPS: {path}")
+    return fps
 
 
 def verify_native_mps() -> dict:
@@ -237,7 +252,33 @@ class PlatformClient:
         except URLError as exc:
             raise RuntimeError(f"Platform is unavailable at {self.base_url}: {exc}") from exc
 
-    def register(self, source: dict, camera_id: int, video_port: int) -> dict:
+    def runtime_bundle(self, source: dict) -> dict:
+        maps = self.request(
+            "GET", f"/api/v1/calibration/channelized-maps?inter_id={source['inter_id']}"
+        )
+        eligible = [
+            item for item in maps
+            if item.get("status") == "lane_verified"
+            and item.get("road_data_version") == source["road_data_version"]
+        ]
+        if not eligible:
+            raise RuntimeError(
+                f"stage-1 gate blocked: no lane_verified map for "
+                f"{source['inter_id']}@{source['road_data_version']}"
+            )
+        selected = max(eligible, key=lambda item: int(item.get("version_no") or 0))
+        return self.request(
+            "GET",
+            f"/api/v1/calibration/channelized-maps/{selected['id']}/runtime-bundle",
+        )
+
+    def register(
+        self,
+        source: dict,
+        camera_id: int,
+        video_port: int,
+        runtime_bundle: dict,
+    ) -> dict:
         return self.request(
             "POST",
             "/api/v1/pipelines/register",
@@ -245,7 +286,8 @@ class PlatformClient:
                 "drone_id": source["drone_id"],
                 "intersection_id": source["inter_id"],
                 "video_src": source["video"],
-                "roads_json": "",
+                "map_version_id": runtime_bundle["map_version_id"],
+                "road_data_version": runtime_bundle["road_data_version"],
                 "camera_id": camera_id,
                 "video_port": video_port,
                 "video_stream_url": f"http://127.0.0.1:{video_port}/video",
@@ -334,12 +376,15 @@ def run_source(
     output_dir: Path,
     kafka_bootstrap: str,
     frame_stride: int,
+    input_fps: float,
+    sample_fps: float,
     imgsz: int,
     drain_seconds: float,
 ) -> dict:
     camera_id = 5700 + index
     video_port = 15700 + index
-    registered = client.register(source, camera_id, video_port)
+    runtime_bundle = client.runtime_bundle(source)
+    registered = client.register(source, camera_id, video_port, runtime_bundle)
     pipeline_id = registered["pipeline_id"]
     run_id = f"native-mps-{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}-{source['profile_id']}"
     topics = [
@@ -371,7 +416,9 @@ def run_source(
     env.update(
         {
             "VIDEO_SRC": str((ROOT / source["video"]).resolve()),
-            "ROADS_JSON": "",
+            "RUNTIME_MAP_BUNDLE_JSON": json.dumps(
+                runtime_bundle, ensure_ascii=False, separators=(",", ":")
+            ),
             "TOPIC_NAME": f"uav_statistics_{camera_id}",
             "CAMERA_ID": str(camera_id),
             "VIDEO_PORT": str(video_port),
@@ -383,8 +430,8 @@ def run_source(
             "RUN_ID": run_id,
             "SOURCE_PROFILE_ID": source["profile_id"],
             "ROAD_DATA_VERSION": source["road_data_version"],
-            "ROAD_CONTEXT_STATUS": "unverified",
-            "QUALITY_STATUS": "unverified",
+            "ROAD_CONTEXT_STATUS": "lane_verified",
+            "QUALITY_STATUS": "verified",
             "FRAME_STRIDE": str(frame_stride),
             "KAFKA_SPOOL_DIR": str(source_dir / "kafka-spool"),
             "PYTORCH_ENABLE_MPS_FALLBACK": "1",
@@ -401,7 +448,7 @@ def run_source(
         "detection_node.device=mps",
         f"detection_node.imgsz={imgsz}",
         "telemetry.enabled=true",
-        "telemetry.source=file",
+        f"telemetry.source={source.get('telemetry_type', 'file')}",
         f"telemetry.file_path={hydra_string(source['telemetry'])}",
         f"telemetry.time_offset_sec={source['time_offset_sec']}",
         f"telemetry.sync_tolerance_sec={source.get('sync_tolerance_sec', 2.5)}",
@@ -456,11 +503,15 @@ def run_source(
         "profile_id": source["profile_id"],
         "pipeline_id": pipeline_id,
         "run_id": run_id,
+        "map_version_id": runtime_bundle["map_version_id"],
+        "road_data_version": runtime_bundle["road_data_version"],
         "video": source["video"],
         "telemetry": source["telemetry"],
         "time_offset_sec": source["time_offset_sec"],
         "camera_id": camera_id,
         "frame_stride": frame_stride,
+        "input_fps": round(input_fps, 3),
+        "sample_fps": round(sample_fps, 3),
         "imgsz": imgsz,
         "return_code": return_code,
         "elapsed_sec": round(time.monotonic() - started, 3),
@@ -484,7 +535,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--username", default=os.environ.get("PLATFORM_USERNAME", "admin"))
     parser.add_argument("--password", default=os.environ.get("PLATFORM_PASSWORD", "admin123"))
     parser.add_argument("--kafka-bootstrap", default="127.0.0.1:9092")
-    parser.add_argument("--frame-stride", type=int, default=10)
+    parser.add_argument("--frame-stride", type=int, help="fixed override; otherwise derived from --sample-fps")
+    parser.add_argument("--sample-fps", type=float, default=3.0)
     parser.add_argument("--imgsz", type=int, default=640)
     parser.add_argument("--drain-seconds", type=float, default=5.0)
     parser.add_argument("--output-dir", type=Path)
@@ -495,8 +547,10 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    if args.frame_stride < 1:
+    if args.frame_stride is not None and args.frame_stride < 1:
         raise SystemExit("--frame-stride must be >= 1")
+    if args.sample_fps <= 0:
+        raise SystemExit("--sample-fps must be > 0")
     catalog = source_catalog()
     selected = args.source or list(catalog)
     unknown = [profile_id for profile_id in selected if profile_id not in catalog]
@@ -541,13 +595,17 @@ def main() -> int:
                 print(f"[{index}/{len(selected)}] resumed {profile_id}", flush=True)
                 continue
         print(f"[{index}/{len(selected)}] running {profile_id}", flush=True)
+        input_fps = video_fps(ROOT / catalog[profile_id]["video"])
+        frame_stride = args.frame_stride or max(1, int(round(input_fps / args.sample_fps)))
         result = run_source(
             client,
             catalog[profile_id],
             index=index,
             output_dir=output_dir,
             kafka_bootstrap=args.kafka_bootstrap,
-            frame_stride=args.frame_stride,
+            frame_stride=frame_stride,
+            input_fps=input_fps,
+            sample_fps=input_fps / frame_stride,
             imgsz=args.imgsz,
             drain_seconds=args.drain_seconds,
         )

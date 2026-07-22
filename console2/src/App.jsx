@@ -179,8 +179,7 @@ export function App() {
   const selectedIntersection = intersections.find((item) => item.id === selectedId) || (selectedSource ? {
     id: selectedId,
     name: selectedSource.intersectionName,
-    center_lat: selectedSource.drone?.last_telemetry?.latitude,
-    center_lon: selectedSource.drone?.last_telemetry?.longitude,
+    center_gcj02: selectedSource.drone?.last_telemetry?.position_gcj02,
     current_drone_id: selectedSource.drone_id,
   } : null)
   const intersectionQuery = useQuery({ queryKey: ['monitoring-intersection', selectedId], queryFn: () => platformApi.intersection(selectedId), enabled: Boolean(selectedId) })
@@ -198,7 +197,7 @@ export function App() {
       limit: 500,
       source_profile_id: selectedSource.profile_id,
       spatial_ready: true,
-      min_world_points: 2,
+      min_gcj02_points: 2,
     }),
     enabled: Boolean(selectedId && selectedSource?.profile_id),
     refetchInterval: 30_000,
@@ -221,16 +220,6 @@ export function App() {
   useEffect(() => {
     setLatestStats(null); setTelemetry(null); setActiveTrajectories([]); setCompletedTrajectories([]); setRealtimeConflicts([]); setVisibleHistoryConflicts([]); setVisibleTrendRows([]); setSelectedEvent(null); setVideoError(false); setVideoRetry(0); setLastStatsAt(0); setLastTelemetryAt(0); statsFingerprint.current = ''; telemetryFingerprint.current = ''; pausedBuffer.current = { trendRows: null, telemetry: null, conflicts: null, realtime: [] }
   }, [selectedId, selectedSource?.profile_id])
-  useEffect(() => {
-    if (!videoError || videoRetry >= 5) return undefined
-    const timer = window.setTimeout(() => {
-      setVideoRetry((value) => value + 1)
-      setVideoNonce(Date.now())
-      setVideoError(false)
-    }, 3000)
-    return () => window.clearTimeout(timer)
-  }, [videoError, videoRetry])
-
   const pipeline = pipelines.find((item) => item.status === 'running' && (
     selectedSource
       ? item.source_profile_id === selectedSource.profile_id
@@ -238,14 +227,20 @@ export function App() {
   )) || null
   const intersectionPipeline = pipelines.find((item) => item.status === 'running' && item.intersection_id === selectedId) || null
   const quickStartMutation = useMutation({
-    mutationFn: ({ source, intersection }) => platformApi.createMission({
-      name: `快速演示 · ${source.intersectionName || intersection}`,
-      drone_id: source.drone_id,
-      source_profile_id: source.profile_id,
-      inter_id: intersection,
-      road_data_version: source.drone.default_road_data_version,
-      scheduled_end_at: new Date(Date.now() + 3_600_000).toISOString(),
-    }),
+    mutationFn: async ({ source, intersection }) => {
+      const mission = await platformApi.createMission({
+        name: `快速演示 · ${source.intersectionName || intersection}`,
+        drone_id: source.drone_id,
+        source_profile_id: source.profile_id,
+        inter_id: intersection,
+        ...(source.drone.default_road_data_version ? { road_data_version: source.drone.default_road_data_version } : {}),
+        scheduled_end_at: new Date(Date.now() + 3_600_000).toISOString(),
+      })
+      if (mission?.status !== 'running') {
+        throw new Error(mission?.error_message || mission?.reason_code || '演示检测启动失败')
+      }
+      return mission
+    },
     onSuccess: () => pipelinesQuery.refetch(),
   })
   const cameraId = pipeline?.camera_id
@@ -370,8 +365,24 @@ export function App() {
     }
   })
   const streamActive = Boolean(pipeline)
-  const liveWorldTrajectories = [...activeTrajectories, ...completedTrajectories].filter((item) => Array.isArray(item?.trajectory_world_m) && item.trajectory_world_m.length)
-  const historicalTrajectories = (Array.isArray(trajectoriesQuery.data) ? trajectoriesQuery.data : []).filter((item) => Array.isArray(item?.trajectory_world_m) && item.trajectory_world_m.length >= 2)
+  useEffect(() => {
+    if (!videoError || !streamActive) return undefined
+    const retryDelay = videoRetry >= 5 ? 10_000 : 3_000
+    const timer = window.setTimeout(() => {
+      setVideoRetry((value) => value + 1)
+      setVideoNonce(Date.now())
+      setVideoError(false)
+    }, retryDelay)
+    return () => window.clearTimeout(timer)
+  }, [videoError, videoRetry, streamActive])
+  const liveWorldTrajectories = useMemo(
+    () => [...activeTrajectories, ...completedTrajectories].filter((item) => Array.isArray(item?.trajectory_gcj02) && item.trajectory_gcj02.length),
+    [activeTrajectories, completedTrajectories],
+  )
+  const historicalTrajectories = useMemo(
+    () => (Array.isArray(trajectoriesQuery.data) ? trajectoriesQuery.data : []).filter((item) => Array.isArray(item?.trajectory_gcj02) && item.trajectory_gcj02.length >= 2),
+    [trajectoriesQuery.data],
+  )
   const worldTrajectories = streamActive ? liveWorldTrajectories : historicalTrajectories
   const cars = asNumber(latestStats?.cars ?? latestStats?.total_vehicles ?? latestStats?.cars_amount)
   const avgSpeed = asNumber(latestStats?.avg_speed_kmh ?? latestStats?.average_speed)
@@ -383,8 +394,8 @@ export function App() {
   const realtimeTrajectoryCount = statsStale ? null : activeTrajectories.length
   const telemetryStale = !lastTelemetryAt || now - lastTelemetryAt > 30_000
   const attitude = telemetry || latestStats?.drone_position || {}
-  const mapCenterLat = asNumber(selectedIntersection?.center_lat ?? intersectionQuery.data?.center_lat ?? attitude.lat ?? attitude.latitude) ?? 36.7029
-  const mapCenterLon = asNumber(selectedIntersection?.center_lon ?? intersectionQuery.data?.center_lon ?? attitude.lon ?? attitude.longitude) ?? 117.0223
+  const mapCenterLat = asNumber(selectedIntersection?.center_gcj02?.latitude ?? intersectionQuery.data?.center_gcj02?.latitude ?? attitude.position_gcj02?.latitude) ?? 36.703222
+  const mapCenterLon = asNumber(selectedIntersection?.center_gcj02?.longitude ?? intersectionQuery.data?.center_gcj02?.longitude ?? attitude.position_gcj02?.longitude) ?? 117.028285
   const height = asNumber(attitude.height ?? attitude.altitude ?? attitude.altitude_agl)
   const heading = asNumber(attitude.heading ?? attitude.attitude_head ?? attitude.yaw)
   const pitch = asNumber(attitude.attitude_pitch ?? attitude.pitch ?? attitude.gimbal_pitch)
@@ -401,11 +412,9 @@ export function App() {
       ? '当前视频源已停用'
       : !selectedSource?.drone_id || !selectedId
         ? '当前视频源未绑定无人机或路口'
-        : !selectedSource?.drone?.default_road_data_version
-          ? '当前无人机未绑定 RoadContext 版本'
-          : intersectionPipeline
-            ? '当前路口已有其他检测任务运行'
-            : ''
+        : intersectionPipeline
+          ? '当前路口已有其他检测任务运行'
+          : ''
   const mjpegSrc = detectorVideoStreamSrc(pipeline, videoNonce)
   const videoStreamAvailable = Boolean(mjpegSrc)
   const mainIsVideo = primaryView !== 'bev'
@@ -441,7 +450,7 @@ export function App() {
 
   return <ConsoleFrame pageTitle='实时监测' immersive>
     <h1 className='sr-only'>实时监测</h1>
-    {mainIsVideo && streamActive && videoStreamAvailable && !videoError ? <img ref={videoRef} className={`map-image ${primaryView}`} src={mjpegSrc} alt={primaryView === 'raw' ? '原始视频流' : '检测器输出视频流'} onLoad={() => { setVideoError(false); setVideoRetry(0) }} onError={() => setVideoError(true)} /> : primaryView === 'bev' ? <MonitoringBevMap centerLat={mapCenterLat} centerLon={mapCenterLon} trajectories={worldTrajectories} activeCount={activeTrajectories.length} label='BEV 地图轨迹主视图' /> : <div className='map-image feed-unavailable'><strong>{streamActive ? (!videoStreamAvailable ? '检测器未登记直连视频地址' : videoRetry >= 5 ? '视频流连接失败' : `视频流重连中 · ${videoRetry + 1}/5`) : '当前路口没有运行中的检测管道'}</strong><span>{monitoringError ? apiErrorMessage(monitoringError) : streamActive ? (videoStreamAvailable ? '每 3 秒直连检测器重试，达到上限后保持错误态' : '请重启 Pipeline 以登记浏览器可访问的 MJPEG 地址') : '可直接启动当前视频源的一小时演示检测'}</span>{!streamActive && selectedSource && <div className='quick-start-actions'><button className='quick-start-button' type='button' title={quickStartUnavailableReason || '启动当前视频源的一小时演示检测'} disabled={Boolean(quickStartUnavailableReason) || quickStartMutation.isPending} onClick={() => quickStartMutation.mutate({ source: selectedSource, intersection: selectedId })}><Play size={15} weight='fill' />{quickStartMutation.isPending ? '正在启动…' : '启动演示检测'}</button>{quickStartMutation.error && <span className='quick-start-error' role='alert'>{apiErrorMessage(quickStartMutation.error, '演示检测启动失败')}</span>}</div>}</div>}
+    {mainIsVideo && streamActive && videoStreamAvailable && !videoError ? <img ref={videoRef} className={`map-image ${primaryView}`} src={mjpegSrc} alt={primaryView === 'raw' ? '原始视频流' : '检测器输出视频流'} onLoad={() => { setVideoError(false); setVideoRetry(0) }} onError={() => setVideoError(true)} /> : primaryView === 'bev' ? <MonitoringBevMap centerLat={mapCenterLat} centerLon={mapCenterLon} trajectories={worldTrajectories} activeCount={activeTrajectories.length} label='BEV 地图轨迹主视图' /> : <div className='map-image feed-unavailable'><strong>{streamActive ? (!videoStreamAvailable ? '检测器未登记直连视频地址' : videoRetry >= 5 ? '视频流连接失败' : `视频流重连中 · ${videoRetry + 1}/5`) : '当前路口没有运行中的检测管道'}</strong><span>{monitoringError ? apiErrorMessage(monitoringError) : streamActive ? (videoStreamAvailable ? (videoRetry >= 5 ? '检测器仍在运行，10 秒后继续自动重试视频流' : '每 3 秒直连检测器重试；持续失败后转为每 10 秒自动恢复') : '请重启 Pipeline 以登记浏览器可访问的 MJPEG 地址') : '可直接启动当前视频源的一小时演示检测'}</span>{!streamActive && selectedSource && <div className='quick-start-actions'><button className='quick-start-button' type='button' title={quickStartUnavailableReason || '启动当前视频源的一小时演示检测'} disabled={Boolean(quickStartUnavailableReason) || quickStartMutation.isPending} onClick={() => quickStartMutation.mutate({ source: selectedSource, intersection: selectedId })}><Play size={15} weight='fill' />{quickStartMutation.isPending ? '正在启动…' : '启动演示检测'}</button>{quickStartMutation.error && <span className='quick-start-error' role='alert'>{apiErrorMessage(quickStartMutation.error, '演示检测启动失败')}</span>}</div>}</div>}
     <div className='map-vignette' />
 
     <section className='context-bar'>

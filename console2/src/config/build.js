@@ -2,7 +2,7 @@ const KIB = 1024
 
 export function manualChunks(id) {
   if (!id.includes('node_modules')) return undefined
-  if (id.includes('/ol/')) return 'map-vendor'
+  if (id.includes('/@amap/amap-jsapi-loader/')) return 'map-vendor'
   if (id.includes('/recharts/') || id.includes('/d3-')) return 'chart-vendor'
   if (id.includes('/@tanstack/react-query/')) return 'query-vendor'
   if (id.includes('/react/') || id.includes('/react-dom/') || id.includes('/react-router') || id.includes('/scheduler/')) return 'react-vendor'

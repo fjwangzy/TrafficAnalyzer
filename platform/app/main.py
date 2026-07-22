@@ -1,8 +1,6 @@
 """Traffic Platform Monolith — main FastAPI application."""
-import hashlib
 import logging
 from contextlib import asynccontextmanager
-from pathlib import Path
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -40,11 +38,8 @@ from app.services.metric_store import PostgresMetricStoreAdapter
 from app.services.mission_orchestrator import MissionOrchestrator, PipelineManagerAdapter
 from app.services.pipeline_manager import PipelineManager
 from app.services.road_context import (
-    FallbackRoadContextAdapter,
-    FixtureRoadContextAdapter,
     Road9RoadContextAdapter,
     RoadContext,
-    RoadContextResult,
 )
 from app.services.survey_worker import SurveyWorker
 
@@ -118,36 +113,9 @@ async def lifespan(app: FastAPI):
         frame_stride=settings.pipeline_frame_stride,
     )
     mission_orchestrator = None
+    road_context = None
     if db_available:
-        fixture_values = {}
-        if settings.local_road_fixture_enabled:
-            project_root = Path(__file__).resolve().parents[2]
-            roads_path = (project_root / settings.local_road_fixture_roads_json).resolve()
-            checksum = hashlib.sha256(roads_path.read_bytes()).hexdigest() if roads_path.is_file() else "unavailable"
-            fixture_values[(settings.local_road_fixture_inter_id, settings.local_road_fixture_version)] = RoadContextResult(
-                inter_id=settings.local_road_fixture_inter_id,
-                road_data_version=settings.local_road_fixture_version,
-                source="local_fixture",
-                checksum=checksum,
-                coordinate_reference={"metric": "ENU", "display": "GCJ02", "status": "unverified"},
-                intersection={"roads_json": settings.local_road_fixture_roads_json},
-                links=(),
-                lanes=(),
-                visual_bindings=({
-                    "local_lane_id": "fixture",
-                    "canonical_link_id": None,
-                    "canonical_lane_id": None,
-                    "roads_json": settings.local_road_fixture_roads_json,
-                    "status": "candidate",
-                },),
-                quality_status="unverified",
-            )
-        road_context = RoadContext(
-            FallbackRoadContextAdapter(
-                Road9RoadContextAdapter(async_session_maker),
-                FixtureRoadContextAdapter(fixture_values),
-            )
-        )
+        road_context = RoadContext(Road9RoadContextAdapter(async_session_maker))
         mission_orchestrator = MissionOrchestrator(
             async_session_maker,
             PipelineManagerAdapter(pipeline_manager),
@@ -172,6 +140,7 @@ async def lifespan(app: FastAPI):
     app.state.pipeline_manager = pipeline_manager
     app.state.survey_worker = survey_worker
     app.state.mission_orchestrator = mission_orchestrator
+    app.state.road_context = road_context
     app.state.settings = settings
     app.state.db_available = db_available
 

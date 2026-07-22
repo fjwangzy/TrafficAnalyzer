@@ -16,7 +16,6 @@ import time
 
 # 设置环境变量
 os.environ["VIDEO_SRC"] = "dummy"
-os.environ["ROADS_JSON"] = "dummy"
 os.environ["TOPIC_NAME"] = "uav_statistics_1"
 os.environ["CAMERA_ID"] = "1"
 
@@ -467,7 +466,7 @@ def _conflict_frame(motor_track, non_motor_track):
     fe.tracked_xyxy = [_bbox_at(mx, my), _bbox_at(nx, ny)]
     fe.homography_matrix = np.eye(3)
     fe.drone_displacement_m = np.array([0.0, 0.0])
-    fe.world_anchor_lat_lon = [36.702909, 117.022330]
+    fe.anchor_gcj02 = [117.022330, 36.702909]
     fe.buffer_tracks = {motor_track.id: motor_track, non_motor_track.id: non_motor_track}
     return fe
 

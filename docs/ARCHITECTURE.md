@@ -1,7 +1,7 @@
 # ARCHITECTURE.md — TrafficAnalyzer 系统架构
 
 > 2026-07-16 本机开发环境已按 ADR-019 完成纯净切换。本文中的旧链路段落仅是历史设计记录；
-> 当前实现以根 `docker-compose.yaml`、Alembic `20260717_0013` 和 canonical `uav_*` 契约为准。
+> 当前实现以根 `docker-compose.yaml`、Alembic `20260721_0017` 和 canonical `uav_*` 契约为准。
 
 ## 系统总览
 
@@ -26,8 +26,8 @@ TrafficAnalyzer 是智慧交通大项目下的无人机 AI 交通分析子系统
                       ▼
 ┌─────────────────────────────────────────────────────────┐
 │                   VideoReader (生成器)                    │
-│  逐帧产出 FrameElement(source, frame, timestamp, roads)  │
-│  注入遥测数据 + 车道多边形（如有配置）                      │
+│  逐帧产出 FrameElement(source, frame, timestamp)         │
+│  注入遥测数据 + 可选的固定 Runtime Road Map Bundle        │
 └─────────────────────┬───────────────────────────────────┘
                       │ FrameElement
                       ▼
@@ -40,57 +40,61 @@ TrafficAnalyzer 是智慧交通大项目下的无人机 AI 交通分析子系统
                       ▼
 ┌─────────────────────────────────────────────────────────┐
 │             HomographyCalibrationNode                    │
-│  遥测→H矩阵（Nadir/Oblique模式）或参考点→静态H            │
+│  按 SourceProfile verified 配准锁定 pixel→ENU 单应矩阵    │
 └─────────────────────┬───────────────────────────────────┘
                       ▼
 ┌─────────────────────────────────────────────────────────┐
 │             MotionCompensationNode                       │
-│  GPS锚定世界坐标系、无人机位移/速度矢量、悬停检测          │
+│  以配准时 GCJ-02 位置为零点，逐帧补偿无人机位移与航向       │
 └─────────────────────┬───────────────────────────────────┘
                       │ FrameElement（带运动补偿字段）
                       ▼
 ┌─────────────────────────────────────────────────────────┐
 │             TrackerInfoUpdateNode                        │
 │  维护 buffer_tracks 字典（TrackElement）                  │
-│  道路分配 + 出口道路检测 + motor/non_motor分类            │
-│  轨迹点累积 + 完成轨迹发射（含世界坐标）                  │
+│  车辆底部接地点 + motor/non_motor 分类 + 逐帧轨迹累积      │
 └─────────────────────┬───────────────────────────────────┘
                       ▼
 ┌─────────────────────────────────────────────────────────┐
 │             SpeedEstimationNode                          │
-│  透视变换+帧间位移→车速(km/h)，减去无人机速度             │
+│  带时间戳的 ENU 轨迹回归→车速(km/h)，不重复扣无人机速度    │
 └─────────────────────┬───────────────────────────────────┘
                       ▼
 ┌─────────────────────────────────────────────────────────┐
 │             DirectionFlowNode                            │
-│  世界坐标系航向→左转/直行/右转/掉头分类+排队检测          │
+│  ENU 航向→左转/直行/右转/掉头分类+排队检测                │
 └─────────────────────┬───────────────────────────────────┘
                       ▼
 ┌─────────────────────────────────────────────────────────┐
 │             LaneDetectionNode（模型驱动，可选）           │
-│  YOLO 分割模型检测车道标线/路面→稳定车道多边形           │
-│  优先级：人工标注 > 模型检测 > 轨迹推断                  │
+│  YOLO 分割模型检测车道标线/路面，仅产生候选几何           │
 └─────────────────────┬───────────────────────────────────┘
                       ▼
 ┌─────────────────────────────────────────────────────────┐
 │             LaneAnalysisNode（数据驱动）                  │
-│  车道级流量/排队长度/车头时距（有标注时自动输出）          │
+│  消费已验证匹配结果；候选几何不能覆盖发布地图              │
 └─────────────────────┬───────────────────────────────────┘
                       ▼
 ┌─────────────────────────────────────────────────────────┐
 │             TrajectoryNode                               │
-│  轨迹转向分类 + 世界坐标轨迹输出                          │
+│  输出 trajectory_enu_m + trajectory_gcj02               │
+└─────────────────────┬───────────────────────────────────┘
+                      ▼
+┌─────────────────────────────────────────────────────────┐
+│             RoadMapMatchingNode                         │
+│  lane_verified 车道面 + 横距 + 航向 + 拓扑 + 历史连续性  │
+│  有地图时输出正式匹配；无地图时透传检测/像素跟踪结果       │
 └─────────────────────┬───────────────────────────────────┘
                       ▼
 ┌─────────────────────────────────────────────────────────┐
 │             AutoLaneInferenceNode（轨迹驱动）             │
-│  自动发现车道中心线 + 各方向流量/排队/车头时距            │
-│  无需人工标注 — 从轨迹空间聚类自动推断                    │
+│  自动发现车道中心线和方向，仅输出质量辅助候选              │
+│  不覆盖已发布地图，不生成正式 Lane ID                     │
 └─────────────────────┬───────────────────────────────────┘
                       ▼
 ┌─────────────────────────────────────────────────────────┐
 │             ConflictDetectionNode（默认启用）             │
-│  右转/左转机非 near-miss 证据漏斗 + 冲突点世界坐标输出      │
+│  右转/左转机非 near-miss 证据漏斗 + 冲突点 ENU/GCJ-02 输出 │
 │  同帧输出标定/轨迹/配对/预测/证据/去重/事件诊断漏斗         │
 └─────────────────────┬───────────────────────────────────┘
                       ▼
@@ -108,8 +112,8 @@ TrafficAnalyzer 是智慧交通大项目下的无人机 AI 交通分析子系统
                       ▼
 ┌─────────────────────────────────────────────────────────┐
 │             ShowNode (supervision 库)                    │
-│  圆角边框+ID+道路多边形+车速标签+方向流量+轨迹尾迹       │
-│  +自动车道中心线+FPS                                     │
+│  圆角边框+ID+已验证渠化几何+车速标签+方向流量+轨迹尾迹   │
+│  +候选质量辅助叠层+FPS                                   │
 └─────────────────────┬───────────────────────────────────┘
                       ▼
 ┌──────────────────────────┐  ┌──────────────────────────┐
@@ -331,6 +335,12 @@ Mac 开发机不得用 x86_64/Rosetta Python 承担 YOLO 推理。仓库通过
 切换运行拓扑时先以非破坏方式导入既有证据卷，不能只复用 road9 元数据。Platform 创建的检测器是同一
 macOS 环境中的进程组，因此 REST、Mission、MJPEG 与进程生命周期都保持本地回环，不需要
 agent、token、路径翻译或 `host.docker.internal`。`status|logs|stop|restart` 由同一脚本管理。
+`run_platform.py` 使用 `os.execvpe` 原位替换为 uvicorn，使 launchd/Docker 直接拥有服务进程；
+不得恢复为 `subprocess.call` wrapper，否则 `launchctl remove` 只会终止外层进程并遗留多个连接
+同一 `road9` 的 Mission 调度器，进而把另一实例的存活 Pipeline 误判为
+`pipeline_runtime_missing`。本机脚本按 launchd owner PID 与精确 uvicorn 命令双重检查单实例；
+发现重复实例时 `up/status` fail closed，不得继续提供误导性的 ready 状态。停止与重启必须等待
+服务端口释放且同命令进程归零后再返回。
 
 `scripts/run_native_mps_replays.py` 是本机批量验收入口：检测器在宿主机 MPS 上串行运行，
 通过 `localhost:9092` 向开发 Kafka 发送 canonical 消息，并通过
@@ -345,10 +355,15 @@ agent、token、路径翻译或 `host.docker.internal`。`status|logs|stop|resta
 批量入口默认 `imgsz=640`，用于 Apple Silicon 长时间回放的速度优先配置；生产检测配置
 仍保持 `imgsz=960` 的小目标精度优先口径。两者结果不得直接作为同一精度基线比较。
 
-默认目录包含 `mp4new` 5 源和 `mp4new2` 3 源，共 8 个 SourceProfile；三组
-`mp4new2` 复用既有海右路、礼士路、崇华路 RoadContext，不创建假路口。TCC 验收只接受
+默认目录包含 `inter_xqh` 1 源、`mp4new` 5 源和 `mp4new2` 3 源，共 9 个 SourceProfile；三组
+`mp4new2` 复用既有海右路、礼士路、崇华路渠化地图，不创建假路口。TCC 验收只接受
 `prediction_type=path_intersection` 且 `distance_m≈0` 的真实事件；0 事件是允许的业务结果，
 不得通过放宽阈值制造正样本。
+
+`finalize_demo_replay_batches.py` 与 `verify_gcj02_demo_replays.py` 支持重复传入 `--source`，用于
+显式缩小技术演示回归范围；不传时仍按 9 源严格门禁。2026-07-22 用户将视频回归范围收敛为
+2 条轨迹样本：已自然 EOF 的前 5 源保留并固化为 5 个 completed Mission（13,042 条轨迹），
+第 6 源中止批次已按白名单清零，其余来源未运行。该抽样结果只证明演示链路，不替代生产全源回放。
 
 批量验收的每个 SourceProfile 必须同时满足：检测进程返回码为 0、Stats 与完成轨迹均非空、
 每条 Stats 都携带 TCC 漏斗诊断、且不存在不符合严格业务口径的 TCC 事件。若批量抽帧未产生
@@ -357,7 +372,7 @@ agent、token、路径翻译或 `host.docker.internal`。`status|logs|stop|resta
 
 Console2 Monitoring 在存在运行中 Pipeline 时只投放当前会话 active/completed 世界轨迹；离线时按
 当前 SourceProfile 查询 24 小时内最多 500 条 `spatial_ready` 历史轨迹并标记为“BEV 历史轨迹回放”。
-页面上限用于保护 OpenLayers 渲染，不替代 Road9 总量对账。
+页面上限用于保护高德地图轨迹图层渲染，不替代 Road9 总量对账。
 
 ### 检测器 MJPEG 地址登记与浏览器直连
 
@@ -379,8 +394,13 @@ Browser <img src="http://127.0.0.1:8101/video">
 `/api/v1/video/camera/{camera_id}` 暂保留为兼容诊断端点，不属于 Console2 运行时数据路径。
 
 Console2 监测页除处理明确的 `<img onError>` 外，还对 MJPEG 首帧设置 8 秒看门狗。
-Pipeline 已运行但连接迟迟没有产生可解码首帧时，页面按既有 3 秒间隔重建流连接，最多
-重试 5 次；已有 1280×720 等有效自然尺寸的画面不会被看门狗打断。飞行任务页和监测页
+本地检测器只有在 `VideoServer` 完成端口绑定并输出 `MJPEG_READY` 后，Platform 才会把
+Pipeline/Mission 标记为 `running`；默认等待上限为 45 秒，超时或子进程提前退出均按启动失败
+收敛，避免把尚不可访问的视频地址提前暴露给浏览器。Mission 调度器对刚启动 Pipeline 的一次
+临时查询缺失保留 15 秒确认窗口，窗口内继续观察，避免并发轮询把实际存活的检测器误判为
+`pipeline_runtime_missing`；超过窗口仍不存在才进入失败终态。运行中的连接若仍未产生可解码首帧，
+页面前 5 次按 3 秒间隔重建流连接，此后每 10 秒持续自动恢复，不再永久锁死错误态；已有
+1280×720 等有效自然尺寸的画面不会被看门狗打断。飞行任务页和监测页
 共享 `video_stream_url` 登记合同。UAT/生产必须把 `PIPELINE_VIDEO_BASE` 配置为浏览器可达的
 HTTPS 地址模板，并在发布门禁中验证端口暴露、TLS 和网络访问策略；不得把本机回环默认值
 直接用于远端浏览器。
@@ -389,24 +409,32 @@ HTTPS 地址模板，并在发布门禁中验证端口暴露、TLS 和网络访�
 视频源、但该路口存在运行中的其他视频源时，Console2 会同步替换 URL 与查询范围后再展示
 该 Pipeline 的 MJPEG，避免将一个视频源的画面与另一个视频源的统计、轨迹或事件混用。
 
-### Console2 BEV 地图投放
+### Console2 GCJ-02 地图投放
 
-Console2 实时监测的 BEV 主视图和右侧预览复用 Console 1.0 的 OpenLayers/OSM 地图方式，
-不再把静态夜景图片冒充地图。`trajectory_world_m` 按轨迹自身
-`world_anchor_lat_lon` 转换到经纬度；缺少轨迹锚点时仅回退到路口中心点，并在地图上
-叠加实时/完成轨迹和当前位置。没有轨迹时仍显示路口地图与 ENU 原点，不生成模拟轨迹。
+Console2 城市地图、实时监测和渠化地图编辑预览统一使用高德 JS API 2.0。底图和所有
+`trajectory_gcj02`、`geometry_gcj02`、`position_gcj02` 坐标均为 GCJ-02，GeoJSON 顺序固定为
+`[longitude, latitude]`。`trajectory_enu_m` 只参与速度、距离、TTC、PET 和拟合计算，不由浏览器
+近似换算经纬度。缺失已验证地图或 GCJ-02 轨迹时显示真实空态，不回退其他底图或坐标契约。
+Console2 在配置了 `AMAP_SECURITY_JS_CODE` 时，于 Loader 执行前设置
+`window._AMapSecurityConfig.securityJsCode`；未配置时仅使用 Web Key，仍尝试由浏览器直接连接
+高德。Vite 与 Console Nginx 均不提供 `/_AMapService` 代理。安全密钥可选是 2026-07-22 用户明确
+接受高德警告或拒绝风险后的部署取舍；配置安全密钥时它会暴露给浏览器，所有入口仍应使用高德
+控制台域名白名单限制调用来源。
 左侧实时态势主卡展示最近一条有效 `uav_stats.active_trajectories` 的数量；统计超过新鲜度
 窗口时显示无实时数据，不再把拥堵指数作为该主卡的展示指标。
 底部实时数据时间轴默认收缩为 12px 感应条，鼠标悬停或键盘聚焦时展开，移出或失焦后
 自动收回；暂停与恢复实时数据的行为不受收缩状态影响。
 
-道路标注参数与 BEV 地图底图是两个独立边界：`ROADS_JSON=""` 只表示检测管道没有人工
-道路 ROI，不能关闭地图底图或把像素轨迹伪装为世界坐标。只有
-`trajectory_world_m` 才进入 BEV 世界坐标图层，`trajectory_px` 仍留在视频坐标语义内。
-所有 Platform、Mission、SourceProfile、本机 MPS 回放和 Compose camera 启动入口均固定为
-`ROADS_JSON=""`，不再从 `uav_visual_lane_bindings` 或 calibration 导出目录回填人工标注。
-Kafka 悬停消息自动生成车道任务默认关闭（`LANE_ANNOTATION_AUTO_TASKS_ENABLED=false`），
-避免失效后被持续运行的视频源立即重建；管理员仍可从持久化测绘关键帧显式建立审计任务。
+需要地图匹配、世界坐标轨迹或车道级研判的正式 Pipeline，只接收启动时固定的
+`RUNTIME_MAP_BUNDLE_JSON`。Bundle 必须引用不可变的 `lane_verified` 版本，包含 GCJ-02/ENU
+几何、拓扑、视觉配准和本地稳定车道键；运行中禁止热切换。未绑定路网的仅检测 Pipeline
+不设置该环境变量，以 `road_context_status=missing`、`quality_status=unverified` 运行
+YOLO/ByteTrack 与 MJPEG，不得传入空对象伪装 Runtime Bundle。
+`HomographyCalibrationNode` 必须按 `SOURCE_PROFILE_ID` 选择唯一 verified 配准，并在车道匹配、
+速度和轨迹节点之前锁定地图锚点与单应矩阵。`MotionCompensationNode` 以配准时刻的
+`registration_position_gcj02` 为位移零点；车辆底部接地点在每一帧使用该帧矩阵与位移累积为
+ENU/GCJ-02，不允许在轨迹结束时用末帧矩阵重投整段历史。像素轨迹仅保留为检测证据，不能
+进入地图或产生正式车道级统计。
 
 ### Nginx 视频流兼容入口
 
@@ -511,14 +539,17 @@ Console2 /
 
 - DashboardReadModel 只在查询时聚合现有事实，不创建 Dashboard 业务表。后续缓存、物化视图或连续聚合必须以 `uav_` 命名、可重建且不得复制事件/任务状态机。
 - S8 口径未批准时 KPI 值为 null，同时返回事实分子/分母和阻断原因；主任首屏不展示无值或未验证的 KPI 卡片，也不把缺失解释为 0。阻断详情只保留在 API 和口径治理材料中。
-- 当前 OSM 开发底图接受 verified WGS84 RoadContext，以及由六组本机验收素材遥测中位点登记的 `status=test + usage=local_acceptance_only` WGS84 坐标。后者只用于本机验收，以无人机图标展示并单独计数；RoadContext 继续保持 unverified，不能冒充权威道路坐标。GCJ02、无可追溯测试来源或缺坐标记录仍只进入隔离计数/配置待办。
-- 正式首页顶部范围、窗口和 as_of 来自聚合响应，不再使用 AppState 中的试点原型常量。I5-B 内部查询已支持风险/监测/质量、WGS84 bbox、搜索和 offset/limit，并将 road9 超时统一为 503；Console2 保留上一成功快照、有限重试，OSM 瓦片连续失败时降级为列表/KPI。项目范围/权限、正式底图、点位聚合/zoom、全局增量/断线 REST 缺口回补和容量仍属后续或外部门禁。
+- 当前唯一活动底图是高德 JS API 2.0，Dashboard 路口、无人机、路网和轨迹坐标全部使用经服务端一次转换的 GCJ-02。只有 `lane_verified` 地图或可追溯的 GCJ-02 测试点位进入地图；缺坐标或未验证记录进入隔离计数/配置待办。
+- 正式首页顶部范围、窗口和 `as_of` 来自聚合响应，不再使用 AppState 中的试点原型常量。I5-B 内部查询已支持风险/监测/质量、GCJ-02 bbox、搜索和 offset/limit，并将 road9 超时统一为 503；Console2 保留上一成功快照和有限重试，高德加载失败时降级为列表/KPI。项目范围/权限、点位聚合/zoom、全局增量/断线 REST 缺口回补和容量仍属后续或外部门禁。
 
 ### I6 本机纯净目标栈与恢复边界
 
 - 根 `docker-compose.yaml` 是唯一完整拓扑，包含 `road9`/TimescaleDB、Apache Kafka KRaft、Platform、Console2、Nginx，以及可选 Kafka UI/GPU 检测器；隔离验证使用环境变量覆盖 project、端口和卷名。
 - Platform 镜像复制 `alembic.ini` 与全部 forward migration，`/ready` 同时确认 database、Kafka、TimescaleDB 和 PipelineManager；`/health` 仅表示进程存活。
-- 新 `road9` 最初由 `20260715_0010` 从空库创建并确认 5 张 hypertable，随后以前向迁移到 `20260717_0013`；`0013` 增加 Kafka inbox 可恢复派发状态。切换时除管理员外业务表为空；当前表内数据只来自切换后的本机验收，不得存在旧 `traffic_platform` database 或迁移隔离表。
+- 新 `road9` 最初由 `20260715_0010` 从空库创建并确认 5 张 hypertable，随后以前向迁移到
+  `20260721_0017`；`0013` 增加 Kafka inbox 可恢复派发，`0014/0015` 增加轨迹研判维度与索引，
+  `0016/0017` 建立 GCJ-02 渠化地图及按 SourceProfile 配准。当前数据只来自清理后的本机重建，
+  不得存在旧 `traffic_platform` database 或迁移隔离表。
 - 正式本机切换执行 30 分钟 readiness/认证/Dashboard/System 连续探测；它只证明本机开发稳定性，不定义生产 SLO。
 - 旧卷和绑定目录保留 7 天且不挂载，到期后仅允许 `scripts/purge_adr019_legacy_storage.py` 固定 allowlist 人工删除。
 - `20260715_0009` 使用数据库触发器维护 `uav_conflict_reviews → uav_conflict_events` 的存在性和删除级联。原因是 PostgreSQL 普通表直接外键指向 Timescale Hypertable 会展开 chunk 约束，无法被 `pg_dump/pg_restore` 可靠重建。
@@ -777,3 +808,31 @@ I3 的 `MetricStore` 是 Kafka 与存储之间的深模块边界：消费者只�
 - `ReliableKafkaPublisher` 将完成轨迹与真实冲突在 Kafka 确认前保留为 fsync + atomic rename 文件；它是故障 spool，不是可查询业务库。
 - canonical envelope 携带 Mission/Pipeline/Run/Source/Inter/Road/Quality lineage，`MetricStore` 以原始业务时间写入轨迹点。
 - Console2 的事件中心、轨迹研判和事故测绘均只从 REST/WebSocket 读取 `road9` 事实；详细验收见 `docs/test_report_mp4_srt_product_deep_demo.md`。
+
+### 2026-07-21 轨迹研判读模型
+
+`/gis` 不再直接把一个历史窗口内最多 500 条完整轨迹一次性铺到地图。Platform 通过
+`PostgresMetricStoreAdapter.query_trajectory_analysis()` 先在 `road9.uav_track_events` 和
+`uav_conflict_events` 按路口、业务时间、Mission/SourceProfile 缩小候选；纯函数
+`build_trajectory_analysis()` 先选出每个 lineage 的 canonical 完成事实，再应用业务车型、YOLO
+原始类别、转向和质量筛选，生成同一份研判读模型：
+
+```text
+road9 完成轨迹/冲突
+  → SQL 来源与时间窗口过滤
+  → lineage canonical 去重
+  → 业务车型 / YOLO / 转向 / 质量过滤
+  → lineage-safe 冲突归因
+  → 流向排名 + 时间桶 + 双分类摘要
+  → 当前时间片可回放轨迹片段（服务端限量）
+  → Console2 地图、排名、分类与代表轨迹联动
+```
+
+地图只消费至少两个 `trajectory_gcj02` 点且具有 `anchor_gcj02` 的完成轨迹；分析计算消费
+对应的 `trajectory_enu_m`。
+默认 30 分钟数据段和时间片均锚定最新一条可回放轨迹，而不是当前墙钟或最新但空间信息不完整的记录；因此不会出现总量有值、
+首屏地图却因最新降级记录而全空。全窗口总量、可回放量、时间片省略量和空间覆盖率分列返回，
+避免渲染上限被误读成业务总量。时间桶最多 720 个，单条轨迹最多返回 60 点，地图时间片最多
+返回受 `track_limit` 控制的证据轨迹。轨迹按 SourceProfile、Mission、Pipeline 与 Track ID 的
+可用组合去重，抽样优先保留端点、转折点和安全归因冲突附近点；这些边界只控制读模型和渲染，
+不修改 canonical 事实。

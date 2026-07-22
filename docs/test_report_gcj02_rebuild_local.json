@@ -1,0 +1,47 @@
+{
+  "schema_version": "uav.gcj02-local-rebuild/v1",
+  "generated_at": "2026-07-21T15:00:00Z",
+  "scope": "local_development_only",
+  "passed": true,
+  "database": {
+    "name": "road9",
+    "alembic_revision": "20260721_0017",
+    "cleanup_revision": "20260721_0016",
+    "post_cleanup_forward_migrations": ["20260721_0017"],
+    "timescaledb_version": "2.28.2",
+    "hypertables": 5,
+    "uav_tables": 44,
+    "retained_counts": {
+      "uav_users": 3,
+      "uav_drones": 5,
+      "uav_video_sources": 10,
+      "uav_telemetry_sources": 10,
+      "uav_flight_plans": 1
+    },
+    "flight_plans_reset_to_draft": true,
+    "business_tables_empty": true,
+    "rebuild_origin_audit_rows": 1
+  },
+  "raw_materials": {
+    "manifest": "/private/tmp/TrafficAnalyzer-gcj02-rebuild-manifest.json",
+    "file_count": 20,
+    "sha256_count": 20,
+    "missing_files": []
+  },
+  "kafka": {
+    "managed_topic_count": 62,
+    "nonzero_end_offsets": {},
+    "managed_consumer_groups_remaining": []
+  },
+  "runtime_gate": {
+    "platform_consumers_stopped_during_rebuild": true,
+    "stage_2_blocked_until_lane_verified": true,
+    "formal_replay_started": false
+  },
+  "verification": {
+    "platform_tests": "175 passed, 5 skipped, 10 subtests passed",
+    "console2_tests": "98 passed",
+    "console2_build": "passed",
+    "inter_xqh_pipeline": "56 PASS / 0 FAIL / 0 WARN"
+  }
+}

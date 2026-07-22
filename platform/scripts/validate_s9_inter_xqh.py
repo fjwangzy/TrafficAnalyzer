@@ -22,33 +22,21 @@ from app.core.database import async_session_maker, close_db, init_db  # noqa: E4
 from app.schemas.mission import DroneCreate, FlightPlanCreate, OnceSchedule, SourceInput, SourcePairCreate  # noqa: E402
 from app.services.mission_orchestrator import MissionOrchestrator, PipelineManagerAdapter  # noqa: E402
 from app.services.pipeline_manager import PipelineManager  # noqa: E402
-from app.services.road_context import FixtureRoadContextAdapter, RoadContext, RoadContextResult  # noqa: E402
+from app.services.road_context import Road9RoadContextAdapter, RoadContext  # noqa: E402
 
 
 VIDEO = "test_videos/inter_xqh/DJI_20260403142902_0001_V小清河北路与水屯路路口.mp4"
 SRT = "test_videos/inter_xqh/telemetry.srt"
-ROADS = "configs/bak/inter_xqh_lanes.json"
-INTER_ID = "INT_camera_1"
-ROAD_VERSION = "ROAD-LOCAL-INTER-XQH"
+INTER_ID = os.environ.get("S9_INTER_ID", "011wwe0z19700001")
+ROAD_VERSION = os.environ.get("S9_ROAD_DATA_VERSION", "")
 
 
 def road_context() -> RoadContext:
-    roads_path = PROJECT_ROOT / ROADS
-    import hashlib
-
-    fixture = RoadContextResult(
-        inter_id=INTER_ID,
-        road_data_version=ROAD_VERSION,
-        source="inter_xqh_smoke_fixture",
-        checksum=hashlib.sha256(roads_path.read_bytes()).hexdigest(),
-        coordinate_reference={"metric": "ENU", "display": "GCJ02", "status": "unverified"},
-        intersection={"roads_json": ROADS},
-        links=(),
-        lanes=(),
-        visual_bindings=({"roads_json": ROADS, "status": "candidate"},),
-        quality_status="unverified",
-    )
-    return RoadContext(FixtureRoadContextAdapter({(INTER_ID, ROAD_VERSION): fixture}))
+    if not ROAD_VERSION:
+        raise RuntimeError(
+            "set S9_ROAD_DATA_VERSION to the published lane_verified map road version"
+        )
+    return RoadContext(Road9RoadContextAdapter(async_session_maker))
 
 
 def pipeline_manager() -> PipelineManager:

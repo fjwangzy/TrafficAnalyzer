@@ -77,11 +77,20 @@ class DirectionFlowNode:
                 continue
 
             # 方向分类：需要足够的轨迹点
-            if len(track.position_history) < self.min_position_points:
+            world_history = getattr(track, "position_history_enu_m", [])
+            if max(len(track.position_history), len(world_history)) < self.min_position_points:
                 direction_counts["unknown"] += 1
                 continue
 
-            if use_world_coords:
+            if len(world_history) >= self.min_position_points:
+                mid = len(world_history) // 2
+                entry_heading = compute_heading(
+                    world_history[: mid + 1], self.heading_window
+                )
+                exit_heading = compute_heading(
+                    world_history[mid:], self.heading_window
+                )
+            elif use_world_coords:
                 # 转换position_history到世界坐标，计算世界空间heading
                 pos_px = np.array([(p[0], p[1]) for p in track.position_history])
                 pos_world = pixel_to_world(pos_px, H) + drone_disp  # Nx2

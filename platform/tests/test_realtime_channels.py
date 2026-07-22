@@ -130,7 +130,7 @@ class RealtimeChannelTest(unittest.IsolatedAsyncioTestCase):
                 "msg_type": "uav_track_complete",
                 "track_id": 7,
                 "trajectory_px": [[1, 2]],
-                "trajectory_world_m": [[0.1, 0.2]],
+                "trajectory_enu_m": [[0.1, 0.2]],
                 "turn_behavior": "right_turn",
                 "avg_speed_kmh": 12.3,
                 "entry_point_m": [0.0, 0.0],

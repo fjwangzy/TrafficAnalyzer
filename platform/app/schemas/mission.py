@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import date, datetime, time
 from typing import Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class DroneCreate(BaseModel):
@@ -125,6 +125,8 @@ class RevisionAction(BaseModel):
 
 
 class MissionCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     name: str | None = Field(default=None, max_length=200)
     drone_id: str = Field(min_length=1, max_length=40)
     source_profile_id: str | None = Field(default=None, max_length=40)
@@ -132,24 +134,12 @@ class MissionCreate(BaseModel):
     road_data_version: str | None = Field(default=None, max_length=100)
     scheduled_end_at: datetime | None = None
 
-    # Migration-compatible fields. They are normalized into the Mission snapshot.
-    intersection_id: str | None = Field(default=None, max_length=100)
-    video_src: str | None = None
-    roads_json: str = ""
-    telemetry_source: str | None = None
-    telemetry_file_path: str | None = None
-
     @model_validator(mode="after")
     def valid_shape(self):
-        self.inter_id = self.inter_id or self.intersection_id
         if not self.inter_id:
             raise ValueError("inter_id is required")
-        if not self.source_profile_id and not self.video_src:
-            raise ValueError("source_profile_id or legacy video_src is required")
-        if self.source_profile_id and self.video_src:
-            raise ValueError("source_profile_id and legacy video_src are mutually exclusive")
-        if self.roads_json:
-            raise ValueError("roads_json must be empty; missions start without road/lane annotations")
+        if not self.source_profile_id:
+            raise ValueError("source_profile_id is required")
         return self
 
 

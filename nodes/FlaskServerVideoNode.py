@@ -114,6 +114,9 @@ class VideoServer(object):
         )
         self.app_thread = Thread(target=self._httpd.serve_forever, daemon=True)
         self.app_thread.start()
+        # Platform waits for this marker before publishing the pipeline as running.
+        # make_server has already bound the socket, so browser requests are safe now.
+        print(f"MJPEG_READY port={self.port}", flush=True)
 
     def stop_server(self):
         if hasattr(self, '_httpd'):

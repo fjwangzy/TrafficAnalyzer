@@ -8,17 +8,38 @@ from unittest.mock import patch
 from app.core.config import settings
 from app.services.pipeline_manager import PipelineInstance, PipelineManager, PipelineStatus
 
+RUNTIME_MAP_BUNDLE = {
+    "schema_version": "uav.runtime-road-map/v1",
+    "map_version_id": "CMV-TEST",
+    "map_status": "lane_verified",
+    "coordinate_system": "GCJ02",
+    "anchor_gcj02": [117.0, 36.7],
+    "geometry_enu_m": {"lanes": {}},
+}
+
 
 class _EmptyStream:
     async def read(self, _size):
         return b""
 
 
+class _ReadyStream:
+    def __init__(self):
+        self.sent = False
+
+    async def read(self, _size):
+        if not self.sent:
+            self.sent = True
+            return b"MJPEG_READY port=8101\n"
+        return b""
+
+
 class _FakeProcess:
-    pid = 4321
-    returncode = None
-    stdout = _EmptyStream()
-    stderr = _EmptyStream()
+    def __init__(self):
+        self.pid = 4321
+        self.returncode = None
+        self.stdout = _ReadyStream()
+        self.stderr = _EmptyStream()
 
 
 class PipelineManagerTest(unittest.IsolatedAsyncioTestCase):
@@ -63,7 +84,7 @@ class PipelineManagerTest(unittest.IsolatedAsyncioTestCase):
                 drone_id="drone_1",
                 intersection_id="INT_camera_1",
                 video_src="test_videos/inter_xqh/demo.mp4",
-                roads_json="",
+                runtime_map_bundle=RUNTIME_MAP_BUNDLE,
                 telemetry_source="srt",
                 telemetry_file_path="test_videos/mp4new/srt/海右路 0624.txt",
                 telemetry_time_offset_sec=12.25,
@@ -97,7 +118,7 @@ class PipelineManagerTest(unittest.IsolatedAsyncioTestCase):
             ),
         )
         self.assertEqual(captured["env"]["VIDEO_SRC"], str(video_path.resolve()))
-        self.assertEqual(captured["env"]["ROADS_JSON"], "")
+        self.assertEqual(captured["env"]["RUNTIME_MAP_BUNDLE_JSON"], '{"schema_version":"uav.runtime-road-map/v1","map_version_id":"CMV-TEST","map_status":"lane_verified","coordinate_system":"GCJ02","anchor_gcj02":[117.0,36.7],"geometry_enu_m":{"lanes":{}}}')
         self.assertEqual(captured["env"]["TOPIC_NAME"], "uav_statistics_10")
         self.assertEqual(captured["env"]["CAMERA_ID"], "10")
         self.assertEqual(captured["env"]["DRONE_ID"], "drone_1")
@@ -117,34 +138,21 @@ class PipelineManagerTest(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(captured["env"]["FRAME_STRIDE"], "12")
         self.assertEqual(captured["env"]["KAFKA_BOOTSTRAP"], "kafka:29092")
-    def test_rtsp_and_roads_sources_use_explicit_allowlists(self):
+    def test_rtsp_sources_use_explicit_allowlists(self):
         temp_dir = tempfile.TemporaryDirectory()
         self.addCleanup(temp_dir.cleanup)
         project_root = Path(temp_dir.name)
-        roads_root = project_root / "generated-roads"
-        roads_root.mkdir()
-        roads_path = roads_root / "intersection.json"
-        roads_path.write_text("{}")
         manager = PipelineManager(project_root=project_root)
 
-        with (
-            patch.object(settings, "uav_rtsp_allowed_hosts", ["camera.uat.internal"]),
-            patch.object(settings, "pipeline_roads_roots", [str(roads_root)]),
-        ):
+        with patch.object(settings, "uav_rtsp_allowed_hosts", ["camera.uat.internal"]):
             self.assertEqual(
                 manager._validate_video_source("rtsp://camera.uat.internal/live"),
                 "rtsp://camera.uat.internal/live",
             )
             with self.assertRaisesRegex(ValueError, "RTSP host"):
                 manager._validate_video_source("rtsp://evil.example/live")
-            self.assertEqual(
-                manager._validate_support_file(
-                    str(roads_path), (".json",), roots=manager._roads_roots()
-                ),
-                str(roads_path.resolve()),
-            )
 
-    async def test_pipeline_start_rejects_nonempty_lane_annotation_parameters(self):
+    async def test_pipeline_start_allows_missing_runtime_map_bundle(self):
         temp_dir = tempfile.TemporaryDirectory()
         self.addCleanup(temp_dir.cleanup)
         project_root = Path(temp_dir.name)
@@ -153,12 +161,40 @@ class PipelineManagerTest(unittest.IsolatedAsyncioTestCase):
         video_path.write_bytes(b"test")
         manager = PipelineManager(project_root=project_root)
 
-        with self.assertRaisesRegex(ValueError, "roads_json must be empty"):
+        with patch(
+            "app.services.pipeline_executor.asyncio.create_subprocess_exec",
+            return_value=_FakeProcess(),
+        ) as create_subprocess:
+            pipeline = await manager.start_pipeline(
+                drone_id="drone_1",
+                intersection_id="INT-1",
+                video_src="test_videos/demo.mp4",
+            )
+        self._monitor_task = manager._monitor_task
+
+        self.assertEqual(pipeline.status, PipelineStatus.RUNNING)
+        self.assertIsNone(pipeline.map_version_id)
+        self.assertEqual(pipeline.road_context_status, "missing")
+        self.assertNotIn(
+            "RUNTIME_MAP_BUNDLE_JSON",
+            create_subprocess.await_args.kwargs["env"],
+        )
+
+    async def test_pipeline_start_rejects_non_verified_runtime_map_bundle(self):
+        temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_dir.cleanup)
+        project_root = Path(temp_dir.name)
+        video_path = project_root / "test_videos/demo.mp4"
+        video_path.parent.mkdir(parents=True)
+        video_path.write_bytes(b"test")
+        manager = PipelineManager(project_root=project_root)
+
+        with self.assertRaisesRegex(ValueError, "must be lane_verified when provided"):
             await manager.start_pipeline(
                 drone_id="drone_1",
                 intersection_id="INT-1",
                 video_src="test_videos/demo.mp4",
-                roads_json="configs/lanes.json",
+                runtime_map_bundle={"map_status": "candidate"},
             )
 
     def test_external_pipeline_preserves_explicit_browser_stream_address(self):
@@ -174,6 +210,7 @@ class PipelineManagerTest(unittest.IsolatedAsyncioTestCase):
             drone_id="drone_1",
             intersection_id="INT-1",
             video_src="test_videos/demo.mp4",
+            map_version_id="CMV-TEST",
             camera_id=5701,
             video_port=15701,
             video_stream_url="http://detector.demo.local:15701/video",
@@ -188,6 +225,7 @@ class PipelineManagerTest(unittest.IsolatedAsyncioTestCase):
                 drone_id="drone_2",
                 intersection_id="INT-2",
                 video_src="test_videos/demo.mp4",
+                map_version_id="CMV-TEST",
                 video_stream_url="http://127.0.0.1:15702/video?token=secret",
             )
 
@@ -197,7 +235,7 @@ class PipelineManagerTest(unittest.IsolatedAsyncioTestCase):
             drone_id="drone_1",
             intersection_id="INT_camera_1",
             video_src="rtsps://operator:secret@camera.uat.internal:8554/live?token=private",
-            roads_json="",
+            map_version_id="CMV-TEST",
             topic_name="uav_statistics_10",
             camera_id=10,
         )
@@ -214,7 +252,7 @@ class PipelineManagerTest(unittest.IsolatedAsyncioTestCase):
             drone_id="drone_1",
             intersection_id="INT_camera_1",
             video_src="test_videos/test_video.mp4",
-            roads_json="",
+            map_version_id="CMV-TEST",
             topic_name="uav_statistics_10",
             camera_id=10,
             status=PipelineStatus.RUNNING,
@@ -234,7 +272,7 @@ class PipelineManagerTest(unittest.IsolatedAsyncioTestCase):
             drone_id="drone_1",
             intersection_id="INT_camera_1",
             video_src="test_videos/test_video.mp4",
-            roads_json="",
+            map_version_id="CMV-TEST",
             topic_name="uav_statistics_10",
             camera_id=10,
             status=PipelineStatus.RUNNING,
@@ -312,6 +350,8 @@ class PlatformDeploymentConfigTest(unittest.TestCase):
         self.assertIn('./test_videos:/app/test_videos:ro', compose)
         self.assertNotIn('.:/project:ro', compose)
         self.assertIn("PIPELINE_PROJECT_ROOT", root_entry)
+        self.assertIn("os.execvpe", root_entry)
+        self.assertNotIn("subprocess.call", root_entry)
         self.assertIn('CMD ["python", "main_optimized.py"]', detector_backup)
         self.assertIn("test_videos", dockerignore)
         self.assertIn("weights", dockerignore)

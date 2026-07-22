@@ -29,11 +29,12 @@ def test_native_mps_runner_is_directly_executable_from_the_repository_root():
     assert "Run mp4new/mp4new2 sources serially" in completed.stdout
 
 
-def test_native_mps_runner_selects_exactly_eight_mp4new_sources():
+def test_native_mps_runner_selects_all_nine_registered_replay_sources():
     catalog = source_catalog()
-    assert len(catalog) == 8
-    assert all(profile_id.startswith(("SRC-MP4NEW-", "SRC-MP4NEW2-")) for profile_id in catalog)
-    assert "SRC-INTER-XQH-0403-PM" not in catalog
+    assert len(catalog) == 9
+    assert "SRC-INTER-XQH-0403-PM" in catalog
+    assert all(item["inter_id"].startswith("011") for item in catalog.values())
+    assert all(item["road_data_version"] == "20260501-IMAGERY-FIT-V1" for item in catalog.values())
 
 
 def test_strict_tcc_validation_accepts_zero_events_and_path_intersections():
@@ -157,10 +158,11 @@ def test_batch_runner_disables_repeated_hover_jpeg_but_keeps_interactive_default
     assert 'data["is_hovering"] and self._hover_annotation_snapshot_enabled' in producer
 
 
-def test_native_runner_forces_empty_lane_annotation_parameters():
+def test_native_runner_requires_immutable_lane_verified_runtime_bundle():
     runner = (ROOT / "scripts/run_native_mps_replays.py").read_text(encoding="utf-8")
-    assert '"roads_json": ""' in runner
-    assert '"ROADS_JSON": ""' in runner
+    assert '"RUNTIME_MAP_BUNDLE_JSON"' in runner
+    assert "stage-1 gate blocked: no lane_verified map" in runner
+    assert "ROADS_JSON" not in runner
 
 
 def test_native_runner_registers_browser_reachable_detector_stream_address():
@@ -176,12 +178,14 @@ def test_native_runner_registers_browser_reachable_detector_stream_address():
         {"drone_id": "UAV-1", "inter_id": "INT-1", "video": "test_videos/demo.mp4"},
         camera_id=5701,
         video_port=15701,
+        runtime_bundle={"map_version_id": "CMV-1", "road_data_version": "20260501"},
     )
 
     assert result == {"pipeline_id": "pipe-native"}
     assert captured["method"] == "POST"
     assert captured["path"] == "/api/v1/pipelines/register"
     assert captured["body"]["video_stream_url"] == "http://127.0.0.1:15701/video"
+    assert captured["body"]["map_version_id"] == "CMV-1"
 
 
 def test_stale_cleanup_only_stops_runner_reserved_registrations():

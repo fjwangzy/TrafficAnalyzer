@@ -70,10 +70,8 @@ class PipelineCreateRequest(BaseModel):
         ...,
         description="Video source: RTSP URL, file path, or camera index",
     )
-    roads_json: str = Field(
-        default="",
-        description="Must be empty; pipelines start without road/lane annotation parameters",
-    )
+    road_data_version: str = Field(min_length=1, max_length=100)
+    map_version_id: str = Field(min_length=1, max_length=40)
     telemetry_source: str | None = Field(
         default=None,
         description="Telemetry source override, e.g. srt or file",
@@ -93,7 +91,7 @@ class PipelineResponse(BaseModel):
     drone_id: str
     intersection_id: str
     video_src: str
-    roads_json: str
+    map_version_id: str
     topic_name: str
     camera_id: int
     video_port: int
@@ -174,15 +172,25 @@ async def start_pipeline(body: PipelineCreateRequest, request: Request):
         _audit_payload(body),
     )
     try:
+        road_context = getattr(request.app.state, "road_context", None)
+        if road_context is None:
+            raise ValueError("RoadContext is unavailable")
+        context = await road_context.get(body.intersection_id, body.road_data_version)
+        if context.map_version_id != body.map_version_id or not context.runtime_map_bundle:
+            raise ValueError("requested lane_verified map version is unavailable")
         pipeline = await pm.start_pipeline(
             drone_id=body.drone_id,
             intersection_id=body.intersection_id,
             video_src=body.video_src,
-            roads_json=body.roads_json,
+            runtime_map_bundle=context.runtime_map_bundle,
             telemetry_source=body.telemetry_source,
             telemetry_file_path=body.telemetry_file_path,
             telemetry_time_offset_sec=body.telemetry_time_offset_sec,
             telemetry_sync_tolerance_sec=body.telemetry_sync_tolerance_sec,
+            inter_id=body.intersection_id,
+            road_data_version=body.road_data_version,
+            road_context_status="complete",
+            quality_status="verified",
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -195,7 +203,8 @@ class PipelineRegisterRequest(BaseModel):
     drone_id: str
     intersection_id: str
     video_src: str
-    roads_json: str = ""
+    map_version_id: str = Field(min_length=1, max_length=40)
+    road_data_version: str = Field(min_length=1, max_length=100)
     camera_id: int | None = Field(default=None, ge=1, le=65535)
     video_port: int | None = Field(default=None, ge=1024, le=65535)
     topic_name: str | None = None
@@ -220,11 +229,17 @@ async def register_pipeline(body: PipelineRegisterRequest, request: Request):
         _audit_payload(body),
     )
     try:
+        road_context = getattr(request.app.state, "road_context", None)
+        if road_context is None:
+            raise ValueError("RoadContext is unavailable")
+        context = await road_context.get(body.intersection_id, body.road_data_version)
+        if context.map_version_id != body.map_version_id or context.map_status != "lane_verified":
+            raise ValueError("requested lane_verified map version is unavailable")
         pipeline = pm.register_pipeline(
             drone_id=body.drone_id,
             intersection_id=body.intersection_id,
             video_src=body.video_src,
-            roads_json=body.roads_json,
+            map_version_id=body.map_version_id,
             camera_id=body.camera_id,
             video_port=body.video_port,
             topic_name=body.topic_name,

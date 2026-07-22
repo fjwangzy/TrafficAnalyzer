@@ -1,5 +1,4 @@
 import os
-import json
 import time
 import logging
 from typing import Generator
@@ -31,6 +30,9 @@ class VideoReader:
 
         self.skip_secs = config["skip_secs"]
         self.frame_stride = max(int(config.get("frame_stride", 1)), 1)
+        self.seek_stride_threshold = max(
+            int(config.get("seek_stride_threshold", 60)), 2
+        )
         self.last_frame_timestamp = -1  # 初始化时特意设置为负值（临时解决方案）
         self.first_timestamp = 0  # 流第一帧时刻的时间值
         if self.frame_stride > 1:
@@ -87,55 +89,10 @@ class VideoReader:
             self.stream.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
             self.stream.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
 
-        # 向后兼容：支持新格式（含roads/lanes/calibration键）和旧格式（扁平道路多边形）
+        # Runtime road truth is injected only through the immutable lane_verified bundle.
         self.roads_info = {}
         self.lane_polygons: dict | None = None
         self.extended_config: dict | None = None
-
-        roads_info_path = config.get("roads_info")
-        if not roads_info_path:
-            logger.info("VideoReader: 未配置道路标注文件，使用空 roads_info 运行")
-            return
-
-        # 从JSON文件读取数据（道路入口和出口坐标信息）
-        with open(roads_info_path, "r") as file:
-            data_json = json.load(file)
-
-        if "roads" in data_json or "lanes" in data_json or "calibration" in data_json:
-            # 新格式：扩展JSON
-            self.extended_config = data_json
-            # 提取道路多边形
-            roads = data_json.get("roads", {})
-            for key, road_data in roads.items():
-                if isinstance(road_data, dict) and "polygon" in road_data:
-                    self.roads_info[key] = [int(v) for v in road_data["polygon"]]
-                elif isinstance(road_data, list):
-                    self.roads_info[key] = [int(v) for v in road_data]
-            # 提取车道多边形（可选）
-            lanes = data_json.get("lanes", {})
-            if lanes:
-                from shapely.geometry import Polygon
-                self.lane_polygons = {}
-                for lane_id, lane_data in lanes.items():
-                    if isinstance(lane_data, dict) and "polygon" in lane_data:
-                        coords = lane_data["polygon"]
-                        self.lane_polygons[lane_id] = Polygon(
-                            [(coords[i], coords[i + 1]) for i in range(0, len(coords), 2)]
-                        )
-            elif self.roads_info:
-                # 无车道标注 → 用道路多边形作为车道（road-level 降级为 lane-level）
-                from shapely.geometry import Polygon
-                self.lane_polygons = {}
-                for road_id, coords in self.roads_info.items():
-                    if len(coords) >= 6:  # 至少 3 个点
-                        self.lane_polygons[road_id] = Polygon(
-                            [(coords[i], coords[i + 1]) for i in range(0, len(coords), 2)]
-                        )
-        else:
-            # 旧格式：扁平道路多边形 {"1": [x1,y1,...], ...}
-            self.roads_info = {
-                key: [int(value) for value in values] for key, values in data_json.items()
-            }
 
     def process(self) -> Generator[FrameElement, None, None]:
         # 当前视频源的原始帧号；跳帧后 FrameElement.frame_num 仍保留原始帧号
@@ -144,7 +101,7 @@ class VideoReader:
         while True:
             next_frame_number = source_frame_number + 1
             if (next_frame_number - 1) % self.frame_stride != 0:
-                if self._seekable_file:
+                if self._seekable_file and self.frame_stride >= self.seek_stride_threshold:
                     # 文件源可直接定位到下一个抽样帧；相比逐帧 grab，H.264 4K
                     # 回放不再为所有被跳过帧执行关键帧间解码。
                     skipped = self.frame_stride - ((next_frame_number - 1) % self.frame_stride)

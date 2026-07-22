@@ -46,8 +46,9 @@ export function buildDashboardSourcePoints({ sources = [], drones = [], intersec
     const pipeline = pipelines.find((item) => item.source_profile_id === source.profile_id && item.status === 'running')
     const intersectionId = pipeline?.intersection_id || drone?.default_inter_id || drone?.current_intersection_id
     const intersection = intersectionById.get(intersectionId)
-    const lat = Number(intersection?.lat ?? drone?.last_telemetry?.latitude)
-    const lon = Number(intersection?.lon ?? drone?.last_telemetry?.longitude)
+    const position = intersection?.position_gcj02 || intersection?.center_gcj02 || drone?.last_telemetry?.position_gcj02
+    const lat = Number(position?.latitude)
+    const lon = Number(position?.longitude)
     if (!intersectionId || !Number.isFinite(lat) || !Number.isFinite(lon)) return []
     return [{
       id: source.profile_id,
@@ -126,7 +127,7 @@ export function DashboardPage() {
 
       <div className='dashboard-grid'>
         <Panel className='map-master-panel'>
-          {mapPoints.length > 0 ? <CityMap points={mapPoints} onSelect={openSourceMonitoring} markerType='drone' coordinateLabel={testCoordinateCount ? `无人机视频源 ${mapPoints.length} 路 · 验收测试坐标 ${testCoordinateCount} 处 · WGS84` : `无人机视频源 ${mapPoints.length} 路 · 遥测坐标 · WGS84`} /> : <div className='map-offline'><WarningCircle size={38} weight='duotone' /><strong>暂无可上图的无人机视频源</strong><span>已登记视频源尚未绑定可用路口或遥测坐标。</span></div>}
+          {mapPoints.length > 0 ? <CityMap points={mapPoints} onSelect={openSourceMonitoring} markerType='drone' coordinateLabel={`无人机视频源 ${mapPoints.length} 路 · GCJ-02`} /> : <div className='map-offline'><WarningCircle size={38} weight='duotone' /><strong>暂无可上图的无人机视频源</strong><span>已登记视频源尚未绑定可用 GCJ-02 路口或遥测坐标。</span></div>}
           <div className='map-legend'><span><Drone size={15} weight='fill' />无人机视频源</span><span><i className='source-running' />运行中</span><span><i className='source-ready' />可用离线</span><span><i className='source-degraded' />数据降级</span><span><i className='source-invalid' />无效</span><span><i className='source-disabled' />已停用</span></div>
         </Panel>
 

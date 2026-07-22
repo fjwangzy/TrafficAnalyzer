@@ -9,7 +9,7 @@ describe('dashboard UAV video source map', () => {
         { profile_id: 'SRC-DEG', display_name: '降级源', drone_id: 'UAV-1', enabled: true, validation_status: 'degraded' },
       ],
       drones: [{ id: 'UAV-1', name: '一号无人机', default_inter_id: 'INT-1' }],
-      intersections: [{ id: 'INT-1', name: '一号路口', lat: 36.7, lon: 117, map_coordinate_status: 'test' }],
+      intersections: [{ id: 'INT-1', name: '一号路口', center_gcj02: { latitude: 36.7, longitude: 117 }, map_coordinate_status: 'test' }],
       pipelines: [{ source_profile_id: 'SRC-RUN', intersection_id: 'INT-1', status: 'running' }],
     })
 
@@ -29,7 +29,7 @@ describe('dashboard UAV video source map', () => {
     const points = buildDashboardSourcePoints({
       sources,
       drones: [{ id: 'UAV-1', default_inter_id: 'INT-1' }],
-      intersections: [{ id: 'INT-1', lat: 36.7, lon: 117 }],
+      intersections: [{ id: 'INT-1', center_gcj02: { latitude: 36.7, longitude: 117 } }],
       pipelines: [{ source_profile_id: 'SRC-RUN', intersection_id: 'INT-1', status: 'running' }],
     })
 

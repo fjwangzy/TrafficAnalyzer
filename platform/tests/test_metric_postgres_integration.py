@@ -66,7 +66,7 @@ async def test_transactional_inbox_facts_queries_and_identity_conflict():
         ("uav_track_complete_i3", canonical("uav_track_complete", f"track-{marker}", {
             "track_id": 7, "vehicle_class": "motor", "turn_behavior": "straight",
             "trajectory_px": [[1, 2], [3, 4]],
-            "trajectory_world_m": [[0.1, 0.2], [0.3, 0.4]],
+            "trajectory_enu_m": [[0.1, 0.2], [0.3, 0.4]],
         })),
         ("uav_conflicts_i3", canonical("uav_conflict", f"conflict-{marker}", {
             "motor_id": 7, "non_motor_id": 8, "severity": "warning",
@@ -126,6 +126,8 @@ async def test_transactional_inbox_facts_queries_and_identity_conflict():
         system = await store.query_system_metrics("1h", ["fps"])
         assert len(traffic) == 2
         assert tracks[0]["track_id"] == 7
+        assert tracks[0]["coordinate_system"] == "GCJ02"
+        assert tracks[0]["trajectory_enu_m"] == [[0.1, 0.2], [0.3, 0.4]]
         assert conflicts[0]["prediction_type"] == "path_intersection"
         reviewed = await store.review_conflict(
             "INT-I3", conflicts[0]["id"], "confirmed", conflicts[0]["review_revision"], None,

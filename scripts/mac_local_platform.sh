@@ -39,6 +39,25 @@ port_is_busy() {
   "$MPS_PYTHON" -c "import socket; s=socket.socket(); raise SystemExit(s.connect_ex(('127.0.0.1', ${PLATFORM_PORT})) != 0)"
 }
 
+platform_instance_pids() {
+  pgrep -f "^${MPS_PYTHON} -m uvicorn app.main:app --host 0.0.0.0 --port ${PLATFORM_PORT}( --reload)?$" || true
+}
+
+launchd_platform_pid() {
+  launchctl print "gui/${UID}/${LAUNCHD_LABEL}" 2>/dev/null \
+    | awk '/^[[:space:]]*pid = / { print $3; exit }'
+}
+
+assert_single_platform() {
+  local owned_pid platform_pids
+  owned_pid="$(launchd_platform_pid)"
+  platform_pids="$(platform_instance_pids)"
+  if [[ -z "$owned_pid" || "$platform_pids" != "$owned_pid" ]]; then
+    echo "Platform single-instance check failed: launchd_pid=${owned_pid:-none}, uvicorn_pids=${platform_pids//$'\n'/,}" >&2
+    return 1
+  fi
+}
+
 start_platform() {
   require_native_mps
   mkdir -p "$RUNTIME_DIR"
@@ -46,6 +65,7 @@ start_platform() {
   chmod 700 "$RUNTIME_DIR"
   chmod 700 "$LOCAL_SURVEY_STORAGE_DIR"
   if platform_is_running; then
+    assert_single_platform
     return
   fi
   if port_is_busy; then
@@ -68,6 +88,12 @@ start_platform() {
     DB_USER="${DB_USER:-traffic}" \
     DB_PASSWORD="${DB_PASSWORD:-traffic123}" \
     DB_NAME="${DB_NAME:-road9}" \
+    YCX_DB_HOST="${YCX_DB_HOST:-}" \
+    YCX_DB_PORT="${YCX_DB_PORT:-5432}" \
+    YCX_DB_USER="${YCX_DB_USER:-}" \
+    YCX_DB_PASSWORD="${YCX_DB_PASSWORD:-}" \
+    YCX_DB_NAME="${YCX_DB_NAME:-ycx}" \
+    YCX_DB_SCHEMA="${YCX_DB_SCHEMA:-road9}" \
     KAFKA_BOOTSTRAP="${KAFKA_BOOTSTRAP:-127.0.0.1:9092}" \
     KAFKA_CONSUMER_GROUP="${KAFKA_CONSUMER_GROUP:-uav-platform-local}" \
     SURVEY_STORAGE_DIR="$LOCAL_SURVEY_STORAGE_DIR" \
@@ -81,6 +107,7 @@ start_platform() {
 
   for _ in {1..80}; do
     if platform_is_ready; then
+      assert_single_platform
       return
     fi
     sleep 0.25
@@ -91,10 +118,19 @@ start_platform() {
 
 stop_platform() {
   launchctl remove "$LAUNCHD_LABEL" >/dev/null 2>&1 || true
+  for _ in {1..50}; do
+    if ! port_is_busy && [[ -z "$(platform_instance_pids)" ]]; then
+      return
+    fi
+    sleep 0.1
+  done
+  echo "Local Platform stopped but port ${PLATFORM_PORT} is still busy." >&2
+  return 1
 }
 
 show_status() {
   if platform_is_running; then
+    assert_single_platform
     curl -fsS "http://127.0.0.1:${PLATFORM_PORT}/ready"
     echo
   else

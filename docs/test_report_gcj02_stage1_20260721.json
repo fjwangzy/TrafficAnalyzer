@@ -1,0 +1,81 @@
+{
+  "schema_version": "uav.gcj02-stage1-acceptance/v1",
+  "generated_at": "2026-07-21T23:24:00+08:00",
+  "scope": "local_technical_demo",
+  "coordinate_system": "GCJ02",
+  "ycx_mode": "read_only_on_demand",
+  "ycx_road_data_version": "20260501",
+  "published_road_data_version": "20260501-IMAGERY-FIT-V1",
+  "operator_signoff_required_for_production": true,
+  "summary": {
+    "intersection_count": 4,
+    "source_profile_count": 9,
+    "link_count": 31,
+    "local_lane_count": 104,
+    "verified_registration_count": 9,
+    "all_technical_gates_passed": true
+  },
+  "items": [
+    {
+      "inter_id": "011wwe0z19700001",
+      "name": "小清河北路与水屯路路口",
+      "map_version_id": "CMV-1d3dedffa32145dca68c148d",
+      "links": 8,
+      "lanes": 32,
+      "source_profiles": ["SRC-INTER-XQH-0403-PM"],
+      "link_fit_residual_p95_m": 0.955,
+      "lane_boundary_residual_median_m": 0.3533,
+      "lane_boundary_residual_p95_m": 1.2318,
+      "max_lane_overlap_ratio": 0.045692,
+      "evidence": ".runtime/calibration/011wwe0z19700001/SRC-INTER-XQH-0403-PM.jpg"
+    },
+    {
+      "inter_id": "011wwe28dm500001",
+      "name": "解放东路-海右路",
+      "map_version_id": "CMV-5442ffb9608c483bbc11c92e",
+      "links": 8,
+      "lanes": 30,
+      "source_profiles": ["SRC-MP4NEW-HY-0624-PM", "SRC-MP4NEW-HY-0625-AM", "SRC-MP4NEW2-HY-0715-PM"],
+      "link_fit_residual_p95_m": 0.8327,
+      "lane_boundary_residual_median_m": 0.3747,
+      "lane_boundary_residual_p95_m": 0.9456,
+      "max_lane_overlap_ratio": 0.045238,
+      "evidence": ".runtime/calibration/011wwe28dm500001/SRC-MP4NEW-HY-0625-AM.jpg"
+    },
+    {
+      "inter_id": "011wwe28dr400003",
+      "name": "解放东路-礼士路",
+      "map_version_id": "CMV-3d95098d2a7d4705992c93a8",
+      "links": 7,
+      "lanes": 19,
+      "source_profiles": ["SRC-MP4NEW-LS-0624-PM", "SRC-MP4NEW-LS-0625-AM", "SRC-MP4NEW2-LS-0715-PM"],
+      "link_fit_residual_p95_m": 0.7851,
+      "lane_boundary_residual_median_m": 0.5671,
+      "lane_boundary_residual_p95_m": 0.8383,
+      "max_lane_overlap_ratio": 0.045202,
+      "evidence": ".runtime/calibration/011wwe28dr400003/SRC-MP4NEW-LS-0625-AM.jpg"
+    },
+    {
+      "inter_id": "011wwe29k1q00001",
+      "name": "新泺大街-崇华路",
+      "map_version_id": "CMV-e00cef599ed44e35add1aa67",
+      "links": 8,
+      "lanes": 23,
+      "source_profiles": ["SRC-MP4NEW-CH-0625-AM", "SRC-MP4NEW2-CH-0715-PM"],
+      "link_fit_residual_p95_m": 0.4937,
+      "lane_boundary_residual_median_m": 0.241,
+      "lane_boundary_residual_p95_m": 0.5942,
+      "max_lane_overlap_ratio": 0.045383,
+      "evidence": ".runtime/calibration/011wwe29k1q00001/SRC-MP4NEW-CH-0625-AM.jpg"
+    }
+  ],
+  "common_checks": {
+    "topology_errors": 0,
+    "direction_checks_passed": true,
+    "stop_line_checks_passed": true,
+    "self_intersection_count": 0,
+    "lane_source_semantics": "YCX lane_info retained only as candidate and accepted after imagery overlay review",
+    "opaque_geomhash_ids_preserved": true
+  },
+  "passed": true
+}

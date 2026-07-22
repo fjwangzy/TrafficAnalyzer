@@ -5,6 +5,8 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from sqlalchemy import (
+    CheckConstraint,
+    Float,
     JSON,
     Boolean,
     DateTime,
@@ -45,19 +47,95 @@ class VisualLaneBinding(Base):
     id: Mapped[str] = mapped_column(String(40), primary_key=True)
     inter_id: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     road_data_version: Mapped[str] = mapped_column(String(100), nullable=False)
+    map_version_id: Mapped[str | None] = mapped_column(
+        ForeignKey("uav_channelized_map_versions.id", ondelete="CASCADE"), nullable=True, index=True
+    )
     local_lane_id: Mapped[str] = mapped_column(String(100), nullable=False)
     canonical_link_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
     canonical_lane_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
-    roads_json: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    geometry_source: Mapped[str] = mapped_column(String(32), nullable=False, default="link_offset_derived")
+    geometry_gcj02: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    geometry_enu_m: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    match_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
     status: Mapped[str] = mapped_column(String(24), nullable=False, default="candidate")
     confirmed_by: Mapped[int | None] = mapped_column(ForeignKey("uav_users.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     retired_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     __table_args__ = (
+        UniqueConstraint("map_version_id", "local_lane_id", name="uq_uav_visual_binding_map_lane"),
+        CheckConstraint(
+            "geometry_source IN ('link_offset_derived','imagery_fitted','manual_override')",
+            name="ck_uav_visual_binding_geometry_source",
+        ),
+    )
+
+
+class ChannelizedMapVersion(Base):
+    __tablename__ = "uav_channelized_map_versions"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    inter_id: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    road_data_version: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    version_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default="draft", index=True)
+    coordinate_system: Mapped[str] = mapped_column(String(16), nullable=False, default="GCJ02")
+    coordinate_transform_version: Mapped[str] = mapped_column(String(80), nullable=False)
+    anchor_gcj02: Mapped[list] = mapped_column(JSON, nullable=False)
+    geometry_gcj02: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    geometry_enu_m: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    topology: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    quality: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    source_checksum: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_by: Mapped[int | None] = mapped_column(ForeignKey("uav_users.id"), nullable=True)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=lambda: datetime.now(UTC), nullable=False
+    )
+
+    __table_args__ = (
+        UniqueConstraint("inter_id", "version_no", name="uq_uav_channelized_map_inter_version"),
+        CheckConstraint(
+            "status IN ('draft','candidate','link_verified','lane_verified','retired')",
+            name="ck_uav_channelized_map_status",
+        ),
+        CheckConstraint("coordinate_system = 'GCJ02'", name="ck_uav_channelized_map_coordinate_system"),
+    )
+
+
+class VisualRegistration(Base):
+    __tablename__ = "uav_visual_registrations"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    map_version_id: Mapped[str] = mapped_column(
+        ForeignKey("uav_channelized_map_versions.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    source_profile_id: Mapped[str | None] = mapped_column(
+        ForeignKey("uav_video_sources.profile_id", ondelete="RESTRICT"),
+        nullable=True,
+        index=True,
+    )
+    source_image_path: Mapped[str] = mapped_column(String(500), nullable=False)
+    orthophoto_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    control_points: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    homography_pixel_to_enu: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    residuals: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default="draft")
+    created_by: Mapped[int | None] = mapped_column(ForeignKey("uav_users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=lambda: datetime.now(UTC), nullable=False
+    )
+
+    __table_args__ = (
         UniqueConstraint(
-            "inter_id", "road_data_version", "local_lane_id",
-            name="uq_uav_visual_binding_inter_version_lane",
+            "map_version_id", "source_profile_id",
+            name="uq_uav_visual_registration_map_source",
+        ),
+        CheckConstraint(
+            "status IN ('draft','registered','verified','rejected')",
+            name="ck_uav_visual_registration_status",
         ),
     )
 
@@ -68,6 +146,9 @@ class LaneAnnotationTaskRecord(Base):
     id: Mapped[str] = mapped_column(String(100), primary_key=True)
     inter_id: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     road_data_version: Mapped[str] = mapped_column(String(100), nullable=False)
+    map_version_id: Mapped[str | None] = mapped_column(
+        ForeignKey("uav_channelized_map_versions.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     status: Mapped[str] = mapped_column(String(24), nullable=False, default="pending", index=True)
     image_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
     annotation: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)

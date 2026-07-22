@@ -35,7 +35,7 @@ video_reader:
   src: ${oc.env:VIDEO_SRC} # путь до файла обработки или номер камеры (int) или ссылки на m3u8 / rtsp поток
   skip_secs : 0  # считываем кадры раз в <skip_secs> секунд
   frame_stride: ${oc.decode:${oc.env:FRAME_STRIDE,1}} # обрабатывать каждый N-й кадр; 10~12 помогает восстановить нормальную скорость движения при низком FPS
-  roads_info: ${oc.env:ROADS_JSON} # json файл с координатами дорог на видео
+  runtime_map_bundle: ${oc.env:RUNTIME_MAP_BUNDLE_JSON}
 
 
 detection_node:
@@ -44,6 +44,7 @@ detection_node:
   confidence: 0.10  # Порог уверенности детектора (чем больше значение, тем меньше находит)
   iou: 0.7  # Порог NMS (чем больше значение, тем больше находит)
   imgsz: 640  # Ресайз при инференсе (640 по умолчанию)
+  half: true  # FP16 on MPS/CUDA; the node keeps CPU inference in FP32
 
 
 tracking_node:  
@@ -104,7 +105,7 @@ kafka_producer_node: #// камера id
 motion_compensation:
   enabled: true
   hover_threshold_ms: 1.0
-  world_anchor: null
+  anchor_gcj02: null
 
 calibration:
   mode: "auto"             # "auto" | "telemetry" | "reference_points"

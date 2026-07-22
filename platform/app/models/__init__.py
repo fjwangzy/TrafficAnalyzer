@@ -16,6 +16,7 @@ from app.models.metrics import (
     TrafficMetric,
 )
 from app.models.mission import (
+    ChannelizedMapVersion,
     DeviceIntersectionBinding,
     DroneRecord,
     EventFeedback,
@@ -29,6 +30,7 @@ from app.models.mission import (
     TelemetrySourceRecord,
     VideoSourceRecord,
     VisualLaneBinding,
+    VisualRegistration,
 )
 from app.models.survey import (
     AiEvent,
@@ -53,7 +55,8 @@ __all__ = [
     "User", "AlertRecord", "SurveyTask", "SurveyCaptureBatch", "SurveyFrame",
     "SurveyMeasurement", "SceneAnnotation", "SurveyReport", "EvidencePackage",
     "EvidenceItem", "AuditLog", "CaptureIngestionJob", "AiEvent", "EventOutbox", "EventDeliveryAttempt",
-    "DeadLetter", "RuleVersion", "RoadContextSnapshot", "VisualLaneBinding", "LaneAnnotationTaskRecord",
+    "DeadLetter", "RuleVersion", "RoadContextSnapshot", "ChannelizedMapVersion", "VisualRegistration",
+    "VisualLaneBinding", "LaneAnnotationTaskRecord",
     "DeviceIntersectionBinding", "DroneRecord", "VideoSourceRecord",
     "TelemetrySourceRecord", "FlightPlanRecord", "MissionRecord", "PipelineRecord",
     "EventFeedback", "MessageInbox", "MessageDeadLetter", "TrafficMetric", "TrackEvent", "TrackPoint",

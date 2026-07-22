@@ -51,7 +51,7 @@ async def intersections(
     risk: Literal["critical", "warning", "unknown"] | None = None,
     monitor: Literal["running", "degraded", "standby"] | None = None,
     quality: Literal["verified", "stale", "unverified"] | None = None,
-    bbox: str | None = Query(default=None, description="min_lon,min_lat,max_lon,max_lat (WGS84)"),
+    bbox: str | None = Query(default=None, description="min_lon,min_lat,max_lon,max_lat (GCJ-02)"),
     q: str | None = Query(default=None, min_length=1, max_length=100),
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=200, ge=1, le=1000),

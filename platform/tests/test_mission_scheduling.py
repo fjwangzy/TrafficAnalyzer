@@ -1,9 +1,15 @@
 import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 from app.models.mission import TelemetrySourceRecord, VideoSourceRecord
-from app.services.mission_orchestrator import SourceValidator, schedule_occurrences
+from app.services.mission_orchestrator import (
+    MissionOrchestrator,
+    SourceValidator,
+    _runtime_missing_grace_expired,
+    schedule_occurrences,
+)
 
 
 def test_once_schedule_preserves_exact_utc_window():
@@ -34,6 +40,25 @@ def test_weekly_schedule_supports_cross_midnight_and_exceptions():
     )
     assert len(result) == 2
     assert all(item.end_at - item.start_at == timedelta(minutes=50) for item in result)
+
+
+def test_recent_pipeline_runtime_miss_is_not_terminal_until_grace_expires():
+    started_at = datetime(2026, 7, 22, 3, 23, 59, tzinfo=UTC)
+    mission = SimpleNamespace(
+        actual_start_at=started_at,
+        scheduled_start_at=started_at - timedelta(seconds=3),
+    )
+
+    assert not _runtime_missing_grace_expired(
+        mission,
+        started_at + timedelta(seconds=3),
+        grace_sec=15,
+    )
+    assert _runtime_missing_grace_expired(
+        mission,
+        started_at + timedelta(seconds=15),
+        grace_sec=15,
+    )
 
 
 def test_local_source_validation_enforces_allowlist_and_pair_types(tmp_path):
@@ -132,3 +157,37 @@ def test_local_source_outside_allowlist_reports_stable_error_code(tmp_path):
     )
 
     assert validator.validate(video, telemetry) == ("invalid", "source_outside_allowlist")
+
+
+async def test_manual_mission_runtime_params_allow_detection_without_road_context():
+    video = VideoSourceRecord(
+        id="video-1", profile_id="source-1", drone_id="drone-1", mode="local",
+        source_type="mp4", location="test_videos/demo.mp4", validation_status="valid",
+    )
+    telemetry = TelemetrySourceRecord(
+        id="telemetry-1", profile_id="source-1", drone_id="drone-1", mode="local",
+        source_type="srt", location="test_videos/demo.srt", validation_status="valid", config={},
+    )
+
+    class Session:
+        async def get(self, model, record_id):
+            return video if model is VideoSourceRecord and record_id == video.id else telemetry
+
+    class RoadContextMustNotBeUsed:
+        async def get(self, *_args):
+            raise AssertionError("unbound missions must not resolve road context")
+
+    orchestrator = object.__new__(MissionOrchestrator)
+    orchestrator._road_context = RoadContextMustNotBeUsed()
+    mission = SimpleNamespace(
+        id="mission-1", drone_id="drone-1", inter_id="INT-1",
+        road_data_version="unverified", video_source_id=video.id,
+        telemetry_source_id=telemetry.id, context_snapshot={"quality_status": "unverified"},
+    )
+
+    params = await orchestrator._runtime_params(Session(), mission)
+
+    assert params["runtime_map_bundle"] is None
+    assert params["road_context_status"] == "missing"
+    assert params["quality_status"] == "unverified"
+    assert params["video_src"] == "test_videos/demo.mp4"

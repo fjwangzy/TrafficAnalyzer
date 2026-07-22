@@ -16,7 +16,7 @@
 | 指标查询权威源 | `road9` 中的 `uav_*` 普通表与 TimescaleDB hypertable |
 | 废弃目标链路 | Grafana、Telegraf、InfluxDB 不进入目标部署和验收 |
 
-本机新库最初由 Alembic `20260715_0010` 从空库创建，当前 head 为 `20260717_0013`，不回迁任何旧数据；生产连接、权限、容量、HA 和路网外部合同仍需确认。
+本机新库最初由 Alembic `20260715_0010` 从空库创建，当前 head 为 `20260721_0017`，不回迁任何旧数据；生产连接、权限、容量、HA 和路网外部合同仍需确认。
 
 ### 0.2 canonical Topic 与 `msg_type`
 
@@ -220,13 +220,13 @@ WebSocket 推送沿用 `{channel, type, data, ts}` 外壳，但 `type` 和 UAV �
 | 方法与候选路径 | 用途 | 最小返回边界 |
 | --- | --- | --- |
 | `GET /api/v1/dashboard/overview` | 主任核心指标、重点关注榜、权限化待办摘要和整体健康 | 已返回 `project_scope/road_data_versions/as_of/window_start/window_end/data_quality/coverage_ratio/schema_version`、指标分子分母/质量/原因和 `pending_tasks`；compare/变化摘要待冻结 |
-| `GET /api/v1/dashboard/intersections` | 按权限、bbox 和筛选返回路口摘要 | 已支持单值 `risk/monitor/quality`、WGS84 `bbox=min_lon,min_lat,max_lon,max_lat`、`q`、`offset/limit`；返回 `project_total/total/has_more/filters`。未实现聚合簇/zoom，不允许一次无限拉取 |
+| `GET /api/v1/dashboard/intersections` | 按权限、bbox 和筛选返回路口摘要 | 已支持单值 `risk/monitor/quality`、GCJ-02 `bbox=min_lon,min_lat,max_lon,max_lat`、`q`、`offset/limit`；返回 `project_total/total/has_more/filters`。未实现聚合簇/zoom，不允许一次无限拉取 |
 | `GET /api/v1/dashboard/intersections/{inter_id}` | 选中路口详情 | 任务、无人机、管道、态势、事件、路网版本、质量及专业页面稳定深链参数 |
 | `GET /api/v1/dashboard/drones` | 当前视野/任务关联的无人机保障摘要 | `drone_id`、任务/路口、位置、遥测时间、定位质量和授权后的状态摘要 |
 
 接口路径不属于消息/自建表 `uav_` 前缀规则，但响应中的业务消息类型、事件引用和后端自建物理对象仍须遵守第 0 节 canonical 契约。overview 与地图摘要必须在同一权限和可比较时间口径下返回；缺失数据使用明确的 `stale/missing/unknown`，不得以 `0` 代替。S8-TBD-001/005 未关闭时，覆盖、拥堵、保障和综合可信度使用 `value=null + numerator/denominator + unverified reason`。
 
-当前 OSM 开发底图接受两类有效 WGS84 坐标：正式 `RoadContext` 与 `coordinate_reference` 均为 `verified`；或本机验收素材目录明确登记的 `status=test + usage=local_acceptance_only` 遥测中位点。测试坐标返回 `map_coordinate_status=test`、计入 `test_coordinate_intersections`，但 RoadContext 仍保持 `unverified`，整体健康不得因此升级为健康或宣称权威坐标已冻结。其他 GCJ02、未验证或缺坐标记录进入 `isolated/map_exclusion_reason`；禁止将 GCJ02 数值直接投放到 WGS84 OSM。
+高德地图只接受 GCJ-02 坐标。正式 `RoadContext` 必须绑定 `lane_verified` 地图；本机验收点位必须明确登记 `status=test + usage=local_acceptance_only` 和 GCJ-02 来源。其他未验证或缺坐标记录进入 `isolated/map_exclusion_reason`。浏览器不得执行 WGS84 转换，也不得回退其他底图。
 
 `bbox` 非 4 个数、经纬度越界或最小值不小于最大值返回 `422 invalid_bbox`。`limit` 为 1～1000，默认 200；`offset` 不小于 0。road9 查询超时或 SQLAlchemy 依赖异常返回 `503 dashboard_dependency_unavailable`，前端可保留最后成功快照并重试，不得回退 Mock。此内部查询契约解决实现者选择项，但正式项目范围、权限过滤、点位聚合/zoom、缓存、SLA 和错误预算仍由 S8-TBD-002/006/007/009 书面冻结。
 
@@ -419,9 +419,10 @@ I4 通过 `EnforcementService` 将候选围栏、候选规则、统一 AI 事件
       "avg_speed_kmh": 18.4,
       "max_speed_kmh": 27.6,
       "trajectory_px": [[100,200], [105,210]],
-      "trajectory_world_m": [[12.3, -5.2], [12.8, -4.9]],
-      "current_point_m": [12.8, -4.9],
-      "world_anchor_lat_lon": [31.234567, 121.456789],
+      "trajectory_enu_m": [[12.3, -5.2], [12.8, -4.9]],
+      "trajectory_gcj02": [[121.456789, 31.234567], [121.456794, 31.234571]],
+      "current_point_enu_m": [12.8, -4.9],
+      "anchor_gcj02": [121.456789, 31.234567],
       "timestamp_first": 120.5,
       "timestamp_last": 123.7
     }
@@ -488,10 +489,11 @@ I4 通过 `EnforcementService` 将候选围栏、候选规则、统一 AI 事件
   "avg_speed_kmh": 22.3,
   "max_speed_kmh": 35.1,
   "trajectory_px": [[100,200], [105,210]],
-  "trajectory_world_m": [[12.3, -5.2], [12.8, -4.9]],
-  "entry_point_m": [10.1, -6.5],
-  "exit_point_m": [18.4, 2.1],
-  "world_anchor_lat_lon": [31.234567, 121.456789],
+  "trajectory_enu_m": [[12.3, -5.2], [12.8, -4.9]],
+  "trajectory_gcj02": [[121.456789, 31.234567], [121.456794, 31.234571]],
+  "entry_point_enu_m": [10.1, -6.5],
+  "exit_point_enu_m": [18.4, 2.1],
+  "anchor_gcj02": [121.456789, 31.234567],
   "timestamp_first": 120.5,
   "timestamp_last": 128.9
 }
@@ -505,8 +507,8 @@ I4 通过 `EnforcementService` 将候选围栏、候选规则、统一 AI 事件
   "motor_id": 142,
   "non_motor_id": 156,
   "prediction_type": "path_intersection",
-  "motor_position_m": [12.3, -5.2],
-  "non_motor_position_m": [12.3, -5.2],
+  "motor_position_enu_m": [12.3, -5.2],
+  "non_motor_position_enu_m": [12.3, -5.2],
   "distance_m": 0.0,
   "ttc_sec": 1.5,
   "pet_sec": 0.2,
@@ -519,7 +521,7 @@ I4 通过 `EnforcementService` 将候选围栏、候选规则、统一 AI 事件
   "evidence": ["hard_ttc_or_pet", "hard_pet"],
   "risk_score": 70,
   "motor_speed_kmh": 25.0,
-  "world_anchor_lat_lon": [31.234567, 121.456789]
+  "anchor_gcj02": [121.456789, 31.234567]
 }
 ```
 
@@ -529,15 +531,11 @@ I4 通过 `EnforcementService` 将候选围栏、候选规则、统一 AI 事件
 
 ### 世界坐标说明
 
-所有世界坐标使用**东北天(ENU)**坐标系，单位为米，原点为世界锚点GPS位置：
+所有计算坐标使用**东北天(ENU)**坐标系，单位为米，原点为 `anchor_gcj02`：
 - `easting_m` (+X) = 东向偏移
 - `northing_m` (+Y) = 北向偏移
 
-**GPS还原公式**：
-```
-lat = anchor_lat + northing_m / 111320
-lon = anchor_lon + easting_m / (111320 × cos(radians(anchor_lat)))
-```
+ENU 与 GCJ-02 的双向转换只由服务端版本化实现完成；浏览器不得使用近似公式。
 
 ### 字段说明（统计消息）
 | 字段 | 类型 | 说明 |
@@ -545,7 +543,7 @@ lon = anchor_lon + easting_m / (111320 × cos(radians(anchor_lat)))
 | `camera_id` | string | 格式 `id_{N}`，N 为摄像头编号 |
 | `cars` | int | 当前帧滑动窗口平均车辆数 |
 | `active_tracks` | int | 当前帧活跃跟踪目标数 |
-| `active_trajectories` | array | 当前活跃轨迹轻量快照，用于平台 BEV 与检测画面同频实时投放；每项包含最近尾部 `trajectory_px`、`trajectory_point_count`、`trajectory_tail_start`、`is_trajectory_tail`，有有效单应性/运动补偿时包含尾部 `trajectory_world_m`、`current_point_m`、`world_anchor_lat_lon` |
+| `active_trajectories` | array | 当前活跃轨迹轻量快照；包含 `trajectory_px` 证据，以及地图已验证时的 `trajectory_enu_m`、`trajectory_gcj02`、`anchor_gcj02`、`map_version_id` 和车道匹配字段 |
 | `road_1` ~ `road_5` | float \| null | 每条道路的车辆活跃度（辆/分钟） |
 | `msg_type` | string | 消息类型标识（"stats"） |
 | `intersection_id` | string | 路口标识（`INT_camera_{N}`） |
@@ -568,7 +566,7 @@ lon = anchor_lon + easting_m / (111320 × cos(radians(anchor_lat)))
 ### BEV GeoJSON 导出
 - Console BEV 视图导出时会合并三类轨迹：当前活跃轨迹快照、当前会话已完成轨迹、历史 API 查询轨迹。
 - 展示层可限制绘制数量以保持流畅，但导出使用当前会话缓存的全量轨迹数据，不受 BEV 显示上限裁剪。
-- GeoJSON `properties` 会保留 `trajectory_world_m`、`trajectory_px`、`track_id`、车辆类型、速度、时间戳、转向行为等原始字段，便于离线复盘。
+- GeoJSON geometry 使用 `trajectory_gcj02`，坐标顺序固定 `[longitude, latitude]`；properties 保留 `trajectory_enu_m`、`trajectory_px`、地图版本和车道匹配 lineage。
 
 ### 生产者
 - 文件：`nodes/KafkaProducerNode.py`
@@ -1123,27 +1121,35 @@ Content-Type: application/json
   "drone_id": "drone_001",
   "intersection_id": "INT_camera_1",
   "video_src": "rtsp://192.168.1.100:554/stream",
-  "roads_json": "",
+  "map_version_id": "CMV-example-lane-verified",
   "telemetry_source": "srt",
   "telemetry_file_path": "test_videos/inter_xqh/telemetry.srt"
 }
 ```
 
-`roads_json` 必须为空字符串。Platform、Mission、SourceProfile、本机 MPS 回放和 Compose camera
-启动均固定注入 `ROADS_JSON=""`，检测管道按无车道/道路标注模式运行；非空值返回
-`422`，平台不再自动查找或加载已保存人工车道标注。
+直接 `POST /api/v1/pipelines` 提供的 `map_version_id` 必须指向相同路口、相同路网版本的不可变
+`lane_verified` 地图；运行中请求切换仍拒绝。手动 Mission 可不带 `road_data_version` 启动仅检测
+Pipeline，此时 `road_context_status=missing`、`quality_status=unverified`，不生成正式地图匹配、世界坐标
+轨迹或车道级研判；已有已验收地图时仍生成 Runtime Road Map Bundle 并固定到 Pipeline。
 
 本地开发可通过环境变量控制平台启动的检测器子进程：
 - `PIPELINE_PYTHON`：检测器 Python 解释器，例如 `/Users/yaoyao/miniconda3/envs/py312/bin/python`
 - `PIPELINE_FRAME_STRIDE`：写入检测器 `FRAME_STRIDE` 环境变量，例如 `3`
 - `PIPELINE_DEVICE`：检测设备；Apple Silicon 开发态固定为 `mps`
 - `PIPELINE_IMGSZ`：检测分辨率；交互式开发默认 `960`
+- `PIPELINE_VIDEO_READY_TIMEOUT_SEC`：等待检测器 MJPEG 端口完成绑定的秒数，默认 `45`
+- `MISSION_PIPELINE_MISSING_GRACE_SEC`：运行 Mission 启动后确认 runtime 缺失的宽限秒数，默认 `15`
 - `KAFKA_BOOTSTRAP`：检测器和平台 Kafka 地址，例如 `localhost:9092`
 
 Apple Silicon 交互式运行使用 `scripts/mac_local_platform.sh up`。Platform 与检测器都使用
 原生 `.venv-mps`，Pipeline/Mission 请求不能覆盖设备、解释器或 `imgsz`。本地文件仍由
 Platform 在仓库 `test_videos/` allowlist 内解析；本机 MJPEG 直连地址由
 `PIPELINE_VIDEO_BASE=http://127.0.0.1:{video_port}/video` 生成。
+由 Platform 启动的检测器必须在端口绑定成功后向 stdout 输出 `MJPEG_READY port=<port>`；
+执行器收到该信号前不得返回启动成功。等待超时或检测器提前退出时，Pipeline/Mission 按启动
+失败返回并清理子进程，Console2 不得得到一个尚不可连接的 `running` 视频地址。
+Mission 已进入 `running` 后，调度器在上述宽限期内遇到一次 runtime 查询缺失只记录告警并继续
+观察；宽限期后仍缺失才写入 `pipeline_runtime_missing`，防止并发启动/轮询造成伪失败。
 
 Apple Silicon 本机 MPS 回放使用 `scripts/run_native_mps_replays.py` 调用
 `POST /api/v1/pipelines/register` 登记宿主机外部进程；登记请求中的视频路径仍使用
@@ -1178,7 +1184,7 @@ seam 拉起 `main_optimized.py`。开发和生产都使用同操作系统的本�
   "drone_id": "drone_001",
   "intersection_id": "INT_camera_1",
   "video_src": "rtsp://...",
-  "roads_json": "",
+  "map_version_id": "CMV-a1b2c3d4",
   "topic_name": "uav_statistics_10",
   "camera_id": 10,
   "video_port": 8101,
@@ -1235,20 +1241,22 @@ SourceProfile lineage 的严格路径交点冲突或实时告警，不混入无�
 | GET | `/api/v1/missions/{id}` | Mission 详情及 Pipeline 独立状态 |
 | POST | `/api/v1/missions/{id}/{stop|retry}` | 停止或创建重试 Mission |
 
-#### `POST /api/v1/missions`（持久化兼容入口）
+#### `POST /api/v1/missions`（持久化入口）
 
-新调用应传已登记的 `source_profile_id`；迁移期仍接受旧 `video_src/telemetry_file_path`，但会执行 allowlist、realpath、类型和配对校验，创建持久化 `trigger_type=manual` Mission 快照。Pipeline 启动失败时 Mission 进入 `failed` 并保存脱敏分类原因，不再写入内存 `MISSIONS`。
+调用必须传已登记的 `source_profile_id` 和 `inter_id`，并创建持久化 `trigger_type=manual` Mission
+快照。`road_data_version` 可选：缺失时允许启动检测器与 MJPEG，Mission/Pipeline 明确记录路网上下文
+缺失；依赖 `lane_verified` 地图的正式地图匹配、世界坐标轨迹和车道级研判不可用。旧视频路径、遥测
+路径和道路 JSON 字段属于禁止的额外字段，请求返回 422。Pipeline 启动失败时 Mission 进入
+`failed` 并保存脱敏分类原因。
 
 请求：
 ```json
 {
   "name": "小清河早高峰巡检",
-  "drone_id": "drone_7",
-  "intersection_id": "INT_camera_7",
-  "video_src": "test_videos/inter_xqh/DJI_20260403142902_0001_V小清河北路与水屯路路口.mp4",
-  "roads_json": "",
-  "telemetry_source": "srt",
-  "telemetry_file_path": "test_videos/inter_xqh/telemetry.srt"
+  "drone_id": "UAV-INTER-XQH",
+  "source_profile_id": "SRC-INTER-XQH-0403-PM",
+  "inter_id": "011wwe0z19700001",
+  "road_data_version": "20260501-IMAGERY-FIT-V1"
 }
 ```
 
@@ -1263,10 +1271,10 @@ SourceProfile lineage 的严格路径交点冲突或实时告警，不混入无�
 | POST | `/api/v1/trajectories/{intersection_id}/conflicts/{event_id}/review` | 管理员按 `expected_revision` 技术确认/驳回；409 表示 revision 冲突，结果不等同警情处置 |
 | GET | `/api/v1/trajectories/{intersection_id}/turn-summary` | 查询转向行为汇总 |
 
-Console GIS 页会在选中路口后调用 `GET /api/v1/trajectories/{intersection_id}?period=all&limit=500&spatial_ready=true&min_world_points=6`，展示历史轨迹数量、轨迹 ID、转向、车辆类型、均速、时长和轨迹点数，用于复盘 `track_complete` 写入后的路线形态。`spatial_ready=true` 要求 `trajectory_world_m` 点数达到 `min_world_points` 且 `world_anchor_lat_lon` 非空；过滤必须在 PostgreSQL 的 `ORDER BY/LIMIT` 前执行，避免最新的降级短片段挤掉库内可投放轨迹。通用查询默认 `spatial_ready=false`，不会隐式丢弃事实。
+Console GIS 页调用 `GET /api/v1/trajectories/{intersection_id}?period=all&limit=500&spatial_ready=true&min_gcj02_points=6`。`spatial_ready=true` 要求 `trajectory_gcj02` 点数达到 `min_gcj02_points` 且 `anchor_gcj02` 非空；过滤在 PostgreSQL 的 `ORDER BY/LIMIT` 前执行。
 
 Console Monitoring 在无运行 Pipeline 时调用
-`GET /api/v1/trajectories/{intersection_id}?period=24h&limit=500&source_profile_id={profile_id}&spatial_ready=true&min_world_points=2`
+`GET /api/v1/trajectories/{intersection_id}?period=24h&limit=500&source_profile_id={profile_id}&spatial_ready=true&min_gcj02_points=2`
 恢复当前视频源的 BEV 历史轨迹。该查询只用于离线回放窗口；运行中 Pipeline 仍以当前 WebSocket
 会话的 active/completed 轨迹为准，避免历史轨迹混入实时检测状态。
 同一页面还会调用 `GET /api/v1/trajectories/{intersection_id}/conflicts?period=1h&limit=200`，展示历史冲突 pair、TTC/PET、业务场景、证据和风险分。Monitoring 使用当前 `source_profile_id` 并固定 `prediction_type=path_intersection` 回填最近 24 小时事件；可在任务复盘时另加 `pipeline_id` 精确过滤。I3 当前实现查询 TimescaleDB hypertable `uav_conflict_events`，并从普通表 `uav_conflict_reviews` 合并复核状态；正式 `/gis`、`/events` 路由不再读取轨迹/事件 Mock。
@@ -1297,14 +1305,17 @@ AlertEngine 创建告警和确认告警时写入 `road9` 中的 `uav_alerts`。P
 | GET | `/api/v1/system/kafka/consumers` | Kafka consumer group 状态 |
 | GET | `/api/v1/system/models` | YOLO 模型列表 |
 
-### 标定中心 `/api/v1/calibration`
+### 标定中心（历史像素契约，已退役）
+
+> 本小节仅保留清库前的审计背景。旧保存端点当前返回 `410`，旧 JSON、像素车道和
+> `lane_annotation_db_path` 不再进入任何运行时。当前契约见本文件末尾“GCJ-02 渠化地图契约”。
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | GET | `/api/v1/calibration/summary` | 标定参数摘要 |
 | GET | `/api/v1/calibration/records` | 标定参数记录 |
 | GET | `/api/v1/calibration/lane-tasks` | 车道标注任务列表 |
-| POST | `/api/v1/calibration/lane-tasks/from-survey-frame` | 管理员从已持久化真实测绘关键帧幂等创建可恢复车道标注任务；不替代实时悬停触发 |
+| POST | `/api/v1/calibration/lane-tasks/from-survey-frame` | 管理员从已持久化真实测绘关键帧幂等创建可恢复车道标注任务；帧必须绑定已登记 `source_profile_id` 并具有有效 pixel→ENU 变换，返回任务会持久化两者供页面重载恢复 |
 | GET | `/api/v1/calibration/lane-tasks/{task_id}/image` | 管理员 Bearer 鉴权后返回车道标注任务 JPEG；Console2 以 Blob URL 注入画布，不公开直链 |
 | GET | `/api/v1/calibration/lane-annotations` | 已保存车道标注参数列表 |
 | GET | `/api/v1/calibration/lane-annotations/{intersection_id}` | 查询某路口可复用车道参数 |
@@ -1346,11 +1357,8 @@ AlertEngine 创建告警和确认告警时写入 `road9` 中的 `uav_alerts`。P
 }
 ```
 
-导出文件仅作为失效前标注审计格式保留，不再进入视频源启动参数。当前有效标注可用
-`python platform/scripts/invalidate_lane_annotations.py --apply` 统一失效：`road9` 中任务改为
-`invalidated`、视觉绑定改为 `retired` 且清空 `roads_json`，文件存储中的当前 annotation 清单
-清空，导出 JSON 移入 `invalidated_lane_annotations/<timestamp>/`。任务图片和失效快照保留用于审计，
-不会被检测器读取。
+以上导出格式是 2026-07-20 以前的历史标注审计快照，已由一次性 GCJ-02 重建清除，不再进入
+视频源启动参数，也不存在活动失效脚本或兼容入口。当前标注只使用版本化渠化地图契约。
 
 ### 就绪检查 `/ready`
 
@@ -1435,3 +1443,85 @@ AlertEngine 创建告警和确认告警时写入 `road9` 中的 `uav_alerts`。P
 - `GET /api/v1/events/{event_id}`：返回规则指标、关联轨迹和内容寻址证据；`PUT /api/v1/events/{event_id}/review` 使用 `expected_revision` 实现技术复核乐观锁。
 - `GET /api/v1/trajectories/{intersection_id}` 支持 `period=all|1h|24h`、`mission_id`、`source_profile_id`、车型和方向筛选；`all` 专用于离线验收的历史业务时间。地图投放可显式使用 `spatial_ready=true&min_world_points=N`，先在 PostgreSQL 过滤具有锚点且至少 N 个世界坐标点的轨迹，再应用 `limit`。
 - 持续拥堵证据在第 30 个连续超阈值样本定格；页面不得以打开详情时的当前画面替换历史证据。
+
+## 2026-07-21 轨迹研判分析契约
+
+`uav_track_complete/v1` 的 `data` 在既有业务车型 `vehicle_class` 之外，新增以下可追溯字段：
+
+| 字段 | 语义 | 历史规则 |
+| --- | --- | --- |
+| `yolo_class_id` | 推理时模型输出的原始类别 ID | 仅复制 payload 中已经存在的可信值 |
+| `yolo_class_name` | 推理时 `model.names[class_id]` 的原始名称 | 不得用当前模型字典猜填旧记录 |
+| `yolo_model_id` | `权重文件名@SHA-256前12位` | 无来源证据时为空 |
+| `class_mapping_version` | YOLO 类别到业务车型的映射版本 | 无来源证据时为空 |
+| `start_road_id` / `exit_road_id` | 入口/出口道路上下文 | 只回填 payload 中可信道路字段 |
+
+`GET /api/v1/trajectories/{intersection_id}/analysis` 是 `/gis` 的一致性分析读模型。它支持
+`period=latest30m|all|1h|24h`，或显式 `start_at + end_at`；`latest30m` 锚定所选筛选条件下
+最新一条可回放轨迹，而不是当前墙钟或最新降级记录。可叠加 `slice_start_at + slice_end_at`、
+`source_profile_id`、`mission_id`、`vehicle_class`、`yolo_class_id`、`turn_behavior`、
+`quality_status`、`movement_key`、`bucket_sec` 与 `track_limit`。显式起止时间必须成对提供；
+`track_limit` 有服务端硬上限，时间桶总数最多 720。
+
+响应同时返回 `quality`、`timeline`、`movement_ranking`、`class_summary.business`、
+`class_summary.yolo`、`slice_tracks` 和 `conflicts`。`movement_source` 在测试质量辅助视图中可以是：
+
+- `road_context`：具有入口/出口或入口/转向道路上下文；
+- `trajectory_quadrant_inferred`：缺少路网匹配时的测试候选，不进入正式统计；
+- `turn_behavior_fallback`：测试候选，不进入正式统计；
+- `unmapped`：没有足够证据形成流向。
+
+排名优先完整路网流向，其次是明确标注的轨迹方位推断，再到道路/转向降级；未知组不会因为
+数量大而覆盖更可解释的流向。轨迹去重与冲突归因使用可用的
+`source_profile_id + mission_id + pipeline_id + track_id`；缺字段时只在剩余 lineage 仍可安全唯一时
+关联，禁止只按会复用的 `track_id`。业务车型、YOLO、转向和质量筛选必须应用于 lineage 去重后的
+canonical 完成事实，不能先过滤旧版本记录再去重，否则分类统计与筛选 KPI 会不一致。地图只返回
+当前时间片内可回放的 `trajectory_gcj02` 片段，每条最多
+60 个抽样点，优先保留首末点、转折点和冲突附近点，并返回 `trajectory_sampled` 与
+`trajectory_original_point_count`；不可回放轨迹仍计入总量，并通过
+`slice_non_replayable_omitted` 和 `spatial_coverage_ratio` 显式降质。
+`trajectory_gcj02` 与 `trajectory_enu_m` 必须按同一组时间片索引和抽样索引返回，禁止一边返回
+当前片段、另一边返回整条完成轨迹。Console2 自动回放可预取下一非空时间片，但等待期间必须保留
+当前已确认片段，不得把请求中状态显示为 0 条轨迹。
+
+## 2026-07-21 GCJ-02 渠化地图契约
+
+唯一公共地理坐标系为 `GCJ02`，公共字段限定为 `position_gcj02`、`geometry_gcj02`、
+`trajectory_gcj02`、`anchor_gcj02` 和 `coordinate_system: "GCJ02"`。米制计算字段为
+`geometry_enu_m`、`trajectory_enu_m`；GeoJSON 和 bbox 均按 `[longitude, latitude]`。
+
+| 方法 | 路径 | 约束 |
+| --- | --- | --- |
+| POST | `/calibration/channelized-maps/bootstrap/{inter_id}` | 管理员操作；本地存在则不访问 YCX，本地不存在才只读导入该路口 |
+| POST | `/calibration/road-context/import-ycx` | YCX 只读事务；WKT 通过 PostGIS `ST_GeomFromText(...,4326)` 读取；ID 按不透明 geomhash 字符串处理 |
+| GET/PUT | `/calibration/channelized-maps/{map_version_id}` | 读取或编辑 `draft/candidate`；已发布版本不可变 |
+| POST | `/calibration/channelized-maps/{map_version_id}/fit-from-image` | 必填已登记 `source_profile_id`；服务端执行 `pixel → ENU → GCJ02`，按地图+来源幂等保存拟合车道、渠化要素和视觉配准 |
+| POST | `/calibration/visual-registrations/{id}/verify` | 人工确认配准；媒体路径必须位于显式 allowlist 根目录 |
+| POST | `/calibration/channelized-maps/{map_version_id}/publish` | 执行残差、拓扑、自交、重叠、方向、停止线和人工复核门禁 |
+| GET | `/calibration/channelized-maps/{map_version_id}/runtime-bundle` | 仅 `lane_verified` 可读，供 Mission 固定注入 |
+
+`lane_info` 仅以 `geometry_source=link_offset_derived` 导入为候选。正式发布至少需要一个
+`imagery_fitted` 或 `manual_override` 车道、已验证视觉配准和真实停止线。拟合数量不一致时使用
+本地稳定 `local_lane_id`，`source_lane_id` 可空，不得拼造 YCX ID。
+
+Console2 的正拍编辑器先按 `inter_id` 读取事故测绘任务、采集批次和关键帧，再调用
+`POST /calibration/lane-tasks/from-survey-frame`。页面不得用空白任务或浏览器端近似公式代替真实帧；
+任务返回的 `source_profile_id` 与 `homography_pixel_to_enu` 是后续拟合的默认输入。画布使用
+`contain` 后的真实影像视口反算自然像素坐标，点击黑边不产生顶点。
+
+完成轨迹必须携带 `map_version_id`、`matched_lane_key`、可空 `source_lane_id`、
+`matched_link_id`、`movement_key`、`map_match_confidence`、`trajectory_enu_m` 和
+`trajectory_gcj02`。视觉配准残差必须包含 `registration_position_gcj02: [longitude, latitude]`
+和 `registration_gimbal_yaw_deg`，运行时据此计算相对配准帧的运动补偿。只有固定
+`lane_verified` Bundle 且精确命中当前 `SOURCE_PROFILE_ID` verified 配准的 Pipeline 可产生
+正式车道级统计。
+
+`GET /trajectories/{intersection_id}` 对每条记录显式返回 `coordinate_system: "GCJ02"`；
+`anchor_gcj02/trajectory_enu_m/trajectory_gcj02/map_version_id` 和车道匹配字段以事实表类型化列
+覆盖原始 payload，浏览器不得从旧字段或运行时默认值猜测坐标系。
+
+外部原生 MPS 重跑在每源自然 EOF 后形成一个 completed Mission。Mission `context_snapshot`
+使用 `uav.replay-batch-provenance/v1`，固定 `replay_batch_id/pipeline_id/source_profile_id`、视频与
+遥测 SHA-256、模型 SHA-256、`map_version_id/road_data_version/coordinate_transform_version`、
+抽帧参数和验收产物路径。事实表以类型化 `mission_id + pipeline_id + source_profile_id` 追溯该
+快照；原始 Kafka `payload` 保持逐字保存，不在最终关联时回写或伪造 Mission 字段。

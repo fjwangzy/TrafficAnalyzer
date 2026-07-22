@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
 import sys
 from pathlib import Path
 
@@ -18,6 +17,11 @@ def configure_environment() -> None:
     """Apply local-development defaults without overriding deployment values."""
     os.environ.setdefault("DEBUG", "true")
     os.environ.setdefault("SERVICE_PORT", "8000")
+    existing_pythonpath = os.environ.get("PYTHONPATH", "")
+    python_paths = [str(PROJECT_ROOT)]
+    if existing_pythonpath:
+        python_paths.append(existing_pythonpath)
+    os.environ["PYTHONPATH"] = os.pathsep.join(python_paths)
 
     os.environ.setdefault("DB_HOST", "localhost")
     os.environ.setdefault("DB_PORT", "5432")
@@ -82,10 +86,13 @@ def main() -> int:
         Path(os.environ[directory_var]).mkdir(parents=True, exist_ok=True)
     Path(os.environ["CALIBRATION_DB_PATH"]).parent.mkdir(parents=True, exist_ok=True)
 
-    try:
-        return subprocess.call(build_command(), cwd=PLATFORM_ROOT)
-    except KeyboardInterrupt:
-        return 130
+    command = build_command()
+    os.chdir(PLATFORM_ROOT)
+    # Replace the wrapper process so launchd/Docker owns uvicorn directly.
+    # A subprocess wrapper becomes orphaned when launchctl removes its parent,
+    # leaving duplicate Mission schedulers connected to the same road9 database.
+    os.execvpe(command[0], command, os.environ)
+    raise RuntimeError("os.execvpe unexpectedly returned")
 
 
 if __name__ == "__main__":

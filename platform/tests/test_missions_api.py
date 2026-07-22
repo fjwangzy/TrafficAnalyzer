@@ -54,17 +54,14 @@ class MissionsApiTest(unittest.TestCase):
         app.include_router(drones.router, prefix="/api/v1")
         self.client = TestClient(app)
 
-    def test_legacy_create_mission_is_normalized_by_persistent_interface(self):
+    def test_source_profile_mission_uses_the_gcj02_runtime_interface(self):
         response = self.client.post(
             "/api/v1/missions",
             json={
                 "name": "小清河早高峰巡检",
                 "drone_id": "drone_7",
-                "intersection_id": "INT_camera_7",
-                "video_src": "test_videos/inter_xqh/demo.mp4",
-                "roads_json": "",
-                "telemetry_source": "srt",
-                "telemetry_file_path": "test_videos/inter_xqh/telemetry.srt",
+                "inter_id": "INT_camera_7",
+                "source_profile_id": "SRC-7",
             },
         )
 
@@ -72,7 +69,7 @@ class MissionsApiTest(unittest.TestCase):
         self.assertEqual(response.json()["status"], "running")
         body, actor_id = self.orchestrator.created
         self.assertEqual(body.inter_id, "INT_camera_7")
-        self.assertEqual(body.video_src, "test_videos/inter_xqh/demo.mp4")
+        self.assertEqual(body.source_profile_id, "SRC-7")
         self.assertIsNone(actor_id)
 
     def test_orchestrator_errors_preserve_status_and_code(self):
@@ -81,8 +78,8 @@ class MissionsApiTest(unittest.TestCase):
             "/api/v1/missions",
             json={
                 "drone_id": "drone_8",
-                "intersection_id": "INT_camera_8",
-                "video_src": "test_videos/inter_xqh/demo.mp4",
+                "inter_id": "INT_camera_8",
+                "source_profile_id": "SRC-8",
             },
         )
         self.assertEqual(response.status_code, 502)
@@ -93,8 +90,8 @@ class MissionsApiTest(unittest.TestCase):
             "/api/v1/missions",
             json={
                 "drone_id": "drone_8",
-                "intersection_id": "INT_camera_8",
-                "video_src": "test_videos/inter_xqh/demo.mp4",
+                "inter_id": "INT_camera_8",
+                "source_profile_id": "SRC-8",
                 "roads_json": "configs/lanes.json",
             },
         )

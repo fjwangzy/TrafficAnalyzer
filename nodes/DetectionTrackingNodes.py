@@ -2,11 +2,23 @@ from ultralytics import YOLO
 import torch
 import numpy as np
 import time
+import hashlib
+from pathlib import Path
 
 from utils_local.utils import profile_time
 from elements.FrameElement import FrameElement
 from elements.VideoEndBreakElement import VideoEndBreakElement
 from byte_tracker.byte_tracker_model import BYTETracker as ByteTracker
+
+
+def build_yolo_model_id(weight_path: str | Path) -> str:
+    """Return the immutable model identity stored with every produced track."""
+    path = Path(weight_path)
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        while chunk := stream.read(8 * 1024 * 1024):
+            digest.update(chunk)
+    return f"{path.name}@{digest.hexdigest()[:12]}"
 
 
 class DetectionTrackingNodes:
@@ -29,11 +41,14 @@ class DetectionTrackingNodes:
         self.device = device
         print(f'检测将在 {device} 上进行')
 
-        self.model = YOLO(config_yolo["weight_pth"], task='detect')
+        weight_path = config_yolo["weight_pth"]
+        self.model = YOLO(weight_path, task='detect')
+        self.yolo_model_id = build_yolo_model_id(weight_path)
         self.classes = self.model.names
         self.conf = config_yolo["confidence"]
         self.iou = config_yolo["iou"]
         self.imgsz = config_yolo["imgsz"]
+        self.half = bool(config_yolo.get("half", False)) and self.device.type in {"mps", "cuda"}
         self.classes_to_detect = config_yolo["classes_to_detect"]
 
         config_bytetrack= config["tracking_node"]
@@ -63,7 +78,7 @@ class DetectionTrackingNodes:
         t_detect_start = time.time()
         outputs = self.model.predict(frame, imgsz=self.imgsz, conf=self.conf, verbose=False,
                                      iou=self.iou, classes=self.classes_to_detect,
-                                     device=self.device)
+                                     device=self.device, half=self.half)
         t_detect_end = time.time()
 
         # 记录推理耗时（毫秒），供Kafka发送到前端展示
@@ -97,6 +112,7 @@ class DetectionTrackingNodes:
 
         # 获取置信度分数
         frame_element.tracked_conf = [t.score for t in track_list]
+        frame_element.yolo_model_id = self.yolo_model_id
 
         return frame_element
 

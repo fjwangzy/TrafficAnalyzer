@@ -1,5 +1,9 @@
 # Console 2 全流程测试验收记录
 
+> 历史验收归档：本文 2026-07-14 至 2026-07-20 的 OSM/OpenLayers/WGS84 记录已由
+> ADR-020 于 2026-07-21 退役，仅作为旧实现证据保留；当前活动契约为 GCJ-02 + 高德地图，
+> 不得从本文恢复兼容分支。
+
 ## Evidence
 
 - execution date: `2026-07-14`
@@ -113,6 +117,52 @@ prior result: conditional pass; production acceptance blocked by P1 Kafka health
 - 原型中的夜景演示底图和预置测量标注已替换为真实白天关键帧与真实持久化量算线，属于数据真实性差异，不是视觉缺陷。
 - 主画布、工具栏、证据缩略图、质量门禁和报告侧栏无裁切、重叠、坏间距或错误圆角。
 - 本轮未发现测绘范围内 P0/P1/P2 视觉问题；既有 Kafka 健康误报等跨模块发现仍按上文追踪，不影响 S3 本轮设计 QA 结论。
+
+final result: passed
+
+---
+
+# Design QA · 历史轨迹研判升级（2026-07-21）
+
+- source visual truth path: `docs/generated/screenshots/2026-07-21-trajectory-analysis-upgrade.png`
+- implementation screenshot path: `/private/tmp/trajectory-analysis-camera-1487x1058-final-exact.png`
+- combined comparison path: `/private/tmp/trajectory-analysis-comparison-final-same.png`
+- viewport/state: `1487 × 1058` 内容视口，深色主题，管理员登录态，`INT_camera_1` 最新可回放 30 分钟
+
+**Full-view comparison evidence**
+
+- 实现保持冻结稿的“查询区 → KPI/质量 → 地图+流向排名 → 时间轴 → 证据”信息层级，并复用 Console2 现有导航、面板、令牌和真实 OSM/ENU 底图。
+- 右栏 23 个真实流向可滚动，地图与时间轴仍完整处于受控工作区；不再由排名长度把页面撑到 1,500px 以上。
+- 当前时间片只画真实世界坐标片段；小清河数据的短轨迹作为质量事实展示，崇华路口实测可见 5.34m 中位、27.55m 最大路径。
+
+**Findings and fixes**
+
+- P1：流向行数参与 CSS grid 行高，侧栏 23 行时把地图工作区撑到约 1,589px，时间轴跌出首屏。修复为桌面地图/侧栏共享 `clamp(560px, 60dvh, 640px)`，侧栏内部滚动；900px 及以下改为单列、侧栏 420px。
+- P1：YOLO/业务类别若在 SQL lineage 去重前过滤，同一轨迹的旧完成事实可能使 class 3 从 4,800 虚增到 4,815。修复为先按 lineage 选 canonical 完成事实，再应用类别、转向和质量筛选。
+- P1：选中流向后 KPI 与时间轴仍显示全窗口。修复为聚焦集合统一驱动 KPI、时间桶、当前片和证据，并自动选择该流向最新有轨迹的时间片。
+- P2：同一 Track ID 跨任务/管道的代表轨迹难以区分。列表新增 SourceProfile/Mission/Pipeline 血缘；旧数据缺失时显示记录摘要，不伪造来源。
+
+**Verification**
+
+- [x] 冻结稿与实现图在同一 `1487 × 1058` 输入中并排复核。
+- [x] `900 / 1280 / 1440 / 1920` 四档无横向溢出，断点布局符合设计。
+- [x] 四个真实路口均返回非空当前片，并验证 YOLO class 3 去重计数。
+- [x] 流向排序、流向聚焦、原始分类、代表轨迹、URL 状态和 `2×` 回放速度交互。
+- [x] Platform 170 passed、Console2 101 passed、消息契约 6 passed、Vite production build、Ruff 和 Alembic head。
+
+**Follow-up polish**
+
+- 无阻断性 P0/P1/P2；生产容量、权威路网和 MPS 新样本仍按现有外部门禁推进。
+
+final result: passed
+
+## 2026-07-22 浏览器批注：轨迹回放连续性
+
+- 批注症状：播放推进到下一 10 秒片时，时间先变化，地图随后约 3 秒显示 `0 条轨迹`，再恢复真实轨迹，形成反复闪烁。
+- 根因：切片进入新的 React Query key 后没有保留同范围上一帧；播放定时器快于查询并继续并发推进；高德覆盖物更新先删旧层再加新层且每片重新 `setFitView`；服务端 ENU 已裁片但 GCJ-02 仍返回整条轨迹。
+- 修复：同范围切片使用上一帧作为请求占位，下一非空片预取并串行推进；空桶只保留在时间轴供手动查看；覆盖物无空窗交换且回放不重新缩放；ENU/GCJ-02 共享裁片索引。
+- 真实页面证据：`011wwe0z19700001`、`14:40:33` 起播放，50ms 间隔采样 10 秒并跨 3 次时间片变化；`emptySamples=0`、`zeroSummarySamples=0`、`iframeReplacements=0`，加载期间保持 60 条轨迹，后续真实更新为 52 条；浏览器 console 0 error/warn。
+- 自动化证据：`RouterApp.test.jsx + MonitoringBevMap.test.jsx` 48/48，Console2 全量 113/113，`platform/tests/test_trajectory_analysis.py` 13/13，Platform 全量 182 passed / 5 skipped / 10 subtests passed，Console2 production build 通过。
 
 final result: passed
 
@@ -278,6 +328,54 @@ final result: I3 local engineering passed; production and contract acceptance bl
 - 权威 RoadContext/围栏、批准执法规则、货车二分类验收集、雷达设备/检定/融合、法制证据、统一身份和主平台 EventDelivery 仍为 `unverified/blocked`。
 
 final result: I4 local candidate engineering passed; legal and external production acceptance blocked
+
+---
+
+# Design QA · 正拍 lane 拟合操作闭环（2026-07-22）
+
+- source visual truth path: `/private/tmp/TrafficAnalyzer-calibration-source-20260722.png`
+- implementation screenshot path: `/private/tmp/TrafficAnalyzer-calibration-implementation-20260722.png`
+- focused editor screenshot path: `/private/tmp/TrafficAnalyzer-calibration-editor-focused-20260722.png`
+- combined comparison path: `/private/tmp/TrafficAnalyzer-calibration-source-vs-implementation-20260722.jpg`
+- viewport/state: `1567 × 969` CSS px，深色主题，管理员会话，`011wwe0z19700001` 本地 `lane_verified` 地图已加载，当前路口无活动关键帧任务
+- source/implementation pixels: 均为 `1567 × 969`；浏览器 `devicePixelRatio=2`，截图接口已归一化为 CSS 像素，因此未再次缩放
+
+**Full-view comparison evidence**
+
+- 保留原页面的顶部/左侧导航、高德叠加预览、左右 `1.45fr / .55fr` 工作区、深色令牌、面板边框与密度；新增内容只落在用户标注的正拍编辑器及其关键帧侧栏。
+- 编辑主画布、配准参数与质量复核的宽度和纵向顺序未改变；页面内部滚动正常，`scrollWidth=innerWidth=1567`，无横向溢出。
+- 右栏由空任务区升级为测绘任务、采集批次、正拍关键帧三级选择，并保留当前任务列表；当前无真实帧时所有后续动作禁用且显示真实空态。
+
+**Focused comparison evidence**
+
+- 字体、字号、行高、输入框、按钮、边框、圆角和蓝色主操作沿用 Console2 现有令牌；没有新增替代图片、CSS 插画、手工图标或占位影像。
+- 编辑器新增“撤销一点 / 清空顶点 / 移除最后几何”，空态下均正确禁用；几何类型与车道方向具有可访问名称。
+- 真实影像继续由任务图片提供；画布按 `contain` 视口反算自然像素，黑边点击不会生成顶点。该行为由宽屏留白回归用例覆盖。
+
+**Findings and comparison history**
+
+- 首次实现前 P0：页面只有“选择真实关键帧任务”的空提示，但无创建入口，核心操作无法开始。修复为从已持久化测绘任务/批次/帧幂等创建可恢复任务，并自动带入 SourceProfile 与 pixel→ENU 变换。
+- 首次实现前 P1：SVG `preserveAspectRatio=meet` 存在留白时按整个元素宽高换算点击，产生系统性像素偏移。修复为复用 `imageContainViewport()`，只接受真实影像区域内的点击。
+- 首次实现前 P2：误点后只能清空全部顶点，完成几何后无法回退。修复为增加单点撤销和当前类型最后几何移除。
+- 修复后未发现剩余 P0/P1/P2 视觉问题；新增侧栏属于用户要求的功能变化，不是相对原空态的设计漂移。
+
+**Interaction and console verification**
+
+- 浏览器验证：安全会话恢复、加载本地地图、YCX 未访问提示、GCJ-02 高德预览、关键帧三级选择空态、所有禁用门禁和无横向溢出。
+- 当前路口没有可用真实测绘关键帧，因此浏览器未向本地数据写入伪任务；创建→自动带入→自然像素绘制→服务端拟合由 Console2 回归测试覆盖。
+- 浏览器日志记录到一次 Vite 热更新期间 `AuthProvider` 重建错误；完整刷新后页面安全会话恢复并正常工作，生产构建不包含该热更新路径。
+
+**Automated verification**
+
+- Platform: `177 passed, 5 skipped, 10 subtests passed`。
+- Console2: `17` files / `100` tests passed；正拍关键帧闭环与宽屏坐标换算回归通过。
+- Vite production build、Ruff、`git diff --check` passed。
+
+**Follow-up polish**
+
+- 无阻断性 P0/P1/P2。当前工具进程为 `x86_64` 且 MPS 不可用，按 ADR-020 未以 CPU 或 Docker 启动开发态 Platform；后续具备原生 arm64/MPS 会话时可补一次真实关键帧写入与拟合提交的浏览器录像证据。
+
+final result: passed
 
 ## 2026-07-15 S9 `road9` 飞行任务四页签真实验收
 

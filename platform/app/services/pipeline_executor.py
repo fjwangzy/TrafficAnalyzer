@@ -8,11 +8,15 @@ start/inspect/stop contract with environment-specific device configuration.
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import signal
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
+
+
+VIDEO_READY_MARKER = "MJPEG_READY"
 
 
 def hydra_string(value: str) -> str:
@@ -36,6 +40,7 @@ class PipelineLaunchSpec:
     road_data_version: str = ""
     road_context_status: str = "missing"
     quality_status: str = "unverified"
+    runtime_map_bundle: dict | None = None
     frame_stride: int | None = None
     kafka_bootstrap: str = "kafka:9092"
     telemetry_source: str | None = None
@@ -53,6 +58,7 @@ class ExecutionHandle:
     stderr_tail: str = ""
     native_process: Any = field(default=None, repr=False)
     io_tasks: list[asyncio.Task] = field(default_factory=list, repr=False)
+    video_ready: asyncio.Event = field(default_factory=asyncio.Event, repr=False)
 
 
 class PipelineExecutor(Protocol):
@@ -77,6 +83,7 @@ class LocalPipelineExecutor:
         imgsz: int | None = None,
         extra_env: dict[str, str] | None = None,
         extra_overrides: tuple[str, ...] = (),
+        video_ready_timeout_sec: float = 45.0,
     ) -> None:
         self._root = Path(project_root).resolve()
         self._pipeline_python = pipeline_python
@@ -84,6 +91,7 @@ class LocalPipelineExecutor:
         self._imgsz = imgsz
         self._extra_env = dict(extra_env or {})
         self._extra_overrides = tuple(extra_overrides)
+        self._video_ready_timeout_sec = max(float(video_ready_timeout_sec), 0.1)
 
     def _command(self, spec: PipelineLaunchSpec) -> list[str]:
         command = [
@@ -124,7 +132,6 @@ class LocalPipelineExecutor:
             **os.environ,
             **self._extra_env,
             "VIDEO_SRC": spec.video_src,
-            "ROADS_JSON": "",
             "TOPIC_NAME": spec.topic_name,
             "CAMERA_ID": str(spec.camera_id),
             "DRONE_ID": spec.drone_id,
@@ -142,6 +149,12 @@ class LocalPipelineExecutor:
         }
         if spec.frame_stride is not None:
             environment["FRAME_STRIDE"] = str(spec.frame_stride)
+        if spec.runtime_map_bundle is not None:
+            environment["RUNTIME_MAP_BUNDLE_JSON"] = json.dumps(
+                spec.runtime_map_bundle, ensure_ascii=False, separators=(",", ":")
+            )
+        else:
+            environment.pop("RUNTIME_MAP_BUNDLE_JSON", None)
         return environment
 
     async def start(self, spec: PipelineLaunchSpec) -> ExecutionHandle:
@@ -162,7 +175,38 @@ class LocalPipelineExecutor:
             asyncio.create_task(self._drain_stream(process.stdout, handle, "stdout")),
             asyncio.create_task(self._drain_stream(process.stderr, handle, "stderr")),
         ]
-        return handle
+        try:
+            await self._wait_until_video_ready(handle)
+            return handle
+        except Exception:
+            await self.stop(handle)
+            raise
+
+    async def _wait_until_video_ready(self, handle: ExecutionHandle) -> None:
+        """Do not expose a running pipeline before its MJPEG socket is bound."""
+        process = handle.native_process
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + self._video_ready_timeout_sec
+        while not handle.video_ready.is_set():
+            if process is not None and process.returncode is not None:
+                handle.returncode = process.returncode
+                raise RuntimeError(
+                    "detector exited before the MJPEG server became ready "
+                    f"(returncode={process.returncode}): {handle.stderr_tail[-1000:]}"
+                )
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                raise TimeoutError(
+                    "detector MJPEG server did not become ready within "
+                    f"{self._video_ready_timeout_sec:g}s"
+                )
+            try:
+                await asyncio.wait_for(
+                    handle.video_ready.wait(),
+                    timeout=min(remaining, 0.1),
+                )
+            except TimeoutError:
+                continue
 
     async def inspect(self, handle: ExecutionHandle) -> ExecutionHandle:
         process = handle.native_process
@@ -213,5 +257,7 @@ class LocalPipelineExecutor:
                     handle.stderr_tail = (handle.stderr_tail + text)[-tail_limit:]
                 else:
                     handle.stdout_tail = (handle.stdout_tail + text)[-tail_limit:]
+                    if VIDEO_READY_MARKER in handle.stdout_tail:
+                        handle.video_ready.set()
         except asyncio.CancelledError:
             pass

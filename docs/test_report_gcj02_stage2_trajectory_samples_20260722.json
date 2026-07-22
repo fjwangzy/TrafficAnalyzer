@@ -1,0 +1,73 @@
+{
+  "schema_version": "uav.gcj02-demo-verification/v1",
+  "verification_scope": "automated technical demo gate",
+  "operator_lane_accuracy_review": "required_for_production_signoff",
+  "selected_source_profiles": [
+    "SRC-INTER-XQH-0403-PM"
+  ],
+  "minimum_sample_count": 2,
+  "source_count": 1,
+  "track_count": 3629,
+  "matched_track_count": 2914,
+  "sampled_track_count": 2,
+  "automated_spatial_consistency": 1.0,
+  "max_gcj02_roundtrip_error_m": 0.0068,
+  "checks": {
+    "all_selected_sources_passed": true,
+    "sample_size_meets_requested_minimum": true,
+    "automated_spatial_consistency_at_least_95pct": true,
+    "gcj02_roundtrip_error_at_most_0_5m": true,
+    "all_sources_have_tracks": true,
+    "all_tracks_have_coordinate_and_map_lineage": true,
+    "all_sources_have_map_matches": true
+  },
+  "items": [
+    {
+      "profile_id": "SRC-INTER-XQH-0403-PM",
+      "mission_id": "MIS-GCJ02-DEMO-f156fc00be86a68e52e0",
+      "pipeline_id": "pipe-1762eff3",
+      "map_version_id": "CMV-1d3dedffa32145dca68c148d",
+      "track_count": 3629,
+      "coordinate_complete_tracks": 3629,
+      "map_lineage_complete": true,
+      "matched_tracks": 2914,
+      "map_match_coverage": 0.803,
+      "sampled_tracks": 2,
+      "samples": [
+        {
+          "track_event_id": "cdc65754c60425cd61734b3d686a8edb05e86300",
+          "track_id": "1",
+          "started_at": "2026-04-03T06:29:01.596000+00:00",
+          "ended_at": "2026-04-03T06:29:34.626000+00:00",
+          "trajectory_point_count": 62,
+          "matched_lane_key": "local:011wwe0z19700001:a07:l02",
+          "source_lane_id": "13wwe0z1twwe0z190102",
+          "matched_link_id": "12wwe0z1twwe0z1901",
+          "movement_key": "12",
+          "map_match_confidence": 0.8393,
+          "minimum_lane_distance_m": 0.0,
+          "max_gcj02_roundtrip_error_m": 0.0068
+        },
+        {
+          "track_event_id": "2f84ba4b07cbce05b47a7b41a516525481e53fcd",
+          "track_id": "35530",
+          "started_at": "2026-04-03T06:36:57.055000+00:00",
+          "ended_at": "2026-04-03T06:37:29.425000+00:00",
+          "trajectory_point_count": 85,
+          "matched_lane_key": "local:011wwe0z19700001:a05:l01",
+          "source_lane_id": "13wwe0z19wwe0z1t0101",
+          "matched_link_id": "12wwe0z19wwe0z1t01",
+          "movement_key": "32",
+          "map_match_confidence": 0.8393,
+          "minimum_lane_distance_m": 0.0,
+          "max_gcj02_roundtrip_error_m": 0.0057
+        }
+      ],
+      "spatial_consistency": 1.0,
+      "max_gcj02_roundtrip_error_m": 0.0068,
+      "input_hashes_present": true,
+      "retired_coordinate_keys": []
+    }
+  ],
+  "passed": true
+}

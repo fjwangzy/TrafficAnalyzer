@@ -11,6 +11,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 LOCAL_REPORT = ROOT / "docs" / "test_report_adr019_local_retirement.json"
+GCJ02_REBUILD_REPORT = ROOT / "docs" / "test_report_gcj02_rebuild_local.json"
 
 
 def _text(relative: str) -> str:
@@ -36,6 +37,21 @@ def _current_schema_head() -> str:
 
 
 def _report_passed() -> bool:
+    try:
+        rebuild = json.loads(GCJ02_REBUILD_REPORT.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        rebuild = {}
+    if (
+        rebuild.get("schema_version") == "uav.gcj02-local-rebuild/v1"
+        and rebuild.get("passed") is True
+        and rebuild.get("database", {}).get("alembic_revision") == _current_schema_head()
+        and rebuild.get("database", {}).get("hypertables") == 5
+        and rebuild.get("database", {}).get("business_tables_empty") is True
+        and not rebuild.get("raw_materials", {}).get("missing_files")
+        and not rebuild.get("kafka", {}).get("nonzero_end_offsets")
+        and not rebuild.get("kafka", {}).get("managed_consumer_groups_remaining")
+    ):
+        return True
     try:
         report = json.loads(LOCAL_REPORT.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
@@ -161,8 +177,8 @@ def audit(scope: str = "production") -> dict:
         {
             "code": "local_runtime_evidence",
             "status": "pass" if _report_passed() else "blocker",
-            "evidence": str(LOCAL_REPORT.relative_to(ROOT)),
-            "detail": "ADR-019 数据服务、空库、旧卷隔离、恢复与健康探测已有执行证据。",
+            "evidence": f"{LOCAL_REPORT.relative_to(ROOT)} + {GCJ02_REBUILD_REPORT.relative_to(ROOT)}",
+            "detail": "ADR-019 基线和 GCJ-02 清库重建、原始素材哈希、Kafka 空状态已有执行证据。",
         },
     ]
     if scope == "production":

@@ -71,6 +71,11 @@ class AutoLaneInferenceNode:
         if isinstance(frame_element, VideoEndBreakElement):
             return frame_element
 
+        if getattr(frame_element, "runtime_map_bundle", None):
+            frame_element.inferred_lanes = None
+            frame_element.lane_source = "channelized_map"
+            return frame_element
+
         if not self.enabled:
             return frame_element
 

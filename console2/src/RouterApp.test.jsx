@@ -34,7 +34,7 @@ vi.mock('./lib/api', async (importOriginal) => {
     platformApi: {
       ...actual.platformApi,
       intersections: vi.fn().mockResolvedValue([
-        { id: '370102000104', name: '小清河北路 × 水屯路', center_lat: 36.7029, center_lon: 117.0223, status: 'active', quality_status: 'unverified' },
+        { id: '370102000104', name: '小清河北路 × 水屯路', center_gcj02: { latitude: 36.7029, longitude: 117.0223 }, coordinate_system: 'GCJ02', status: 'active', quality_status: 'unverified' },
       ]),
       dashboardOverview: vi.fn().mockResolvedValue({
         schema_version: 'uav.dashboard/v1', project_scope: 'local_road9_authorized_scope', as_of: '2026-07-15T05:52:00Z', window_start: '2026-07-15T05:22:00Z', window_end: '2026-07-15T05:52:00Z', road_data_versions: ['ROAD-I5'], coverage_definition_status: 'blocked_s8_tbd_001_005',
@@ -53,7 +53,16 @@ vi.mock('./lib/api', async (importOriginal) => {
         { id: 'INT-I5', inter_id: 'INT-I5', name: 'I5 未验证路口', lat: null, lon: null, map_eligible: false, map_exclusion_reason: 'road_context_unverified', road_data_version: 'ROAD-I5', monitor: 'standby', risk: 'unknown', quality: 'unverified', last_metric_at: null, metric: {}, mission_id: null, drone_id: null, pipeline_id: null, events: [], conflict_count: 0 },
       ] }),
       dashboardDrones: vi.fn().mockResolvedValue({ schema_version: 'uav.dashboard/v1', items: [{ id: 'UAV-I5', name: 'I5 drone', enabled: true, status: 'offline', telemetry_quality: 'missing' }] }),
-      trajectories: vi.fn().mockResolvedValue([{ id: 'TRK-1', track_id: 7, trajectory_world_m: [[0, 0], [1, 1]], quality_status: 'unverified' }]),
+      trajectories: vi.fn().mockResolvedValue([{ id: 'TRK-1', track_id: 7, trajectory_gcj02: [[117, 36.7], [117.0001, 36.7001]], quality_status: 'unverified' }]),
+      trajectoryAnalysis: vi.fn().mockResolvedValue({
+        query: { intersection_id: 'INT-I5', period: 'all', start_at: '2026-07-21T08:00:00Z', end_at: '2026-07-21T08:00:20Z', slice_start_at: '2026-07-21T08:00:10Z', slice_end_at: '2026-07-21T08:00:20Z', bucket_sec: 10 },
+        quality: { total_tracks: 2, replayable_tracks: 2, returned_tracks: 1, truncated: false, unattributed_conflicts: 0, spatial_coverage_ratio: 1, status: 'complete' },
+        timeline: [{ start_at: '2026-07-21T08:00:00Z', end_at: '2026-07-21T08:00:10Z', active_tracks: 1, conflict_count: 0 }, { start_at: '2026-07-21T08:00:10Z', end_at: '2026-07-21T08:00:20Z', active_tracks: 2, conflict_count: 1 }],
+        movement_ranking: [{ movement_key: 'entry:1|exit:2', movement_label: '东进口 → 西出口', vehicle_count: 2, share: 1, avg_speed_kmh: 31.5, p85_speed_kmh: 38, conflict_count: 1 }],
+        class_summary: { business: [{ class_name: 'motor', count: 2 }], yolo: [{ class_id: 3, class_name: 'car', model_id: 'yolo11s.pt@abc123', count: 2 }], unknown_yolo_name_count: 0 },
+        slice_tracks: [{ id: 'TRK-1', track_id: '7', mission_id: 'MSN-1', pipeline_id: 'PIPE-1', source_profile_id: 'SRC-1', movement_key: 'entry:1|exit:2', movement_label: '东进口 → 西出口', trajectory_enu_m: [[0, 0], [1, 1]], trajectory_gcj02: [[117, 36.7], [117.0001, 36.7001]], anchor_gcj02: [117, 36.7], vehicle_class: 'motor', yolo_class_id: 3, yolo_class_name: 'car', yolo_model_id: 'yolo11s.pt@abc123', class_mapping_version: 'visdrone-business/v1', quality_status: 'verified', avg_speed_kmh: 31.5, max_speed_kmh: 42, started_at: '2026-07-21T08:00:00Z', ended_at: '2026-07-21T08:00:20Z' }],
+        conflicts: [{ id: 'C-1', occurred_at: '2026-07-21T08:00:15Z', severity: 'warning', ttc_sec: 1.2, attributed_movements: ['entry:1|exit:2'] }],
+      }),
       conflicts: vi.fn().mockResolvedValue([
         { id: 'UAV-EVT-20260713-001', inter_id: 'INT-I5', conflict_scene: '机非冲突风险升高', severity: 'critical', ttc_sec: 1.2, pet_sec: 0.8, distance_m: 0, risk_score: 86, evidence: ['path_intersection'], occurred_at: '2026-07-15T02:52:16Z', quality_status: 'unverified', time_quality: 'reconstructed', review_status: 'pending', review_revision: 1 },
       ]),
@@ -100,7 +109,7 @@ vi.mock('./lib/api', async (importOriginal) => {
       createFlightPlan: vi.fn(),
       createMission: vi.fn(),
       enforcementZones: vi.fn().mockResolvedValue([
-        { id: 'ZONE-I4-01', name: '本地候选限行区', zone_type: 'truck_restriction', geometry: { type: 'Polygon', coordinates: [[[0, 0], [10, 0], [10, 10], [0, 0]]] }, coordinate_system: 'ENU', road_data_version: 'ROAD-I4', source: 'local_candidate', status: 'candidate', schedule: {}, checksum: 'b'.repeat(64), revision: 1, rule_count: 1, authority_status: 'unavailable' },
+        { id: 'ZONE-I4-01', name: '本地候选限行区', zone_type: 'truck_restriction', geometry: { type: 'Polygon', coordinates: [[[117, 36.7], [117.001, 36.7], [117.001, 36.701], [117, 36.7]]] }, coordinate_system: 'GCJ02', road_data_version: 'ROAD-I4', source: 'local_candidate', status: 'candidate', schedule: {}, checksum: 'b'.repeat(64), revision: 1, rule_count: 1, authority_status: 'unavailable' },
       ]),
       enforcementRules: vi.fn().mockResolvedValue([
         { id: 'RULE-I4-01', name: '候选货车事实规则', clue_type: 'truck_restriction', zone_id: 'ZONE-I4-01', status: 'candidate', quality_status: 'unverified', approval_status: 'blocked', revision: 1 },
@@ -128,6 +137,7 @@ vi.mock('./components/CityMap', () => ({
 
 import { RouterApp } from './RouterApp'
 import { platformApi } from './lib/api'
+import { firstPlayableSliceIndex, nextPlayableSliceIndex } from './pages/InsightPages'
 
 function open(path) {
   window.history.pushState({}, '', path)
@@ -149,6 +159,19 @@ describe('Console2 full prototype', () => {
       consoleRole: 'admin',
     })
     window.history.pushState({}, '', '/')
+  })
+
+  it('skips empty timeline buckets during automatic trajectory playback', () => {
+    const timeline = [
+      { start_at: '00:00:00', active_tracks: 0, conflict_count: 0 },
+      { start_at: '00:00:10', active_tracks: 3, conflict_count: 0 },
+      { start_at: '00:00:20', active_tracks: 0, conflict_count: 0 },
+      { start_at: '00:00:30', active_tracks: 0, conflict_count: 1 },
+    ]
+
+    expect(firstPlayableSliceIndex(timeline)).toBe(1)
+    expect(nextPlayableSliceIndex(timeline, 1)).toBe(3)
+    expect(nextPlayableSliceIndex(timeline, 3)).toBe(-1)
   })
 
   it('renders the S8 city overview at the root route', async () => {
@@ -175,7 +198,7 @@ describe('Console2 full prototype', () => {
     const drone = { id: 'UAV-MAP-1', name: '地图监测无人机', default_inter_id: 'INT-MAP-1', default_video_source_id: 'VID-MAP-1', intersection_name: '地图监测路口' }
     const pipeline = { pipeline_id: 'PIPE-MAP-1', intersection_id: 'INT-MAP-1', source_profile_id: 'SRC-MAP-1', drone_id: 'UAV-MAP-1', camera_id: 17, video_stream_url: 'http://127.0.0.1:8127/video', status: 'running' }
     platformApi.dashboardIntersections.mockResolvedValueOnce({ schema_version: 'uav.dashboard/v1', total: 1, map_eligible: 1, isolated: 0, items: [
-      { id: 'INT-MAP-1', inter_id: 'INT-MAP-1', name: '地图监测路口', lat: 36.67, lon: 116.99, map_eligible: true, map_coordinate_status: 'test', road_data_version: 'ROAD-MAP', monitor: 'running', risk: 'normal', quality: 'unverified', metric: {}, events: [], conflict_count: 0 },
+      { id: 'INT-MAP-1', inter_id: 'INT-MAP-1', name: '地图监测路口', center_gcj02: { latitude: 36.67, longitude: 116.99 }, coordinate_system: 'GCJ02', map_eligible: true, map_coordinate_status: 'test', road_data_version: 'ROAD-MAP', monitor: 'running', risk: 'normal', quality: 'unverified', metric: {}, events: [], conflict_count: 0 },
     ] })
     platformApi.sources.mockResolvedValueOnce([source]).mockResolvedValueOnce([source])
     platformApi.drones.mockResolvedValueOnce([drone]).mockResolvedValueOnce([drone])
@@ -208,7 +231,51 @@ describe('Console2 full prototype', () => {
     expect(navigation).toHaveTextContent('AI 事件中心轨迹研判')
     expect(screen.getByRole('link', { name: '轨迹研判' })).toHaveClass('active')
     expect(container.querySelector('.page-heading')).not.toBeInTheDocument()
-    expect(screen.getByLabelText('时间窗口')).toHaveValue('all')
+    expect(screen.getByLabelText('时间窗口')).toHaveValue('latest30m')
+  })
+
+  it('uses flow ranking and raw detector classes to explain the selected time slice', async () => {
+    open('/gis')
+
+    expect(await screen.findByRole('tab', { name: '流向排名' })).toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: '东进口 → 西出口 2 辆' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('tab', { name: /原始分类/ }))
+    expect(await screen.findByText('YOLO car')).toBeInTheDocument()
+    expect(screen.getByText('yolo11s.pt@abc123')).toBeInTheDocument()
+    expect(screen.getByLabelText('历史时间片')).toHaveAttribute('max', '1')
+    fireEvent.click(screen.getByRole('tab', { name: '代表轨迹' }))
+    expect(await screen.findByText('源 SRC-1 · 任务 MSN-1 · 管道 PIPE-1')).toBeInTheDocument()
+  })
+
+  it('sorts flow ranking accessibly and preserves the analysis state in the URL', async () => {
+    const baseAnalysis = await platformApi.trajectoryAnalysis('INT-I5', {})
+    platformApi.trajectoryAnalysis.mockClear()
+    platformApi.trajectoryAnalysis.mockResolvedValueOnce({
+      ...baseAnalysis,
+      movement_ranking: [
+        { movement_key: 'entry:1|exit:2', movement_label: '东进口 → 西出口', movement_source: 'road_context', vehicle_count: 2, share: 0.25, avg_speed_kmh: 31.5, p85_speed_kmh: 38, conflict_count: 1 },
+        { movement_key: 'entry:3|exit:4', movement_label: '北进口 → 南出口', movement_source: 'road_context', vehicle_count: 6, share: 0.75, avg_speed_kmh: 18, p85_speed_kmh: 24, conflict_count: 0 },
+      ],
+    })
+
+    open('/gis?intersection_id=INT-I5&period=all&movement_sort=avg_speed&start_at=2026-07-21T08%3A00%3A00Z&end_at=2026-07-21T08%3A00%3A20Z&slice_start_at=2026-07-21T08%3A00%3A10Z&slice_end_at=2026-07-21T08%3A00%3A20Z')
+
+    const sortBySpeed = await screen.findByRole('button', { name: '按均速排序' })
+    expect(sortBySpeed).toHaveAttribute('aria-pressed', 'true')
+    const rankedRows = await screen.findAllByRole('button', { name: /进口 → .*出口 .* 辆/ })
+    expect(rankedRows[0]).toHaveAccessibleName('东进口 → 西出口 2 辆')
+
+    fireEvent.click(screen.getByRole('button', { name: '按冲突排序' }))
+    await waitFor(() => expect(new URLSearchParams(window.location.search).get('movement_sort')).toBe('conflict'))
+    fireEvent.change(screen.getByLabelText('回放速度'), { target: { value: '2' } })
+    await waitFor(() => expect(new URLSearchParams(window.location.search).get('playback_speed')).toBe('2'))
+    fireEvent.click(screen.getByRole('button', { name: '东进口 → 西出口 2 辆' }))
+    await waitFor(() => expect(new URLSearchParams(window.location.search).get('movement_key')).toBe('entry:1|exit:2'))
+
+    await waitFor(() => expect(platformApi.trajectoryAnalysis).toHaveBeenLastCalledWith('INT-I5', expect.not.objectContaining({
+      slice_start_at: expect.anything(),
+    })))
+    expect(screen.getByRole('tab', { name: '流向排名' })).toHaveAttribute('aria-selected', 'true')
   })
 
   it('does not present pending road9 trajectory queries as zero data', async () => {
@@ -228,8 +295,53 @@ describe('Console2 full prototype', () => {
       ],
     })
 
-    await waitFor(() => expect(screen.getByText('1 个路口 · 1 条轨迹')).toBeInTheDocument())
-    expect(platformApi.trajectories).toHaveBeenCalledWith('INT-I5', { period: 'all', limit: 500, spatial_ready: true, min_world_points: 6 })
+    await waitFor(() => expect(screen.getByText('1 个路口 · 2 条轨迹')).toBeInTheDocument())
+    expect(platformApi.trajectoryAnalysis).toHaveBeenCalledWith('INT-I5', expect.objectContaining({ period: 'latest30m', bucket_sec: 10, track_limit: 60 }))
+  })
+
+  it('keeps the current trajectory frame visible while the next replay slice loads', async () => {
+    const baseAnalysis = await platformApi.trajectoryAnalysis('INT-I5', {})
+    const firstSlice = {
+      ...baseAnalysis,
+      query: {
+        ...baseAnalysis.query,
+        start_at: '2026-07-21T08:00:00Z',
+        end_at: '2026-07-21T08:00:20Z',
+        slice_start_at: '2026-07-21T08:00:00Z',
+        slice_end_at: '2026-07-21T08:00:10Z',
+      },
+      conflicts: [],
+    }
+    const secondSlice = {
+      ...firstSlice,
+      query: {
+        ...firstSlice.query,
+        slice_start_at: '2026-07-21T08:00:10Z',
+        slice_end_at: '2026-07-21T08:00:20Z',
+      },
+    }
+    let resolveSecondSlice
+    platformApi.trajectoryAnalysis
+      .mockResolvedValueOnce(firstSlice)
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveSecondSlice = resolve }))
+
+    open('/gis?intersection_id=INT-I5&period=all&playback_speed=4&start_at=2026-07-21T08%3A00%3A00Z&end_at=2026-07-21T08%3A00%3A20Z&slice_start_at=2026-07-21T08%3A00%3A00Z&slice_end_at=2026-07-21T08%3A00%3A10Z')
+
+    expect(await screen.findByText('1 条轨迹 · 0 个冲突', {}, { timeout: 10_000 })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '播放历史回放' }))
+    await waitFor(() => expect(platformApi.trajectoryAnalysis).toHaveBeenCalledWith(
+      'INT-I5',
+      expect.objectContaining({ slice_start_at: '2026-07-21T08:00:10Z' }),
+    ))
+    await waitFor(() => expect(new URLSearchParams(window.location.search).get('slice_start_at'))
+      .toBe('2026-07-21T08:00:10Z'))
+
+    expect(screen.getByText('1 条轨迹 · 0 个冲突')).toBeInTheDocument()
+    expect(screen.queryByText('当前时间片无可回放轨迹')).not.toBeInTheDocument()
+    expect(screen.getByText('加载下一片…')).toBeInTheDocument()
+
+    resolveSecondSlice(secondSlice)
+    await waitFor(() => expect(screen.queryByText('加载下一片…')).not.toBeInTheDocument())
   })
 
   it('uses the server dashboard scope instead of URL prototype labels', async () => {
@@ -243,7 +355,7 @@ describe('Console2 full prototype', () => {
     await waitFor(() => expect(screen.getByLabelText('路口')).toHaveValue('INT-I5'))
     expect(screen.getByLabelText('时间窗口')).toHaveValue('24h')
     expect(screen.getByText('坐标尚未冻结')).toBeInTheDocument()
-    expect(platformApi.trajectories).toHaveBeenCalledWith('INT-I5', { period: '24h', limit: 500, spatial_ready: true, min_world_points: 6 })
+    expect(platformApi.trajectoryAnalysis).toHaveBeenCalledWith('INT-I5', expect.objectContaining({ period: '24h', bucket_sec: 10, track_limit: 60 }))
   })
 
   it('restores the fleet tab and selected drone from a deep link', async () => {
@@ -470,7 +582,7 @@ describe('Console2 full prototype', () => {
     open('/enforcement/zones')
     fireEvent.click(await screen.findByRole('button', { name: '编辑候选' }))
     fireEvent.click(screen.getByRole('button', { name: '保存候选' }))
-    await waitFor(() => expect(platformApi.updateEnforcementZone).toHaveBeenCalledWith('ZONE-I4-01', expect.objectContaining({ revision: 1, coordinate_system: 'ENU' })))
+    await waitFor(() => expect(platformApi.updateEnforcementZone).toHaveBeenCalledWith('ZONE-I4-01', expect.objectContaining({ revision: 1, coordinate_system: 'GCJ02' })))
   })
 
   it('keeps demo governance disabled unless it is explicitly enabled', async () => {
@@ -509,7 +621,7 @@ describe('Console2 full prototype', () => {
   it('isolates unverified coordinates instead of plotting demo points', async () => {
     open('/')
     expect(await screen.findByText('暂无可上图的无人机视频源')).toBeInTheDocument()
-    expect(await screen.findByText('已登记视频源尚未绑定可用路口或遥测坐标。')).toBeInTheDocument()
+    expect(await screen.findByText('已登记视频源尚未绑定可用 GCJ-02 路口或遥测坐标。')).toBeInTheDocument()
     expect(screen.queryByText('演示地图')).not.toBeInTheDocument()
   })
 

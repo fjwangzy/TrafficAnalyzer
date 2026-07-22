@@ -35,7 +35,7 @@ video_reader:
   src: ${oc.env:VIDEO_SRC} # 待处理文件的路径，或摄像头编号（int），或 m3u8 / rtsp 流链接
   skip_secs: 0  # 每隔 <skip_secs> 秒读取一帧
   frame_stride: ${oc.decode:${oc.env:FRAME_STRIDE,5}} # 每 N 帧处理 1 帧；低FPS实时预览可设 10~12 恢复正常行驶速度
-  roads_info: ${oc.env:ROADS_JSON,''} # 可选：包含视频中道路坐标的 json 文件；为空则不使用道路标注
+  runtime_map_bundle: ${oc.env:RUNTIME_MAP_BUNDLE_JSON,''} # lane_verified GCJ-02/ENU 地图包；正式运行必填
 
 detection_node:
   weight_pth: weights/yolo11s-visdrone.pt  # 模型 .pt 或 .engine (TensorRT) 文件的路径
@@ -44,6 +44,7 @@ detection_node:
   iou: 0.4  # NMS 阈值（值越大，匹配到的目标越多）
   imgsz: 960  # 航拍4K小目标推理尺寸；比640更容易保留电动车/三轮车
   device: auto  # 推理设备: "auto" 自动检测 (cuda>mps>cpu) | "cuda" | "mps" | "cpu"
+  half: true  # MPS/CUDA 使用 FP16；CPU 由节点强制保持 FP32
 
 tracking_node:
   # 使用 ByteTrack (https://github.com/ifzhang/ByteTrack)
@@ -111,7 +112,7 @@ kafka_producer_node: #// 摄像头 id
 motion_compensation:
   enabled: true              # 启用无人机运动补偿（需遥测数据）
   hover_threshold_ms: 1.0    # 低于此速度(m/s)视为悬停，跳过速度补偿
-  world_anchor: null         # null=自动取首帧GPS均值，或手动 [lat, lon]
+  anchor_gcj02: null         # null=自动取首次 GCJ-02 遥测均值，或手动 [longitude, latitude]
 
 calibration:
   mode: "auto"             # "auto" | "telemetry" | "reference_points"
@@ -194,6 +195,9 @@ trajectory:
     right_turn: [-150, -30]
     u_turn: [150, 180]
 
+road_map_matching:
+  max_lateral_distance_m: 2.5
+
 auto_lane:
   enabled: true                        # 启用自动车道推断（无需人工标注）
   # 向下兼容：如果有车道标注数据(lane_polygons)，以标注数据为准，跳过自动推断
@@ -237,7 +241,7 @@ geojson_export:
   output_dir: "${oc.env:GEOJSON_OUTPUT_DIR,output}"  # Compose 使用持久卷；本地保持 output
   filename: null                     # null=自动生成带时间戳文件名
   export_interval_sec: 0             # 定期导出间隔(秒)，0=仅流结束时导出
-  use_gps: true                      # 有世界锚点时转为 WGS84 经纬度
+  use_gps: true                      # 有 GCJ-02 锚点时输出 GCJ-02 GeoJSON
   include_metadata: true             # 在 properties 中包含轨迹元数据
   simplify_tolerance_m: 0.5          # Douglas-Peucker 简化容忍度(米)，0=不简化
 

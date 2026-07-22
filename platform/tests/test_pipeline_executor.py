@@ -1,3 +1,4 @@
+import asyncio
 from unittest.mock import patch
 
 import pytest
@@ -29,10 +30,20 @@ async def test_local_executor_forces_configured_mps_device(tmp_path):
         async def read(self, _size):
             return b""
 
+    class ReadyStream:
+        def __init__(self):
+            self.sent = False
+
+        async def read(self, _size):
+            if not self.sent:
+                self.sent = True
+                return b"MJPEG_READY port=8101\n"
+            return b""
+
     class FakeProcess:
         pid = 9001
         returncode = None
-        stdout = EmptyStream()
+        stdout = ReadyStream()
         stderr = EmptyStream()
 
     async def fake_exec(*command, **kwargs):
@@ -64,3 +75,42 @@ async def test_local_executor_forces_configured_mps_device(tmp_path):
     assert captured["environment"]["KAFKA_BOOTSTRAP"] == "127.0.0.1:9092"
     assert captured["environment"]["PYTORCH_ENABLE_MPS_FALLBACK"] == "1"
     assert captured["cwd"] == str(tmp_path.resolve())
+
+
+@pytest.mark.asyncio
+async def test_local_executor_waits_until_mjpeg_server_is_ready(tmp_path):
+    class ControlledStream:
+        def __init__(self):
+            self.chunks = asyncio.Queue()
+
+        async def read(self, _size):
+            return await self.chunks.get()
+
+    stdout = ControlledStream()
+
+    class FakeProcess:
+        pid = 9002
+        returncode = None
+        stderr = ControlledStream()
+        native_wait = asyncio.Event()
+
+        async def wait(self):
+            await self.native_wait.wait()
+            return self.returncode
+
+    process = FakeProcess()
+    process.stdout = stdout
+    executor = LocalPipelineExecutor(tmp_path, video_ready_timeout_sec=1.0)
+
+    with patch(
+        "app.services.pipeline_executor.asyncio.create_subprocess_exec",
+        return_value=process,
+    ):
+        start_task = asyncio.create_task(executor.start(_spec()))
+        await asyncio.sleep(0)
+        assert not start_task.done()
+
+        await stdout.chunks.put(b"MJPEG_READY port=8101\n")
+        handle = await asyncio.wait_for(start_task, timeout=1.0)
+
+    assert handle.pid == 9002

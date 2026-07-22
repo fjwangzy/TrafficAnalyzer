@@ -21,8 +21,9 @@ const trafficSeries = [
 ]
 
 function mapIntersection(item) {
-  const latitude = item.center_lat ?? item.lat
-  const longitude = item.center_lon ?? item.lon
+  const center = item.center_gcj02 || item.position_gcj02 || {}
+  const latitude = center.latitude ?? (Array.isArray(center) ? center[1] : undefined)
+  const longitude = center.longitude ?? (Array.isArray(center) ? center[0] : undefined)
   return {
     ...item,
     id: item.inter_id || item.id,
@@ -212,92 +213,320 @@ function eventColumns(onOpen) {
   ]
 }
 
+const MOVEMENT_COLORS = ['#63b3ff', '#ff806b', '#58d6b0', '#c792ff', '#ffca67']
+const BUSINESS_CLASS_LABELS = { motor: '机动车', non_motor: '非机动车', unknown: '未分类' }
+const MOVEMENT_SOURCE_LABELS = { road_context: '路网匹配', trajectory_quadrant_inferred: '轨迹方位推断', turn_behavior_fallback: '仅按转向降级', unmapped: '未匹配' }
+const MOVEMENT_SORTS = ['business', 'vehicle_count', 'avg_speed', 'conflict']
+const TRAJECTORY_SLICE_PARAMS = new Set(['slice_start_at', 'slice_end_at'])
+
+function sameTrajectoryAnalysisScope(previousParams, nextParams) {
+  if (!previousParams || !nextParams) return false
+  const keys = new Set([...Object.keys(previousParams), ...Object.keys(nextParams)])
+  return [...keys].every((key) => TRAJECTORY_SLICE_PARAMS.has(key) || previousParams[key] === nextParams[key])
+}
+
+export function nextPlayableSliceIndex(timeline, currentIndex) {
+  return timeline.findIndex((item, index) => (
+    index > currentIndex && (Number(item.active_tracks) > 0 || Number(item.conflict_count) > 0)
+  ))
+}
+
+export function firstPlayableSliceIndex(timeline) {
+  const index = timeline.findIndex((item) => Number(item.active_tracks) > 0 || Number(item.conflict_count) > 0)
+  return index >= 0 ? index : 0
+}
+
+function analysisTime(value, includeDate = false) {
+  if (!value) return '—'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  return new Intl.DateTimeFormat('zh-CN', {
+    ...(includeDate ? { month: '2-digit', day: '2-digit' } : {}),
+    hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+  }).format(date)
+}
+
+function shortEvidenceId(value) {
+  const text = String(value || '')
+  if (!text) return '—'
+  return text.length <= 18 ? text : `${text.slice(0, 8)}…${text.slice(-6)}`
+}
+
+function trackLineageLabel(track) {
+  const parts = []
+  if (track.source_profile_id) parts.push(`源 ${shortEvidenceId(track.source_profile_id)}`)
+  if (track.mission_id) parts.push(`任务 ${shortEvidenceId(track.mission_id)}`)
+  if (track.pipeline_id) parts.push(`管道 ${shortEvidenceId(track.pipeline_id)}`)
+  return parts.join(' · ') || `记录 ${shortEvidenceId(track.id)}`
+}
+
 export function GisPage() {
   const location = useLocation()
   const navigate = useNavigate()
-  const initialId = new URLSearchParams(location.search).get('intersection_id')
-  const [selectedId, setSelectedId] = useState(initialId)
-  const initialLayer = new URLSearchParams(location.search).get('layer')
-  const [layer, setLayer] = useState(['trajectory', 'conflict', 'hotspot'].includes(initialLayer) ? initialLayer : 'trajectory')
-  const initialPeriod = new URLSearchParams(location.search).get('period')
-  const [period, setPeriod] = useState(['all', '1h', '24h'].includes(initialPeriod) ? initialPeriod : 'all')
-  const [missionId, setMissionId] = useState(new URLSearchParams(location.search).get('mission_id') || 'all')
-  const [sourceProfileId, setSourceProfileId] = useState(new URLSearchParams(location.search).get('source_profile_id') || 'all')
-  const [vehicleClass, setVehicleClass] = useState(new URLSearchParams(location.search).get('class_name') || 'all')
-  const [turnBehavior, setTurnBehavior] = useState(new URLSearchParams(location.search).get('turn_behavior') || 'all')
-  const [selectedTrackId, setSelectedTrackId] = useState(new URLSearchParams(location.search).get('track_id'))
+  const queryClient = useQueryClient()
+  const search = new URLSearchParams(location.search)
+  const initialStartAt = search.get('start_at')
+  const initialEndAt = search.get('end_at')
+  const initialSliceStartAt = search.get('slice_start_at')
+  const initialSliceEndAt = search.get('slice_end_at')
+  const hasExactWindow = Boolean(initialStartAt && initialEndAt && initialSliceStartAt && initialSliceEndAt)
+  const [selectedId, setSelectedId] = useState(search.get('intersection_id'))
+  const [period, setPeriod] = useState(['latest30m', 'all', '1h', '24h'].includes(search.get('period')) ? search.get('period') : 'latest30m')
+  const [missionId, setMissionId] = useState(search.get('mission_id') || 'all')
+  const [sourceProfileId, setSourceProfileId] = useState(search.get('source_profile_id') || 'all')
+  const [vehicleClass, setVehicleClass] = useState(search.get('vehicle_class') || search.get('class_name') || 'all')
+  const [yoloClassId, setYoloClassId] = useState(search.get('yolo_class_id') || 'all')
+  const [turnBehavior, setTurnBehavior] = useState(search.get('turn_behavior') || 'all')
+  const [selectedMovement, setSelectedMovement] = useState(search.get('movement_key'))
+  const [selectedTrackId, setSelectedTrackId] = useState(search.get('track_id'))
+  const [analysisTab, setAnalysisTab] = useState(['movement', 'class', 'track'].includes(search.get('analysis_tab')) ? search.get('analysis_tab') : 'movement')
+  const [movementSort, setMovementSort] = useState(MOVEMENT_SORTS.includes(search.get('movement_sort')) ? search.get('movement_sort') : 'business')
+  const [analysisWindow, setAnalysisWindow] = useState(hasExactWindow ? { start: initialStartAt, end: initialEndAt } : null)
+  const [sliceWindow, setSliceWindow] = useState(hasExactWindow ? { start: initialSliceStartAt, end: initialSliceEndAt } : null)
+  const [sliceInteractive, setSliceInteractive] = useState(hasExactWindow)
+  const [playing, setPlaying] = useState(false)
+  const [playbackSpeed, setPlaybackSpeed] = useState(['0.5', '1', '2', '4'].includes(search.get('playback_speed')) ? Number(search.get('playback_speed')) : 1)
+
   const intersectionsQuery = useQuery({ queryKey: ['i3-project-intersections'], queryFn: loadProjectIntersections, refetchInterval: 30_000 })
   const missionsQuery = useQuery({ queryKey: ['i3-gis-missions'], queryFn: () => platformApi.missions() })
   const sourcesQuery = useQuery({ queryKey: ['i3-gis-sources'], queryFn: () => platformApi.sources() })
   const projectIntersections = (intersectionsQuery.data || []).map(mapIntersection)
-  const mapIntersections = projectIntersections.filter((item) => Number.isFinite(item.lat) && Number.isFinite(item.lon))
   const selected = projectIntersections.find((item) => item.id === selectedId) || projectIntersections[0] || null
   useEffect(() => { if (!selectedId && selected) setSelectedId(selected.id) }, [selectedId, selected])
-  const trajectoriesQuery = useQuery({
-    queryKey: ['i3-trajectories', selected?.id, period, missionId, sourceProfileId, vehicleClass, turnBehavior],
-    queryFn: () => platformApi.trajectories(selected.id, {
-      period, limit: 500, spatial_ready: true, min_world_points: 6,
-      ...(missionId !== 'all' ? { mission_id: missionId } : {}),
-      ...(sourceProfileId !== 'all' ? { source_profile_id: sourceProfileId } : {}),
-      ...(vehicleClass !== 'all' ? { class_name: vehicleClass } : {}),
-      ...(turnBehavior !== 'all' ? { turn_behavior: turnBehavior } : {}),
-    }),
+
+  const scopeKey = [selectedId, period, missionId, sourceProfileId, vehicleClass, yoloClassId, turnBehavior].join('|')
+  const previousScopeKey = useRef(scopeKey)
+  useEffect(() => {
+    if (previousScopeKey.current === scopeKey) return
+    previousScopeKey.current = scopeKey
+    setAnalysisWindow(null)
+    setSliceWindow(null)
+    setSelectedMovement(null)
+    setSelectedTrackId(null)
+    setPlaying(false)
+    setSliceInteractive(false)
+  }, [scopeKey])
+
+  useEffect(() => {
+    const params = new URLSearchParams(location.search)
+    const setOptional = (name, value, emptyValue = 'all') => {
+      if (value && value !== emptyValue) params.set(name, value)
+      else params.delete(name)
+    }
+    setOptional('intersection_id', selectedId, null)
+    params.set('period', period)
+    setOptional('mission_id', missionId)
+    setOptional('source_profile_id', sourceProfileId)
+    setOptional('vehicle_class', vehicleClass)
+    params.delete('class_name')
+    setOptional('yolo_class_id', yoloClassId)
+    setOptional('turn_behavior', turnBehavior)
+    setOptional('movement_key', selectedMovement, null)
+    setOptional('track_id', selectedTrackId, null)
+    setOptional('analysis_tab', analysisTab === 'movement' ? null : analysisTab, null)
+    setOptional('movement_sort', movementSort === 'business' ? null : movementSort, null)
+    setOptional('playback_speed', playbackSpeed === 1 ? null : String(playbackSpeed), null)
+    if (analysisWindow && sliceWindow) {
+      params.set('start_at', analysisWindow.start)
+      params.set('end_at', analysisWindow.end)
+      params.set('slice_start_at', sliceWindow.start)
+      params.set('slice_end_at', sliceWindow.end)
+    } else {
+      for (const name of ['start_at', 'end_at', 'slice_start_at', 'slice_end_at']) params.delete(name)
+    }
+    const nextSearch = params.toString()
+    if (nextSearch !== location.search.replace(/^\?/, '')) {
+      navigate(`${location.pathname}?${nextSearch}`, { replace: true })
+    }
+  }, [analysisTab, analysisWindow, location.pathname, location.search, missionId, movementSort, navigate, period, playbackSpeed, selectedId, selectedMovement, selectedTrackId, sliceWindow, sourceProfileId, turnBehavior, vehicleClass, yoloClassId])
+
+  const analysisParams = {
+    period, bucket_sec: 10, track_limit: 60,
+    ...(missionId !== 'all' ? { mission_id: missionId } : {}),
+    ...(sourceProfileId !== 'all' ? { source_profile_id: sourceProfileId } : {}),
+    ...(vehicleClass !== 'all' ? { vehicle_class: vehicleClass } : {}),
+    ...(yoloClassId !== 'all' ? { yolo_class_id: Number(yoloClassId) } : {}),
+    ...(turnBehavior !== 'all' ? { turn_behavior: turnBehavior } : {}),
+    ...(selectedMovement ? { movement_key: selectedMovement } : {}),
+    ...(sliceInteractive && analysisWindow && sliceWindow ? {
+      start_at: analysisWindow.start, end_at: analysisWindow.end,
+      slice_start_at: sliceWindow.start, slice_end_at: sliceWindow.end,
+    } : {}),
+  }
+  const analysisQuery = useQuery({
+    queryKey: ['trajectory-analysis', selected?.id, analysisParams],
+    queryFn: () => platformApi.trajectoryAnalysis(selected.id, analysisParams),
     enabled: Boolean(selected?.id),
-    refetchInterval: 30_000,
+    placeholderData: (previous, previousQuery) => (
+      sameTrajectoryAnalysisScope(previousQuery?.queryKey?.[2], analysisParams) ? previous : undefined
+    ),
+    staleTime: 30_000,
   })
-  const conflictsQuery = useQuery({
-    queryKey: ['i3-conflicts', selected?.id, period],
-    queryFn: () => platformApi.conflicts(selected.id, { period, limit: 200 }),
-    enabled: Boolean(selected?.id),
-    refetchInterval: 30_000,
-  })
-  const trajectories = trajectoriesQuery.data || []
-  const conflicts = conflictsQuery.data || []
-  const periodLabel = period === 'all' ? '全部验收数据' : period === '24h' ? '最近 24 小时' : '最近 1 小时'
-  const intersectionResult = intersectionsQuery.isLoading
-    ? '路口加载中'
-    : intersectionsQuery.error ? '路口加载失败' : `${projectIntersections.length} 个路口`
-  const trajectoryResult = intersectionsQuery.isLoading
-    ? '轨迹等待路口'
-    : trajectoriesQuery.isLoading ? '轨迹加载中' : trajectoriesQuery.error ? '轨迹加载失败' : `${trajectories.length} 条轨迹`
-  const selectedTrack = trajectories.find((item) => item.id === selectedTrackId) || trajectories[0] || null
-  useEffect(() => { if (!selectedTrackId && selectedTrack) setSelectedTrackId(selectedTrack.id) }, [selectedTrackId, selectedTrack])
+  const analysis = analysisQuery.data || { query: {}, quality: {}, timeline: [], movement_ranking: [], class_summary: { business: [], yolo: [] }, slice_tracks: [], conflicts: [] }
+  const timeline = analysis.timeline || []
+  useEffect(() => {
+    if (!analysis.query?.start_at) return
+    if (!analysisWindow) setAnalysisWindow({ start: analysis.query.start_at, end: analysis.query.end_at })
+    if (!sliceWindow) setSliceWindow({ start: analysis.query.slice_start_at, end: analysis.query.slice_end_at })
+  }, [analysis.query?.start_at, analysis.query?.end_at, analysis.query?.slice_start_at, analysis.query?.slice_end_at, analysisWindow, sliceWindow])
+
+  const currentSliceIndex = Math.max(0, timeline.findIndex((item) => item.start_at === (sliceWindow?.start || analysis.query?.slice_start_at)))
+  const displayedSliceIndex = Math.max(0, timeline.findIndex((item) => item.start_at === analysis.query?.slice_start_at))
+  const selectSlice = (index) => {
+    const bucket = timeline[index]
+    if (bucket) {
+      setSliceInteractive(true)
+      setSliceWindow({ start: bucket.start_at, end: bucket.end_at })
+    }
+  }
+  useEffect(() => {
+    if (!playing || analysisQuery.isFetching || timeline.length < 2) return undefined
+    const nextIndex = nextPlayableSliceIndex(timeline, displayedSliceIndex)
+    const nextBucket = timeline[nextIndex]
+    if (!nextBucket || !selected?.id || !analysisWindow) return undefined
+    const nextParams = {
+      ...analysisParams,
+      start_at: analysisWindow.start,
+      end_at: analysisWindow.end,
+      slice_start_at: nextBucket.start_at,
+      slice_end_at: nextBucket.end_at,
+    }
+    queryClient.prefetchQuery({
+      queryKey: ['trajectory-analysis', selected.id, nextParams],
+      queryFn: () => platformApi.trajectoryAnalysis(selected.id, nextParams),
+      staleTime: 30_000,
+    })
+    return undefined
+  }, [analysisQuery.isFetching, analysisWindow, displayedSliceIndex, playing, queryClient, selected?.id, timeline])
+
+  useEffect(() => {
+    if (!playing || analysisQuery.isFetching || timeline.length < 2) return undefined
+    if (analysis.query?.slice_start_at !== sliceWindow?.start) return undefined
+    const timer = window.setTimeout(() => {
+      const current = timeline.findIndex((item) => item.start_at === sliceWindow?.start)
+      const next = nextPlayableSliceIndex(timeline, current)
+      if (next < 0) {
+        setPlaying(false)
+        return
+      }
+      setSliceInteractive(true)
+      setSliceWindow({ start: timeline[next].start_at, end: timeline[next].end_at })
+    }, 1400 / playbackSpeed)
+    return () => window.clearTimeout(timer)
+  }, [analysis.query?.slice_start_at, analysisQuery.isFetching, playbackSpeed, playing, timeline, sliceWindow?.start])
+
+  const tracks = analysis.slice_tracks || []
+  const conflicts = analysis.conflicts || []
+  const selectedTrack = tracks.find((item) => item.id === selectedTrackId) || tracks[0] || null
+  useEffect(() => {
+    if (selectedTrack && selectedTrack.id !== selectedTrackId) setSelectedTrackId(selectedTrack.id)
+  }, [selectedTrack, selectedTrackId])
+  const movementColor = new Map((analysis.movement_ranking || []).map((item, index) => [item.movement_key, index % MOVEMENT_COLORS.length]))
+  const sortedMovements = useMemo(() => {
+    const movements = analysis.movement_ranking || []
+    if (movementSort === 'business') return movements
+    const originalIndex = new Map(movements.map((item, index) => [item.movement_key, index]))
+    const field = movementSort === 'vehicle_count' ? 'vehicle_count' : movementSort === 'avg_speed' ? 'avg_speed_kmh' : 'conflict_count'
+    return [...movements].sort((left, right) => {
+      const leftValue = Number(left[field])
+      const rightValue = Number(right[field])
+      const leftValid = Number.isFinite(leftValue)
+      const rightValid = Number.isFinite(rightValue)
+      if (leftValid !== rightValid) return leftValid ? -1 : 1
+      if (leftValid && rightValid && leftValue !== rightValue) return rightValue - leftValue
+      return originalIndex.get(left.movement_key) - originalIndex.get(right.movement_key)
+    })
+  }, [analysis.movement_ranking, movementSort])
+  const mapTracks = tracks.map((track) => ({ ...track, color_index: movementColor.get(track.movement_key) || 0, selected: track.id === selectedTrack?.id }))
   const availableMissions = (missionsQuery.data || []).filter((item) => !selected?.id || item.inter_id === selected.id)
   const selectIntersection = (item) => {
+    if (!item) return
     setSelectedId(item.id)
-    const params = new URLSearchParams(location.search)
-    params.set('intersection_id', item.id)
-    navigate(`${location.pathname}?${params.toString()}`, { replace: true })
-  }
-  const selectLayer = (value) => {
-    setLayer(value)
-    const params = new URLSearchParams(location.search)
-    params.set('layer', value)
-    if (selected) params.set('intersection_id', selected.id)
-    navigate(`${location.pathname}?${params.toString()}`, { replace: true })
   }
   const selectPeriod = (value) => {
     setPeriod(value)
-    const params = new URLSearchParams(location.search)
-    params.set('period', value)
-    if (selected) params.set('intersection_id', selected.id)
-    navigate(`${location.pathname}?${params.toString()}`, { replace: true })
   }
-  const loading = intersectionsQuery.isLoading || trajectoriesQuery.isLoading || conflictsQuery.isLoading
-  const error = intersectionsQuery.error || trajectoriesQuery.error || conflictsQuery.error
-  const retry = () => {
-    if (intersectionsQuery.error) intersectionsQuery.refetch()
-    if (trajectoriesQuery.error) trajectoriesQuery.refetch()
-    if (conflictsQuery.error) conflictsQuery.refetch()
+  const toggleMovement = (movementKey) => {
+    setSelectedMovement((value) => value === movementKey ? null : movementKey)
+    setSelectedTrackId(null)
+    setSliceWindow(null)
+    setSliceInteractive(false)
+    setPlaying(false)
   }
+  const togglePlayback = () => {
+    if (playing) {
+      setPlaying(false)
+      return
+    }
+    if (timeline.length > 1 && nextPlayableSliceIndex(timeline, currentSliceIndex) < 0) {
+      selectSlice(firstPlayableSliceIndex(timeline))
+    }
+    setPlaying(true)
+  }
+  const intersectionResult = intersectionsQuery.isLoading ? '路口加载中' : intersectionsQuery.error ? '路口加载失败' : `${projectIntersections.length} 个路口`
+  const trajectoryResult = intersectionsQuery.isLoading ? '轨迹等待路口' : analysisQuery.isLoading ? '轨迹分析中' : analysisQuery.error ? '轨迹分析失败' : `${analysis.quality?.total_tracks || 0} 条轨迹`
+  const periodLabel = period === 'latest30m' ? '最新数据段 30 分钟' : period === 'all' ? '全部验收数据' : period === '24h' ? '最近 24 小时' : '最近 1 小时'
+  const loading = intersectionsQuery.isLoading || analysisQuery.isLoading
+  const error = intersectionsQuery.error || analysisQuery.error
+  const quality = analysis.quality || {}
+
   return <AppShell pageTitle='轨迹研判'>
-    <PageHeader eyebrow='S1 / S2 / S5' title='轨迹研判' description='按任务、数据源、车型和方向回放 road9 真实轨迹，并从轨迹追溯事件与检测运行。' meta={`${periodLabel} · ${trajectoryResult}`} />
-    <FilterBar result={`${intersectionResult} · ${trajectoryResult}`} onReset={() => { setMissionId('all'); setSourceProfileId('all'); setVehicleClass('all'); setTurnBehavior('all') }}><label>路口<select aria-label='路口' value={selected?.id || ''} onChange={(event) => selectIntersection(projectIntersections.find((item) => item.id === event.target.value))}>{projectIntersections.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label>任务<select aria-label='轨迹任务' value={missionId} onChange={(event) => setMissionId(event.target.value)}><option value='all'>全部任务</option>{availableMissions.map((item) => <option key={item.id} value={item.id}>{item.id}</option>)}</select></label><label>数据源<select aria-label='轨迹数据源' value={sourceProfileId} onChange={(event) => setSourceProfileId(event.target.value)}><option value='all'>全部数据源</option>{(sourcesQuery.data || []).map((item) => <option key={item.profile_id} value={item.profile_id}>{item.profile_id}</option>)}</select></label><label>车型<select aria-label='车辆类型' value={vehicleClass} onChange={(event) => setVehicleClass(event.target.value)}><option value='all'>全部车型</option><option value='motor'>机动车</option><option value='non_motor'>非机动车</option><option value='unknown'>未分类</option></select></label><label>方向<select aria-label='转向类型' value={turnBehavior} onChange={(event) => setTurnBehavior(event.target.value)}><option value='all'>全部方向</option><option value='straight'>直行</option><option value='left_turn'>左转</option><option value='right_turn'>右转</option><option value='u_turn'>掉头</option></select></label><label>时间窗口<select aria-label='时间窗口' value={period} onChange={(event) => selectPeriod(event.target.value)}><option value='all'>全部验收数据</option><option value='1h'>最近 1 小时</option><option value='24h'>最近 24 小时</option></select></label><Segmented value={layer} onChange={selectLayer} options={[{ value: 'trajectory', label: '历史轨迹' }, { value: 'conflict', label: '事件回放' }, { value: 'hotspot', label: '风险热区' }]} /></FilterBar>
-    {loading && <QualityNotice tone='info' title='正在加载'>{intersectionsQuery.isLoading ? '正在读取项目路口，随后恢复 road9 真实轨迹。' : '正在从 road9 恢复轨迹与冲突事实。'}</QualityNotice>}
-    {error && <QualityNotice tone='warning' title='历史数据不可用'>{apiErrorMessage(error)} <button className='secondary-button' onClick={retry}>重新加载真实数据</button></QualityNotice>}
+    <PageHeader eyebrow='交通运行诊断' title='历史轨迹分析' description='先看时间片，再按流向和原始识别分类下钻；地图只展示当前切片，避免全量轨迹叠加造成误判。' meta={`${periodLabel} · ${trajectoryResult}`} />
+    <FilterBar result={`${intersectionResult} · ${trajectoryResult}`} onReset={() => { setMissionId('all'); setSourceProfileId('all'); setVehicleClass('all'); setYoloClassId('all'); setTurnBehavior('all'); setSelectedMovement(null); setSelectedTrackId(null); setMovementSort('business') }}>
+      <label>路口<select aria-label='路口' value={selected?.id || ''} onChange={(event) => selectIntersection(projectIntersections.find((item) => item.id === event.target.value))}>{projectIntersections.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+      <label>任务<select aria-label='轨迹任务' value={missionId} onChange={(event) => setMissionId(event.target.value)}><option value='all'>全部任务</option>{availableMissions.map((item) => <option key={item.id} value={item.id}>{item.id}</option>)}</select></label>
+      <label>数据源<select aria-label='轨迹数据源' value={sourceProfileId} onChange={(event) => setSourceProfileId(event.target.value)}><option value='all'>全部数据源</option>{(sourcesQuery.data || []).map((item) => <option key={item.profile_id} value={item.profile_id}>{item.display_name || item.profile_id}</option>)}</select></label>
+      <label>业务车型<select aria-label='车辆类型' value={vehicleClass} onChange={(event) => setVehicleClass(event.target.value)}><option value='all'>全部车型</option><option value='motor'>机动车</option><option value='non_motor'>非机动车</option><option value='unknown'>未分类</option></select></label>
+      <label>原始 YOLO<select aria-label='原始 YOLO 分类' value={yoloClassId} onChange={(event) => setYoloClassId(event.target.value)}><option value='all'>全部原始类别</option>{(analysis.class_summary?.yolo || []).map((item) => <option key={`${item.class_id}-${item.class_name}`} value={String(item.class_id)}>#{item.class_id} {item.class_name || 'unknown'}</option>)}</select></label>
+      <label>方向<select aria-label='转向类型' value={turnBehavior} onChange={(event) => setTurnBehavior(event.target.value)}><option value='all'>全部方向</option><option value='straight'>直行</option><option value='left_turn'>左转</option><option value='right_turn'>右转</option><option value='u_turn'>掉头</option></select></label>
+      <label>时间窗口<select aria-label='时间窗口' value={period} onChange={(event) => selectPeriod(event.target.value)}><option value='latest30m'>最新数据段 30 分钟</option><option value='all'>全部验收数据</option><option value='1h'>当前时间最近 1 小时</option><option value='24h'>当前时间最近 24 小时</option></select></label>
+    </FilterBar>
+    {loading && !analysisQuery.data && <QualityNotice tone='info' title='正在建立研判窗口'>{intersectionsQuery.isLoading ? '正在读取项目路口。' : '正在聚合轨迹、流向与冲突事实。'}</QualityNotice>}
+    {error && <QualityNotice tone='warning' title='历史轨迹分析不可用'>{apiErrorMessage(error)} <button className='secondary-button' onClick={() => { intersectionsQuery.refetch(); analysisQuery.refetch() }}>重新加载</button></QualityNotice>}
     {!loading && !error && !selected && <QualityNotice tone='info' title='暂无路口'>尚未登记项目路口。</QualityNotice>}
-    {selected && <div className='gis-layout'><Panel className='gis-map-panel' title={selected.name} subtitle={`inter_id ${selected.id} · ${missionId === 'all' ? '跨任务' : missionId}`}>{layer === 'hotspot' ? <CityMap points={mapIntersections} selectedId={selected.id} onSelect={selectIntersection} showHeat={conflicts.length > 0} /> : <MonitoringBevMap centerLat={selected.lat} centerLon={selected.lon} trajectories={trajectories} embedded label={`${selected.name}真实轨迹投放图`} />}{(!Number.isFinite(selected.lat) || !Number.isFinite(selected.lon)) && <QualityNotice tone='warning' title='坐标尚未冻结'>使用轨迹自身 ENU 锚点投放；不伪造项目路口坐标。</QualityNotice>}{layer === 'hotspot' && conflicts.length === 0 && <QualityNotice tone='info' title='无热区输入'>当前窗口没有真实冲突事实。</QualityNotice>}<div className='trajectory-timeline'><span>{trajectories.at(-1)?.started_at || '窗口起点'}</span><i><b style={{ width: selectedTrack ? '100%' : '0%' }} /></i><span>{trajectories[0]?.ended_at || '窗口终点'}</span></div></Panel>
-      <div className='gis-sidebar'><Panel title='空间对象摘要'><div className='summary-quad'><div><strong>{trajectories.length}</strong><span>历史轨迹</span></div><div><strong>{trajectories.filter((item) => item.trajectory_world_m?.length > 1).length}</strong><span>世界坐标</span></div><div><strong>{conflicts.length}</strong><span>真实冲突</span></div><div><strong>{trajectories.filter((item) => item.quality_status !== 'verified').length}</strong><span>unverified</span></div></div></Panel>{selectedTrack ? <Panel title={`Track #${selectedTrack.track_id}`} subtitle={selectedTrack.id}><InfoRow label='车型 / 方向' value={`${selectedTrack.vehicle_class || 'unknown'} / ${selectedTrack.turn_behavior || '未分类'}`} /><InfoRow label='时间' value={`${selectedTrack.started_at || '—'} → ${selectedTrack.ended_at || '—'}`} /><InfoRow label='时长 / 点数' value={`${selectedTrack.duration_sec ?? '—'}s / ${selectedTrack.trajectory_px?.length || 0}`} /><InfoRow label='平均 / 最高速度' value={`${selectedTrack.avg_speed_kmh ?? '—'} / ${selectedTrack.max_speed_kmh ?? '—'} km/h`} /><InfoRow label='任务' value={selectedTrack.mission_id || '—'} /><InfoRow label='数据源' value={selectedTrack.source_profile_id || '—'} /><InfoRow label='路网 / 质量' value={`${selectedTrack.road_data_version || '—'} / ${selectedTrack.quality_status || '—'}`} badge={selectedTrack.road_context_status === 'complete' ? 'good' : 'degraded'} /></Panel> : <Panel title='轨迹详情'><span className='muted'>当前筛选没有轨迹</span></Panel>}<Panel title='轨迹清单' subtitle='点击同步地图与详情'><div className='trajectory-list'>{trajectories.slice(0, 12).map((track) => <button className={`compact-event ${selectedTrack?.id === track.id ? 'selected' : ''}`} key={track.id} onClick={() => setSelectedTrackId(track.id)}><StatusBadge value={track.quality_status || 'unverified'} /><div><strong>Track #{track.track_id}</strong><span>{track.vehicle_class || 'unknown'} · {track.turn_behavior || '未分类'} · {track.duration_sec ?? '—'}s</span></div></button>)}</div></Panel><Panel title='关联事件'>{conflicts.length === 0 ? <span className='muted'>当前窗口无真实冲突</span> : conflicts.slice(0, 3).map((item) => { const event = conflictEvent(item); return <button className='compact-event' key={event.id} onClick={() => navigate(`/events?event_id=${event.id}`)}><StatusBadge value={event.severity} /><div><strong>{event.title}</strong><span>{event.metric} · {event.occurredAt}</span></div></button> })}</Panel></div></div>}
+    {selected && <div className='trajectory-analysis-page'>
+      <div className='trajectory-analysis-kpis'>
+        <div><span>分析轨迹</span><strong>{quality.total_tracks || 0}</strong><small>全窗口事实，不受地图上限影响</small></div>
+        <div><span>可回放轨迹</span><strong>{quality.replayable_tracks || 0}</strong><small>空间覆盖 {Math.round((quality.spatial_coverage_ratio || 0) * 100)}%</small></div>
+        <div><span>识别流向</span><strong>{analysis.movement_ranking?.length || 0}</strong><small>{selectedMovement ? '已聚焦 1 个流向' : '点击排名可聚焦'}</small></div>
+        <div><span>当前切片冲突</span><strong>{conflicts.length}</strong><small>未归因 {quality.unattributed_conflicts || 0} 条</small></div>
+      </div>
+      <div className='trajectory-quality-notices'>
+        {!loading && !error && quality.total_tracks === 0 && <QualityNotice tone='info' title='当前范围无完成轨迹'>请扩大时间窗口或清除车型、任务与数据源筛选。 <button className='secondary-button' onClick={() => { setPeriod('all'); setMissionId('all'); setSourceProfileId('all'); setVehicleClass('all'); setYoloClassId('all'); setTurnBehavior('all') }}>清除并查看全部</button></QualityNotice>}
+        {quality.truncated && <QualityNotice tone='warning' title='当前时间片已限量'>仅展示 {quality.returned_tracks || 0} 条可回放轨迹；请选择流向或原始类别缩小范围。 <button className='secondary-button' onClick={() => setAnalysisTab('track')}>查看当前片轨迹</button></QualityNotice>}
+        {(quality.spatial_coverage_ratio ?? 1) < 1 && <QualityNotice tone='warning' title='空间覆盖不足'>{quality.total_tracks - quality.replayable_tracks} 条轨迹缺少可投放的世界坐标。 <button className='secondary-button' onClick={() => setAnalysisTab('track')}>查看可回放轨迹</button></QualityNotice>}
+        {(analysis.movement_ranking || []).some((item) => item.movement_source !== 'road_context') && <QualityNotice tone='info' title='部分流向使用降级证据'>“轨迹方位推断”与“仅按转向降级”均不是权威路网匹配。 <button className='secondary-button' onClick={() => setAnalysisTab('movement')}>查看来源标记</button></QualityNotice>}
+        {(quality.unattributed_conflicts || 0) > 0 && <QualityNotice tone='warning' title='存在未归因冲突'>{quality.unattributed_conflicts} 条冲突因缺少同一任务或管道血缘，未计入流向排名。 <button className='secondary-button' onClick={() => navigate('/events')}>查看事件中心</button></QualityNotice>}
+        {(quality.duplicate_tracks_omitted || 0) > 0 && <QualityNotice tone='info' title='重复完成轨迹已去重'>{quality.duplicate_tracks_omitted} 条同血缘重复记录未进入排名和占比。</QualityNotice>}
+      </div>
+      {(!Number.isFinite(selected.lat) || !Number.isFinite(selected.lon)) && <QualityNotice tone='warning' title='坐标尚未冻结'>缺少可信 GCJ-02 坐标时不投放地图。</QualityNotice>}
+      <div className='trajectory-analysis-workspace'>
+        <section className='trajectory-map-card'>
+          <header><div><strong>{selected.name}</strong><span>当前时间片 · {analysisTime(analysis.query?.slice_start_at || sliceWindow?.start)}—{analysisTime(analysis.query?.slice_end_at || sliceWindow?.end)}</span></div><div className={`analysis-quality ${quality.status || 'empty'}`}>{quality.status === 'complete' ? '数据完整' : quality.status === 'degraded' ? '部分可回放' : '暂无数据'}</div></header>
+          <div className='trajectory-map-stage'>
+            <MonitoringBevMap centerLat={selected.lat} centerLon={selected.lon} trajectories={mapTracks} embedded showEndpoints={false} label={`${selected.name}当前时间片真实轨迹投放图`} />
+            <div className='movement-legend'>{sortedMovements.slice(0, 5).map((item) => <span key={item.movement_key}><i style={{ background: MOVEMENT_COLORS[movementColor.get(item.movement_key) || 0] }} />{item.movement_label}</span>)}</div>
+            {tracks.length === 0 && <div className='map-empty-state'><Crosshair size={24} /><strong>当前时间片无可回放轨迹</strong><span>拖动下方时间轴查看其他片段</span></div>}
+          </div>
+          <div className='analysis-timeline'>
+            <div className='timeline-actions'><button className='timeline-play' aria-label={playing ? '暂停历史回放' : '播放历史回放'} onClick={togglePlayback}>{playing ? <Pause size={14} weight='fill' /> : <Play size={14} weight='fill' />}</button><select aria-label='回放速度' value={String(playbackSpeed)} onChange={(event) => setPlaybackSpeed(Number(event.target.value))}><option value='0.5'>0.5×</option><option value='1'>1×</option><option value='2'>2×</option><option value='4'>4×</option></select></div>
+            <div className='timeline-window'><strong>{analysisTime(analysis.query?.start_at, true)}</strong><span>—</span><strong>{analysisTime(analysis.query?.end_at, true)}</strong><small>{analysis.query?.bucket_sec || 10}s / 片</small></div>
+            <div className='timeline-control'><div className='timeline-bars'>{timeline.map((item, index) => <i key={item.start_at} className={index === currentSliceIndex ? 'active' : ''} style={{ height: item.active_tracks > 0 ? `${Math.max(12, Math.min(100, item.active_tracks * 6))}%` : '0%' }} />)}</div><input aria-label='历史时间片' type='range' min='0' max={Math.max(0, timeline.length - 1)} value={Math.min(currentSliceIndex, Math.max(0, timeline.length - 1))} onChange={(event) => selectSlice(Number(event.target.value))} /></div>
+            <div className='timeline-now' aria-live='polite'><strong>{analysisTime(analysis.query?.slice_start_at || sliceWindow?.start)}</strong><span>{tracks.length} 条轨迹 · {conflicts.length} 个冲突</span>{analysisQuery.isPlaceholderData && <small>加载下一片…</small>}</div>
+          </div>
+        </section>
+        <aside className='trajectory-analysis-sidebar'>
+          <div className='analysis-tabs' role='tablist' aria-label='轨迹研判维度'><button role='tab' aria-selected={analysisTab === 'movement'} className={analysisTab === 'movement' ? 'active' : ''} onClick={() => setAnalysisTab('movement')}>流向排名</button><button role='tab' aria-selected={analysisTab === 'class'} className={analysisTab === 'class' ? 'active' : ''} onClick={() => setAnalysisTab('class')}>原始分类</button><button role='tab' aria-selected={analysisTab === 'track'} className={analysisTab === 'track' ? 'active' : ''} onClick={() => setAnalysisTab('track')}>代表轨迹</button></div>
+          {analysisTab === 'movement' && <div className='movement-ranking' role='tabpanel'><div className='analysis-sidebar-intro'><strong>流向排名</strong><span>有效流向优先；可切换车辆数、均速和冲突排序，当前筛选保持不变。</span></div><div className='movement-sort' role='group' aria-label='流向排序'><button aria-label='按业务优先级排序' aria-pressed={movementSort === 'business'} onClick={() => setMovementSort('business')}>业务优先</button><button aria-label='按车辆数排序' aria-pressed={movementSort === 'vehicle_count'} onClick={() => setMovementSort('vehicle_count')}>车辆数</button><button aria-label='按均速排序' aria-pressed={movementSort === 'avg_speed'} onClick={() => setMovementSort('avg_speed')}>均速</button><button aria-label='按冲突排序' aria-pressed={movementSort === 'conflict'} onClick={() => setMovementSort('conflict')}>冲突</button></div>{sortedMovements.map((item, index) => <button key={item.movement_key} className={selectedMovement === item.movement_key ? 'selected' : ''} aria-label={`${item.movement_label} ${item.vehicle_count} 辆`} onClick={() => toggleMovement(item.movement_key)}><b>{index + 1}</b><i style={{ background: MOVEMENT_COLORS[movementColor.get(item.movement_key) || 0] }} /><div><strong>{item.movement_label}</strong><span>{MOVEMENT_SOURCE_LABELS[item.movement_source] || item.movement_source} · {item.avg_speed_kmh ?? '—'} km/h · P85 {item.p85_speed_kmh ?? '—'}</span></div><em>{item.vehicle_count}<small>辆</small></em><mark className={item.conflict_count ? 'risk' : ''}>{item.conflict_count} 冲突</mark></button>)}</div>}
+          {analysisTab === 'class' && <div className='class-analysis'><div className='analysis-sidebar-intro'><strong>原始目标分类</strong><span>保留 YOLO 输出并与业务车型并列，便于发现映射偏差。</span></div><h4>业务分类</h4>{(analysis.class_summary?.business || []).map((item) => <div className='class-row' key={item.class_name}><span>{BUSINESS_CLASS_LABELS[item.class_name] || item.class_name}</span><strong>{item.count}</strong></div>)}<h4>检测器原始分类</h4>{(analysis.class_summary?.yolo || []).map((item) => <button className='class-row raw' key={`${item.class_id}-${item.class_name}`} onClick={() => setYoloClassId(String(item.class_id))}><span><b>YOLO {item.class_name || 'unknown'}</b><small>class #{item.class_id ?? '—'}</small></span><strong>{item.count}</strong><em>{item.model_id || '模型版本缺失'}</em></button>)}{analysis.class_summary?.unknown_yolo_name_count > 0 && <QualityNotice tone='warning' title='原始类名缺失'>{analysis.class_summary.unknown_yolo_name_count} 条轨迹仅有 class id。</QualityNotice>}</div>}
+          {analysisTab === 'track' && <div className='representative-tracks'><div className='analysis-sidebar-intro'><strong>当前时间片轨迹</strong><span>点击后在地图高亮，并展示原始识别证据。</span></div>{tracks.slice(0, 20).map((track) => <button key={track.id} className={selectedTrack?.id === track.id ? 'selected' : ''} onClick={() => setSelectedTrackId(track.id)}><i style={{ background: MOVEMENT_COLORS[movementColor.get(track.movement_key) || 0] }} /><div><strong>Track #{track.track_id}</strong><span>{track.movement_label} · {track.avg_speed_kmh ?? '—'} km/h</span><small>{trackLineageLabel(track)}</small><small>YOLO {track.yolo_class_name || 'unknown'} #{track.yolo_class_id ?? '—'} → {BUSINESS_CLASS_LABELS[track.vehicle_class] || track.vehicle_class || 'unknown'}</small></div></button>)}</div>}
+        </aside>
+      </div>
+      <div className='trajectory-evidence-grid'>
+        <Panel title={selectedTrack ? `Track #${selectedTrack.track_id} 识别与运行证据` : '轨迹证据'} subtitle={selectedTrack?.movement_label}>{selectedTrack ? <><InfoRow label='业务车型 / 方向' value={`${BUSINESS_CLASS_LABELS[selectedTrack.vehicle_class] || selectedTrack.vehicle_class || 'unknown'} / ${selectedTrack.turn_behavior || '未分类'}`} /><InfoRow label='原始分类' value={`YOLO ${selectedTrack.yolo_class_name || 'unknown'} (#${selectedTrack.yolo_class_id ?? '—'})`} /><InfoRow label='模型 / 映射' value={`${selectedTrack.yolo_model_id || '—'} / ${selectedTrack.class_mapping_version || '—'}`} /><InfoRow label='平均 / 最高速度' value={`${selectedTrack.avg_speed_kmh ?? '—'} / ${selectedTrack.max_speed_kmh ?? '—'} km/h`} /><InfoRow label='任务 / 数据源' value={`${selectedTrack.mission_id || '—'} / ${selectedTrack.source_profile_id || '—'}`} /><InfoRow label='路网 / 质量' value={`${selectedTrack.road_data_version || '—'} / ${selectedTrack.quality_status || '—'}`} badge={selectedTrack.quality_status === 'verified' ? 'good' : 'degraded'} /></> : <span className='muted'>当前时间片没有轨迹。</span>}</Panel>
+        <Panel title='当前时间片关联冲突' subtitle='只展示同一任务或管道血缘可归因事件'>{conflicts.length === 0 ? <span className='muted'>当前时间片无可归因冲突</span> : conflicts.map((item) => <button className='compact-event' key={item.id} onClick={() => navigate(`/events?event_id=${item.id}`)}><StatusBadge value={item.severity || 'warning'} /><div><strong>{item.conflict_scene || '冲突候选'}</strong><span>TTC {item.ttc_sec ?? '—'}s · {analysisTime(item.occurred_at)}</span></div></button>)}</Panel>
+      </div>
+    </div>}
   </AppShell>
 }
 

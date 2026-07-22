@@ -39,3 +39,37 @@ def test_invalidate_all_removes_active_annotations_and_archives_exports(tmp_path
     persisted = json.loads(db_path.read_text(encoding="utf-8"))
     assert persisted["annotations"] == {}
     assert persisted["invalidated_annotations"][0]["status"] == "invalidated"
+
+
+def test_persisted_keyframe_task_retains_registration_context_and_refreshes_idempotently(tmp_path):
+    db_path = tmp_path / "lane_annotation_db.json"
+    store = LaneAnnotationStore(str(db_path))
+
+    created = store.ensure_task_from_snapshot(
+        "INT-1",
+        b"jpeg",
+        1920,
+        1080,
+        "FRM-1",
+        source_profile_id="SRC-1",
+        homography_pixel_to_enu=[[0.1, 0, -10], [0, 0.1, -5], [0, 0, 1]],
+    )
+    refreshed = store.ensure_task_from_snapshot(
+        "INT-1",
+        b"new-jpeg-is-not-written-for-the-same-frame",
+        1920,
+        1080,
+        "FRM-1",
+        source_profile_id="SRC-2",
+        homography_pixel_to_enu=[[0.2, 0, -20], [0, 0.2, -10], [0, 0, 1]],
+    )
+
+    assert created["task_id"] == refreshed["task_id"]
+    assert refreshed["trigger"] == "persisted_survey_keyframe"
+    assert refreshed["source_profile_id"] == "SRC-2"
+    assert refreshed["homography_pixel_to_enu"] == [
+        [0.2, 0, -20],
+        [0, 0.2, -10],
+        [0, 0, 1],
+    ]
+    assert len(store.list_tasks()) == 1

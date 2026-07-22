@@ -63,20 +63,39 @@ class SpeedEstimationNode:
             if len(track.position_history) > self.history_frames:
                 track.position_history = track.position_history[-self.history_frames:]
 
-            if len(track.position_history) < 3:
+            world_history = getattr(track, "position_history_enu_m", [])
+            if len(world_history) > self.history_frames:
+                track.position_history_enu_m = world_history[-self.history_frames:]
+                world_history = track.position_history_enu_m
+
+            if len(track.position_history) < 3 and len(world_history) < 3:
                 continue
 
             # T-202: 线性回归速度估算
             # 提取时间戳和坐标
-            t_arr = np.array([p[2] for p in track.position_history])
-            x_arr = np.array([p[0] for p in track.position_history])
-            y_arr = np.array([p[1] for p in track.position_history])
+            source_history = world_history if len(world_history) >= 3 else track.position_history
+            t_arr = np.array([p[2] for p in source_history])
+            x_arr = np.array([p[0] for p in source_history])
+            y_arr = np.array([p[1] for p in source_history])
 
             dt_total = t_arr[-1] - t_arr[0]
             if dt_total < 0.05:
                 continue
 
-            if has_H:
+            if len(world_history) >= 3:
+                pts_world = np.column_stack([x_arr, y_arr])
+                t_centered = t_arr - t_arr[0]
+                slope_e = np.polyfit(t_centered, pts_world[:, 0], 1)[0]
+                slope_n = np.polyfit(t_centered, pts_world[:, 1], 1)[0]
+                true_vel = np.array([slope_e, slope_n])
+                speed_ms = float(np.linalg.norm(true_vel))
+                track.velocity_ms = true_vel
+                track.speed_kmh = speed_ms * 3.6
+                if speed_ms > 0.5:
+                    track.heading_angle = math.degrees(
+                        math.atan2(true_vel[1], true_vel[0])
+                    )
+            elif has_H:
                 # T-202: 在世界坐标系做线性回归
                 # 先用当前帧H转换所有历史点到世界坐标系
                 pts_px = np.column_stack([x_arr, y_arr])
@@ -93,7 +112,7 @@ class SpeedEstimationNode:
 
                 apparent_vel = np.array([slope_e, slope_n])  # m/s, 无人机相对速度
 
-                # 运动补偿：减去无人机速度矢量
+                # Legacy fallback: all points share the current camera pose.
                 if drone_vel is not None and not is_hovering:
                     true_vel = apparent_vel - drone_vel
                     speed_ms = float(np.linalg.norm(true_vel))

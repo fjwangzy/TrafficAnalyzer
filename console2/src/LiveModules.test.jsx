@@ -30,8 +30,14 @@ const liveMocks = vi.hoisted(() => ({
     calibrationCoverage: vi.fn(),
     laneTasks: vi.fn(),
     laneTaskImage: vi.fn(),
-    laneAnnotations: vi.fn(),
-    saveLaneAnnotation: vi.fn(),
+    createLaneTaskFromSurveyFrame: vi.fn(),
+    surveyTasks: vi.fn(),
+    surveyBatches: vi.fn(),
+    surveyFrames: vi.fn(),
+    bootstrapChannelizedMap: vi.fn(),
+    fitChannelizedMapFromImage: vi.fn(),
+    verifyVisualRegistration: vi.fn(),
+    publishChannelizedMap: vi.fn(),
   },
 }))
 
@@ -66,7 +72,7 @@ vi.mock('./components/CityMap', () => ({
 }))
 
 vi.mock('./components/MonitoringBevMap', () => ({
-  MonitoringBevMap: ({ compact, label, trajectories = [] }) => <div role='img' aria-label={label} data-compact={compact ? 'true' : 'false'} data-trajectory-count={trajectories.length}>OpenLayers BEV 地图</div>,
+  MonitoringBevMap: ({ compact, label, trajectories = [] }) => <div role='img' aria-label={label} data-compact={compact ? 'true' : 'false'} data-trajectory-count={trajectories.length}>高德 GCJ-02 轨迹地图</div>,
 }))
 
 import { RouterApp } from './RouterApp'
@@ -95,8 +101,8 @@ function mockSuccessfulApis() {
     { id: 'C-CPA', source_profile_id: 'SRC-1', prediction_type: 'same_time_cpa', distance_m: 0.4, motor_id: 7, non_motor_id: 8, severity: 'warning', title: '实验 CPA 事件', occurred_at: '2026-07-14T09:59:57Z' },
   ])
   liveMocks.api.trajectories.mockResolvedValue([
-    { id: 'TRK-HIST-1', track_id: 96, source_profile_id: 'SRC-1', pipeline_id: 'P-old', trajectory_world_m: [[0, 0], [5, 8], [12, 16]], world_anchor_lat_lon: [36.7, 117.0] },
-    { id: 'TRK-HIST-2', track_id: 88, source_profile_id: 'SRC-1', pipeline_id: 'P-old', trajectory_world_m: [[4, 0], [8, 7], [11, 15]], world_anchor_lat_lon: [36.7, 117.0] },
+    { id: 'TRK-HIST-1', track_id: 96, source_profile_id: 'SRC-1', pipeline_id: 'P-old', trajectory_gcj02: [[117, 36.7], [117.0001, 36.7001], [117.0002, 36.7002]], anchor_gcj02: [117, 36.7] },
+    { id: 'TRK-HIST-2', track_id: 88, source_profile_id: 'SRC-1', pipeline_id: 'P-old', trajectory_gcj02: [[117.0001, 36.7], [117.0002, 36.7001], [117.0003, 36.7002]], anchor_gcj02: [117, 36.7] },
   ])
   liveMocks.api.acknowledgeAlert.mockResolvedValue({ id: 'A-1', status: 'acknowledged' })
   liveMocks.api.createMission.mockResolvedValue({ id: 'MSN-DEMO-1', status: 'running' })
@@ -111,10 +117,18 @@ function mockSuccessfulApis() {
   liveMocks.api.calibrationSummary.mockResolvedValue({ total: 1, ok: 1 })
   liveMocks.api.calibrationRecords.mockResolvedValue([{ key: 'CAL-1', intersection_id: 'INT-1', quality: { score: 0.95 }, reprojection_error: 1.2 }])
   liveMocks.api.calibrationCoverage.mockResolvedValue([{ key: 'INT-1-H112', altitude: 112, pitch: -89, quality: 'ok' }])
-  liveMocks.api.laneTasks.mockResolvedValue([{ task_id: 'TASK-1', intersection_id: 'INT-1', image_width: 960, image_height: 540, lane_count: 0, roads: { north: [1, 2, 3] }, status: 'pending' }])
+  const laneTask = { task_id: 'TASK-1', intersection_id: 'INT-1', source_frame_id: 'FRM-LANE-1', source_profile_id: 'SRC-1', homography_pixel_to_enu: [[0.1, 0, -10], [0, 0.1, -5], [0, 0, 1]], image_width: 960, image_height: 540, lane_count: 0, roads: { north: [1, 2, 3] }, status: 'pending' }
+  liveMocks.api.laneTasks.mockResolvedValue([laneTask])
   liveMocks.api.laneTaskImage.mockResolvedValue(new Blob(['jpeg'], { type: 'image/jpeg' }))
-  liveMocks.api.laneAnnotations.mockResolvedValue([])
-  liveMocks.api.saveLaneAnnotation.mockResolvedValue({ task_id: 'TASK-1', status: 'saved' })
+  liveMocks.api.createLaneTaskFromSurveyFrame.mockResolvedValue(laneTask)
+  liveMocks.api.surveyTasks.mockResolvedValue([{ id: 'SVY-LANE-1', title: '路口正拍采集', inter_id: 'INT-1', selected_batch_id: 'BATCH-LANE-1', status: 'measuring' }])
+  liveMocks.api.surveyBatches.mockResolvedValue([{ id: 'BATCH-LANE-1', status: 'selected', source_profile_id: 'SRC-1' }])
+  liveMocks.api.surveyFrames.mockResolvedValue([{ id: 'FRM-LANE-1', frame_number: 120, timestamp_sec: 4, has_metric_transform: true, metric_transform: [[0.1, 0, -10], [0, 0.1, -5], [0, 0, 1]] }])
+  const map = { id: 'CMV-1', inter_id: 'INT-1', version_no: 1, status: 'draft', coordinate_system: 'GCJ02', coordinate_transform_version: 'v1', road_data_version: 'ROAD-1', anchor_gcj02: [117, 36.7], geometry_gcj02: {}, lanes: [] }
+  liveMocks.api.bootstrapChannelizedMap.mockResolvedValue({ source: 'local', map })
+  liveMocks.api.fitChannelizedMapFromImage.mockResolvedValue({ ...map, status: 'candidate', registration: { id: 'VRG-1', status: 'registered' } })
+  liveMocks.api.verifyVisualRegistration.mockResolvedValue({ id: 'VRG-1', status: 'verified' })
+  liveMocks.api.publishChannelizedMap.mockResolvedValue({ ...map, status: 'lane_verified' })
 }
 
 describe('Console2 live module migration', () => {
@@ -224,7 +238,7 @@ describe('Console2 live module migration', () => {
       limit: 500,
       source_profile_id: 'SRC-1',
       spatial_ready: true,
-      min_world_points: 2,
+      min_gcj02_points: 2,
     })
     expect(screen.getByText('BEV 历史轨迹回放 · 2 TRACKS')).toBeInTheDocument()
     expect(screen.queryByText(/数据质量 ·/)).not.toBeInTheDocument()
@@ -301,6 +315,42 @@ describe('Console2 live module migration', () => {
       road_data_version: 'ROAD-1',
       scheduled_end_at: expect.any(String),
     })))
+  })
+
+  it('allows demo detection without a bound road context', async () => {
+    liveMocks.api.pipelines.mockResolvedValue([])
+    liveMocks.api.drones.mockResolvedValue([
+      { id: 'UAV-1', name: '小清河无人机', default_inter_id: 'INT-1', default_video_source_id: 'VID-1', intersection_name: '小清河北路 × 水屯路' },
+    ])
+    open('/monitoring?intersection_id=INT-1&source_profile_id=SRC-1')
+
+    const startButton = await screen.findByRole('button', { name: '启动演示检测' })
+    expect(startButton).toBeEnabled()
+    expect(startButton).toHaveAttribute('title', '启动当前视频源的一小时演示检测')
+
+    fireEvent.click(startButton)
+    await waitFor(() => expect(liveMocks.api.createMission).toHaveBeenCalledWith({
+      name: '快速演示 · 小清河北路 × 水屯路',
+      drone_id: 'UAV-1',
+      source_profile_id: 'SRC-1',
+      inter_id: 'INT-1',
+      scheduled_end_at: expect.any(String),
+    }))
+  })
+
+  it('shows a Mission business failure instead of silently treating it as started', async () => {
+    liveMocks.api.pipelines.mockResolvedValue([])
+    liveMocks.api.createMission.mockResolvedValueOnce({
+      id: 'MSN-FAILED-1',
+      status: 'failed',
+      reason_code: 'pipeline_start_failed',
+      error_message: '检测器进程启动失败',
+    })
+    open('/monitoring?intersection_id=INT-1&source_profile_id=SRC-1')
+
+    fireEvent.click(await screen.findByRole('button', { name: '启动演示检测' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('检测器进程启动失败')
   })
 
   it('freezes visible REST, WebSocket, and clock updates while paused then restores them in order', async () => {
@@ -385,8 +435,8 @@ describe('Console2 live module migration', () => {
     open('/monitoring?intersection_id=INT-1&view=detector')
     expect(await screen.findByAltText('检测器输出视频流')).toBeInTheDocument()
 
-    act(() => liveMocks.wsCallback({ type: 'uav_track_complete', data: { track_id: 101, trajectory_world_m: [[0, 0], [10, 8], [20, 12]] } }))
-    act(() => liveMocks.wsCallback({ type: 'uav_track_complete', data: { track_id: 102, trajectory_world_m: [[2, 1], [12, 5], [22, 9]] } }))
+    act(() => liveMocks.wsCallback({ type: 'uav_track_complete', data: { track_id: 101, trajectory_gcj02: [[117, 36.7], [117.0001, 36.7001], [117.0002, 36.7002]] } }))
+    act(() => liveMocks.wsCallback({ type: 'uav_track_complete', data: { track_id: 102, trajectory_gcj02: [[117.0001, 36.7], [117.0002, 36.7001], [117.0003, 36.7002]] } }))
 
     expect(screen.queryByLabelText('车辆轨迹图层')).not.toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: /切为主视图/ }))
@@ -419,6 +469,26 @@ describe('Console2 live module migration', () => {
     vi.useRealTimers()
   })
 
+  it('keeps recovering after the initial MJPEG retry window is exhausted', async () => {
+    open('/monitoring?intersection_id=INT-1')
+    await screen.findByAltText('检测器输出视频流')
+    vi.useFakeTimers()
+    try {
+      for (let attempt = 1; attempt <= 5; attempt += 1) {
+        fireEvent.error(screen.getByAltText('检测器输出视频流'))
+        expect(screen.getByText(`视频流重连中 · ${attempt}/5`)).toBeInTheDocument()
+        act(() => vi.advanceTimersByTime(3_000))
+      }
+      fireEvent.error(screen.getByAltText('检测器输出视频流'))
+      expect(screen.getByText('视频流连接失败')).toBeInTheDocument()
+
+      act(() => vi.advanceTimersByTime(10_000))
+      expect(screen.getByAltText('检测器输出视频流')).toBeInTheDocument()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('shows real system data, marks legacy topics, and keeps identity read-only', async () => {
     open('/admin/system?tab=system')
 
@@ -441,26 +511,42 @@ describe('Console2 live module migration', () => {
     expect(await screen.findByText('uav_statistics_11')).toBeInTheDocument()
   })
 
-  it('saves multiple lane polygons in natural image coordinates and preserves roads', async () => {
-    const rect = { left: 0, top: 0, right: 480, bottom: 270, width: 480, height: 270, x: 0, y: 0, toJSON: () => ({}) }
+  it('projects multiple image polygons through the versioned channelized-map workflow', async () => {
+    const rect = { left: 0, top: 0, right: 600, bottom: 270, width: 600, height: 270, x: 0, y: 0, toJSON: () => ({}) }
     vi.spyOn(Element.prototype, 'getBoundingClientRect').mockReturnValue(rect)
     open('/admin/calibration?tab=lanes')
+    fireEvent.click(await screen.findByText('INT-1'))
+    fireEvent.click(screen.getByRole('button', { name: '加载本地 / 按需导入' }))
+    const canvas = await screen.findByLabelText('渠化几何绘制画布')
+    for (const [clientX, clientY] of [[110, 25], [160, 25], [160, 75]]) fireEvent.click(canvas, { clientX, clientY })
+    fireEvent.click(screen.getByRole('button', { name: '完成车道面' }))
+    fireEvent.change(screen.getByLabelText('车道方向'), { target: { value: 'left_turn' } })
+    for (const [clientX, clientY] of [[260, 100], [310, 100], [310, 150]]) fireEvent.click(canvas, { clientX, clientY })
+    fireEvent.click(screen.getByRole('button', { name: '完成车道面' }))
+    fireEvent.click(screen.getByRole('button', { name: '保存影像拟合候选' }))
 
-    const canvas = await screen.findByLabelText('车道多边形绘制画布')
-    for (const [clientX, clientY] of [[50, 25], [100, 25], [100, 75]]) fireEvent.click(canvas, { clientX, clientY })
-    fireEvent.click(screen.getByRole('button', { name: '闭合为车道' }))
-    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'left_turn' } })
-    for (const [clientX, clientY] of [[200, 100], [250, 100], [250, 150]]) fireEvent.click(canvas, { clientX, clientY })
-    fireEvent.click(screen.getByRole('button', { name: '闭合为车道' }))
-    fireEvent.click(screen.getByRole('button', { name: '保存标注参数' }))
-
-    await waitFor(() => expect(liveMocks.api.saveLaneAnnotation).toHaveBeenCalledTimes(1))
-    expect(liveMocks.api.saveLaneAnnotation).toHaveBeenCalledWith('TASK-1', {
+    await waitFor(() => expect(liveMocks.api.fitChannelizedMapFromImage).toHaveBeenCalledTimes(1))
+    expect(liveMocks.api.fitChannelizedMapFromImage).toHaveBeenCalledWith('CMV-1', expect.objectContaining({
+      task_id: 'TASK-1',
       lanes: [
-        { lane_id: 'L1', name: '车道 1', direction: 'straight', polygon: [100, 50, 200, 50, 200, 150] },
-        { lane_id: 'L2', name: '车道 2', direction: 'left_turn', polygon: [400, 200, 500, 200, 500, 300] },
+        expect.objectContaining({ direction: 'straight', polygon_px: [[100, 50], [200, 50], [200, 150]] }),
+        expect.objectContaining({ direction: 'left_turn', polygon_px: [[400, 200], [500, 200], [500, 300]] }),
       ],
-      roads: { north: [1, 2, 3] },
-    })
+    }))
+  })
+
+  it('creates a recoverable lane task from a real survey keyframe and hydrates registration context', async () => {
+    liveMocks.api.laneTasks.mockResolvedValue([])
+    open('/admin/calibration?tab=lanes')
+
+    fireEvent.change(screen.getByLabelText('路口 ID'), { target: { value: 'INT-1' } })
+    const loadFrame = await screen.findByRole('button', { name: '载入关键帧并开始标注' })
+    await waitFor(() => expect(loadFrame).toBeEnabled())
+    fireEvent.click(loadFrame)
+
+    await waitFor(() => expect(liveMocks.api.createLaneTaskFromSurveyFrame).toHaveBeenCalledWith('FRM-LANE-1'))
+    expect(await screen.findByLabelText('渠化几何绘制画布')).toBeInTheDocument()
+    expect(screen.getByLabelText('SourceProfile ID')).toHaveValue('SRC-1')
+    expect(screen.getByLabelText('pixel → ENU 3×3 单应矩阵')).toHaveValue('[[0.1,0,-10],[0,0.1,-5],[0,0,1]]')
   })
 })

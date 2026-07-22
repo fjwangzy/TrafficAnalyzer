@@ -118,8 +118,9 @@ class DashboardReadModel:
     def _coordinates(snapshot: RoadContextSnapshot) -> tuple[float | None, float | None]:
         payload = snapshot.payload or {}
         intersection = payload.get("intersection") or {}
-        lat = _number(intersection.get("center_lat", intersection.get("lat", payload.get("center_lat"))))
-        lon = _number(intersection.get("center_lon", intersection.get("lon", payload.get("center_lon"))))
+        center = intersection.get("center_gcj02") or payload.get("center_gcj02") or []
+        lon = _number(center[0]) if isinstance(center, list) and len(center) >= 2 else None
+        lat = _number(center[1]) if isinstance(center, list) and len(center) >= 2 else None
         if lat is None or lon is None or not (-90 <= lat <= 90 and -180 <= lon <= 180):
             return None, None
         return lat, lon
@@ -152,11 +153,11 @@ class DashboardReadModel:
             coordinate_reference = snapshot.coordinate_reference or {}
             coordinate_verified = (
                 coordinate_reference.get("status") == "verified"
-                and coordinate_reference.get("display") == "WGS84"
+                and coordinate_reference.get("display") == "GCJ02"
             )
             coordinate_test = (
                 coordinate_reference.get("status") == "test"
-                and coordinate_reference.get("display") == "WGS84"
+                and coordinate_reference.get("display") == "GCJ02"
                 and coordinate_reference.get("usage") == "local_acceptance_only"
             )
             monitor = "running" if fresh_metric and mission and pipeline_running and road_verified else (
@@ -180,8 +181,10 @@ class DashboardReadModel:
                 "id": inter_id,
                 "inter_id": inter_id,
                 "name": intersection.get("name") or payload.get("name") or inter_id,
-                "lat": lat if map_eligible else None,
-                "lon": lon if map_eligible else None,
+                "center_gcj02": (
+                    {"longitude": lon, "latitude": lat} if map_eligible else None
+                ),
+                "coordinate_system": "GCJ02",
                 "map_eligible": map_eligible,
                 "map_coordinate_status": map_coordinate_status,
                 "map_exclusion_reason": None if map_eligible else (
@@ -381,8 +384,8 @@ class DashboardReadModel:
                 "id": drone.id, "name": drone.name, "enabled": drone.enabled,
                 "status": "online" if fresh and drone.enabled else ("offline" if drone.enabled else "disabled"),
                 "telemetry_at": _iso(observed_at), "telemetry_quality": telemetry.quality_status if telemetry else "missing",
-                "lat": _number(telemetry.latitude) if fresh else None,
-                "lon": _number(telemetry.longitude) if fresh else None,
+                "position_gcj02": telemetry.position_gcj02 if fresh else None,
+                "coordinate_system": "GCJ02",
                 "battery_pct": _number(telemetry.battery_pct) if fresh else None,
                 "mission_id": mission.id if mission else None, "inter_id": mission.inter_id if mission else None,
             })

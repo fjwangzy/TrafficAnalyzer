@@ -117,6 +117,8 @@ class LaneAnnotationStore:
         image_height: int,
         source_frame_id: str,
         roads: dict[str, Any] | None = None,
+        source_profile_id: str | None = None,
+        homography_pixel_to_enu: list[list[float]] | None = None,
     ) -> dict[str, Any]:
         """Create an idempotent task from a persisted real keyframe; hover tasks remain the live trigger."""
         db = self._load()
@@ -125,6 +127,17 @@ class LaneAnnotationStore:
             None,
         )
         if existing:
+            changed = False
+            recoverable_context = {
+                "source_profile_id": source_profile_id,
+                "homography_pixel_to_enu": homography_pixel_to_enu,
+            }
+            for key, value in recoverable_context.items():
+                if value is not None and existing.get(key) != value:
+                    existing[key] = value
+                    changed = True
+            if changed:
+                self._write(db)
             return existing
         now = time.time()
         safe_frame = "".join(char if char.isalnum() or char in "-_" else "_" for char in source_frame_id)
@@ -142,6 +155,8 @@ class LaneAnnotationStore:
             "is_hovering": False,
             "trigger": "persisted_survey_keyframe",
             "source_frame_id": source_frame_id,
+            "source_profile_id": source_profile_id,
+            "homography_pixel_to_enu": homography_pixel_to_enu,
             "roads": roads or {},
             "lane_count": 0,
             "image_path": str(image_path),

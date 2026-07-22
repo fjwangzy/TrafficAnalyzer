@@ -5,6 +5,7 @@ from elements.FrameElement import FrameElement
 from elements.VideoEndBreakElement import VideoEndBreakElement
 from utils_local.utils import profile_time
 from utils_local.homography import pixel_to_world, is_valid_homography
+from utils_local.coordinates import enu_to_gcj02
 
 logger = logging.getLogger(__name__)
 
@@ -220,23 +221,26 @@ class ConflictDetectionNode:
 
                     # 预测冲突点世界坐标（含运动补偿）
                     drone_disp = getattr(frame_element, "drone_displacement_m", None)
-                    world_anchor = getattr(frame_element, "world_anchor_lat_lon", None)
+                    anchor_gcj02 = getattr(frame_element, "anchor_gcj02", None)
                     if drone_disp is not None:
-                        motor_world = prediction["motor_position_m"] + drone_disp
-                        non_motor_world = prediction["non_motor_position_m"] + drone_disp
-                        event["motor_position_m"] = [
+                        motor_world = prediction["motor_position_enu_m"] + drone_disp
+                        non_motor_world = prediction["non_motor_position_enu_m"] + drone_disp
+                        event["motor_position_enu_m"] = [
                             round(float(motor_world[0]), 2),
                             round(float(motor_world[1]), 2),
                         ]
-                        event["non_motor_position_m"] = [
+                        event["non_motor_position_enu_m"] = [
                             round(float(non_motor_world[0]), 2),
                             round(float(non_motor_world[1]), 2),
                         ]
-                        if world_anchor:
-                            event["world_anchor_lat_lon"] = [
-                                round(world_anchor[0], 6),
-                                round(world_anchor[1], 6),
+                        if anchor_gcj02:
+                            event["anchor_gcj02"] = [
+                                round(anchor_gcj02[0], 6),
+                                round(anchor_gcj02[1], 6),
                             ]
+                            midpoint = (motor_world + non_motor_world) / 2.0
+                            lon, lat = enu_to_gcj02(midpoint[0], midpoint[1], anchor_gcj02)
+                            event["conflict_position_gcj02"] = [round(lon, 8), round(lat, 8)]
 
                     conflict_events.append(event)
                     diagnostics["events_emitted"] += 1
@@ -506,8 +510,8 @@ class ConflictDetectionNode:
             "pet_sec": 0.0,
             "arrival_time_delta_sec": 0.0,
             "conflict_angle_deg": conflict_angle_deg,
-            "motor_position_m": motor_future,
-            "non_motor_position_m": non_motor_future,
+            "motor_position_enu_m": motor_future,
+            "non_motor_position_enu_m": non_motor_future,
             "motor_arrival_ttc_sec": closest_time,
             "non_motor_arrival_ttc_sec": closest_time,
         }
@@ -577,8 +581,8 @@ class ConflictDetectionNode:
             "pet_sec": arrival_delta,
             "arrival_time_delta_sec": arrival_delta,
             "conflict_angle_deg": conflict_angle_deg,
-            "motor_position_m": conflict_point,
-            "non_motor_position_m": conflict_point,
+            "motor_position_enu_m": conflict_point,
+            "non_motor_position_enu_m": conflict_point,
             "motor_arrival_ttc_sec": motor_ttc,
             "non_motor_arrival_ttc_sec": non_motor_ttc,
             "min_same_time_distance_m": min_same_time_distance,

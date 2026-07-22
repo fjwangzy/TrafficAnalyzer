@@ -27,7 +27,7 @@
 ### 1.1 本地开发库实况（2026-07-16 纯净切换）
 
 - 当前连接 database 为 `road9`，应用对象位于 `public`；这只是本地开发现状，不代表生产目标 schema 已冻结。
-- migration head 为 `20260717_0013`，版本表为 `uav_alembic_version`；`0012` 增加检测事实 lineage，`0013` 增加 inbox 可恢复派发状态。
+- migration head 为 `20260721_0017`，版本表为 `uav_alembic_version`；`0012` 增加检测事实 lineage，`0013` 增加 inbox 可恢复派发，`0014/0015` 增加轨迹研判维度/索引，`0016/0017` 建立 GCJ-02 渠化地图与多视频源视觉配准。
 - 正式本机端口 `5432` 由根 Compose 的 TimescaleDB 提供，使用稳定新卷 `traffic_road9_data`；不挂载旧 PostgreSQL、实验 TimescaleDB 或旧目标卷。
 - migration 自动启用 TimescaleDB 并创建 5 张 `uav_*` hypertable。初始化数据仅允许管理员账号，业务、指标、轨迹、任务和告警表为空。
 - `uav_traffic_metrics`、`uav_track_points`、`uav_conflict_events`、`uav_telemetry_metrics`、`uav_system_metrics`、普通表 `uav_track_events` 及长期 `uav_message_inbox` 已实现。永久性输入错误进入独立的 `uav_message_dead_letters`；可变技术复核状态位于普通表 `uav_conflict_reviews`，两者都不更新追加型冲突事实。
@@ -387,7 +387,9 @@ CREATE EXTENSION IF NOT EXISTS timescaledb;
 
 - `uav_road_context_snapshots` 只保存从 `road9` 路网数据读取的版本/缓存元数据，不能成为另一个无版本路网主库。
 - `uav_visual_lane_bindings` 保存 `local_lane_key -> inter_id + link_id + lane_id + road_data_version` 以及置信度、方法和人工确认信息。
-- 自 2026-07-20 起视频源固定无车道标注参数启动；已有 `uav_visual_lane_bindings` 以 `status=retired/retired_at` 失效并清空 `roads_json`，已有 `uav_lane_annotation_tasks` 以 `status=invalidated` 保留审计，不再作为 Pipeline 输入。
+- 历史快照：2026-07-20 曾以 `retired/invalidated` 失效旧道路 JSON 标注；该批历史业务记录已在
+  ADR-020 一次性重建中清除。当前 `uav_visual_lane_bindings` 仅服务版本化渠化地图，不含
+  `roads_json` 列。
 - 主数据版本变化不得重写历史指标、轨迹或事件；每条事实保留产生时的 `road_data_version`。
 - 管道启动时读取已发布版本快照并缓存，不得逐帧查询远程/共享路网表。
 - `road9` 中具体路网表/视图路径仍为 `【验收阻断】【待确认】`；此前调查的 `road10.*` 不再作为目标引用。
@@ -508,3 +510,45 @@ Topic 的复数/单数按上表固定，禁止消费者自行猜测；`msg_type`
 - `uav_ai_events` 已持久化 `congestion`、`quality_degradation` 和 `survey_result`，证据通过 `uav_evidence_packages` / `uav_evidence_items` 保存 SHA-256 和内容地址。
 - 检测进程的文件 spool 位于独立持久卷，不建表、不提供业务查询、Kafka 确认后删除；未引入 SQLite 或第二业务数据库。
 - 完整验收计数与查询见 `docs/test_report_mp4_srt_product_deep_demo.md`。
+
+### 10.2 轨迹研判类型化维度（2026-07-21）
+
+Alembic `20260721_0014` 为 `uav_track_events` 增加可空列：
+`yolo_class_id INTEGER`、`yolo_class_name TEXT`、`yolo_model_id TEXT`、
+`class_mapping_version TEXT`、`start_road_id TEXT`、`exit_road_id TEXT`。原始 canonical
+`payload` 继续保留；以上列用于筛选、聚合、排序和来源追溯，不形成第二份业务真源。
+
+迁移只从 payload 中复制已经存在的 `yolo_class_id`、`start_road_id` 和 `exit_road_id`；
+旧记录没有模型来源时，`yolo_class_name`、`yolo_model_id`、`class_mapping_version` 必须保持空，
+禁止按当前权重或类别表反推。新增索引覆盖路口+结束时间、YOLO 类别、入口/出口和转向等实际
+研判过滤维度；查询仍必须先在 PostgreSQL 完成路口、窗口与筛选条件收敛，再进入应用聚合。
+
+后续 `20260721_0015` 增加 `(inter_id, source_profile_id, ended_at)` 与
+`(mission_id, pipeline_id, track_id)` 查询索引。本机 `road9` 已升级到 `20260721_0015`；真实
+30 分钟查询的过滤 SQL 执行约 3.5ms，完整分析读模型约 0.25s（崇华路样本）。四路口真实数据对账与历史字段
+缺失说明见 `docs/test_report_trajectory_analysis_multi_intersection_20260721.md`。
+
+### 10.3 GCJ-02 渠化地图与轨迹重建（2026-07-21）
+
+Alembic `20260721_0016` 删除新写入链路中的旧坐标列并建立渠化地图实体；后续
+`20260721_0017` 将视觉配准唯一键扩展为 `map_version_id + source_profile_id`，保证同一路口
+多个正拍视频各自固定 pixel→ENU 单应矩阵。当前本机 schema head 为 `20260721_0017`：
+
+- `uav_channelized_map_versions`：路口、YCX/地图版本、`draft → candidate → link_verified → lane_verified → retired` 状态、GCJ-02/ENU 几何、锚点、拓扑和质量结果；
+- `uav_visual_registrations`：原图/正射影像、控制点、pixel→ENU 单应矩阵、残差和复核状态；
+  verified 记录的 `residuals` 同时保存配准视频时刻、`registration_position_gcj02` 与
+  `registration_gimbal_yaw_deg`，作为运行时逐帧运动补偿的不可变参考；
+- 重建的 `uav_visual_lane_bindings`：本地稳定车道键、可空 YCX lane ID、不透明 link ID、几何来源、置信度和审核状态。
+
+`uav_track_events/uav_track_points/uav_conflict_events/uav_telemetry_metrics` 的公共位置字段只使用
+GCJ-02，米制计算字段明确以 `_enu_m` 结尾。`source_lane_id` 与 `matched_link_id` 均为字符串，
+不得假设 road9/YCX 对象 ID 可解析为数字或业务编码。
+
+已发布地图与上游 `uav_road_context_snapshots` 通过不可变 `source_checksum` 关联，不能用本地
+`*-IMAGERY-FIT-*` 地图版本冒充 YCX 快照版本。`lane_verified` 发布会将精确命中的快照更新为
+`quality_status=verified`，并写入 GCJ-02 锚点、转换版本和 `map_version_id`；Dashboard 只据此
+投放路口中心和高德地图。
+
+本机 2026-07-21 已执行一次性清理：除一条重建起点审计外，所有历史业务/派生表为零；主数据、
+Alembic 版本和 20 个原始文件 SHA-256 保留。证据见
+`docs/test_report_gcj02_rebuild_local.json`，操作见 `docs/runbook_trajectory_data_reset_and_replay.md`。

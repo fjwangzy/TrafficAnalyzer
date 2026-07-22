@@ -37,8 +37,8 @@ from app.schemas.mission import (
     SourcePairCreate,
     SourcePairUpdate,
 )
-from app.services.road_context import RoadContext
 from app.services.pipeline_manager import detector_video_stream_url
+from app.services.road_context import RoadContext
 
 logger = logging.getLogger(__name__)
 
@@ -88,6 +88,21 @@ def _utc(value: datetime) -> datetime:
 
 def _now() -> datetime:
     return datetime.now(UTC)
+
+
+def _runtime_missing_grace_expired(
+    mission: MissionRecord,
+    now: datetime,
+    grace_sec: float | None = None,
+) -> bool:
+    started_at = _utc(mission.actual_start_at or mission.scheduled_start_at)
+    missing_age = max(timedelta(0), _utc(now) - started_at)
+    grace = (
+        settings.mission_pipeline_missing_grace_sec
+        if grace_sec is None
+        else max(float(grace_sec), 0.0)
+    )
+    return missing_age >= timedelta(seconds=grace)
 
 
 def _id(prefix: str) -> str:
@@ -550,32 +565,13 @@ class MissionOrchestrator:
                 )
             snapshot: dict = {"quality_status": "unverified"}
             video_id = telemetry_id = None
-            if body.source_profile_id:
-                pair = await self._pair(session, body.source_profile_id)
-                if pair is None or pair[0].drone_id != body.drone_id:
-                    raise MissionError("source profile not found for drone", code="source_profile_invalid")
-                if pair[0].validation_status == "invalid" or pair[1].validation_status == "invalid":
-                    raise MissionError("source profile is invalid", code="source_profile_invalid")
-                video_id, telemetry_id = pair[0].id, pair[1].id
-                snapshot["source_profile_id"] = body.source_profile_id
-            else:
-                video = VideoSourceRecord(
-                    id="legacy", profile_id="legacy", drone_id=body.drone_id, mode="local",
-                    source_type="mp4", location=body.video_src or "", validation_status="unknown",
-                )
-                telemetry = TelemetrySourceRecord(
-                    id="legacy", profile_id="legacy", drone_id=body.drone_id, mode="local",
-                    source_type="srt", location=body.telemetry_file_path or "", validation_status="unknown",
-                )
-                status, code = self._validator.validate(video, telemetry)
-                if status == "invalid":
-                    raise MissionError("legacy source validation failed", code=code or "source_invalid")
-                snapshot["legacy_source"] = {
-                    "video_src": body.video_src,
-                    "telemetry_source": body.telemetry_source or "srt",
-                    "telemetry_file_path": body.telemetry_file_path,
-                    "roads_json": body.roads_json,
-                }
+            pair = await self._pair(session, body.source_profile_id)
+            if pair is None or pair[0].drone_id != body.drone_id:
+                raise MissionError("source profile not found for drone", code="source_profile_invalid")
+            if pair[0].validation_status == "invalid" or pair[1].validation_status == "invalid":
+                raise MissionError("source profile is invalid", code="source_profile_invalid")
+            video_id, telemetry_id = pair[0].id, pair[1].id
+            snapshot["source_profile_id"] = body.source_profile_id
             mission = MissionRecord(
                 id=_id("MSN"), name=body.name or "手动 Mission", trigger_type="manual",
                 drone_id=body.drone_id, video_source_id=video_id, telemetry_source_id=telemetry_id,
@@ -701,6 +697,27 @@ class MissionOrchestrator:
                         )
                         progressed += 1
                     elif runtime is None:
+                        started_at = _utc(
+                            mission.actual_start_at or mission.scheduled_start_at
+                        )
+                        missing_age = max(
+                            timedelta(0),
+                            now - started_at,
+                        )
+                        missing_is_terminal = _runtime_missing_grace_expired(
+                            mission, now
+                        )
+                        logger.warning(
+                            "Mission %s runtime %s unavailable %.1fs after startup "
+                            "(grace=%.1fs, terminal=%s)",
+                            mission.id,
+                            mission.pipeline_id,
+                            missing_age.total_seconds(),
+                            settings.mission_pipeline_missing_grace_sec,
+                            missing_is_terminal,
+                        )
+                        if not missing_is_terminal:
+                            continue
                         mission.status = "failed"
                         mission.reason_code = "pipeline_runtime_missing"
                         mission.error_message = "pipeline runtime is missing before the scheduled window ended"
@@ -808,46 +825,60 @@ class MissionOrchestrator:
     async def _runtime_params(self, session: AsyncSession, mission: MissionRecord) -> dict:
         legacy = mission.context_snapshot.get("legacy_source")
         if legacy:
-            return {
-                "drone_id": mission.drone_id, "intersection_id": mission.inter_id,
-                "video_src": legacy["video_src"], "roads_json": legacy.get("roads_json", ""),
-                "telemetry_source": legacy.get("telemetry_source") or "srt",
-                "telemetry_file_path": legacy.get("telemetry_file_path"),
-                "mission_id": mission.id,
-                "source_profile_id": mission.context_snapshot.get("source_profile_id"),
-                "inter_id": mission.inter_id,
-                "road_data_version": mission.road_data_version,
-                "road_context_status": "complete" if mission.road_data_version else "missing",
-                "quality_status": mission.context_snapshot.get("quality_status", "unverified"),
-            }
+            raise MissionError("legacy source missions are retired; bind a SourceProfile", code="legacy_source_retired")
         video = await session.get(VideoSourceRecord, mission.video_source_id)
         telemetry = await session.get(TelemetrySourceRecord, mission.telemetry_source_id)
         if video is None or telemetry is None:
             raise MissionError("mission source snapshot cannot be resolved", code="source_missing")
-        context = await self._road_context.get(mission.inter_id, mission.road_data_version)
+        context = None
+        if mission.road_data_version and mission.road_data_version != "unverified":
+            try:
+                context = await self._road_context.get(
+                    mission.inter_id, mission.road_data_version
+                )
+            except LookupError:
+                context = None
+        runtime_map_bundle = (
+            context.runtime_map_bundle
+            if context is not None
+            and context.map_status == "lane_verified"
+            and context.runtime_map_bundle
+            else None
+        )
         mission.context_snapshot = {
             **mission.context_snapshot,
-            "road_context": {
-                "inter_id": context.inter_id,
-                "road_data_version": context.road_data_version,
-                "checksum": context.checksum,
-                "quality_status": context.quality_status,
-            },
+            **(
+                {
+                    "road_context": {
+                        "inter_id": context.inter_id,
+                        "road_data_version": context.road_data_version,
+                        "checksum": context.checksum,
+                        "quality_status": context.quality_status,
+                        "map_version_id": context.map_version_id,
+                        "runtime_status": "complete" if runtime_map_bundle else "unverified",
+                    }
+                }
+                if context is not None
+                else {}
+            ),
             "source_profile_id": video.profile_id,
         }
         return {
             "drone_id": mission.drone_id, "intersection_id": mission.inter_id,
-            "video_src": video.location, "roads_json": "",
+            "video_src": video.location,
             "telemetry_source": telemetry.source_type,
             "telemetry_file_path": telemetry.location if telemetry.mode == "local" else None,
             "telemetry_time_offset_sec": (telemetry.config or {}).get("time_offset_sec", 0.0),
             "telemetry_sync_tolerance_sec": (telemetry.config or {}).get("sync_tolerance_sec", 0.5),
             "mission_id": mission.id,
             "source_profile_id": video.profile_id,
-            "inter_id": context.inter_id,
-            "road_data_version": context.road_data_version,
-            "road_context_status": "complete",
-            "quality_status": context.quality_status,
+            "inter_id": mission.inter_id,
+            "road_data_version": (
+                context.road_data_version if runtime_map_bundle else mission.road_data_version
+            ),
+            "road_context_status": "complete" if runtime_map_bundle else "missing",
+            "quality_status": context.quality_status if runtime_map_bundle else "unverified",
+            "runtime_map_bundle": runtime_map_bundle,
         }
 
     async def _validate_plan(self, session: AsyncSession, plan: FlightPlanRecord) -> None:
@@ -861,9 +892,14 @@ class MissionOrchestrator:
         if video.validation_status not in {"valid", "degraded"} or telemetry.validation_status not in {"valid", "degraded"}:
             raise MissionError("source profile must be validated before enable", code="source_profile_unverified")
         try:
-            await self._road_context.get(plan.inter_id, plan.road_data_version)
+            context = await self._road_context.get(plan.inter_id, plan.road_data_version)
         except LookupError as exc:
             raise MissionError(str(exc), code="road_context_unavailable") from exc
+        if context.map_status != "lane_verified" or not context.runtime_map_bundle:
+            raise MissionError(
+                "flight plan requires a lane_verified channelized map",
+                code="channelized_map_not_verified",
+            )
 
     async def _reject_overlap(self, session: AsyncSession, plan: FlightPlanRecord) -> None:
         start = _now() - timedelta(days=1)

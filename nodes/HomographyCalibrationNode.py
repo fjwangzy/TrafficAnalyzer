@@ -1,5 +1,6 @@
 import numpy as np
 import logging
+import os
 
 from elements.FrameElement import FrameElement
 from elements.VideoEndBreakElement import VideoEndBreakElement
@@ -10,6 +11,11 @@ from utils_local.homography import (
     is_valid_homography,
 )
 from utils_local.gcp_refinement import GCPRefinement
+from utils_local.runtime_map import (
+    load_runtime_map_bundle,
+    runtime_registration_homography,
+    select_runtime_visual_registration,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +40,21 @@ class HomographyCalibrationNode:
         self.reference_points = cal.get("reference_points", [])
         self._static_H: np.ndarray | None = None
         self._logged_no_calibration = False
+        self._runtime_bundle = load_runtime_map_bundle(config)
+        self._runtime_registration = None
+        self._runtime_H: np.ndarray | None = None
+        if self._runtime_bundle is not None:
+            self._runtime_registration = select_runtime_visual_registration(
+                self._runtime_bundle, os.environ.get("SOURCE_PROFILE_ID")
+            )
+            self._runtime_H = runtime_registration_homography(
+                self._runtime_registration
+            )
+            logger.info(
+                "HomographyCalibrationNode: locked lane_verified map=%s source=%s",
+                self._runtime_bundle.get("map_version_id"),
+                self._runtime_registration.get("source_profile_id"),
+            )
 
         # ── 镜头畸变系数 [k1, k2, p1, p2, k3]（可选）──
         self.dist_coeffs = cal.get("dist_coeffs", None)
@@ -113,6 +134,21 @@ class HomographyCalibrationNode:
             return frame_element
 
         telemetry = getattr(frame_element, "telemetry", None)
+
+        # A formal replay is locked to the exact source-image registration of one
+        # immutable lane_verified map.  It must never fall back to a telemetry or
+        # reference-point coordinate frame later in the pipeline.
+        if self._runtime_bundle is not None:
+            frame_element.homography_matrix = self._runtime_H.copy()
+            frame_element.calibration_mode = "runtime_map"
+            frame_element.anchor_gcj02 = tuple(self._runtime_bundle["anchor_gcj02"])
+            frame_element.map_version_id = self._runtime_bundle["map_version_id"]
+            frame_element.runtime_map_bundle = self._runtime_bundle
+            frame_element.runtime_visual_registration = self._runtime_registration
+            if self.dist_coeffs:
+                frame_element.dist_coeffs = self.dist_coeffs
+                frame_element.camera_intrinsics = self.camera_intrinsics
+            return frame_element
 
         if self.mode == "auto":
             if telemetry and telemetry.get("altitude_agl", 0) > 0 and self.camera_intrinsics:

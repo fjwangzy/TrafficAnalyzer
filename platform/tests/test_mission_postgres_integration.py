@@ -24,7 +24,7 @@ from app.schemas.mission import (
     SourcePairCreate,
 )
 from app.services.mission_orchestrator import MissionError, MissionOrchestrator
-from app.services.road_context import FixtureRoadContextAdapter, RoadContext, RoadContextResult
+from app.services.road_context import RoadContext, RoadContextResult
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("RUN_PG_INTEGRATION") != "1",
@@ -68,15 +68,36 @@ class FakePipeline:
 
 
 def road_context():
+    class TestRoadContextAdapter:
+        def __init__(self, result):
+            self.result = result
+
+        async def get(self, inter_id, road_data_version):
+            if (inter_id, road_data_version) == (
+                self.result.inter_id,
+                self.result.road_data_version,
+            ):
+                return self.result
+            return None
+
     result = RoadContextResult(
         inter_id="INT_camera_1", road_data_version="ROAD-LOCAL-INTER-XQH",
         source="test_fixture", checksum="a" * 64,
         coordinate_reference={"metric": "ENU", "display": "GCJ02"},
         intersection={}, links=(), lanes=(),
-        visual_bindings=({"roads_json": "configs/bak/inter_xqh_lanes.json"},),
-        quality_status="unverified",
+        visual_bindings=(), quality_status="verified",
+        map_version_id="CMV-PG-INTEGRATION",
+        map_status="lane_verified",
+        runtime_map_bundle={
+            "schema_version": "uav.runtime-road-map/v1",
+            "map_version_id": "CMV-PG-INTEGRATION",
+            "map_status": "lane_verified",
+            "coordinate_system": "GCJ02",
+            "anchor_gcj02": [117.0, 36.7],
+            "lanes": [],
+        },
     )
-    return RoadContext(FixtureRoadContextAdapter({(result.inter_id, result.road_data_version): result}))
+    return RoadContext(TestRoadContextAdapter(result))
 
 
 async def cleanup():
@@ -123,7 +144,9 @@ async def test_persistent_plan_concurrency_stop_and_restart_recovery():
     assert missions[0]["status"] == "running"
     assert len(pipeline_a.started) + len(pipeline_b.started) == 1
     started = (pipeline_a.started + pipeline_b.started)[0]
-    assert started["roads_json"] == ""
+    assert "roads_json" not in started
+    assert started["runtime_map_bundle"]["map_version_id"] == "CMV-PG-INTEGRATION"
+    assert started["runtime_map_bundle"]["coordinate_system"] == "GCJ02"
     assert missions[0]["pipeline"]["topic_name"].startswith("uav_statistics_")
 
     stopped = await first.stop_mission(missions[0]["id"], "integration test")
@@ -203,6 +226,10 @@ async def test_scheduler_persists_pipeline_eof_and_error_terminal_states():
     _, missing_mission = await start_plan("I2 pipeline runtime missing")
     pipeline.running.pop(missing_mission["pipeline_id"])
     await orchestrator.run_once(now + timedelta(seconds=3))
+    transient_result = await orchestrator.get_mission(missing_mission["id"])
+    assert transient_result["status"] == "running"
+
+    await orchestrator.run_once(now + timedelta(seconds=16))
     missing_result = await orchestrator.get_mission(missing_mission["id"])
     assert missing_result["status"] == "failed"
     assert missing_result["reason_code"] == "pipeline_runtime_missing"

@@ -28,7 +28,7 @@ async def test_dashboard_reads_verified_coordinates_and_never_invents_kpis():
             road_data_version=f"ROAD-I5-{marker}",
             source="integration_fixture",
             checksum="c" * 64,
-            coordinate_reference={"display": "WGS84", "status": "verified"},
+            coordinate_reference={"display": "GCJ02", "status": "verified"},
             payload={"intersection": {"name": "I5 集成路口", "center_lat": 36.7, "center_lon": 117.0}},
             quality_status="verified",
         ))

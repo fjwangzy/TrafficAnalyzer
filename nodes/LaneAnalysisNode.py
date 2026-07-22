@@ -36,6 +36,26 @@ class LaneAnalysisNode:
         if isinstance(frame_element, VideoEndBreakElement):
             return frame_element
 
+        if getattr(frame_element, "runtime_map_bundle", None):
+            lane_stats: dict[str, dict] = {}
+            for track in (frame_element.buffer_tracks or {}).values():
+                lane_id = getattr(track, "matched_lane_key", None)
+                if not lane_id:
+                    continue
+                stats = lane_stats.setdefault(lane_id, {
+                    "count": 0, "speed_total": 0.0, "queue_length_m": 0.0, "stopped_count": 0,
+                    "map_version_id": frame_element.map_version_id,
+                })
+                stats["count"] += 1
+                stats["speed_total"] += float(track.avg_speed_kmh or 0)
+                if float(track.avg_speed_kmh or 0) < self.queue_speed_threshold_kmh:
+                    stats["stopped_count"] += 1
+            for stats in lane_stats.values():
+                stats["avg_speed_kmh"] = round(stats.pop("speed_total") / stats["count"], 1)
+            frame_element.lane_stats = lane_stats or None
+            frame_element.lane_source = "channelized_map"
+            return frame_element
+
         lane_polygons = self._load_lane_polygons(frame_element)
         if not lane_polygons:
             # 无车道标注数据 → 跳过，DirectionFlowNode已处理方向流量

@@ -84,6 +84,12 @@ services:
       DB_PASSWORD: ${ROAD9_PASSWORD:?ROAD9_PASSWORD is required for production}
       DB_NAME: road9
       DB_BOOTSTRAP_DATABASE: postgres
+      YCX_DB_HOST: ${YCX_DB_HOST:?YCX_DB_HOST is required for read-only road import}
+      YCX_DB_PORT: ${YCX_DB_PORT:-5432}
+      YCX_DB_USER: ${YCX_DB_USER:?YCX_DB_USER is required for read-only road import}
+      YCX_DB_PASSWORD: ${YCX_DB_PASSWORD:?YCX_DB_PASSWORD is required for read-only road import}
+      YCX_DB_NAME: ${YCX_DB_NAME:-ycx}
+      YCX_DB_SCHEMA: ${YCX_DB_SCHEMA:-road9}
       KAFKA_BOOTSTRAP: kafka:29092
       KAFKA_SPOOL_DIR: /pipeline-spool
       KAFKA_CONSUMER_GROUP: uav-platform
@@ -132,6 +138,9 @@ services:
       context: ./console2
       dockerfile: Dockerfile
     restart: unless-stopped
+    environment:
+      AMAP_JS_API_KEY: ${AMAP_JS_API_KEY:?AMAP_JS_API_KEY is required}
+      AMAP_SECURITY_JS_CODE: ${AMAP_SECURITY_JS_CODE:-}
     ports:
       - "${CONSOLE_PORT:-8080}:8080"
     depends_on:

@@ -7,6 +7,7 @@ from elements.VideoEndBreakElement import VideoEndBreakElement
 from utils_local.utils import profile_time, intersects_central_point
 from utils_local.homography import is_valid_homography, undistort_points
 from utils_local.motion_compensation import pixel_to_world_compensated
+from utils_local.coordinates import enu_to_gcj02
 
 logger = logging.getLogger("buffer_tracks")
 
@@ -135,11 +136,54 @@ class TrackerInfoUpdateNode:
             self.buffer_tracks[id].trajectory_points.append((cx, cy))
             self.buffer_tracks[id].trajectory_timestamps_sec.append(frame_element.timestamp)
 
+            # Canonical trajectory geometry uses the vehicle ground-contact point
+            # and is projected with the transform of this exact frame.  Keeping
+            # these points incrementally avoids reprojecting history with a later
+            # camera pose when the track completes.
+            ground_x = cx
+            ground_y = float(bbox[3])
+            track = self.buffer_tracks[id]
+            # Map lineage belongs to the Pipeline, not to successful lane
+            # containment.  Unmatched intersection tracks still must be
+            # traceable to the immutable lane_verified map used for projection.
+            if getattr(frame_element, "map_version_id", None):
+                track.map_version_id = frame_element.map_version_id
+            track.ground_contact_points_px.append((ground_x, ground_y))
+            H = frame_element.homography_matrix
+            drone_disp = getattr(frame_element, "drone_displacement_m", None)
+            anchor_gcj02 = getattr(frame_element, "anchor_gcj02", None)
+            if is_valid_homography(H) and drone_disp is not None:
+                ground_px = np.asarray([[ground_x, ground_y]], dtype=np.float64)
+                dist_coeffs = getattr(frame_element, "dist_coeffs", None)
+                cam_intrinsics = getattr(frame_element, "camera_intrinsics", None)
+                if dist_coeffs and cam_intrinsics:
+                    ground_px = undistort_points(
+                        ground_px,
+                        cam_intrinsics,
+                        (frame_element.frame.shape[1], frame_element.frame.shape[0]),
+                        dist_coeffs,
+                    )
+                world = pixel_to_world_compensated(ground_px, H, drone_disp)[0]
+                point_enu = (float(world[0]), float(world[1]))
+                track.trajectory_enu_m.append(point_enu)
+                track.position_history_enu_m.append(
+                    (point_enu[0], point_enu[1], frame_element.timestamp)
+                )
+                if anchor_gcj02:
+                    track.trajectory_gcj02.append(
+                        enu_to_gcj02(point_enu[0], point_enu[1], anchor_gcj02)
+                    )
+                track.current_position_enu_m = [point_enu[0], point_enu[1]]
+
             # 累积position_history（含时间戳，供SpeedEstimationNode和DirectionFlowNode使用）
             self.buffer_tracks[id].position_history.append((cx, cy, frame_element.timestamp))
             # 限制position_history大小（SpeedEstimationNode会进一步裁剪到history_frames）
             if len(self.buffer_tracks[id].position_history) > 60:
                 self.buffer_tracks[id].position_history = self.buffer_tracks[id].position_history[-60:]
+            if len(self.buffer_tracks[id].position_history_enu_m) > 60:
+                self.buffer_tracks[id].position_history_enu_m = (
+                    self.buffer_tracks[id].position_history_enu_m[-60:]
+                )
 
             # 出口道路检测：车辆从一条道路移动到另一条道路时记录exit_road
             current_road = intersects_central_point(
@@ -176,7 +220,7 @@ class TrackerInfoUpdateNode:
         H = frame_element.homography_matrix
         has_H = is_valid_homography(H)
         drone_disp = getattr(frame_element, "drone_displacement_m", None)
-        world_anchor = getattr(frame_element, "world_anchor_lat_lon", None)
+        anchor_gcj02 = getattr(frame_element, "anchor_gcj02", None)
         can_convert_world = has_H and drone_disp is not None
 
         # 镜头畸变校正数据
@@ -203,6 +247,7 @@ class TrackerInfoUpdateNode:
                     "avg_speed_kmh": round(track.avg_speed_kmh, 1),
                     "max_speed_kmh": round(track.max_speed_kmh, 1),
                     "trajectory_px": track.trajectory_points,
+                    "ground_contact_points_px": track.ground_contact_points_px,
                     "trajectory_timestamps_sec": track.trajectory_timestamps_sec,
                     "trajectory_time_offsets_sec": [
                         round(value - track.timestamp_first, 3)
@@ -210,27 +255,50 @@ class TrackerInfoUpdateNode:
                     ],
                     "timestamp_first": track.timestamp_first,
                     "timestamp_last": track.timestamp_last,
+                    "map_version_id": track.map_version_id,
+                    "matched_lane_key": track.matched_lane_key,
+                    "source_lane_id": track.source_lane_id,
+                    "matched_link_id": track.matched_link_id,
+                    "movement_key": track.movement_key,
+                    "map_match_confidence": track.map_match_confidence,
                 }
 
+                if track.trajectory_enu_m:
+                    completed_track_data["trajectory_enu_m"] = [
+                        [round(point[0], 2), round(point[1], 2)]
+                        for point in track.trajectory_enu_m
+                    ]
+                    completed_track_data["entry_point_enu_m"] = completed_track_data[
+                        "trajectory_enu_m"
+                    ][0]
+                    completed_track_data["exit_point_enu_m"] = completed_track_data[
+                        "trajectory_enu_m"
+                    ][-1]
+                if track.trajectory_gcj02:
+                    completed_track_data["trajectory_gcj02"] = [
+                        [round(point[0], 8), round(point[1], 8)]
+                        for point in track.trajectory_gcj02
+                    ]
+
                 # 入口/出口点世界坐标
-                if can_convert_world and track.trajectory_points:
-                    entry_px = np.array([track.trajectory_points[0]], dtype=np.float64)
-                    exit_px = np.array([track.trajectory_points[-1]], dtype=np.float64)
+                if can_convert_world and track.ground_contact_points_px and not track.trajectory_enu_m:
+                    entry_px = np.array([track.ground_contact_points_px[0]], dtype=np.float64)
+                    exit_px = np.array([track.ground_contact_points_px[-1]], dtype=np.float64)
                     # 镜头畸变校正
                     if dist_coeffs and cam_intrinsics and img_size:
                         entry_px = undistort_points(entry_px, cam_intrinsics, img_size, dist_coeffs)
                         exit_px = undistort_points(exit_px, cam_intrinsics, img_size, dist_coeffs)
                     entry_world = pixel_to_world_compensated(entry_px, H, drone_disp)[0]
                     exit_world = pixel_to_world_compensated(exit_px, H, drone_disp)[0]
-                    completed_track_data["entry_point_m"] = [
+                    completed_track_data["entry_point_enu_m"] = [
                         round(float(entry_world[0]), 2), round(float(entry_world[1]), 2)
                     ]
-                    completed_track_data["exit_point_m"] = [
+                    completed_track_data["exit_point_enu_m"] = [
                         round(float(exit_world[0]), 2), round(float(exit_world[1]), 2)
                     ]
-                    if world_anchor:
-                        completed_track_data["world_anchor_lat_lon"] = [
-                            round(world_anchor[0], 6), round(world_anchor[1], 6)
+                    if anchor_gcj02:
+                        completed_track_data["anchor_gcj02"] = [
+                            round(anchor_gcj02[0], 6), round(anchor_gcj02[1], 6)
                         ]
 
                 completed_tracks.append(completed_track_data)

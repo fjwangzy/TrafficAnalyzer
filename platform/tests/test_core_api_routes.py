@@ -44,6 +44,7 @@ class _MetricStore:
     def __init__(self):
         self.conflict_query_args = None
         self.traffic_query_args = None
+        self.trajectory_analysis_args = None
 
     async def query_tracks(self, *args, **kwargs):
         return []
@@ -59,6 +60,18 @@ class _MetricStore:
             "pet_sec": 0.3,
             "evidence": ["hard_ttc_or_pet"],
         }]
+
+    async def query_trajectory_analysis(self, intersection_id, **query):
+        self.trajectory_analysis_args = (intersection_id, query)
+        return {
+            "query": {"intersection_id": intersection_id},
+            "quality": {"total_tracks": 2, "returned_tracks": 1, "truncated": False},
+            "timeline": [],
+            "movement_ranking": [{"movement_key": "entry:3|exit:2", "vehicle_count": 2}],
+            "class_summary": {"business": [], "yolo": [], "unknown_yolo_name_count": 0},
+            "slice_tracks": [],
+            "conflicts": [],
+        }
 
     async def query_traffic(self, *args, **kwargs):
         self.traffic_query_args = (args, kwargs)
@@ -147,6 +160,44 @@ class CoreApiRoutesTest(unittest.TestCase):
                 "granularity": "5m",
             }),
         )
+
+    def test_trajectory_analysis_endpoint_forwards_time_slice_and_raw_class_filters(self):
+        response = self.client.get(
+            "/api/v1/trajectories/INT_camera_1/analysis",
+            params={
+                "start_at": "2026-07-21T08:00:00Z",
+                "end_at": "2026-07-21T08:30:00Z",
+                "slice_start_at": "2026-07-21T08:14:20Z",
+                "slice_end_at": "2026-07-21T08:14:30Z",
+                "bucket_sec": 10,
+                "source_profile_id": "SRC-1",
+                "vehicle_class": "motor",
+                "yolo_class_id": 3,
+                "movement_key": "entry:3|exit:2",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["movement_ranking"][0]["vehicle_count"], 2)
+        intersection_id, query = self.client.app.state.metric_store.trajectory_analysis_args
+        self.assertEqual(intersection_id, "INT_camera_1")
+        self.assertEqual(query["bucket_sec"], 10)
+        self.assertEqual(query["source_profile_id"], "SRC-1")
+        self.assertEqual(query["vehicle_class"], "motor")
+        self.assertEqual(query["yolo_class_id"], 3)
+        self.assertEqual(query["movement_key"], "entry:3|exit:2")
+
+    def test_trajectory_analysis_can_discover_the_complete_data_window(self):
+        response = self.client.get(
+            "/api/v1/trajectories/INT_camera_1/analysis",
+            params={"period": "all", "bucket_sec": 10},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        _, query = self.client.app.state.metric_store.trajectory_analysis_args
+        self.assertEqual(query["period"], "all")
+        self.assertIsNone(query["start_at"])
+        self.assertIsNone(query["slice_start_at"])
 
 
 if __name__ == "__main__":

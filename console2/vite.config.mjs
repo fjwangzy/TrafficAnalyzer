@@ -3,6 +3,7 @@ import react from "@vitejs/plugin-react";
 import { bundleBudgetPlugin, manualChunks } from './src/config/build.js'
 
 export default defineConfig({
+  envPrefix: ["VITE_", "AMAP_"],
   optimizeDeps: {
     include: ["react", "react-dom/client"],
   },

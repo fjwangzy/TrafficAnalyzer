@@ -14,7 +14,6 @@ import logging
 import numpy as np
 
 os.environ["VIDEO_SRC"] = "test_videos/inter_xqh/DJI_20260403142902_0001_V小清河北路与水屯路路口.mp4"
-os.environ["ROADS_JSON"] = ""
 os.environ["TOPIC_NAME"] = "uav_statistics_1"
 os.environ["CAMERA_ID"] = "1"
 
@@ -108,7 +107,6 @@ def main():
     video_config = {
         "src": os.environ["VIDEO_SRC"],
         "skip_secs": 0,
-        "roads_info": os.environ["ROADS_JSON"],
     }
     telemetry_config = {
         "enabled": True,
@@ -223,11 +221,11 @@ def main():
             "frame": frame_count2,
             "has_displacement": fe.drone_displacement_m is not None,
             "has_velocity": fe.drone_velocity_ms is not None,
-            "has_anchor": fe.world_anchor_lat_lon is not None,
+            "has_anchor": fe.anchor_gcj02 is not None,
             "is_hovering": fe.is_hovering,
             "displacement": fe.drone_displacement_m.copy() if fe.drone_displacement_m is not None else None,
             "velocity": fe.drone_velocity_ms.copy() if fe.drone_velocity_ms is not None else None,
-            "anchor": fe.world_anchor_lat_lon,
+            "anchor": fe.anchor_gcj02,
         })
         if frame_count2 >= 25:
             break
@@ -470,7 +468,7 @@ def main():
         print(f"    homography: {'Yes' if last_fe.homography_matrix is not None else 'No'}")
         print(f"    drone_displacement: {last_fe.drone_displacement_m}")
         print(f"    drone_velocity: {last_fe.drone_velocity_ms}")
-        print(f"    world_anchor: {last_fe.world_anchor_lat_lon}")
+        print(f"    anchor_gcj02: {last_fe.anchor_gcj02}")
         print(f"    is_hovering: {last_fe.is_hovering}")
         print(f"    direction_stats: {last_fe.direction_stats}")
         print(f"    info: {last_fe.info}")

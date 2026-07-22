@@ -16,7 +16,7 @@ class ZoneCreate(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     zone_type: ZoneType
     geometry: dict
-    coordinate_system: Literal["ENU", "GCJ02", "WGS84"]
+    coordinate_system: Literal["GCJ02"] = "GCJ02"
     road_data_version: str | None = Field(default=None, max_length=100)
     schedule: dict = Field(default_factory=dict)
 
@@ -38,7 +38,7 @@ class ZoneUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=200)
     zone_type: ZoneType | None = None
     geometry: dict | None = None
-    coordinate_system: Literal["ENU", "GCJ02", "WGS84"] | None = None
+    coordinate_system: Literal["GCJ02"] | None = None
     road_data_version: str | None = Field(default=None, max_length=100)
     schedule: dict | None = None
     status: Literal["candidate", "retired"] | None = None

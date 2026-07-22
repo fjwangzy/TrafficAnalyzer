@@ -77,7 +77,7 @@ class KafkaConsumerStatsTest(unittest.IsolatedAsyncioTestCase):
             {
                 "msg_type": "uav_stats",
                 "lane_stats": {"1": {"count": 2}},
-                "active_trajectories": [{"track_id": 7, "trajectory_world_m": [[0, 0]]}],
+                "active_trajectories": [{"track_id": 7, "trajectory_enu_m": [[0, 0]]}],
             },
             "INT_camera_1",
         )

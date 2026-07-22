@@ -19,7 +19,7 @@
 
 - [x] **Gate A / P0 清零**：关闭匿名管理员注册、WebSocket 客户端消息注入和 SRT 遥测超容差/越界返回。
 - [x] **应用 Gate B 完成**：认证与 active-user 回查、Pipeline/视频 RBAC、媒体鉴权、持久审计、Kafka 可恢复 dispatch、测绘错误态/复核、Demo 隔离、暂停语义、拆包、可访问性、Nginx 安全头和 Ruff/CI 门禁已统一落地。
-- [x] 本机 canonical 栈已迁移到唯一 Alembic head `20260717_0013`；Platform、显式 PostgreSQL/TimescaleDB、Console2、根回归、`inter_xqh 56 PASS` 和 ADR-019 strict audit 均复核通过。
+- [x] 本机 canonical 栈已前向迁移到唯一 Alembic head `20260721_0017`；Platform、显式 PostgreSQL/TimescaleDB、Console2、根回归、`inter_xqh 56 PASS` 和 ADR-019 strict audit 均复核通过。
 - [ ] **完整发布 UAT 仍 No-Go**：按确认范围延期 GPU/Platform/Console 镜像修复、干净制品 digest、SBOM/签名、共享 UAT secret/TLS/SASL、容器最小权限/healthcheck 和 HA/容量门禁；详见 [`UAT_FULL_REVIEW_2026-07-17.md`](UAT_FULL_REVIEW_2026-07-17.md)。
 
 ## PRD/UI 滚动交付
@@ -34,7 +34,7 @@
 - [x] I4：完成 S4 本地 candidate 围栏/规则、统一 AI 线索、证据引用/哈希、技术复核审计和 Console2 三视图真实化；权威发布与主平台投递保持 503/blocked。
 - [ ] I4 正式门禁：冻结权威围栏/规则、执法类型与阈值、雷达设备/检定/融合、法制证据、统一身份与主平台合同，完成批准验收集和性能容量验收。
 - [x] I5-A：完成 DashboardReadModel、4 个真实聚合 API、正式 `/` Mock 清除、未冻结 KPI null 门禁、权威坐标隔离和 empty/blocked 视觉验收。
-- [ ] I5-B：内部风险/监测/质量筛选、WGS84 bbox、搜索、offset/limit、422/503、REST 保留快照/有限重试和底图失败降级已实现；项目范围/底图/KPI/权限、点位聚合/zoom、全局增量/断线缺口回补、获批正常/混合质量数据及 5 秒/30 秒正式验收仍待外部冻结。
+- [ ] I5-B：内部风险/监测/质量筛选、GCJ-02 bbox、搜索、offset/limit、422/503、REST 保留快照/有限重试和高德加载失败降级已实现；项目范围/KPI/权限、点位聚合/zoom、全局增量/断线缺口回补、获批正常/混合质量数据及 5 秒/30 秒正式验收仍待外部冻结。
 - [x] I6：根 Compose 已收敛为唯一 `road9/TimescaleDB + Apache Kafka KRaft + Platform + Console2 + Nginx` 拓扑；`traffic_road9_data` 从空库迁移到 `20260715_0010`，管理员 1 条、业务 0 条；旧数据不迁移，旧容器已删除，指定旧资产未挂载并保留到北京时间 2026-07-23 11:11:54。独立目标栈、断库恢复、正式端口切换、61/61 样本的 30 分钟健康探测和 `--scope local --strict` 均通过；生产镜像/秘密/TLS/SASL/HA、容量、RPO/RTO、试点和主平台联调继续 blocked。
 
 ## 技术债清单
@@ -173,6 +173,9 @@
 
 ### Sprint 4: 质量加固（部分）
 
+> 下表保留历次实现事实；凡涉及 InfluxDB、OSM/OpenLayers、WGS84、道路 JSON 或旧频道的行均为
+> 历史快照，已由 ADR-019/ADR-020 退役，不得恢复为当前运行时合同。
+
 | ID | 任务 | 状态 | 修改文件 |
 |----|------|------|----------|
 | T-402 | motion_compensation.py 死代码 | ✅ | `utils_local/motion_compensation.py` — 3 个函数标记 deprecated + warnings.warn |
@@ -245,7 +248,14 @@
 | T-479 | 监控历史态势真实性与查询性能修复 | ✅ | `GET /intersections/{id}/stats` 透传 `granularity`，历史查询改为类型化标量投影并每桶保留最新点，仅最后一点补读 TCC 诊断，避免 30 分钟查询反序列化约 190MB 审计 payload、耗尽连接池；真实 `SRC-MP4NEW2-CH-0715-PM` 请求由超时降至 0.362s、返回 4 个采样点。Console2 将虚构的“车型/货车”图改为真实 `direction_flow` 直行/左转/右转图，区分加载失败与真空数据，并移除无 SourceProfile lineage 的固定告警；浏览器确认两图可见、固定事件为 0、检测器直连图 1280×720。 |
 | T-480 | 实时监测双侧栏缺省锁定 | ✅ | Console2 `/monitoring` 的“实时态势”与“BEV 与实时事件”侧栏初始即为展开且锁定状态，刷新或切换 SourceProfile 后保持可见；用户点击收缩仍会解除对应锁定并执行原有悬停展开逻辑。`LiveModules.test.jsx` 通过公开面板状态、`pinned` 样式和两个“取消锁定”按钮覆盖缺省行为。 |
 | T-481 | 无人机回放源与悬浮按钮重叠修复 | ✅ | `/drones` 回放卡片把回放源、道路质量和启动/停止按钮收敛到同一个底部浮层网格：左列内容可收缩并省略长名称，右列按钮占独立列，三列/两列/单列布局均不再依赖相互竞争的绝对定位。浏览器逐卡测量 5 张卡片的下拉框与按钮均为 0px 重叠、10px 间距；路由交互与响应式 CSS 契约覆盖。 |
-| T-482 | 轨迹研判升级设计：时间片 + 流向排名 + YOLO 原始分类 | 设计 ✅ / 实现 ⏳ | 冻结 `/gis` 的 10 秒时间片回放、默认流向排名、地图/时间轴/类别/代表轨迹联动和严格历史来源规则；业务车型与 YOLO 原始类别分离，未来轨迹保存 ID、名称、模型标识和映射版本。设计、分析 API、持久化边界、异常状态与验收矩阵见 `docs/generated/2026-07-21-trajectory-analysis-upgrade-design.md`；检测消息、Alembic、分析服务与 Console2 实现待推进。 |
+| T-482 | 轨迹研判升级：时间片 + 流向排名 + YOLO 原始分类 | ✅ | `/gis` 已改为最新可回放 30 分钟数据段、当前时间片世界轨迹、可切换排序的流向榜、双分类和代表轨迹联动；筛选/流向/时间片/页签可由 URL 复现。检测链保存 YOLO ID/name/model/mapping，`20260721_0014/0015` 增加类型化列与查询索引，分析 API 在 lineage-safe 去重后应用业务/YOLO/方向筛选，并提供冲突归因、转折与冲突点优先抽样及质量元数据。`road9` 四路口抽验 50,301 条完成事实、28,487 条唯一轨迹，默认时间片分别返回 24/18/50/14 条可移动轨迹；170 项 Platform、101 项 Console2、6 项消息契约、生产构建、四档响应式和同视口视觉验收均通过。证据见 `docs/test_report_trajectory_analysis_multi_intersection_20260721.md`。 |
+| T-483 | 八源轨迹清理与原生 MPS 重跑准备 | ✅ | 新增只读 `platform/scripts/inventory_trajectory_replay.py` 与 4 项范围测试，复用 bootstrap 的八源 allowlist，输出事实、衍生事件、证据、Inbox 和活动任务影响面；当前盘点为 37,891 条轨迹、1,209,810 个轨迹点、95 个冲突、132 个证据包，活动 Mission/Pipeline 为 0。`docs/runbook_trajectory_data_reset_and_replay.md` 冻结清理/保留边界、备份与 Kafka Inbox 策略、MPS 门禁、重跑和回滚步骤。Platform 全量 174 passed；本轮未删除数据，当前 MPS available=false，恢复前禁止重跑。 |
+| T-484 | GCJ-02 + 高德地图两阶段重建与技术演示收尾 | ✅ | 以固定白名单完成历史业务事实和受管 Kafka Topic 一次性清理，保留主数据、原始素材及 SHA-256；YCX 仅在本地缺路口时按需只读导入，WKT 由 PostGIS 解析，对象 ID 按不透明 geomhash 处理。四路口发布 4 个不可变 `lane_verified` 地图（31 Link / 104 本地车道），9 个 SourceProfile 具有独立 verified 影像配准；5 个来源自然 EOF 并固化为 completed Mission，共 13,042 条新轨迹。视频回归按用户决定以小清河北路 2 条轨迹样本收尾，空间一致性 100%，GCJ-02/ENU 最大往返误差 0.0068m；Console2 `/gis` 已在高德地图验证。技术演示完成，生产仍由道路标线人工签署、至少 100 条人工轨迹且车道匹配准确率 ≥95%、其余来源是否全跑和生产安全/容量门禁阻断。证据见 `docs/test_report_gcj02_two_stage_demo_20260722.md` 与 `docs/runbook_trajectory_data_reset_and_replay.md`。 |
+| T-485 | 未绑定路网的演示检测启动 | ✅ | `/monitoring` 不再用无人机 `default_road_data_version` 缺失禁用“启动演示检测”；手动 Mission、PipelineManager 和检测子进程环境均允许无 Runtime Road Map Bundle 启动 YOLO/ByteTrack 与 MJPEG：缺图时不再把 `{}` 写入 `RUNTIME_MAP_BUNDLE_JSON`，并以 `road_context_status=missing`、`quality_status=unverified` 保持降级边界。Mission API 返回 `failed` 时监控页直接显示 `error_message/reason_code`，不再静默当作启动成功。传入地图时仍只接受 `lane_verified` Bundle，正式地图匹配、世界坐标轨迹和车道级研判不因本修复放宽。浏览器实测 `SRC-MP4NEW-HY-0625-AM` 从按钮启动到检测器首帧、`LIVE 2.4 FPS`、MPS 推理约 145ms 和实时轨迹，验证后从任务页停止，恢复 0 个执行任务。 |
+| T-486 | 监控页 BEV 历史轨迹闪烁修复 | ✅ | `console2/src/App.jsx` 对实时与历史 GCJ-02 轨迹集合保持稳定引用；`MonitoringBevMap.jsx` 使用完整绘制签名复用等价轨迹输入，页面时钟等无关重渲染不再每秒删除 500 条覆盖物、重新添加并执行 `setFitView`。`MonitoringBevMap.test.jsx` 覆盖结构等价的新数组不触发 `remove/add/setFitView`，`LiveModules.test.jsx` 同步覆盖 Mission 业务失败可见。浏览器地图复验当时被并行加入的安全密钥硬门禁阻断；该门禁后续由 T-487 改为可选。 |
+| T-487 | 高德 JSAPI 浏览器直连 | ✅ | Web Key 是唯一前端硬门禁；`AMAP_SECURITY_JS_CODE` 改为可选，存在时设置 `window._AMapSecurityConfig.securityJsCode`，不存在时清除旧安全配置并仍调用 Loader。开发 Vite 暴露 `AMAP_*` 环境前缀并兼容 `VITE_AMAP_*`，生产 Compose 也不再要求安全密钥，二者均无 `/_AMapService` 代理。组件回归覆盖仅 Web Key 不得进入“高德地图服务不可用”；用户明确接受仅 Key 模式可能被高德警告或拒绝。 |
+| T-488 | 检测器冷启动与 MJPEG 就绪竞态根治 | ✅ | 根因包含两段竞态：检测器 `VideoServer` 仅在端口完成绑定后输出 `MJPEG_READY`，Platform 默认等待最多 45 秒再把 Pipeline/Mission 标为 `running`；`run_platform.py` 改用 `os.execvpe` 让 launchd 直接拥有 uvicorn，`mac_local_platform.sh stop/restart` 等待端口释放，不再遗留多个连接同一 `road9` 的孤儿调度器误写 `pipeline_runtime_missing`。调度器另保留 15 秒瞬时缺失确认窗口；Console2 首轮 5 次 3 秒重连后改为每 10 秒持续自愈，不再永久锁死“视频流连接失败”。针对性生命周期回归、Console2 全量回归、生产构建和真实 Chromium 冷启动稳定性复验通过；当时既有的 GCJ-02 切片断言已由 T-489 修复并恢复 Platform 全量通过。 |
+| T-489 | 轨迹研判连续回放与闪烁修复 | ✅ | `/gis` 相邻时间片请求使用同范围占位帧、串行推进和下一非空片预取，等待时保持当前轨迹并显示“加载下一片…”，自动播放跳过长时间空桶，末片点击播放从首个有事实时间片重开。`MonitoringBevMap` 先添加新覆盖物再移除旧覆盖物，且只在首次投放时缩放视口；分析 API 以同一索引裁剪 ENU/GCJ-02，修复“ENU 是当前片、地图却画整条轨迹”的契约偏差。真实 `/gis` 10 秒高频采样跨 3 次切片：0 次空地图、0 次 0 轨迹、0 次 iframe 重建，console 0 error/warn；Router/地图 48 项、Console2 全量 113 项、Platform 聚合 13 项与全量 182 项通过，production build 通过。 |
 | T-438 | GIS 历史轨迹与冲突复盘 | ✅ | `traffic-fly-console/src/features/gis/index.tsx` — 选中路口后调用 `/api/v1/trajectories/{intersection_id}?period=1h&limit=200` 和 `/api/v1/trajectories/{intersection_id}/conflicts?period=1h&limit=200`，显示历史轨迹数量、Track ID、转向、车辆类型、均速、时长、轨迹点数，以及历史冲突 pair、TTC/PET、场景、证据和风险分；`traffic-fly-console/src/features/gis/index.test.tsx` 覆盖 `INT_camera_1` 历史轨迹与冲突证据复盘详情 |
 | T-439 | Dashboard pipelines_active 真实数据 | ✅ | `traffic-fly-console/src/features/dashboard/index.tsx` — 首页活跃管道数优先使用 `system_metrics.pipelines_active` WebSocket 实时值，列表未加载时回退 `/intersections/summary.pipelines_active`，列表加载后使用 `/pipelines` running 数；`traffic-fly-console/src/features/dashboard/index.test.tsx` 覆盖 WebSocket 更新和 summary fallback；当前前端回归 `npm test` 通过 27 个测试文件 / 160 个测试，`npm run build` 通过 |
 | T-430 | PipelineManager 正常结束状态修正 | ✅ | `platform/app/services/pipeline_manager.py` — 子进程 `return_code == 0` 时标记为 `stopped` 且清空 `error_message`，非零退出才标记 `error` 并保留 stderr 尾部；`platform/tests/test_pipeline_manager.py` 覆盖正常结束与异常退出两个状态分支 |
@@ -413,8 +423,30 @@
 - **修复**：添加 `if self._cv2_writer is not None:` 检查
 
 ## 下一步
-要实际使用 GCP 修正解决你的东西向偏移问题，需要：
 
-在路口找 2-3 个特征点（路灯、标线端点），用 Google Earth 获取其经纬度
-在视频截图中标注这些点的像素坐标
-将经纬度转为相对锚点的 ENU 偏移填入 app_config.yaml 的 gcp.points
+### GCJ-02 + 高德地图两阶段重建（2026-07-21）
+
+- [x] Alembic `20260721_0016` + `20260721_0017`、GCJ-02/ENU 坐标工具、公共契约、路网/轨迹类型化字段和按 SourceProfile 唯一的视觉配准。
+- [x] YCX 按需只读导入：PostGIS 解析 WKT、对象 ID 按不透明 geomhash、首路口 8 Link/32 候选完整性验证。
+- [x] 高德 CityMap、Monitoring BEV、渠化编辑预览和运行时 Web Key 浏览器直连；安全密钥可选，Vite/Nginx 不提供高德代理，域名白名单仍为建议门禁。
+- [x] 渠化地图版本、视觉配准、影像拟合、渠化要素编辑、发布质量门禁和 Runtime Bundle。
+- [x] 补齐正拍 lane 拟合操作闭环：按路口选择事故测绘任务/采集批次/真实关键帧，幂等创建可恢复
+  标注任务并自动带入 SourceProfile 与 pixel→ENU 变换；修复宽屏 `contain` 黑边导致的像素坐标偏移，
+  增加顶点撤销和当前类型几何移除操作（2026-07-22）。
+- [x] `RoadMapMatchingNode`、正式地图/轨迹研判的 `lane_verified` 门禁和顺序重跑工具；仅检测 Pipeline 在未绑定路网时允许以 `missing/unverified` 降级启动。
+- [x] 修正正式轨迹坐标链：SourceProfile 精确配准在检测后首节点锁定；底部接地点逐帧累积
+  ENU/GCJ-02，速度/方向使用逐帧 ENU 历史，车道匹配复用相同 H 与运动补偿。
+- [x] 历史数据库/Kafka 清理，保留主数据和 20 个原始素材 SHA-256；62 个 Topic offset 为零。
+- [x] 4 个注册路口完成正拍关键帧配准与技术门禁，发布 4 个不可变 `lane_verified` 版本；共 31 Link、104 本地稳定 Lane、9 个 verified SourceProfile 配准。生产人工签署单独保留。
+- [x] 用户将视频回归范围调整为 2 条轨迹样本，不再等待 9 源全量结束。v3 前 5 源均自然 EOF、
+  Kafka/数据库精确对账并固化为 5 个 completed Mission，共 13,042 条轨迹；第 6 源中止事实与
+  Kafka 尾部补写已两轮清零并稳定为零。抽样 2 条空间一致性 100%，GCJ-02/ENU 最大往返误差
+  0.0068m；Console2 已实测高德地图、GCJ-02 标签、Mission 和真实轨迹可见。证据见
+  `docs/test_report_gcj02_two_stage_demo_20260722.md`。
+- [ ] 生产发布仍需人工复核不少于 100 条轨迹、车道匹配准确率达到 95%，并确认是否执行其余
+  4 源全量回放；当前技术演示结果不解锁生产门禁。
+
+后续新增路口若出现系统性偏移，必须在渠化标注页面选择不少于 4 个分布合理的可复核控制点，
+记录影像像素与已确认 GCJ-02 坐标，由服务端计算 pixel→ENU 单应矩阵并保存残差；不得从
+Google Earth/WGS84 直接抄取坐标、不得在浏览器二次转换，也不得恢复 `app_config.yaml`
+中的全局 `gcp.points` 兼容路径。

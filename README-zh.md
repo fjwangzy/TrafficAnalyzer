@@ -1,13 +1,13 @@
 # 无人机交通态势分析平台
 
-TrafficAnalyzer 使用无人机视频、遥测和道路配置完成车辆检测、跟踪、速度/方向/车道分析、轨迹输出与机非冲突识别。管理端由 FastAPI Platform 与 React Console2 组成。
+TrafficAnalyzer 使用无人机视频、遥测和已发布渠化地图完成车辆检测、跟踪、速度/方向/车道分析、轨迹输出与机非冲突识别。管理端由 FastAPI Platform 与 React Console2 组成。
 
 ## 本机数据架构
 
 ADR-019 已在本机开发环境完成纯净切换：
 
 - 唯一数据库为 PostgreSQL connection database `road9`，镜像启用 TimescaleDB；
-- 数据库由 Alembic 初始化，当前 head 为 `20260715_0010`；
+- 数据库由 Alembic 初始化，当前 head 为 `20260721_0017`；
 - Kafka 使用 Apache Kafka KRaft；
 - Topic、`msg_type`、WebSocket channel 和自建表统一使用 `uav_` 前缀；
 - 旧观测链路已从代码和 Compose 删除，历史数据不迁移；
@@ -16,8 +16,31 @@ ADR-019 已在本机开发环境完成纯净切换：
 ## Docker 全栈
 
 ```bash
+export ROAD9_PASSWORD='replace-me'
+export JWT_SECRET_KEY='replace-me'
+export BOOTSTRAP_ADMIN_PASSWORD='replace-me'
+export CORS_ORIGINS='["https://console.example.com"]'
+export AMAP_JS_API_KEY='replace-me'
 docker compose -p traffic_analyzer up -d --build
 ```
+
+公共坐标契约唯一为 GCJ-02，Console2 唯一活动底图为高德 JS API 2.0。Web Key 在容器启动时
+写入 `/runtime-config.js`；`AMAP_SECURITY_JS_CODE` 为可选增强配置，提供时由运行时配置注入
+浏览器并通过 `securityJsCode` 直连高德，不提供时仅使用 Web Key。两种模式都不经过 Vite 或
+Nginx 代理；仅 Key 模式可能被高德警告或拒绝，开发/生产域名仍应在高德控制台白名单中登记。
+`docs/road_pg.md` 只供操作者取得当前凭证；前端、构建脚本和运行时代码不得直接读取该文件。
+
+## 两阶段重建状态
+
+本机技术演示已完成严格串行的两阶段重建：第一阶段按路口从 YCX 只读导入候选路网并以无人机
+正拍影像拟合、发布不可变 `lane_verified` 地图；第二阶段固定 Runtime Road Map Bundle，使用
+ENU 计算并以 GCJ-02 投放轨迹。当前四路口地图、9 个视频源配准和 5 个自然 EOF 回放批次已经
+固化；视频回归按本轮约定以 2 条轨迹样本完成技术验收，不代表生产人工签署。
+
+执行边界、回滚步骤和下一阶段入口见
+[`docs/runbook_trajectory_data_reset_and_replay.md`](docs/runbook_trajectory_data_reset_and_replay.md)，
+本轮证据见
+[`docs/test_report_gcj02_two_stage_demo_20260722.md`](docs/test_report_gcj02_two_stage_demo_20260722.md)。
 
 默认入口：
 
@@ -39,10 +62,12 @@ docker compose -p traffic_analyzer --profile ops up -d kafka-ui
 检测器由 Pipeline API 或 Mission 调度在 Platform 容器内按需拉起，并在任务停止或 Platform
 退出时回收。镜像默认保持 CPU 可启动，NVIDIA GPU 暴露仍属于外部部署门禁。
 
-本机不使用 Docker 时，从仓库根目录启动 Platform：
+Apple Silicon 本机开发从仓库根目录启动原生 Platform，以便检测器子进程使用 Metal/MPS：
 
 ```bash
-python run_platform.py
+scripts/mac_local_platform.sh up
+export AMAP_JS_API_KEY='replace-me'
+cd console2 && npm run dev
 ```
 
 原独立检测器镜像保存在 `Dockerfile.detector`，不进入 canonical Compose。它不会内置模型
@@ -69,7 +94,7 @@ python main_optimized.py pipeline.send_info_kafka=False
 
 ```bash
 VIDEO_SRC="test_videos/inter_xqh/DJI_20260403142902_0001_V小清河北路与水屯路路口.mp4" \
-ROADS_JSON="" \
+RUNTIME_MAP_BUNDLE_JSON="$(<lane-verified-runtime-bundle.json)" \
 TOPIC_NAME="uav_statistics_1" \
 CAMERA_ID=1 \
 KAFKA_BOOTSTRAP="localhost:9092" \

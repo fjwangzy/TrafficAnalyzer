@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest'
 
 import {
   geometrySegments,
+  dragImageGeometry,
   imageContainViewport,
   metricSegmentLabel,
+  projectMetricPolygonToImage,
   projectPoint,
 } from './surveyGeometry'
 
@@ -39,5 +41,59 @@ describe('survey measurement geometry', () => {
       width: 1000,
       height: 562.5,
     })
+  })
+
+  it('reverse-projects an ENU lane polygon onto its authoritative image', () => {
+    const pixelToEnu = [
+      [0.1, 0, -10],
+      [0, 0.1, -5],
+      [0, 0, 1],
+    ]
+    const geometry = {
+      type: 'Polygon',
+      coordinates: [[
+        [0, 0],
+        [10, 0],
+        [10, 10],
+        [0, 0],
+      ]],
+    }
+
+    const projected = projectMetricPolygonToImage(geometry, pixelToEnu)
+    expect(projected).toHaveLength(3)
+    expect(projected[0][0]).toBeCloseTo(100)
+    expect(projected[0][1]).toBeCloseTo(50)
+    expect(projected[1][0]).toBeCloseTo(200)
+    expect(projected[1][1]).toBeCloseTo(50)
+    expect(projected[2][0]).toBeCloseTo(200)
+    expect(projected[2][1]).toBeCloseTo(150)
+  })
+
+  it('clips a projected reference lane to the visible source-image rectangle', () => {
+    expect(projectMetricPolygonToImage({
+      type: 'Polygon',
+      coordinates: [[[-10, 10], [50, 10], [50, 50], [-10, 50], [-10, 10]]],
+    }, [[1, 0, 0], [0, 1, 0], [0, 0, 1]], { width: 40, height: 40 })).toEqual([
+      [0, 40],
+      [0, 10],
+      [40, 10],
+      [40, 40],
+    ])
+  })
+
+  it('moves one lane vertex while keeping it inside the source image', () => {
+    expect(dragImageGeometry(
+      [[10, 10], [80, 10], [80, 80]],
+      { type: 'vertex', index: 1, point: [130, -20] },
+      { width: 100, height: 90 },
+    )).toEqual([[10, 10], [100, 0], [80, 80]])
+  })
+
+  it('translates a whole lane without changing its shape or leaving the image', () => {
+    expect(dragImageGeometry(
+      [[70, 20], [90, 20], [90, 50], [70, 50]],
+      { type: 'translate', dx: 30, dy: -40 },
+      { width: 100, height: 90 },
+    )).toEqual([[80, 0], [100, 0], [100, 30], [80, 30]])
   })
 })

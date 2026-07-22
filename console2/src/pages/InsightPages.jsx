@@ -491,14 +491,6 @@ export function GisPage() {
         <div><span>识别流向</span><strong>{analysis.movement_ranking?.length || 0}</strong><small>{selectedMovement ? '已聚焦 1 个流向' : '点击排名可聚焦'}</small></div>
         <div><span>当前切片冲突</span><strong>{conflicts.length}</strong><small>未归因 {quality.unattributed_conflicts || 0} 条</small></div>
       </div>
-      <div className='trajectory-quality-notices'>
-        {!loading && !error && quality.total_tracks === 0 && <QualityNotice tone='info' title='当前范围无完成轨迹'>请扩大时间窗口或清除车型、任务与数据源筛选。 <button className='secondary-button' onClick={() => { setPeriod('all'); setMissionId('all'); setSourceProfileId('all'); setVehicleClass('all'); setYoloClassId('all'); setTurnBehavior('all') }}>清除并查看全部</button></QualityNotice>}
-        {quality.truncated && <QualityNotice tone='warning' title='当前时间片已限量'>仅展示 {quality.returned_tracks || 0} 条可回放轨迹；请选择流向或原始类别缩小范围。 <button className='secondary-button' onClick={() => setAnalysisTab('track')}>查看当前片轨迹</button></QualityNotice>}
-        {(quality.spatial_coverage_ratio ?? 1) < 1 && <QualityNotice tone='warning' title='空间覆盖不足'>{quality.total_tracks - quality.replayable_tracks} 条轨迹缺少可投放的世界坐标。 <button className='secondary-button' onClick={() => setAnalysisTab('track')}>查看可回放轨迹</button></QualityNotice>}
-        {(analysis.movement_ranking || []).some((item) => item.movement_source !== 'road_context') && <QualityNotice tone='info' title='部分流向使用降级证据'>“轨迹方位推断”与“仅按转向降级”均不是权威路网匹配。 <button className='secondary-button' onClick={() => setAnalysisTab('movement')}>查看来源标记</button></QualityNotice>}
-        {(quality.unattributed_conflicts || 0) > 0 && <QualityNotice tone='warning' title='存在未归因冲突'>{quality.unattributed_conflicts} 条冲突因缺少同一任务或管道血缘，未计入流向排名。 <button className='secondary-button' onClick={() => navigate('/events')}>查看事件中心</button></QualityNotice>}
-        {(quality.duplicate_tracks_omitted || 0) > 0 && <QualityNotice tone='info' title='重复完成轨迹已去重'>{quality.duplicate_tracks_omitted} 条同血缘重复记录未进入排名和占比。</QualityNotice>}
-      </div>
       {(!Number.isFinite(selected.lat) || !Number.isFinite(selected.lon)) && <QualityNotice tone='warning' title='坐标尚未冻结'>缺少可信 GCJ-02 坐标时不投放地图。</QualityNotice>}
       <div className='trajectory-analysis-workspace'>
         <section className='trajectory-map-card'>
@@ -525,6 +517,14 @@ export function GisPage() {
       <div className='trajectory-evidence-grid'>
         <Panel title={selectedTrack ? `Track #${selectedTrack.track_id} 识别与运行证据` : '轨迹证据'} subtitle={selectedTrack?.movement_label}>{selectedTrack ? <><InfoRow label='业务车型 / 方向' value={`${BUSINESS_CLASS_LABELS[selectedTrack.vehicle_class] || selectedTrack.vehicle_class || 'unknown'} / ${selectedTrack.turn_behavior || '未分类'}`} /><InfoRow label='原始分类' value={`YOLO ${selectedTrack.yolo_class_name || 'unknown'} (#${selectedTrack.yolo_class_id ?? '—'})`} /><InfoRow label='模型 / 映射' value={`${selectedTrack.yolo_model_id || '—'} / ${selectedTrack.class_mapping_version || '—'}`} /><InfoRow label='平均 / 最高速度' value={`${selectedTrack.avg_speed_kmh ?? '—'} / ${selectedTrack.max_speed_kmh ?? '—'} km/h`} /><InfoRow label='任务 / 数据源' value={`${selectedTrack.mission_id || '—'} / ${selectedTrack.source_profile_id || '—'}`} /><InfoRow label='路网 / 质量' value={`${selectedTrack.road_data_version || '—'} / ${selectedTrack.quality_status || '—'}`} badge={selectedTrack.quality_status === 'verified' ? 'good' : 'degraded'} /></> : <span className='muted'>当前时间片没有轨迹。</span>}</Panel>
         <Panel title='当前时间片关联冲突' subtitle='只展示同一任务或管道血缘可归因事件'>{conflicts.length === 0 ? <span className='muted'>当前时间片无可归因冲突</span> : conflicts.map((item) => <button className='compact-event' key={item.id} onClick={() => navigate(`/events?event_id=${item.id}`)}><StatusBadge value={item.severity || 'warning'} /><div><strong>{item.conflict_scene || '冲突候选'}</strong><span>TTC {item.ttc_sec ?? '—'}s · {analysisTime(item.occurred_at)}</span></div></button>)}</Panel>
+      </div>
+      <div className='trajectory-quality-notices'>
+        {!loading && !error && quality.total_tracks === 0 && <QualityNotice tone='info' title='当前范围无完成轨迹'>请扩大时间窗口或清除车型、任务与数据源筛选。 <button className='secondary-button' onClick={() => { setPeriod('all'); setMissionId('all'); setSourceProfileId('all'); setVehicleClass('all'); setYoloClassId('all'); setTurnBehavior('all') }}>清除并查看全部</button></QualityNotice>}
+        {quality.truncated && <QualityNotice tone='warning' title='当前时间片已限量'>仅展示 {quality.returned_tracks || 0} 条可回放轨迹；请选择流向或原始类别缩小范围。 <button className='secondary-button' onClick={() => setAnalysisTab('track')}>查看当前片轨迹</button></QualityNotice>}
+        {(quality.spatial_coverage_ratio ?? 1) < 1 && <QualityNotice tone='warning' title='空间覆盖不足'>{quality.total_tracks - quality.replayable_tracks} 条轨迹缺少可投放的世界坐标。 <button className='secondary-button' onClick={() => setAnalysisTab('track')}>查看可回放轨迹</button></QualityNotice>}
+        {(analysis.movement_ranking || []).some((item) => item.movement_source !== 'road_context') && <QualityNotice tone='info' title='部分流向使用降级证据'>“轨迹方位推断”与“仅按转向降级”均不是权威路网匹配。 <button className='secondary-button' onClick={() => setAnalysisTab('movement')}>查看来源标记</button></QualityNotice>}
+        {(quality.unattributed_conflicts || 0) > 0 && <QualityNotice tone='warning' title='存在未归因冲突'>{quality.unattributed_conflicts} 条冲突因缺少同一任务或管道血缘，未计入流向排名。 <button className='secondary-button' onClick={() => navigate('/events')}>查看事件中心</button></QualityNotice>}
+        {(quality.duplicate_tracks_omitted || 0) > 0 && <QualityNotice tone='info' title='重复完成轨迹已去重'>{quality.duplicate_tracks_omitted} 条同血缘重复记录未进入排名和占比。</QualityNotice>}
       </div>
     </div>}
   </AppShell>

@@ -2,9 +2,14 @@ import math
 from pathlib import Path
 
 import numpy as np
+from utils_local.coordinates import enu_to_gcj02
 
 from app.services.survey_capture import parse_dji_json, parse_dji_srt
-from app.services.survey_geometry import calculate_measurement, compute_homography_from_telemetry
+from app.services.survey_geometry import (
+    align_homography_to_map_enu,
+    calculate_measurement,
+    compute_homography_from_telemetry,
+)
 from app.services.survey_storage import ContentAddressedStore, resolve_allowlisted_asset
 
 
@@ -17,6 +22,19 @@ def test_nadir_homography_centers_enu_and_scales_metric_distance():
     metric, values = calculate_measurement("line", [[500, 250], [600, 250]], matrix)
     assert np.allclose(metric[0], [0, 0], atol=1e-6)
     assert math.isclose(values["length_m"], 14.2222, abs_tol=1e-4)
+
+
+def test_frame_local_homography_is_translated_into_the_channelized_map_enu_frame():
+    anchor = [117.028285, 36.703222]
+    longitude, latitude = enu_to_gcj02(12, -8, anchor)
+
+    aligned = align_homography_to_map_enu(
+        np.eye(3),
+        {"position_gcj02": {"longitude": longitude, "latitude": latitude}},
+        anchor,
+    )
+
+    assert np.allclose(aligned, [[1, 0, 12], [0, 1, -8], [0, 0, 1]], atol=1e-6)
 
 
 def test_polygon_measurement_returns_area_and_perimeter():

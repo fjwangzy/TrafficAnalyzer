@@ -7,17 +7,18 @@ const mapMocks = vi.hoisted(() => ({
   remove: vi.fn(),
   setCenter: vi.fn(),
   setFitView: vi.fn(),
+  sdk: null,
 }))
 
 vi.mock('../lib/amap', () => ({
-  loadAmap: vi.fn(async () => window.AMap),
+  loadAmap: vi.fn(async () => mapMocks.sdk),
 }))
 
 import { MonitoringBevMap, mapFitDuration, mapFitPadding, trajectoryGcj02, validMapCenter } from './MonitoringBevMap'
 
 beforeEach(() => {
-  Object.values(mapMocks).forEach((mock) => mock.mockClear())
-  window.AMap = {
+  Object.values(mapMocks).forEach((mock) => mock?.mockClear?.())
+  mapMocks.sdk = {
     Map: class {
       constructor() { return mapMocks }
     },
@@ -28,6 +29,7 @@ beforeEach(() => {
       constructor(options) { this.options = options }
     },
   }
+  window.AMap = mapMocks.sdk
 })
 
 describe('MonitoringBevMap GCJ-02 contract', () => {
@@ -47,6 +49,18 @@ describe('MonitoringBevMap GCJ-02 contract', () => {
   it('keeps fit helpers stable', () => {
     expect(mapFitPadding({ embedded: true })).toEqual([32, 32, 32, 32])
     expect(mapFitDuration(true)).toBe(0)
+  })
+
+  it('renders overlays from the loaded SDK without requiring a window global', async () => {
+    delete window.AMap
+    render(
+      <MonitoringBevMap compact trajectories={[{
+        id: 'TRK-1',
+        trajectory_gcj02: [[117.1, 36.7], [117.2, 36.8]],
+      }]} label='BEV test map' />,
+    )
+
+    await waitFor(() => expect(mapMocks.add).toHaveBeenCalledTimes(1))
   })
 
   it('does not rebuild and refit unchanged trajectory overlays', async () => {

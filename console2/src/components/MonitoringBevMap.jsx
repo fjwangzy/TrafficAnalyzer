@@ -36,6 +36,7 @@ export function trajectoryOverlaySignature(trajectories = []) {
 export function MonitoringBevMap({ centerLat, centerLon, trajectories = [], activeCount = 0, compact = false, embedded = false, showEndpoints = true, label }) {
   const targetRef = useRef(null)
   const mapRef = useRef(null)
+  const amapRef = useRef(null)
   const overlaysRef = useRef([])
   const [loadFailed, setLoadFailed] = useState(false)
   const [mapReady, setMapReady] = useState(false)
@@ -52,13 +53,14 @@ export function MonitoringBevMap({ centerLat, centerLon, trajectories = [], acti
     if (!targetRef.current || loadFailed) return undefined
     loadAmap().then((AMap) => {
       if (disposed || !targetRef.current) return
+      amapRef.current = AMap
       mapRef.current = new AMap.Map(targetRef.current, {
         center: [center.lon, center.lat], zoom: compact ? 18 : 19,
         zooms: [15, 22], mapStyle: 'amap://styles/darkblue', viewMode: '2D',
       })
       setMapReady(true)
     }).catch(() => { if (!disposed) setLoadFailed(true) })
-    return () => { disposed = true; setMapReady(false); mapRef.current?.destroy(); mapRef.current = null; overlaysRef.current = [] }
+    return () => { disposed = true; setMapReady(false); mapRef.current?.destroy(); mapRef.current = null; amapRef.current = null; overlaysRef.current = [] }
   }, [compact, loadFailed])
 
   useEffect(() => {
@@ -66,7 +68,7 @@ export function MonitoringBevMap({ centerLat, centerLon, trajectories = [], acti
     if (!map) return
     map.setCenter([center.lon, center.lat])
     const previousOverlays = overlaysRef.current
-    const AMap = window.AMap
+    const AMap = amapRef.current
     if (!AMap) return
     const overlays = []
     stableTrajectories.forEach((item, index) => {

@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -30,11 +30,13 @@ const liveMocks = vi.hoisted(() => ({
     calibrationCoverage: vi.fn(),
     laneTasks: vi.fn(),
     laneTaskImage: vi.fn(),
+    startLaneKeyframeExtraction: vi.fn(),
     createLaneTaskFromSurveyFrame: vi.fn(),
     surveyTasks: vi.fn(),
     surveyBatches: vi.fn(),
     surveyFrames: vi.fn(),
     bootstrapChannelizedMap: vi.fn(),
+    createChannelizedMap: vi.fn(),
     fitChannelizedMapFromImage: vi.fn(),
     verifyVisualRegistration: vi.fn(),
     publishChannelizedMap: vi.fn(),
@@ -86,8 +88,8 @@ function open(path) {
 function mockSuccessfulApis() {
   liveMocks.api.intersections.mockResolvedValue([{ id: 'INT-1', name: '小清河北路 × 水屯路' }])
   liveMocks.api.sources.mockResolvedValue([
-    { profile_id: 'SRC-1', display_name: '小清河北路早高峰', drone_id: 'UAV-1', enabled: true, video: { id: 'VID-1', source_type: 'mp4', location_hint: 'xqh-am.mp4' } },
-    { profile_id: 'SRC-2', display_name: '崇华路晚高峰', drone_id: 'UAV-2', enabled: true, video: { id: 'VID-2', source_type: 'mp4', location_hint: 'ch-pm.mp4' } },
+    { profile_id: 'SRC-1', display_name: '小清河北路早高峰', drone_id: 'UAV-1', mode: 'local', enabled: true, validation_status: 'valid', video: { id: 'VID-1', source_type: 'mp4', location_hint: 'xqh-am.mp4' }, telemetry: { source_type: 'srt' } },
+    { profile_id: 'SRC-2', display_name: '崇华路晚高峰', drone_id: 'UAV-2', mode: 'local', enabled: true, validation_status: 'valid', video: { id: 'VID-2', source_type: 'mp4', location_hint: 'ch-pm.mp4' }, telemetry: { source_type: 'srt' } },
   ])
   liveMocks.api.drones.mockResolvedValue([
     { id: 'UAV-1', name: '小清河无人机', default_inter_id: 'INT-1', default_video_source_id: 'VID-1', default_road_data_version: 'ROAD-1', intersection_name: '小清河北路 × 水屯路' },
@@ -117,15 +119,27 @@ function mockSuccessfulApis() {
   liveMocks.api.calibrationSummary.mockResolvedValue({ total: 1, ok: 1 })
   liveMocks.api.calibrationRecords.mockResolvedValue([{ key: 'CAL-1', intersection_id: 'INT-1', quality: { score: 0.95 }, reprojection_error: 1.2 }])
   liveMocks.api.calibrationCoverage.mockResolvedValue([{ key: 'INT-1-H112', altitude: 112, pitch: -89, quality: 'ok' }])
-  const laneTask = { task_id: 'TASK-1', intersection_id: 'INT-1', source_frame_id: 'FRM-LANE-1', source_profile_id: 'SRC-1', homography_pixel_to_enu: [[0.1, 0, -10], [0, 0.1, -5], [0, 0, 1]], image_width: 960, image_height: 540, lane_count: 0, roads: { north: [1, 2, 3] }, status: 'pending' }
+  const laneTask = { task_id: 'TASK-1', intersection_id: 'INT-1', source_frame_id: 'FRM-LANE-1', source_profile_id: 'SRC-1', homography_pixel_to_enu: [[0.1, 0, -10], [0, 0.1, -5], [0, 0, 1]], homography_coordinate_frame: 'map_enu', map_version_id: 'CMV-1', map_anchor_gcj02: [117, 36.7], image_width: 960, image_height: 540, lane_count: 0, roads: { north: [1, 2, 3] }, status: 'pending' }
   liveMocks.api.laneTasks.mockResolvedValue([laneTask])
   liveMocks.api.laneTaskImage.mockResolvedValue(new Blob(['jpeg'], { type: 'image/jpeg' }))
   liveMocks.api.createLaneTaskFromSurveyFrame.mockResolvedValue(laneTask)
+  liveMocks.api.startLaneKeyframeExtraction.mockResolvedValue({
+    task: { id: 'SVY-CAL-1', title: '渠化标注抽帧 · 小清河北路 × 水屯路', inter_id: 'INT-1', status: 'collecting', revision: 4 },
+    batch: { id: 'BATCH-CAL-1', status: 'queued', source_profile_id: 'SRC-1' },
+  })
   liveMocks.api.surveyTasks.mockResolvedValue([{ id: 'SVY-LANE-1', title: '路口正拍采集', inter_id: 'INT-1', selected_batch_id: 'BATCH-LANE-1', status: 'measuring' }])
   liveMocks.api.surveyBatches.mockResolvedValue([{ id: 'BATCH-LANE-1', status: 'selected', source_profile_id: 'SRC-1' }])
   liveMocks.api.surveyFrames.mockResolvedValue([{ id: 'FRM-LANE-1', frame_number: 120, timestamp_sec: 4, has_metric_transform: true, metric_transform: [[0.1, 0, -10], [0, 0.1, -5], [0, 0, 1]] }])
-  const map = { id: 'CMV-1', inter_id: 'INT-1', version_no: 1, status: 'draft', coordinate_system: 'GCJ02', coordinate_transform_version: 'v1', road_data_version: 'ROAD-1', anchor_gcj02: [117, 36.7], geometry_gcj02: {}, lanes: [] }
+  const map = {
+    id: 'CMV-1', inter_id: 'INT-1', version_no: 1, status: 'draft', coordinate_system: 'GCJ02', coordinate_transform_version: 'v1', road_data_version: 'ROAD-1', anchor_gcj02: [117, 36.7], geometry_gcj02: {},
+    lanes: [{
+      local_lane_id: 'candidate:LANE-1', source_lane_id: 'LANE-1', link_id: 'LINK-1', geometry_source: 'link_offset_derived',
+      geometry_enu_m: { type: 'Polygon', coordinates: [[[0, 0], [10, 0], [10, 10], [0, 0]]] },
+      geometry_gcj02: { type: 'Polygon', coordinates: [[[117, 36.7], [117.0001, 36.7], [117.0001, 36.7001], [117, 36.7]]] },
+    }],
+  }
   liveMocks.api.bootstrapChannelizedMap.mockResolvedValue({ source: 'local', map })
+  liveMocks.api.createChannelizedMap.mockResolvedValue({ ...map, id: 'CMV-2', version_no: 2, status: 'draft' })
   liveMocks.api.fitChannelizedMapFromImage.mockResolvedValue({ ...map, status: 'candidate', registration: { id: 'VRG-1', status: 'registered' } })
   liveMocks.api.verifyVisualRegistration.mockResolvedValue({ id: 'VRG-1', status: 'verified' })
   liveMocks.api.publishChannelizedMap.mockResolvedValue({ ...map, status: 'lane_verified' })
@@ -535,11 +549,91 @@ describe('Console2 live module migration', () => {
     }))
   })
 
+  it('overlays the current channelized lanes and adopts one as an editable image draft', async () => {
+    open('/admin/calibration?tab=lanes')
+    fireEvent.click(await screen.findByText('INT-1'))
+    fireEvent.click(screen.getByRole('button', { name: '加载本地 / 按需导入' }))
+
+    const referenceLane = await screen.findByLabelText('路网参考车道 candidate:LANE-1')
+    fireEvent.click(referenceLane)
+
+    expect(screen.getByText(/1 条车道/)).toBeInTheDocument()
+    expect(screen.getByLabelText('调整车道顶点 1')).toBeInTheDocument()
+  })
+
+  it('drags an adopted lane vertex in source-image coordinates before fitting', async () => {
+    const rect = { left: 0, top: 0, right: 600, bottom: 270, width: 600, height: 270, x: 0, y: 0, toJSON: () => ({}) }
+    vi.spyOn(Element.prototype, 'getBoundingClientRect').mockReturnValue(rect)
+    open('/admin/calibration?tab=lanes')
+    fireEvent.click(await screen.findByText('INT-1'))
+    fireEvent.click(screen.getByRole('button', { name: '加载本地 / 按需导入' }))
+    fireEvent.click(await screen.findByLabelText('路网参考车道 candidate:LANE-1'))
+
+    const canvas = screen.getByLabelText('渠化几何绘制画布')
+    const handle = screen.getByLabelText('调整车道顶点 1')
+    fireEvent.pointerDown(handle, { pointerId: 1, clientX: 110, clientY: 25 })
+    fireEvent.pointerMove(canvas, { pointerId: 1, clientX: 135, clientY: 50 })
+    fireEvent.pointerUp(canvas, { pointerId: 1, clientX: 135, clientY: 50 })
+    fireEvent.click(screen.getByRole('button', { name: '保存影像拟合候选' }))
+
+    await waitFor(() => expect(liveMocks.api.fitChannelizedMapFromImage).toHaveBeenCalledTimes(1))
+    const [mapId, payload] = liveMocks.api.fitChannelizedMapFromImage.mock.calls[0]
+    expect(mapId).toBe('CMV-1')
+    expect(payload.lanes[0].polygon_px[0]).toEqual([150, 100])
+    expect(payload.lanes[0].polygon_px[1][0]).toBeCloseTo(200)
+    expect(payload.lanes[0].polygon_px[2][1]).toBeCloseTo(150)
+  })
+
+  it('drags an adopted lane as one shape before fitting', async () => {
+    const rect = { left: 0, top: 0, right: 600, bottom: 270, width: 600, height: 270, x: 0, y: 0, toJSON: () => ({}) }
+    vi.spyOn(Element.prototype, 'getBoundingClientRect').mockReturnValue(rect)
+    open('/admin/calibration?tab=lanes')
+    fireEvent.click(await screen.findByText('INT-1'))
+    fireEvent.click(screen.getByRole('button', { name: '加载本地 / 按需导入' }))
+    fireEvent.click(await screen.findByLabelText('路网参考车道 candidate:LANE-1'))
+
+    const canvas = screen.getByLabelText('渠化几何绘制画布')
+    const lane = screen.getByLabelText('拟合车道 candidate:LANE-1')
+    fireEvent.pointerDown(lane, { pointerId: 2, clientX: 110, clientY: 25 })
+    fireEvent.pointerMove(canvas, { pointerId: 2, clientX: 120, clientY: 35 })
+    fireEvent.pointerUp(canvas, { pointerId: 2, clientX: 120, clientY: 35 })
+    fireEvent.click(screen.getByRole('button', { name: '保存影像拟合候选' }))
+
+    await waitFor(() => expect(liveMocks.api.fitChannelizedMapFromImage).toHaveBeenCalledTimes(1))
+    const payload = liveMocks.api.fitChannelizedMapFromImage.mock.calls[0][1]
+    expect(payload.lanes[0].polygon_px[0][0]).toBeCloseTo(120)
+    expect(payload.lanes[0].polygon_px[0][1]).toBeCloseTo(70)
+    expect(payload.lanes[0].polygon_px[2][0]).toBeCloseTo(220)
+    expect(payload.lanes[0].polygon_px[2][1]).toBeCloseTo(170)
+  })
+
+  it('forks an immutable verified map into a new editable fitting draft', async () => {
+    const publishedMap = {
+      id: 'CMV-PUBLISHED', inter_id: 'INT-1', version_no: 7, status: 'lane_verified', coordinate_system: 'GCJ02', coordinate_transform_version: 'v1', road_data_version: 'ROAD-1', anchor_gcj02: [117, 36.7],
+      geometry_gcj02: { links: {} }, geometry_enu_m: { links: {} }, topology: { links: [] }, quality: { reviewed: true }, source_checksum: 'abc123',
+      lanes: [{ local_lane_id: 'lane:verified:1', source_lane_id: 'LANE-1', link_id: 'LINK-1', geometry_source: 'imagery_fitted', geometry_gcj02: { type: 'Polygon', coordinates: [] }, geometry_enu_m: { type: 'Polygon', coordinates: [] }, match_confidence: 0.98 }],
+    }
+    liveMocks.api.bootstrapChannelizedMap.mockResolvedValue({ source: 'local', map: publishedMap })
+    liveMocks.api.createChannelizedMap.mockResolvedValue({ ...publishedMap, id: 'CMV-DRAFT', version_no: 8, status: 'draft' })
+    open('/admin/calibration?tab=lanes')
+    fireEvent.click(await screen.findByRole('button', { name: '加载本地 / 按需导入' }))
+
+    const fork = await screen.findByRole('button', { name: '基于 lane_verified 新建拟合草稿' })
+    fireEvent.click(fork)
+
+    await waitFor(() => expect(liveMocks.api.createChannelizedMap).toHaveBeenCalledWith(expect.objectContaining({
+      inter_id: 'INT-1',
+      road_data_version: 'ROAD-1',
+      lanes: [expect.objectContaining({ local_lane_id: 'lane:verified:1', geometry_source: 'imagery_fitted' })],
+    })))
+    await waitFor(() => expect(screen.queryByRole('button', { name: '基于 lane_verified 新建拟合草稿' })).not.toBeInTheDocument())
+  })
+
   it('creates a recoverable lane task from a real survey keyframe and hydrates registration context', async () => {
     liveMocks.api.laneTasks.mockResolvedValue([])
     open('/admin/calibration?tab=lanes')
 
-    fireEvent.change(screen.getByLabelText('路口 ID'), { target: { value: 'INT-1' } })
+    fireEvent.change(await screen.findByLabelText('路口 ID'), { target: { value: 'INT-1' } })
     const loadFrame = await screen.findByRole('button', { name: '载入关键帧并开始标注' })
     await waitFor(() => expect(loadFrame).toBeEnabled())
     fireEvent.click(loadFrame)
@@ -548,5 +642,68 @@ describe('Console2 live module migration', () => {
     expect(await screen.findByLabelText('渠化几何绘制画布')).toBeInTheDocument()
     expect(screen.getByLabelText('SourceProfile ID')).toHaveValue('SRC-1')
     expect(screen.getByLabelText('pixel → ENU 3×3 单应矩阵')).toHaveValue('[[0.1,0,-10],[0,0.1,-5],[0,0,1]]')
+  })
+
+  it('starts retained source extraction inside lane calibration after explicit precheck', async () => {
+    const extractedTask = { id: 'SVY-CAL-1', title: '渠化标注抽帧 · 小清河北路 × 水屯路', inter_id: 'INT-1', status: 'collecting', revision: 4 }
+    const extractedBatch = { id: 'BATCH-CAL-1', status: 'queued', source_profile_id: 'SRC-1' }
+    let extractionStarted = false
+    liveMocks.api.laneTasks.mockResolvedValue([])
+    liveMocks.api.surveyTasks.mockImplementation(() => Promise.resolve(extractionStarted ? [extractedTask] : []))
+    liveMocks.api.surveyBatches.mockImplementation((taskId) => Promise.resolve(taskId === extractedTask.id ? [extractedBatch] : []))
+    liveMocks.api.startLaneKeyframeExtraction.mockImplementation(() => {
+      extractionStarted = true
+      return Promise.resolve({ task: extractedTask, batch: extractedBatch })
+    })
+    open('/admin/calibration?tab=lanes')
+
+    fireEvent.change(screen.getByLabelText('路口 ID'), { target: { value: 'INT-1' } })
+    expect(await screen.findByRole('option', { name: /小清河北路早高峰 · SRC-1/ })).toBeInTheDocument()
+    for (const [, label] of [
+      ['task_context', '已确认当前路口与路网版本'],
+      ['operator_authorized', '操作员已获素材使用授权'],
+      ['site_command_confirmed', '现场指挥与航拍任务已确认'],
+      ['device_ready', '无人机正拍视频与遥测源可用'],
+      ['storage_ready', '证据存储空间与留存策略已确认'],
+    ]) fireEvent.click(screen.getByRole('checkbox', { name: label }))
+    fireEvent.click(screen.getByRole('button', { name: '完成预检并开始抽帧' }))
+
+    await waitFor(() => expect(liveMocks.api.startLaneKeyframeExtraction).toHaveBeenCalledTimes(1))
+    expect(liveMocks.api.startLaneKeyframeExtraction).toHaveBeenCalledWith({
+      inter_id: 'INT-1',
+      source_profile_id: 'SRC-1',
+      road_data_version: 'ROAD-1',
+      checklist: {
+        task_context: true,
+        operator_authorized: true,
+        site_command_confirmed: true,
+        device_ready: true,
+        storage_ready: true,
+      },
+    }, expect.stringMatching(/^lane-extract-/))
+    await waitFor(() => expect(screen.getByLabelText('采集批次')).toHaveValue('BATCH-CAL-1'))
+    expect(within(screen.getByTestId('keyframe-extraction')).getByRole('status')).toHaveTextContent('抽帧任务已入队 · BATCH-CAL-1')
+    expect(screen.getByRole('button', { name: '完成预检并开始抽帧' })).toBeDisabled()
+  })
+
+  it('shows lane extraction failures beside the action that failed', async () => {
+    liveMocks.api.laneTasks.mockResolvedValue([])
+    liveMocks.api.surveyTasks.mockResolvedValue([])
+    liveMocks.api.startLaneKeyframeExtraction.mockRejectedValue(new Error('抽帧接口暂不可用'))
+    open('/admin/calibration?tab=lanes')
+
+    fireEvent.change(await screen.findByLabelText('路口 ID'), { target: { value: 'INT-1' } })
+    expect(await screen.findByRole('option', { name: /小清河北路早高峰 · SRC-1/ })).toBeInTheDocument()
+    for (const label of [
+      '已确认当前路口与路网版本',
+      '操作员已获素材使用授权',
+      '现场指挥与航拍任务已确认',
+      '无人机正拍视频与遥测源可用',
+      '证据存储空间与留存策略已确认',
+    ]) fireEvent.click(screen.getByRole('checkbox', { name: label }))
+    fireEvent.click(screen.getByRole('button', { name: '完成预检并开始抽帧' }))
+
+    const extraction = screen.getByTestId('keyframe-extraction')
+    expect(await within(extraction).findByText('抽帧接口暂不可用')).toBeInTheDocument()
   })
 })

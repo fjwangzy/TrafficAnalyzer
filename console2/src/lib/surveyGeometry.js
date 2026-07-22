@@ -10,6 +10,92 @@ export function projectPoint(point, matrix) {
   return projected.every(Number.isFinite) ? projected : null
 }
 
+function invertProjectiveMatrix(matrix) {
+  if (!Array.isArray(matrix) || matrix.length !== 3 || matrix.some((row) => !Array.isArray(row) || row.length !== 3)) return null
+  const [a, b, c] = matrix
+  const determinant = (
+    a[0] * (b[1] * c[2] - b[2] * c[1])
+    - a[1] * (b[0] * c[2] - b[2] * c[0])
+    + a[2] * (b[0] * c[1] - b[1] * c[0])
+  )
+  if (!Number.isFinite(determinant) || Math.abs(determinant) < 1e-12) return null
+  return [
+    [b[1] * c[2] - b[2] * c[1], a[2] * c[1] - a[1] * c[2], a[1] * b[2] - a[2] * b[1]],
+    [b[2] * c[0] - b[0] * c[2], a[0] * c[2] - a[2] * c[0], a[2] * b[0] - a[0] * b[2]],
+    [b[0] * c[1] - b[1] * c[0], a[1] * c[0] - a[0] * c[1], a[0] * b[1] - a[1] * b[0]],
+  ].map((row) => row.map((value) => value / determinant))
+}
+
+function clipPolygonBoundary(points, inside, intersect) {
+  if (!points.length) return []
+  const clipped = []
+  let previous = points.at(-1)
+  for (const current of points) {
+    const currentInside = inside(current)
+    const previousInside = inside(previous)
+    if (currentInside !== previousInside) clipped.push(intersect(previous, current))
+    if (currentInside) clipped.push(current)
+    previous = current
+  }
+  return clipped
+}
+
+function clipPolygonToImage(points, bounds) {
+  if (!Number.isFinite(bounds?.width) || !Number.isFinite(bounds?.height)) return points
+  let clipped = clipPolygonBoundary(points, ([x]) => x >= 0, (start, end) => {
+    const ratio = (0 - start[0]) / (end[0] - start[0])
+    return [0, start[1] + ratio * (end[1] - start[1])]
+  })
+  clipped = clipPolygonBoundary(clipped, ([x]) => x <= bounds.width, (start, end) => {
+    const ratio = (bounds.width - start[0]) / (end[0] - start[0])
+    return [bounds.width, start[1] + ratio * (end[1] - start[1])]
+  })
+  clipped = clipPolygonBoundary(clipped, ([, y]) => y >= 0, (start, end) => {
+    const ratio = (0 - start[1]) / (end[1] - start[1])
+    return [start[0] + ratio * (end[0] - start[0]), 0]
+  })
+  return clipPolygonBoundary(clipped, ([, y]) => y <= bounds.height, (start, end) => {
+    const ratio = (bounds.height - start[1]) / (end[1] - start[1])
+    return [start[0] + ratio * (end[0] - start[0]), bounds.height]
+  })
+}
+
+export function projectMetricPolygonToImage(geometry, pixelToEnu, bounds) {
+  if (geometry?.type !== 'Polygon' || !Array.isArray(geometry.coordinates?.[0])) return []
+  const enuToPixel = invertProjectiveMatrix(pixelToEnu)
+  if (!enuToPixel) return []
+  const projected = geometry.coordinates[0].map((point) => projectPoint(point, enuToPixel))
+  if (projected.some((point) => !point)) return []
+  const [first] = projected
+  const last = projected.at(-1)
+  if (projected.length > 1 && Math.hypot(first[0] - last[0], first[1] - last[1]) < 1e-7) projected.pop()
+  return clipPolygonToImage(projected, bounds)
+}
+
+function clamp(value, minimum, maximum) {
+  return Math.min(maximum, Math.max(minimum, value))
+}
+
+export function dragImageGeometry(points, interaction, bounds) {
+  const next = points.map((point) => [...point])
+  const width = Number.isFinite(bounds?.width) ? bounds.width : Number.POSITIVE_INFINITY
+  const height = Number.isFinite(bounds?.height) ? bounds.height : Number.POSITIVE_INFINITY
+  if (interaction?.type === 'vertex' && next[interaction.index]) {
+    next[interaction.index] = [
+      clamp(interaction.point[0], 0, width),
+      clamp(interaction.point[1], 0, height),
+    ]
+  }
+  if (interaction?.type === 'translate' && next.length) {
+    const xs = next.map(([x]) => x)
+    const ys = next.map(([, y]) => y)
+    const dx = clamp(interaction.dx, -Math.min(...xs), width - Math.max(...xs))
+    const dy = clamp(interaction.dy, -Math.min(...ys), height - Math.max(...ys))
+    return next.map(([x, y]) => [x + dx, y + dy])
+  }
+  return next
+}
+
 export function metricSegmentLength(start, end, metricTransform) {
   const metricStart = projectPoint(start, metricTransform)
   const metricEnd = projectPoint(end, metricTransform)

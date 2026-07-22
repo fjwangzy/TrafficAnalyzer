@@ -234,6 +234,14 @@ describe('Console2 full prototype', () => {
     expect(screen.getByLabelText('时间窗口')).toHaveValue('latest30m')
   })
 
+  it('places trajectory quality indicators at the bottom of the analysis page', async () => {
+    const { container } = open('/gis')
+
+    expect(await screen.findByText('部分流向使用降级证据')).toBeInTheDocument()
+    expect(container.querySelector('.trajectory-analysis-page')?.lastElementChild)
+      .toHaveClass('trajectory-quality-notices')
+  })
+
   it('uses flow ranking and raw detector classes to explain the selected time slice', async () => {
     open('/gis')
 

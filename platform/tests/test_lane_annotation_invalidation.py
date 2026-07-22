@@ -53,6 +53,9 @@ def test_persisted_keyframe_task_retains_registration_context_and_refreshes_idem
         "FRM-1",
         source_profile_id="SRC-1",
         homography_pixel_to_enu=[[0.1, 0, -10], [0, 0.1, -5], [0, 0, 1]],
+        map_version_id="CMV-1",
+        map_anchor_gcj02=[117.0, 36.7],
+        homography_coordinate_frame="map_enu",
     )
     refreshed = store.ensure_task_from_snapshot(
         "INT-1",
@@ -62,6 +65,9 @@ def test_persisted_keyframe_task_retains_registration_context_and_refreshes_idem
         "FRM-1",
         source_profile_id="SRC-2",
         homography_pixel_to_enu=[[0.2, 0, -20], [0, 0.2, -10], [0, 0, 1]],
+        map_version_id="CMV-2",
+        map_anchor_gcj02=[117.1, 36.8],
+        homography_coordinate_frame="map_enu",
     )
 
     assert created["task_id"] == refreshed["task_id"]
@@ -72,4 +78,7 @@ def test_persisted_keyframe_task_retains_registration_context_and_refreshes_idem
         [0, 0.2, -10],
         [0, 0, 1],
     ]
+    assert refreshed["map_version_id"] == "CMV-2"
+    assert refreshed["map_anchor_gcj02"] == [117.1, 36.8]
+    assert refreshed["homography_coordinate_frame"] == "map_enu"
     assert len(store.list_tasks()) == 1

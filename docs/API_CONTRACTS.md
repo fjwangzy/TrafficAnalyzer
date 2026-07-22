@@ -1494,6 +1494,9 @@ canonical 完成事实，不能先过滤旧版本记录再去重，否则分类�
 | --- | --- | --- |
 | POST | `/calibration/channelized-maps/bootstrap/{inter_id}` | 管理员操作；本地存在则不访问 YCX，本地不存在才只读导入该路口 |
 | POST | `/calibration/road-context/import-ycx` | YCX 只读事务；WKT 通过 PostGIS `ST_GeomFromText(...,4326)` 读取；ID 按不透明 geomhash 字符串处理 |
+| POST | `/calibration/channelized-maps` | 管理员创建新的 `draft`；用于从已发布不可变版本完整复制地图、拓扑、质量和车道绑定后继续影像拟合，不得更新原版本 |
+| POST | `/calibration/lane-keyframe-extractions` | 管理员为当前路口选择已启用、`valid`、本地 SourceProfile；请求必须逐项确认五项测绘预检。服务端在同一事务内创建 `source=lane_calibration` 测绘任务、完成预检并将原视频/遥测不可变引用入抽帧队列；支持 `Idempotency-Key` |
+| POST | `/calibration/lane-tasks/from-survey-frame` | 从已持久化且具备 SourceProfile、pixel→ENU 变换的真实关键帧幂等创建可恢复标注任务 |
 | GET/PUT | `/calibration/channelized-maps/{map_version_id}` | 读取或编辑 `draft/candidate`；已发布版本不可变 |
 | POST | `/calibration/channelized-maps/{map_version_id}/fit-from-image` | 必填已登记 `source_profile_id`；服务端执行 `pixel → ENU → GCJ02`，按地图+来源幂等保存拟合车道、渠化要素和视觉配准 |
 | POST | `/calibration/visual-registrations/{id}/verify` | 人工确认配准；媒体路径必须位于显式 allowlist 根目录 |
@@ -1504,10 +1507,22 @@ canonical 完成事实，不能先过滤旧版本记录再去重，否则分类�
 `imagery_fitted` 或 `manual_override` 车道、已验证视觉配准和真实停止线。拟合数量不一致时使用
 本地稳定 `local_lane_id`，`source_lane_id` 可空，不得拼造 YCX ID。
 
-Console2 的正拍编辑器先按 `inter_id` 读取事故测绘任务、采集批次和关键帧，再调用
+Console2 的正拍编辑器可先调用 `POST /calibration/lane-keyframe-extractions`，把当前路口已登记的
+本地视频与遥测交给既有 `SurveyWorker` 异步抽帧；页面轮询批次的 `queued/processing` 状态，待真实
+关键帧落库后，再按 `inter_id` 读取任务、采集批次和关键帧并调用
 `POST /calibration/lane-tasks/from-survey-frame`。页面不得用空白任务或浏览器端近似公式代替真实帧；
 任务返回的 `source_profile_id` 与 `homography_pixel_to_enu` 是后续拟合的默认输入。画布使用
-`contain` 后的真实影像视口反算自然像素坐标，点击黑边不产生顶点。
+`contain` 后的真实影像视口反算自然像素坐标，点击黑边不产生顶点。当前地图的 ENU 车道面可
+在浏览器端用该矩阵的逆变换叠加到关键帧，点击后复制为拟合草稿；顶点拖拽和整车道平移只更新
+自然像素坐标且不越出图像边界。参考车道跨出关键帧时，页面必须先把多边形裁剪到自然影像矩形，
+再允许复制和整体拖动，避免首次拖动因边界纠正产生跳位。该逆变换仅服务交互预览，正式持久化仍必须调用
+`fit-from-image` 由服务端执行 `pixel → ENU → GCJ02`。地图状态不在 `draft/candidate` 时页面必须
+先调用 `POST /calibration/channelized-maps` 新建草稿，不能向不可变版本提交拟合。
+`lane-tasks/from-survey-frame` 返回的单应矩阵必须标记
+`homography_coordinate_frame=map_enu`，并携带 `map_version_id`、`map_anchor_gcj02`。服务端以
+帧 GPS 的 WGS-84→GCJ-02→地图 ENU 位移对源影像单应矩阵做平移；不得把源图坐标误套
+`BEV view_transform⁻¹`。旧任务或地图锚点不一致时 `fit-from-image` 返回 422，要求从真实关键帧
+刷新任务。
 
 完成轨迹必须携带 `map_version_id`、`matched_lane_key`、可空 `source_lane_id`、
 `matched_link_id`、`movement_key`、`map_match_confidence`、`trajectory_enu_m` 和

@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from shapely.geometry import LineString, Polygon
@@ -21,12 +21,14 @@ from app.core.config import settings
 from app.core.database import get_db
 from app.models.mission import (
     ChannelizedMapVersion,
+    DroneRecord,
     RoadContextSnapshot,
     VideoSourceRecord,
     VisualLaneBinding,
     VisualRegistration,
 )
 from app.models.survey import SurveyCaptureBatch, SurveyFrame, SurveyTask
+from app.services.survey_geometry import align_homography_to_map_enu
 from app.services.survey_service import SurveyService
 from app.services.ycx_road_import import YcxRoadImporter
 
@@ -49,6 +51,13 @@ class SaveLaneAnnotationPayload(BaseModel):
 
 class LaneTaskFromSurveyFramePayload(BaseModel):
     frame_id: str = Field(min_length=1, max_length=40)
+
+
+class LaneKeyframeExtractionPayload(BaseModel):
+    inter_id: str = Field(min_length=1, max_length=100)
+    source_profile_id: str = Field(min_length=1, max_length=40)
+    road_data_version: str | None = Field(default=None, max_length=100)
+    checklist: dict[str, bool]
 
 
 class ChannelizedLanePayload(BaseModel):
@@ -223,6 +232,112 @@ async def list_lane_annotation_tasks(request: Request):
     return _lane_store(request).list_tasks()
 
 
+@router.post("/lane-keyframe-extractions", status_code=201)
+async def start_lane_keyframe_extraction(
+    payload: LaneKeyframeExtractionPayload,
+    request: Request,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    db: AsyncSession = Depends(get_db),
+):
+    """Create a lane-calibration survey task and enqueue its retained source media."""
+    _require_admin(request)
+    required = {
+        "task_context",
+        "operator_authorized",
+        "site_command_confirmed",
+        "device_ready",
+        "storage_ready",
+    }
+    if set(payload.checklist) != required or not all(payload.checklist.values()):
+        raise HTTPException(
+            status_code=422,
+            detail="lane keyframe extraction requires exactly five confirmed precheck items",
+        )
+    request_id = idempotency_key or request.headers.get("X-Request-ID")
+    if request_id and len(request_id) > 80:
+        raise HTTPException(status_code=422, detail="request identifier exceeds 80 characters")
+
+    source = (
+        await db.execute(
+            select(VideoSourceRecord).where(
+                VideoSourceRecord.profile_id == payload.source_profile_id
+            )
+        )
+    ).scalar_one_or_none()
+    if source is None:
+        raise HTTPException(status_code=404, detail="source profile not found")
+    drone = await db.get(DroneRecord, source.drone_id)
+    if drone is None or drone.default_inter_id != payload.inter_id:
+        raise HTTPException(
+            status_code=422,
+            detail="source profile is not registered to the requested intersection",
+        )
+    if not drone.enabled or not source.enabled or source.mode != "local":
+        raise HTTPException(
+            status_code=422,
+            detail="lane keyframe extraction requires an enabled local source profile",
+        )
+    if source.validation_status != "valid":
+        raise HTTPException(
+            status_code=422,
+            detail="lane keyframe extraction requires a valid source profile",
+        )
+
+    context = (
+        await db.execute(
+            select(RoadContextSnapshot)
+            .where(RoadContextSnapshot.inter_id == payload.inter_id)
+            .order_by(RoadContextSnapshot.created_at.desc())
+        )
+    ).scalars().first()
+    intersection = ((context.payload or {}).get("intersection") or {}) if context else {}
+    location = intersection.get("name") or payload.inter_id
+    road_data_version = payload.road_data_version or (
+        context.road_data_version if context else None
+    )
+    user = getattr(request.state, "user", None) or {}
+    actor_id = _actor_id(request)
+    actor_name = user.get("username") or user.get("name") or "admin"
+    service = SurveyService(db)
+    try:
+        task = await service.create_task(
+            {
+                "title": f"渠化标注抽帧 · {location}",
+                "scene_location": location,
+                "source": "lane_calibration",
+                "inter_id": payload.inter_id,
+                "road_data_version": road_data_version,
+            },
+            actor_id,
+            actor_name,
+            request_id,
+        )
+        prechecking = await service.transition(
+            task["id"], "start_precheck", task["revision"], {},
+            actor_id, "admin", request_id,
+        )
+        await service.transition(
+            task["id"], "complete_precheck", prechecking["revision"],
+            {"checklist": payload.checklist}, actor_id, "admin", request_id,
+        )
+        batch = await service.import_capture_batch(
+            task["id"], None, None, payload.source_profile_id,
+            actor_id, "admin", request_id,
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=422, detail="registered source media is unavailable") from exc
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {
+        "task": await service.get_task(task["id"], actor_id, "admin"),
+        "batch": batch,
+    }
+
+
 @router.post("/lane-tasks/from-survey-frame", status_code=201)
 async def create_lane_task_from_survey_frame(
     payload: LaneTaskFromSurveyFramePayload,
@@ -251,10 +366,8 @@ async def create_lane_task_from_survey_frame(
             detail="survey frame has no pixel-to-ENU transform",
         )
     try:
-        homography = np.asarray(frame.homography, dtype=np.float64)
-        view_transform = np.asarray(frame.view_transform, dtype=np.float64)
-        metric_transform = homography @ np.linalg.inv(view_transform)
-    except (TypeError, ValueError, np.linalg.LinAlgError) as exc:
+        metric_transform = np.asarray(frame.homography, dtype=np.float64)
+    except (TypeError, ValueError) as exc:
         raise HTTPException(
             status_code=422,
             detail="survey frame has an invalid pixel-to-ENU transform",
@@ -289,6 +402,24 @@ async def create_lane_task_from_survey_frame(
                 .order_by(RoadContextSnapshot.created_at.desc())
             )
         ).scalars().first()
+    map_version = (
+        await db.execute(
+            select(ChannelizedMapVersion)
+            .where(ChannelizedMapVersion.inter_id == task.inter_id)
+            .order_by(ChannelizedMapVersion.version_no.desc())
+        )
+    ).scalars().first()
+    if map_version is None:
+        raise HTTPException(
+            status_code=422,
+            detail="survey frame has no channelized-map ENU anchor",
+        )
+    try:
+        metric_transform = align_homography_to_map_enu(
+            metric_transform, frame.telemetry, map_version.anchor_gcj02
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     roads = ((context.payload or {}).get("intersection") or {}) if context else {}
     return _lane_store(request).ensure_task_from_snapshot(
         task.inter_id,
@@ -299,6 +430,9 @@ async def create_lane_task_from_survey_frame(
         roads,
         source_profile_id=batch.source_profile_id,
         homography_pixel_to_enu=metric_transform.tolist(),
+        map_version_id=map_version.id,
+        map_anchor_gcj02=map_version.anchor_gcj02,
+        homography_coordinate_frame="map_enu",
     )
 
 
@@ -796,6 +930,21 @@ async def fit_channelized_map_from_image(
         raise HTTPException(status_code=404, detail="lane annotation task not found")
     if task.get("intersection_id") != row.inter_id:
         raise HTTPException(status_code=422, detail="task and map intersection do not match")
+    if task.get("homography_coordinate_frame") != "map_enu":
+        raise HTTPException(
+            status_code=422,
+            detail="annotation task must be refreshed with a map-aligned keyframe transform",
+        )
+    task_anchor = task.get("map_anchor_gcj02")
+    if (
+        not isinstance(task_anchor, list)
+        or len(task_anchor) != 2
+        or any(abs(float(task_anchor[index]) - float(row.anchor_gcj02[index])) > 1e-9 for index in range(2))
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="annotation task and map ENU anchors do not match",
+        )
     image_path = _lane_store(request).get_task_image_path(payload.task_id)
     if image_path is None:
         raise HTTPException(status_code=422, detail="annotation task has no retained source image")

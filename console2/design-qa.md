@@ -377,6 +377,48 @@ final result: I4 local candidate engineering passed; legal and external producti
 
 final result: passed
 
+## 2026-07-22 测绘抽帧接入正拍路口标注
+
+- 关键帧侧栏新增“从已登记正拍素材抽帧”：只展示当前路口无人机下已启用、`valid` 的本地 SourceProfile，并同时显示无人机、校验状态和遥测类型。
+- 操作员必须显式确认任务上下文、素材授权、现场指挥、设备和存储五项预检，未全部确认时“完成预检并开始抽帧”保持禁用。
+- 单次提交由 Platform 原子创建 `lane_calibration` 测绘任务并入既有 SurveyWorker 队列；页面轮询 queued/processing 批次，帧落库后继续沿用“选择关键帧 → 创建可恢复标注任务 → pixel→ENU→GCJ-02 拟合”流程。
+- 首次真实点击复现“无反应”：浏览器实际收到 `404 Not Found`，原因是原生 Platform 仍运行 11:43 启动的旧进程且 OpenAPI 不含新路由；错误只显示在页面顶部，当前按钮视口没有反馈。修复后错误和成功批次号都在按钮下方以 `alert/status` 就地显示，404 明确提示重启原生 Platform。
+- 确认 `pipelines_active=0` 后使用 `scripts/mac_local_platform.sh restart` 加载路由；重启后 Platform/road9/Kafka/TimescaleDB 全部 ready。浏览器真实提交返回 `201`，任务 `SVY-20260722-C583AC`、批次 `BATCH-7F5595D84E9D` 达到 `ready`，随后真实帧创建 lane 任务返回 `201` 并显示源影像。
+- 自动化覆盖跨路口来源拒绝、预检/入队顺序、幂等键透传、当前路口素材筛选、批次自动选中及按钮旁成功/失败反馈；Platform `184 passed / 5 skipped / 10 subtests`，Console2 `17 files / 115 tests`，production build、Ruff 与 `git diff --check` 通过。
+
+final result: passed; live extraction and retained-frame handoff verified
+
+## 2026-07-22 关键帧路网叠加与拟合拖拽
+
+- 当前 `geometry_enu_m` 车道面经关键帧 pixel→ENU 单应矩阵求逆后直接叠加在真实影像上；绿色虚线表示路网参考层，工具栏可显式开关，点击参考车道才复制为蓝色拟合草稿。
+- 选中草稿后只显示该车道的黄色顶点手柄；拖动手柄修改单点，拖动车道面整体平移。两种操作都按 `contain` 视口还原自然像素，并把几何限制在影像边界内；跨出关键帧的参考多边形先裁剪到自然影像矩形，避免采纳后的首次整形拖动跳位。
+- 已发布的 `link_verified/lane_verified` 版本不再允许页面直接提交拟合；版本门禁提供“基于当前状态新建拟合草稿”，成功复制完整地图与车道绑定后切换到新 `draft`，原版本保持不可变。
+- 投影求逆、闭合点处理、单点边界、整形平移、参考车道采纳、两种指针拖拽和不可变版本派生均有自动化回归；正式落库仍由 Platform 执行 pixel→ENU→GCJ-02。
+- 首轮真实浏览器叠加出现明显中心/比例偏移。只读核对显示帧位置经 WGS-84→GCJ-02 后相对地图锚点仅约东 `-1.30m`、北 `+4.25m`，不是 84/02 数百米级混用；根因是源影像单应矩阵误乘 `BEV view_transform⁻¹`，比例从约 `0.048` 错变为 `0.105 m/px`。
+- 修复后 #1487 关键帧的 pixel→地图 ENU 矩阵为 `[[0.0481575,0.0002522,-94.0343],[0.0002522,-0.0481575,55.7792],[0,0,1]]`；浏览器中 32 条参考车道的水平/纵向轴线分别贴合小清河北路与水屯路，旧帧局部任务被显式阻止叠加和拟合。
+- 最终门禁：Platform `186 passed / 5 skipped / 10 subtests`，Console2 `17 files / 123 tests`，Vite production build、Ruff 与 `git diff --check` 通过。
+
+final result: passed; live map-center alignment, interaction regression and immutable-version gate verified
+
+## 2026-07-22 BEV 轨迹投放 SDK 引用修复
+
+- 症状：实时监测紧凑 BEV 卡片同时显示大量 `TRACKS` 和正常高德底图，但轨迹覆盖物为空。
+- 根因：`loadAmap()` 返回的 SDK 已成功创建地图，覆盖物 effect 却再次读取可缺失的 `window.AMap` 并提前退出；故障与路网匹配无关。
+- 修复：组件保存 Loader 返回的 SDK 引用，地图、Polyline 与 CircleMarker 使用同一实例；卸载时同步释放 SDK、地图和覆盖物引用。
+- 运行边界：用户停止检测器后未重启。Platform 只读结果显示截图对应 Pipeline 为 `stopped`，`map_version_id=null`；最近统计中 143 条活动轨迹包含 3,067 个有效 GCJ-02 点，但 `road_context_status=missing`、`quality_status=unverified`、0 条匹配车道，未加载 `lane_verified` Runtime Bundle。
+- 验收：回归测试模拟“Loader 有 SDK、window 无全局”并验证 `map.add`；真实 XQH 历史切片显示 60 条轨迹，浏览器可见多色轨迹覆盖高德底图。Console2 全量 `17 files / 124 tests` 与 production build 通过。
+
+final result: passed; BEV overlay SDK ownership fixed without changing road-map runtime configuration
+
+## 2026-07-22 轨迹研判质量提示移至底部
+
+- 将“当前时间片已限量、空间覆盖不足、降级证据、未归因冲突、重复完成轨迹去重”等质量提示整体从 KPI 下方移动到页面最后。
+- 地图、流向排名、时间轴、轨迹证据和关联冲突保持原有层级与交互；质量提示中的筛选、跳转按钮行为不变。
+- 自动化断言 `trajectory-quality-notices` 是 `.trajectory-analysis-page` 的最后一个子区块。真实页面 DOM 顺序为统计卡 → 工作区 → 证据 → 质量提示，证据区底部 `1015px`、提示区顶部 `1027px`。
+- Console2 全量 `17 files / 125 tests`、production build 与 `git diff --check` 通过。
+
+final result: passed; quality indicators moved below the complete trajectory-analysis workspace
+
 ## 2026-07-15 S9 `road9` 飞行任务四页签真实验收
 
 ### Runtime evidence

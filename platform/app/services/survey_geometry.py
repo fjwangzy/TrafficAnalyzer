@@ -10,12 +10,36 @@ import math
 
 import cv2
 import numpy as np
+from utils_local.coordinates import gcj02_to_enu, normalize_telemetry_position
 
 DEFAULT_CAMERA_INTRINSICS = {
     "focal_length_mm": 4.5,
     "sensor_width_mm": 6.4,
     "sensor_height_mm": 3.6,
 }
+
+
+def align_homography_to_map_enu(
+    pixel_to_local_enu: list | np.ndarray,
+    telemetry: dict,
+    anchor_gcj02: list[float],
+) -> np.ndarray:
+    """Translate a frame-centred metric transform into one channelized-map ENU frame."""
+    normalized = normalize_telemetry_position(telemetry)
+    position = (normalized or {}).get("position_gcj02") or {}
+    if position.get("longitude") is None or position.get("latitude") is None:
+        raise ValueError("survey frame has no canonical telemetry position")
+    easting, northing = gcj02_to_enu(
+        position["longitude"], position["latitude"], anchor_gcj02
+    )
+    translation = np.array(
+        [[1.0, 0.0, easting], [0.0, 1.0, northing], [0.0, 0.0, 1.0]],
+        dtype=np.float64,
+    )
+    matrix = np.asarray(pixel_to_local_enu, dtype=np.float64)
+    if matrix.shape != (3, 3) or not np.all(np.isfinite(matrix)):
+        raise ValueError("survey frame has an invalid pixel-to-ENU transform")
+    return translation @ matrix
 
 
 def compute_homography_from_telemetry(

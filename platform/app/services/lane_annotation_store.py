@@ -119,6 +119,9 @@ class LaneAnnotationStore:
         roads: dict[str, Any] | None = None,
         source_profile_id: str | None = None,
         homography_pixel_to_enu: list[list[float]] | None = None,
+        map_version_id: str | None = None,
+        map_anchor_gcj02: list[float] | None = None,
+        homography_coordinate_frame: str | None = None,
     ) -> dict[str, Any]:
         """Create an idempotent task from a persisted real keyframe; hover tasks remain the live trigger."""
         db = self._load()
@@ -131,6 +134,9 @@ class LaneAnnotationStore:
             recoverable_context = {
                 "source_profile_id": source_profile_id,
                 "homography_pixel_to_enu": homography_pixel_to_enu,
+                "map_version_id": map_version_id,
+                "map_anchor_gcj02": map_anchor_gcj02,
+                "homography_coordinate_frame": homography_coordinate_frame,
             }
             for key, value in recoverable_context.items():
                 if value is not None and existing.get(key) != value:
@@ -157,6 +163,9 @@ class LaneAnnotationStore:
             "source_frame_id": source_frame_id,
             "source_profile_id": source_profile_id,
             "homography_pixel_to_enu": homography_pixel_to_enu,
+            "map_version_id": map_version_id,
+            "map_anchor_gcj02": map_anchor_gcj02,
+            "homography_coordinate_frame": homography_coordinate_frame,
             "roads": roads or {},
             "lane_count": 0,
             "image_path": str(image_path),

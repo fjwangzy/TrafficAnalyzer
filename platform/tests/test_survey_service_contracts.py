@@ -126,6 +126,98 @@ def test_unchanged_server_asset_uses_persisted_fingerprint_without_rehash(tmp_pa
 
 
 @pytest.mark.asyncio
+async def test_source_profile_capture_import_resolves_server_asset_paths(tmp_path, monkeypatch):
+    source_root = tmp_path / "sources"
+    source_root.mkdir()
+    video_path = source_root / "capture.mp4"
+    telemetry_path = source_root / "telemetry.srt"
+    video_path.write_bytes(b"video")
+    telemetry_path.write_text("telemetry", encoding="utf-8")
+    monkeypatch.setattr(settings, "survey_asset_roots", [str(source_root)])
+    monkeypatch.setattr(settings, "survey_storage_dir", str(tmp_path / "managed"))
+
+    class Session(_FakeSession):
+        def __init__(self):
+            super().__init__()
+            self.results = [
+                SimpleNamespace(
+                    location="capture.mp4", mode="local", enabled=True
+                ),
+                SimpleNamespace(
+                    location="telemetry.srt",
+                    mode="local",
+                    enabled=True,
+                    source_type="srt",
+                    config={},
+                    validation_status="valid",
+                ),
+            ]
+
+        async def execute(self, _statement):
+            value = self.results.pop(0)
+
+            class Result:
+                def scalar_one_or_none(self):
+                    return value
+
+            return Result()
+
+    service = SurveyService(Session())
+
+    async def no_prior(_action, _request_id):
+        return None
+
+    async def ready_task(_task_id, _actor_id, _role):
+        return SimpleNamespace(id="SVY-1", state="ready")
+
+    async def package(_task_id):
+        return SimpleNamespace(id="EVP-1")
+
+    captured = {}
+
+    async def enqueue(task, package_value, video, telemetry, *_args, **_kwargs):
+        captured.update(
+            task=task,
+            package=package_value,
+            video=video,
+            telemetry=telemetry,
+        )
+        return {"id": "BATCH-1"}
+
+    async def batch_details(_batch):
+        return {"id": "BATCH-1", "status": "queued"}
+
+    service._prior = no_prior
+    service._task = ready_task
+    service._package = package
+    service.enqueue_capture_batch = enqueue
+    service._batch_details = batch_details
+    original_get = service.session.get
+
+    async def get(model, identifier):
+        if identifier == "BATCH-1":
+            return SimpleNamespace(id="BATCH-1")
+        return await original_get(model, identifier)
+
+    service.session.get = get
+
+    result = await service.import_capture_batch(
+        "SVY-1",
+        None,
+        None,
+        "SRC-1",
+        actor_id=1,
+        role="admin",
+        request_id="import-source-profile",
+    )
+
+    assert result == {"id": "BATCH-1", "status": "queued"}
+    assert captured["video"].path == video_path
+    assert captured["telemetry"].path == telemetry_path
+    assert captured["video"].storage_backend == "server_asset"
+
+
+@pytest.mark.asyncio
 async def test_scene_annotation_full_crud_preserves_revision_and_audit(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "survey_storage_dir", str(tmp_path / "managed"))
     session = _FakeSession()

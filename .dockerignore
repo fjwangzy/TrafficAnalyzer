@@ -24,7 +24,7 @@ console2
 traffic-fly-console
 platform/tests
 platform/scripts
-test_*.py
+test/
 docker-compose*.yaml
 README.md
 README-zh.md

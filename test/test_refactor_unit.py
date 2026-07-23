@@ -11,8 +11,14 @@
 
 import sys
 import os
+from pathlib import Path
+
 import numpy as np
 import time
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 # 设置环境变量
 os.environ["VIDEO_SRC"] = "dummy"
@@ -517,7 +523,7 @@ results.check(
         and right_turn_events[0]["prediction_type"] == "path_intersection"
         and right_turn_events[0]["conflict_scene"] == "suspected_right_turn_mv_nmv"
         and "hard_ttc_or_pet" in right_turn_events[0]["evidence"]
-        and "motor_position_m" in right_turn_events[0]
+        and "motor_position_enu_m" in right_turn_events[0]
     ),
     f"events={right_turn_events}"
 )

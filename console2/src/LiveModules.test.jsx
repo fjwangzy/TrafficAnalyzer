@@ -36,10 +36,12 @@ const liveMocks = vi.hoisted(() => ({
     surveyBatches: vi.fn(),
     surveyFrames: vi.fn(),
     bootstrapChannelizedMap: vi.fn(),
+    channelizedMap: vi.fn(),
     createChannelizedMap: vi.fn(),
     fitChannelizedMapFromImage: vi.fn(),
     verifyVisualRegistration: vi.fn(),
     publishChannelizedMap: vi.fn(),
+    intersectionProjectWorkspace: vi.fn(),
   },
 }))
 
@@ -83,6 +85,17 @@ function open(path) {
   window.history.pushState({}, '', path)
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 }, mutations: { retry: false } } })
   return { ...render(<QueryClientProvider client={queryClient}><RouterApp /></QueryClientProvider>), queryClient }
+}
+
+function groupedLaneMap() {
+  return {
+    id: 'CMV-GROUPED', inter_id: 'INT-1', version_no: 1, status: 'draft', coordinate_system: 'GCJ02', coordinate_transform_version: 'v1', road_data_version: 'ROAD-1', anchor_gcj02: [117, 36.7], geometry_gcj02: {},
+    lanes: [
+      { local_lane_id: 'candidate:LANE-1', source_lane_id: 'LANE-1', link_id: 'LINK-1', geometry_source: 'link_offset_derived', geometry_enu_m: { type: 'Polygon', coordinates: [[[0, 0], [10, 0], [10, 30], [0, 30], [0, 0]]] } },
+      { local_lane_id: 'candidate:LANE-2', source_lane_id: 'LANE-2', link_id: 'LINK-1', geometry_source: 'link_offset_derived', geometry_enu_m: { type: 'Polygon', coordinates: [[[12, 0], [22, 0], [22, 30], [12, 30], [12, 0]]] } },
+      { local_lane_id: 'candidate:LANE-3', source_lane_id: 'LANE-3', link_id: 'LINK-2', geometry_source: 'link_offset_derived', geometry_enu_m: { type: 'Polygon', coordinates: [[[24, 0], [34, 0], [34, 30], [24, 30], [24, 0]]] } },
+    ],
+  }
 }
 
 function mockSuccessfulApis() {
@@ -139,10 +152,17 @@ function mockSuccessfulApis() {
     }],
   }
   liveMocks.api.bootstrapChannelizedMap.mockResolvedValue({ source: 'local', map })
+  liveMocks.api.channelizedMap.mockResolvedValue({ ...map, status: 'lane_verified', quality: { reviewed: true } })
   liveMocks.api.createChannelizedMap.mockResolvedValue({ ...map, id: 'CMV-2', version_no: 2, status: 'draft' })
   liveMocks.api.fitChannelizedMapFromImage.mockResolvedValue({ ...map, status: 'candidate', registration: { id: 'VRG-1', status: 'registered' } })
   liveMocks.api.verifyVisualRegistration.mockResolvedValue({ id: 'VRG-1', status: 'verified' })
   liveMocks.api.publishChannelizedMap.mockResolvedValue({ ...map, status: 'lane_verified' })
+  liveMocks.api.intersectionProjectWorkspace.mockResolvedValue({
+    project: { project_id: 'IPR-1', inter_id: 'INT-1', name: '小清河北路 × 水屯路', stage: 'published', revision: 2, center_gcj02: [117, 36.7], created_by: 'admin' },
+    bindings: [{ source_profile_id: 'SRC-1' }],
+    channelized_maps: [{ ...map, status: 'lane_verified', quality: { reviewed: true } }],
+    readiness: { formal_intersection: true, road_context_verified: true, source_bound: true, road_data_version: 'ROAD-1', next_action: 'operate_runtime' },
+  })
 }
 
 describe('Console2 live module migration', () => {
@@ -557,8 +577,84 @@ describe('Console2 live module migration', () => {
     const referenceLane = await screen.findByLabelText('路网参考车道 candidate:LANE-1')
     fireEvent.click(referenceLane)
 
-    expect(screen.getByText(/1 条车道/)).toBeInTheDocument()
+    expect(screen.getByText('0 个顶点 · 1 条车道 · 0 个渠化要素')).toBeInTheDocument()
     expect(screen.getByLabelText('调整车道顶点 1')).toBeInTheDocument()
+  })
+
+  it('selects and adopts the whole Link group when a reference lane is clicked once', async () => {
+    liveMocks.api.bootstrapChannelizedMap.mockResolvedValue({ source: 'local', map: groupedLaneMap() })
+
+    open('/admin/calibration?tab=lanes')
+    fireEvent.click(await screen.findByText('INT-1'))
+    fireEvent.click(screen.getByRole('button', { name: '加载本地 / 按需导入' }))
+    fireEvent.click(await screen.findByLabelText('路网参考车道 candidate:LANE-1'))
+
+    expect(screen.getByText('Link LINK-1 · 2 条车道')).toBeInTheDocument()
+    expect(screen.getByLabelText('拟合车道 candidate:LANE-1')).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByLabelText('拟合车道 candidate:LANE-2')).toHaveAttribute('aria-selected', 'true')
+    expect(screen.queryByLabelText('拟合车道 candidate:LANE-3')).not.toBeInTheDocument()
+  })
+
+  it('switches from Link group editing to one lane when a draft lane is double-clicked', async () => {
+    liveMocks.api.bootstrapChannelizedMap.mockResolvedValue({ source: 'local', map: groupedLaneMap() })
+    open('/admin/calibration?tab=lanes')
+    fireEvent.click(await screen.findByText('INT-1'))
+    fireEvent.click(screen.getByRole('button', { name: '加载本地 / 按需导入' }))
+    fireEvent.click(await screen.findByLabelText('路网参考车道 candidate:LANE-1'))
+
+    fireEvent.doubleClick(screen.getByLabelText('拟合车道 candidate:LANE-1'))
+
+    expect(screen.getByText('单车道 · candidate:LANE-1')).toBeInTheDocument()
+    expect(screen.getByLabelText('拟合车道 candidate:LANE-1')).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByLabelText('拟合车道 candidate:LANE-2')).toHaveAttribute('aria-selected', 'false')
+    expect(screen.getByLabelText('调整车道顶点 1')).toBeInTheDocument()
+  })
+
+  it('deletes the selected Link group without removing lanes from other Links', async () => {
+    liveMocks.api.bootstrapChannelizedMap.mockResolvedValue({ source: 'local', map: groupedLaneMap() })
+    open('/admin/calibration?tab=lanes')
+    fireEvent.click(await screen.findByText('INT-1'))
+    fireEvent.click(screen.getByRole('button', { name: '加载本地 / 按需导入' }))
+    fireEvent.click(await screen.findByLabelText('路网参考车道 candidate:LANE-1'))
+    fireEvent.click(await screen.findByLabelText('路网参考车道 candidate:LANE-3'))
+    fireEvent.click(screen.getByLabelText('拟合车道 candidate:LANE-1'))
+
+    fireEvent.click(screen.getByRole('button', { name: '删除所选' }))
+
+    expect(screen.queryByLabelText('拟合车道 candidate:LANE-1')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('拟合车道 candidate:LANE-2')).not.toBeInTheDocument()
+    expect(screen.getByLabelText('拟合车道 candidate:LANE-3')).toBeInTheDocument()
+  })
+
+  it('splits one double-clicked lane into two editable lanes on the same Link', async () => {
+    liveMocks.api.bootstrapChannelizedMap.mockResolvedValue({ source: 'local', map: groupedLaneMap() })
+    open('/admin/calibration?tab=lanes')
+    fireEvent.click(await screen.findByText('INT-1'))
+    fireEvent.click(screen.getByRole('button', { name: '加载本地 / 按需导入' }))
+    fireEvent.click(await screen.findByLabelText('路网参考车道 candidate:LANE-1'))
+    fireEvent.doubleClick(screen.getByLabelText('拟合车道 candidate:LANE-1'))
+
+    fireEvent.click(screen.getByRole('button', { name: '拆分车道' }))
+
+    expect(screen.queryByLabelText('拟合车道 candidate:LANE-1')).not.toBeInTheDocument()
+    expect(screen.getAllByLabelText(/拟合车道 candidate:LANE-1:split-/)).toHaveLength(2)
+    expect(screen.getByText('0 个顶点 · 3 条车道 · 0 个渠化要素')).toBeInTheDocument()
+  })
+
+  it('merges the selected Link group into one editable lane envelope', async () => {
+    liveMocks.api.bootstrapChannelizedMap.mockResolvedValue({ source: 'local', map: groupedLaneMap() })
+    open('/admin/calibration?tab=lanes')
+    fireEvent.click(await screen.findByText('INT-1'))
+    fireEvent.click(screen.getByRole('button', { name: '加载本地 / 按需导入' }))
+    fireEvent.click(await screen.findByLabelText('路网参考车道 candidate:LANE-1'))
+
+    fireEvent.click(screen.getByRole('button', { name: '合并车道' }))
+
+    expect(screen.queryByLabelText('拟合车道 candidate:LANE-1')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('拟合车道 candidate:LANE-2')).not.toBeInTheDocument()
+    expect(screen.getByLabelText('拟合车道 candidate:LANE-1:merged')).toBeInTheDocument()
+    expect(screen.getByText('单车道 · candidate:LANE-1:merged')).toBeInTheDocument()
+    expect(screen.getByText('0 个顶点 · 1 条车道 · 0 个渠化要素')).toBeInTheDocument()
   })
 
   it('drags an adopted lane vertex in source-image coordinates before fitting', async () => {
@@ -607,6 +703,53 @@ describe('Console2 live module migration', () => {
     expect(payload.lanes[0].polygon_px[2][1]).toBeCloseTo(170)
   })
 
+  it('drags every lane in the selected Link group by the same image offset', async () => {
+    const rect = { left: 0, top: 0, right: 600, bottom: 270, width: 600, height: 270, x: 0, y: 0, toJSON: () => ({}) }
+    vi.spyOn(Element.prototype, 'getBoundingClientRect').mockReturnValue(rect)
+    liveMocks.api.bootstrapChannelizedMap.mockResolvedValue({ source: 'local', map: groupedLaneMap() })
+    open('/admin/calibration?tab=lanes')
+    fireEvent.click(await screen.findByText('INT-1'))
+    fireEvent.click(screen.getByRole('button', { name: '加载本地 / 按需导入' }))
+    fireEvent.click(await screen.findByLabelText('路网参考车道 candidate:LANE-1'))
+
+    const canvas = screen.getByLabelText('渠化几何绘制画布')
+    fireEvent.pointerDown(screen.getByLabelText('拟合车道 candidate:LANE-1'), { pointerId: 3, clientX: 110, clientY: 25 })
+    fireEvent.pointerMove(canvas, { pointerId: 3, clientX: 120, clientY: 35 })
+    fireEvent.pointerUp(canvas, { pointerId: 3, clientX: 120, clientY: 35 })
+    fireEvent.click(screen.getByRole('button', { name: '保存影像拟合候选' }))
+
+    await waitFor(() => expect(liveMocks.api.fitChannelizedMapFromImage).toHaveBeenCalledTimes(1))
+    const lanes = liveMocks.api.fitChannelizedMapFromImage.mock.calls[0][1].lanes
+    expect(lanes[0].polygon_px[0][0]).toBeCloseTo(120)
+    expect(lanes[0].polygon_px[0][1]).toBeCloseTo(70)
+    expect(lanes[1].polygon_px[0][0]).toBeCloseTo(240)
+    expect(lanes[1].polygon_px[0][1]).toBeCloseTo(70)
+  })
+
+  it('drags only one lane after double-click switches to single-lane editing', async () => {
+    const rect = { left: 0, top: 0, right: 600, bottom: 270, width: 600, height: 270, x: 0, y: 0, toJSON: () => ({}) }
+    vi.spyOn(Element.prototype, 'getBoundingClientRect').mockReturnValue(rect)
+    liveMocks.api.bootstrapChannelizedMap.mockResolvedValue({ source: 'local', map: groupedLaneMap() })
+    open('/admin/calibration?tab=lanes')
+    fireEvent.click(await screen.findByText('INT-1'))
+    fireEvent.click(screen.getByRole('button', { name: '加载本地 / 按需导入' }))
+    fireEvent.click(await screen.findByLabelText('路网参考车道 candidate:LANE-1'))
+    fireEvent.doubleClick(screen.getByLabelText('拟合车道 candidate:LANE-1'))
+
+    const canvas = screen.getByLabelText('渠化几何绘制画布')
+    fireEvent.pointerDown(screen.getByLabelText('拟合车道 candidate:LANE-1'), { pointerId: 4, clientX: 110, clientY: 25 })
+    fireEvent.pointerMove(canvas, { pointerId: 4, clientX: 120, clientY: 35 })
+    fireEvent.pointerUp(canvas, { pointerId: 4, clientX: 120, clientY: 35 })
+    fireEvent.click(screen.getByRole('button', { name: '保存影像拟合候选' }))
+
+    await waitFor(() => expect(liveMocks.api.fitChannelizedMapFromImage).toHaveBeenCalledTimes(1))
+    const lanes = liveMocks.api.fitChannelizedMapFromImage.mock.calls[0][1].lanes
+    expect(lanes[0].polygon_px[0][0]).toBeCloseTo(120)
+    expect(lanes[0].polygon_px[0][1]).toBeCloseTo(70)
+    expect(lanes[1].polygon_px[0][0]).toBeCloseTo(220)
+    expect(lanes[1].polygon_px[0][1]).toBeCloseTo(50)
+  })
+
   it('forks an immutable verified map into a new editable fitting draft', async () => {
     const publishedMap = {
       id: 'CMV-PUBLISHED', inter_id: 'INT-1', version_no: 7, status: 'lane_verified', coordinate_system: 'GCJ02', coordinate_transform_version: 'v1', road_data_version: 'ROAD-1', anchor_gcj02: [117, 36.7],
@@ -627,6 +770,31 @@ describe('Console2 live module migration', () => {
       lanes: [expect.objectContaining({ local_lane_id: 'lane:verified:1', geometry_source: 'imagery_fitted' })],
     })))
     await waitFor(() => expect(screen.queryByRole('button', { name: '基于 lane_verified 新建拟合草稿' })).not.toBeInTheDocument())
+  })
+
+  it('keeps a published project inspector compact when no keyframe is selected', async () => {
+    liveMocks.api.laneTasks.mockResolvedValue([])
+    open('/admin/calibration/editor?inter_id=INT-1&project_id=IPR-1')
+
+    expect(await screen.findByText('9/9 通过')).toBeInTheDocument()
+    await waitFor(() => expect(screen.getByLabelText('画布视图')).toHaveValue('map'))
+    expect(screen.getByText('关键帧与素材').closest('details')).not.toHaveAttribute('open')
+    expect(screen.getByRole('button', { name: '进入运行应用' })).toBeEnabled()
+  })
+
+  it('hydrates the project overview map and routes its published next action to runtime', async () => {
+    open('/admin/intersection-projects/IPR-1?tab=overview')
+
+    expect(await screen.findByText('6/6 通过')).toBeInTheDocument()
+    expect(screen.getByLabelText('预览底图')).toHaveValue('map')
+    expect(liveMocks.api.channelizedMap).toHaveBeenCalledWith('CMV-1')
+
+    fireEvent.click(screen.getByRole('button', { name: '版本对比' }))
+    expect(screen.getByRole('region', { name: '版本对比面板' })).toHaveTextContent('暂无可对比历史版本')
+
+    fireEvent.click(screen.getAllByRole('button', { name: /去处理/ })[0])
+    await waitFor(() => expect(window.location.search).toContain('tab=runtime'))
+    expect(await screen.findByText('Runtime 规则')).toBeInTheDocument()
   })
 
   it('creates a recoverable lane task from a real survey keyframe and hydrates registration context', async () => {

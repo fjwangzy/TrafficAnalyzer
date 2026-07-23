@@ -2,7 +2,7 @@
 """端到端集成测试：inter_xqh视频+SRT遥测 → Kafka → Platform → Monitor页面。
 
 运行方式:
-  python3 test_e2e_inter_xqh.py
+  python3 test/test_e2e_inter_xqh.py
 
 前置条件:
   - Kafka 容器运行 (localhost:9093 = HOST PLAINTEXT listener)

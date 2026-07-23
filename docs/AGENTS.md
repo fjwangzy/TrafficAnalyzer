@@ -32,9 +32,9 @@
 优先使用可重复的自动化验证：
 
 ```bash
-python test_pipeline_inter_xqh.py
+python test/test_pipeline_inter_xqh.py
 python -m pytest platform/tests -q
-python -m pytest test_kafka_active_trajectories.py test_utils_local.py test_byte_tracker_core.py test_main_optimized_eof.py test_road9_compose_runtime.py test_telemetry_file_reader.py test_video_reader_frame_stride.py -q
+python -m pytest test/test_kafka_active_trajectories.py test/test_utils_local.py test/test_byte_tracker_core.py test/test_main_optimized_eof.py test/test_road9_compose_runtime.py test/test_telemetry_file_reader.py test/test_video_reader_frame_stride.py -q
 cd console2 && npm test && npm run build
 python scripts/audit_adr019_retirement.py --scope local --strict
 ```

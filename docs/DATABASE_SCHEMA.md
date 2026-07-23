@@ -27,7 +27,7 @@
 ### 1.1 本地开发库实况（2026-07-16 纯净切换）
 
 - 当前连接 database 为 `road9`，应用对象位于 `public`；这只是本地开发现状，不代表生产目标 schema 已冻结。
-- migration head 为 `20260721_0017`，版本表为 `uav_alembic_version`；`0012` 增加检测事实 lineage，`0013` 增加 inbox 可恢复派发，`0014/0015` 增加轨迹研判维度/索引，`0016/0017` 建立 GCJ-02 渠化地图与多视频源视觉配准。
+- migration head 为 `20260722_0018`，版本表为 `uav_alembic_version`；`0012` 增加检测事实 lineage，`0013` 增加 inbox 可恢复派发，`0014/0015` 增加轨迹研判维度/索引，`0016/0017` 建立 GCJ-02 渠化地图与多视频源视觉配准，`0018` 增加路口项目、视频接入、分段素材绑定和标定检查审计。
 - 正式本机端口 `5432` 由根 Compose 的 TimescaleDB 提供，使用稳定新卷 `traffic_road9_data`；不挂载旧 PostgreSQL、实验 TimescaleDB 或旧目标卷。
 - migration 自动启用 TimescaleDB 并创建 5 张 `uav_*` hypertable。初始化数据仅允许管理员账号，业务、指标、轨迹、任务和告警表为空。
 - `uav_traffic_metrics`、`uav_track_points`、`uav_conflict_events`、`uav_telemetry_metrics`、`uav_system_metrics`、普通表 `uav_track_events` 及长期 `uav_message_inbox` 已实现。永久性输入错误进入独立的 `uav_message_dead_letters`；可变技术复核状态位于普通表 `uav_conflict_reviews`，两者都不更新追加型冲突事实。
@@ -539,6 +539,17 @@ Alembic `20260721_0016` 删除新写入链路中的旧坐标列并建立渠化�
   verified 记录的 `residuals` 同时保存配准视频时刻、`registration_position_gcj02` 与
   `registration_gimbal_yaw_deg`，作为运行时逐帧运动补偿的不可变参考；
 - 重建的 `uav_visual_lane_bindings`：本地稳定车道键、可空 YCX lane ID、不透明 link ID、几何来源、置信度和审核状态。
+
+### 10.4 路口项目与视频发现（2026-07-22）
+
+Alembic `20260722_0018` 增加四个仅承载工作流与审计的实体，不把项目表当作外部路网真值：
+
+- `uav_intersection_projects`：稳定 `project_id`、可空正式 `inter_id`、GCJ-02 项目中心、阶段和乐观修订号；
+- `uav_video_ingestion_jobs`：视频优先/路口优先模式、期望项目、SourceProfile/素材引用、悬停证据、候选与错误码；
+- `uav_source_intersection_bindings`：SourceProfile 到项目的分段绑定，保存起止偏移、绑定质量、坐标证据与确认人；
+- `uav_calibration_review_records`：提交检查、通过或退回的不可覆盖审计记录，不承载角色隔离；通过记录必须保存影像地图对照、版本差异、配准误差、拓扑、车道方向和停止线六项全真检查表。
+
+最新 `RoadContextSnapshot` 只用于幂等回填项目壳；正式路网事实仍来自已验证 RoadContext，运行时仍只接受不可变 `lane_verified` Bundle。
 
 `uav_track_events/uav_track_points/uav_conflict_events/uav_telemetry_metrics` 的公共位置字段只使用
 GCJ-02，米制计算字段明确以 `_enu_m` 结尾。`source_lane_id` 与 `matched_link_id` 均为字符串，

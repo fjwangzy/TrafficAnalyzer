@@ -2,10 +2,10 @@
 """管道集成测试：使用离线遥测文件验证交通态势感知全链路输出。
 
 用法（Docker内运行）：
-  python3 test_pipeline_inter_xqh.py
+  python3 test/test_pipeline_inter_xqh.py
 
 或直接：
-  docker run --rm -v $(pwd):/app -w /app traffic_analyzer python3 test_pipeline_inter_xqh.py
+  docker run --rm -v $(pwd):/app -w /app traffic_analyzer python3 test/test_pipeline_inter_xqh.py
 """
 
 import os
@@ -13,7 +13,13 @@ import sys
 import json
 import time
 import logging
+from pathlib import Path
+
 import numpy as np
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 # 设置环境变量
 os.environ["VIDEO_SRC"] = "test_videos/inter_xqh/DJI_20260403142902_0001_V小清河北路与水屯路路口.mp4"

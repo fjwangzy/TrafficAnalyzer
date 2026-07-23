@@ -5,7 +5,7 @@ Tests the full data flow:
   Detection Pipeline (GPU+MPS) → MJPEG (port 8100) → Platform API → HLS/Nginx → Frontend
 
 Usage:
-    python test_e2e_mps_streaming.py
+    python test/test_e2e_mps_streaming.py
 """
 import json
 import subprocess

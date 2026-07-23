@@ -57,6 +57,66 @@ class YcxRoadImporter:
         if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", settings.ycx_db_schema):
             raise ValueError("YCX_DB_SCHEMA contains unsupported characters")
 
+    async def nearby_intersections(
+        self,
+        center_gcj02: list[float],
+        radius_m: float = 250.0,
+    ) -> list[dict[str, Any]]:
+        """Return read-only active-version candidates around one GCJ-02 point."""
+        if not self._settings.ycx_db_host or not self._settings.ycx_db_user:
+            return []
+        connection = await asyncpg.connect(
+            host=self._settings.ycx_db_host,
+            port=self._settings.ycx_db_port,
+            user=self._settings.ycx_db_user,
+            password=self._settings.ycx_db_password,
+            database=self._settings.ycx_db_name,
+            timeout=10,
+            server_settings={"search_path": f"{self._settings.ycx_db_schema},public"},
+        )
+        try:
+            async with connection.transaction(readonly=True):
+                version = await connection.fetchval(
+                    "SELECT version_id FROM dim_data_version WHERE is_enable = 1 ORDER BY version_id DESC LIMIT 1"
+                )
+                if not version:
+                    return []
+                rows = await connection.fetch(
+                    """
+                    SELECT inter_id, inter_name,
+                           ST_X(ST_GeomFromText(geom_center, 4326)) AS longitude,
+                           ST_Y(ST_GeomFromText(geom_center, 4326)) AS latitude
+                    FROM dim_inter_info
+                    WHERE version_id=$1
+                      AND NULLIF(BTRIM(geom_center), '') IS NOT NULL
+                      AND ST_DWithin(
+                          ST_GeomFromText(geom_center, 4326)::geography,
+                          ST_SetSRID(ST_MakePoint($2, $3), 4326)::geography,
+                          $4
+                      )
+                    ORDER BY ST_GeomFromText(geom_center, 4326)::geography <->
+                             ST_SetSRID(ST_MakePoint($2, $3), 4326)::geography
+                    LIMIT 20
+                    """,
+                    version,
+                    float(center_gcj02[0]),
+                    float(center_gcj02[1]),
+                    float(radius_m),
+                )
+                return [
+                    {
+                        "inter_id": row["inter_id"],
+                        "name": row["inter_name"] or row["inter_id"],
+                        "center_gcj02": [float(row["longitude"]), float(row["latitude"])],
+                        "road_data_version": str(version),
+                        "quality_status": "candidate",
+                        "source": "ycx_readonly",
+                    }
+                    for row in rows
+                ]
+        finally:
+            await connection.close()
+
     async def import_intersection(
         self,
         inter_id: str,

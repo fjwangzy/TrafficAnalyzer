@@ -515,6 +515,7 @@ PipelineManager → main_optimized.py → Kafka uav_* → road9/TimescaleDB + We
 - 同一无人机 enabled 计划不能重叠；不同无人机可以同时监测同一路口。
 - 编辑/暂停计划只影响未来执行，不改写运行中 Mission 的设备、源、路网和计划快照。
 - SourceProfile 是 API 聚合，物理数据由 `uav_video_sources` 与 `uav_telemetry_sources` 承载；配对关系只能有一套状态真源。
+- 路口渠化工作流允许“视频先发现”和“路口先建档”两条入口，但都必须汇聚到 `IntersectionProject + SourceProfile + SourceIntersectionBinding`。`IntersectionProject` 是稳定工作壳，不替代 RoadContext；视频归属必须先经 WGS84 证据留存和 GCJ-02 候选匹配，不能直接套用无人机默认路口。
 - DJI Cloud JSON 回放源在 `uav_telemetry_sources.config` 保存 `time_offset_sec/sync_tolerance_sec`，PipelineManager 将其作为 Hydra override 传给 `TelemetryFileReader`；原始空洞返回无有效遥测，不做插值伪造。
 - 根 `docker-compose.yaml` 为 Platform 启用 Docker init 进程，用于回收 EOF、人工停止或异常退出后的多进程检测 worker，避免反复切换摄像头积累僵尸进程。
 - Console2 `/drones` 从持久化 Drone/Source/Mission 聚合生成路口控制卡，通过手动 Mission 独立启停，并与 `/monitoring` 共用 Pipeline 启动时登记的 `video_stream_url` 直连检测器 MJPEG。
@@ -627,7 +628,7 @@ Console2 /enforcement/**
 **原因**：在 multiprocessing.Queue 中，无法发送 Python 异常或关闭信号。哨兵对象可以被序列化通过队列，每个节点看到后执行清理并退出。
 **代价**：每个节点的 process() 方法开头都需要 isinstance 检查。
 
-三进程入口同样必须把 sentinel 判断放在任何普通帧字段和共享内存访问之前。2026-07-15 的真实 5GB EOF 验证发现检测进程先读取 `.frame` 会使 sentinel 以 `AttributeError` 退出；当前 `proc_frame_reader_and_detection` 已先把 `VideoEndBreakElement` 级联入队并退出，tracker/show 继续按既有节点契约完成清理。`test_main_optimized_eof.py` 是该顺序的最小回归，`docs/test_report_s9_inter_xqh_eof.json` 是重启恢复后自然 EOF 的原始链路证据。
+三进程入口同样必须把 sentinel 判断放在任何普通帧字段和共享内存访问之前。2026-07-15 的真实 5GB EOF 验证发现检测进程先读取 `.frame` 会使 sentinel 以 `AttributeError` 退出；当前 `proc_frame_reader_and_detection` 已先把 `VideoEndBreakElement` 级联入队并退出，tracker/show 继续按既有节点契约完成清理。`test/test_main_optimized_eof.py` 是该顺序的最小回归，`docs/test_report_s9_inter_xqh_eof.json` 是重启恢复后自然 EOF 的原始链路证据。
 
 ### 3. ByteTrack 而非 DeepSORT
 

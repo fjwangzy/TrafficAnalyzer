@@ -527,7 +527,7 @@ I4 通过 `EnforcementService` 将候选围栏、候选规则、统一 AI 事件
 
 冲突检测默认启用（`conflict_detection.enabled: true`），但无有效单应性矩阵、双方世界坐标速度向量或足够历史轨迹时会自动跳过，避免像素距离和短轨迹抖动误报。`ttc_sec` 基于 motor/non_motor 世界坐标运动趋势做未来 `0-5s` 候选交汇预测；有足够历史轨迹时，预测方向优先取最近一个有效轨迹段，速度大小沿用 `SpeedEstimationNode` 的米/秒估计，避免线性回归测速方向在转弯或轨迹错位时制造虚假交点。默认路径交点候选必须同时满足：双方预测路径存在空间交点、到达时间差不超过 `arrival_time_tolerance_sec`（默认 `1.0s`）、且双方到达交点这段时间内的连续同刻最小中心距进入 `same_time_collision_radius_m`（默认 `0.8m`）共同冲突区；只有数学射线交点但同刻距离仍偏大的 0.9m~1.7m 擦肩轨迹不会被判成相撞。同刻 CPA 候选默认关闭（`enable_same_time_cpa: false`），显式开启后也只使用 `same_time_collision_radius_m`，且 CPA 的 `pet_sec=0` 不作为 PET 侵占证据。候选还必须满足 `30°~150°` 冲突角，并归入无车道标注轨迹几何近似场景：`suspected_right_turn_mv_nmv` 或 `suspected_unprotected_left_turn`。机动车转弯场景除首尾 heading 差外，还要求转弯前后两段投影位移都达到 `min_turn_leg_m`（默认 `2.0m`），用于过滤短窗口小折线和近直行误分。
 
-最终 `conflict` 事件需要 near-miss 证据：`hard_ttc_or_pet`（默认 TTC <= 1.5s）可直接触发；路径交点 `hard_pet`（默认 PET <= 1.0s）只表示极近抢行强度，必须叠加 `hard_deceleration`、`hard_steering`、`stop_or_yield` 之一才触发事件，避免仅凭数学交点和低 PET 把近距离错位经过报成 near-miss。`hard_steering` 只把非机动车短窗口 heading 突变视为避险证据，机动车正常右/左转不计作避险急转向。`prediction_type` 标识候选来源，默认业务口径只展示/处理 `path_intersection`；显式启用扩展时产生的 `same_time_cpa` 属于中心点同刻最近接近候选，Monitoring 冲突回放入口会过滤该类 CPA-only 擦肩事件。旧格式事件仅在缺少 `prediction_type` 且 `distance_m` 近似 `0.0` 时按路径交点兼容，带 `prediction_type=path_intersection` 但 `distance_m` 非零的畸形消息也会被前端过滤，0.9m/1.3m/1.7m 等非零距离旧 CPA 消息不会进入业务冲突列表。`distance_m` 表示预测冲突时刻的双方距离，路径交点场景为 `0.0`；`motor_position_m` / `non_motor_position_m` 表示预测冲突点附近的双方未来世界坐标。`motor_arrival_ttc_sec` / `non_motor_arrival_ttc_sec` 表示双方到达冲突点的预测时间。`motor_id` / `non_motor_id` 轨迹对同级别事件不重复上报，但允许从 `warning` 升级为 `critical` 再次上报，直到轨迹清理后释放状态。Platform Kafka consumer 的实时冲突缓存和 WebSocket 推送同样按 `motor_id` / `non_motor_id` upsert，同级重复消息会被丢弃，升级消息会替换原事件并重新推送。机非分类由 `vehicle_classification.non_motor_class_names` / `non_motor_class_ids` 配置非机动车集合；未配置的已知检测类别按机动车处理。摩托车、电动车相关类别默认归入非机动车。
+最终 `conflict` 事件需要 near-miss 证据：`hard_ttc_or_pet`（默认 TTC <= 1.5s）可直接触发；路径交点 `hard_pet`（默认 PET <= 1.0s）只表示极近抢行强度，必须叠加 `hard_deceleration`、`hard_steering`、`stop_or_yield` 之一才触发事件，避免仅凭数学交点和低 PET 把近距离错位经过报成 near-miss。`hard_steering` 只把非机动车短窗口 heading 突变视为避险证据，机动车正常右/左转不计作避险急转向。`prediction_type` 标识候选来源，默认业务口径只展示/处理 `path_intersection`；显式启用扩展时产生的 `same_time_cpa` 属于中心点同刻最近接近候选，Monitoring 冲突回放入口会过滤该类 CPA-only 擦肩事件。旧格式事件仅在缺少 `prediction_type` 且 `distance_m` 近似 `0.0` 时按路径交点兼容，带 `prediction_type=path_intersection` 但 `distance_m` 非零的畸形消息也会被前端过滤，0.9m/1.3m/1.7m 等非零距离旧 CPA 消息不会进入业务冲突列表。`distance_m` 表示预测冲突时刻的双方距离，路径交点场景为 `0.0`；`motor_position_enu_m` / `non_motor_position_enu_m` 表示预测冲突点附近的双方未来 ENU 世界坐标。`motor_arrival_ttc_sec` / `non_motor_arrival_ttc_sec` 表示双方到达冲突点的预测时间。`motor_id` / `non_motor_id` 轨迹对同级别事件不重复上报，但允许从 `warning` 升级为 `critical` 再次上报，直到轨迹清理后释放状态。Platform Kafka consumer 的实时冲突缓存和 WebSocket 推送同样按 `motor_id` / `non_motor_id` upsert，同级重复消息会被丢弃，升级消息会替换原事件并重新推送。机非分类由 `vehicle_classification.non_motor_class_names` / `non_motor_class_ids` 配置非机动车集合；未配置的已知检测类别按机动车处理。摩托车、电动车相关类别默认归入非机动车。
 
 ### 世界坐标说明
 
@@ -1485,6 +1485,23 @@ canonical 完成事实，不能先过滤旧版本记录再去重，否则分类�
 当前已确认片段，不得把请求中状态显示为 0 条轨迹。
 
 ## 2026-07-21 GCJ-02 渠化地图契约
+
+### 路口项目与统一视频接入（2026-07-22）
+
+以下接口全部要求 `admin`，当前不扩展角色枚举或制图/复核人员隔离：
+
+| 方法 | 路径 | 契约 |
+|---|---|---|
+| GET/POST | `/calibration/intersection-projects` | 查询或创建稳定项目；正式 `inter_id` 可在发现阶段为空 |
+| GET/PATCH | `/calibration/intersection-projects/{project_id}` | 查询或按 `revision` 修改项目 |
+| GET | `/calibration/intersection-projects/{project_id}/workspace` | 汇总 RoadContext、分段素材绑定、地图版本和唯一下一步动作 |
+| POST | `/calibration/video-ingestions` | `project_id` 为空表示视频优先；传入表示路口优先并作为期望归属校验 |
+| GET | `/calibration/video-ingestions/{job_id}` | 返回 WGS84 原始中心、GCJ-02 匹配中心、悬停时间段、候选距离与状态 |
+| POST | `/calibration/video-ingestions/{job_id}/resolve` | `bind_expected_project`、`bind_existing_project` 或 `create_project`；绑定写入独立时间范围和质量 |
+| POST | `/calibration/channelized-maps/{id}/submit-check` | 保存一次提交检查审计 |
+| POST | `/calibration/channelized-maps/{id}/check` | `admin` 记录通过/退回、问题和检查表；`approved` 必须显式通过影像地图对照、版本差异、配准误差、拓扑、车道方向和停止线六项门禁且无开放问题，发布前最近结果必须为 `approved` |
+
+悬停发现按 1Hz 重采样，使用不少于 15 秒、云台俯角不高于 `-80°`、位置半径 P95 不超过 5m、派生速度 P95 不超过 1m/s 的稳定段。DJI 原始经纬度以 WGS84 留存，候选距离只用固定版本转换后的 GCJ-02 计算。本地 RoadContext 候选优先；最近候选不超过 80m 且与第二候选差不少于 80m 才可标记 `auto_high_confidence`。无遥测绑定为 `manual_unverified`。
 
 唯一公共地理坐标系为 `GCJ02`，公共字段限定为 `position_gcj02`、`geometry_gcj02`、
 `trajectory_gcj02`、`anchor_gcj02` 和 `coordinate_system: "GCJ02"`。米制计算字段为

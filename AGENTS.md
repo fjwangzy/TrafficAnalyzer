@@ -63,14 +63,14 @@ docker compose -p traffic_analyzer --profile gpu-only up -d --build
 
 ```bash
 python -m pytest platform/tests -q
-python -m pytest test_kafka_active_trajectories.py test_utils_local.py test_byte_tracker_core.py -q
+python -m pytest test/test_kafka_active_trajectories.py test/test_utils_local.py test/test_byte_tracker_core.py -q
 cd console2 && npm test && npm run build
-python test_pipeline_inter_xqh.py
+python test/test_pipeline_inter_xqh.py
 python scripts/audit_adr019_retirement.py --scope local --strict
 git diff --check
 ```
 
-`test_pipeline_inter_xqh.py` 预期 `56 PASS / 0 FAIL / 0 WARN`，需要 `weights/uav_best.pt`。生产范围审计继续保留外部阻断。
+`test/test_pipeline_inter_xqh.py` 预期 `56 PASS / 0 FAIL / 0 WARN`，需要 `weights/uav_best.pt`。生产范围审计继续保留外部阻断。
 
 ## 检测管道
 

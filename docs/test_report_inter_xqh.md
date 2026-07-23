@@ -2,7 +2,7 @@
 
 > **当前范围说明（2026-07-16）**：`56 PASS / 0 FAIL / 0 WARN` 是算法/管道防回退证据；正式本机 `road9`、`uav_*`、TimescaleDB 与旧链路退役另由 ADR-019 严格审计及[六组本机全流程报告](test_report_local_replay_full_flow.md)证明。两者都不代表生产验收。
 
-**最近复跑日期**: 2026-07-16
+**最近复跑日期**: 2026-07-22
 **测试资产**: `test_videos/inter_xqh/`  
 - 视频: `DJI_20260403142902_0001_V小清河北路与水屯路路口.mp4` (5.4GB, 4K, 16.5min)  
 - 遥测: `telemetry.srt` (29,741 条记录, 逐帧@30fps)
@@ -11,7 +11,18 @@
 
 ## 测试结果：56 PASS / 0 FAIL / 0 WARN ✅
 
-2026-07-16 最终工作树复跑 `python test_pipeline_inter_xqh.py` 通过：`56 PASS / 0 FAIL / 0 WARN`。前 100 帧真实 YOLO+SRT 管道耗时 96.2s（CPU），检测目标帧率 100/100、累计 8051 个目标、遥测注入 100/100、H 矩阵 100/100、运动补偿 90/100、机非冲突事件数 0。
+2026-07-22 最终工作树复跑 `python test/test_pipeline_inter_xqh.py` 通过：`56 PASS / 0 FAIL / 0 WARN`。前 100 帧真实 YOLO+SRT 管道耗时 106.7s（CPU），检测目标帧率 100/100、累计 8051 个目标、遥测注入 100/100、H 矩阵 100/100、运动补偿 90/100、机非冲突事件数 0。
+
+## 路口项目、视频发现与渠化发布验收（2026-07-22）
+
+- 路口项目 `IPR-1853f6704b79c593c892f8ea` 以路口优先路径接入 `SRC-INTER-XQH-0403-PM`；901 秒悬停段的 WGS84 中心为 `[117.022326, 36.702909]`，固定版本转换后的 GCJ-02 中心为 `[117.028267426, 36.703260199]`，距 RoadContext `011wwe0z19700001` 中心 4.532m，绑定质量为 `auto_high_confidence`。
+- 同一素材再由视频优先任务 `VIJ-b4c364c26c894bea8cc7b164` 发现并绑定已有项目，返回同一绑定 `SIB-bedd6eedfa9e4ed5a34b28e4`；绑定总数保持 1，项目继续为 `published/revision 5`，证明两条入口汇聚且重复解析不会复制绑定或回退项目阶段。
+- 把 XQH 素材按路口优先方式提交给解放东路与海右路项目时，任务 `VIJ-375a5278dda24d1eac418415` 返回 `409 video_intersection_mismatch` 并携带真实 XQH 候选；纯 MP4 任务 `VIJ-d6df8724330d4fd5aa5f34f0` 返回 `awaiting_confirmation/manual_unverified/telemetry_unavailable`，两类异常均未静默绑定或套用路网。
+- 真实关键帧任务 `lane-011wwe0z19700001-FRM-4221C85DCB81` 使用 3840×2160 原图和 map ENU 单应矩阵；车道先裁剪到影像范围，再由服务端统一执行 pixel→ENU→GCJ-02，生成 V2 `CMV-b83a25740598430bb996f75d` 的 32 条 `imagery_fitted` 车道和 4 条停止线。
+- 配准 `VRG-3351d2719cf74f1798ef0fc0` 已验证；4 个控制点重投影 P95 为 `7.105427357601002e-15m`，拓扑问题 0，方向、停止线、自交和重叠检查均通过。
+- Console2 项目工作台由 `admin` 真实执行“提交检查 → 六项检查通过 → 发布 lane_verified”；审计记录 `CRV-3ea5a0e3073d4c97bed3a9ea` 保存六项全真清单、意见和 actor 1。空清单调用返回 `422 calibration_review_incomplete`。
+- 发布后 V2 为唯一 `lane_verified`，V1 `CMV-1d3dedffa32145dca68c148d` 自动变为 `retired`；Runtime Bundle 返回 V2、GCJ02、转换版本 `wgs84-gcj02-local-enu/v1` 和 32 条车道。浏览器运行应用页命中新 V2，console error/warning 均为 0。
+- 自动化门禁：Platform `201 passed / 5 skipped / 10 subtests passed`；Console2 `17 files / 125 tests` 且 production build 成功；XQH `56 PASS / 0 FAIL / 0 WARN`。新增异常覆盖包括 GPS 有效率不足、非正拍/移动段、WGS84/GCJ-02 混用、相邻路口歧义、错误期望项目、无遥测和重复绑定。ADR-019 strict 除既有 `local_runtime_evidence` 外部证据门禁外全部通过。
 
 ### Phase 1: SRT 遥测解析 (7/7)
 | 检查项 | 结果 | 详情 |
@@ -84,12 +95,12 @@ DirectionFlowNode, LaneAnalysisNode, TrajectoryNode, ConflictDetectionNode, Calc
 **修复**: 更新为 `((statistics|track_complete|conflicts|telemetry)_.*|system_metrics)`
 
 ### 改进: Phase 4 测试预热
-**文件**: `test_pipeline_inter_xqh.py`  
+**文件**: `test/test_pipeline_inter_xqh.py`
 **问题**: 仅喂3帧但锚点需10帧，导致运动补偿始终为 None  
 **修复**: 增加12帧预热阶段建立GPS锚点
 
 ### 改进: SRT 遥测支持
-**文件**: `test_pipeline_inter_xqh.py`  
+**文件**: `test/test_pipeline_inter_xqh.py`
 **变更**: 从 JSON file 切换到 SRT 源 (source: "srt", time_offset: 0)
 
 ### 改进: xqh 机非冲突误报压制
@@ -102,7 +113,7 @@ DirectionFlowNode, LaneAnalysisNode, TrajectoryNode, ConflictDetectionNode, Calc
 
 ### 改进: 路径交点同一时空占用门槛
 **文件**: `nodes/ConflictDetectionNode.py`
-**变更**: 路径交点 PET 候选不再只看“预测射线相交 + 到达时间差”。双方到达交点这段时间内的连续同刻最小中心距必须进入 `same_time_collision_radius_m=0.8m` 共同冲突区，否则不上报；这会过滤回放中虚线/红圈看起来相交、但轨迹并无同一时空碰撞概率的样本。新增回归测试覆盖“到达时间差达标但同刻中心距离超过实际碰撞半径”场景；`test_refactor_unit.py` 为 `52 PASS / 0 FAIL`。
+**变更**: 路径交点 PET 候选不再只看“预测射线相交 + 到达时间差”。双方到达交点这段时间内的连续同刻最小中心距必须进入 `same_time_collision_radius_m=0.8m` 共同冲突区，否则不上报；这会过滤回放中虚线/红圈看起来相交、但轨迹并无同一时空碰撞概率的样本。新增回归测试覆盖“到达时间差达标但同刻中心距离超过实际碰撞半径”场景；`test/test_refactor_unit.py` 为 `52 PASS / 0 FAIL`。
 
 ### 改进: 预测方向优先使用最近轨迹段
 **文件**: `nodes/ConflictDetectionNode.py`
@@ -169,12 +180,12 @@ DirectionFlowNode, LaneAnalysisNode, TrajectoryNode, ConflictDetectionNode, Calc
 - 2026-07-02 Grafana provisioning verification：`services/grafana/provisioning/datasources/datasource.yaml` 自动配置 InfluxDB datasource UID `cdycrblq6bf9ce` 和 PostgreSQL datasource UID `f848db3d-2635-4913-be1c-ae2d0db7c90a`，与 `camera-1.json` / `camera-2.json` 面板引用一致；`docker compose config` 确认 provisioning 目录挂载到 `/etc/grafana/provisioning`，Grafana 容器默认注入 `admin/admin123` 登录账号和 InfluxDB 凭据环境变量。`python -m pytest test_grafana_provisioning.py -q` 通过 3 个回归测试。本机 Grafana UI smoke 因缺少 `grafana/grafana` 镜像且 Docker pull 无进展未完成。
 
 ### 道路归属基础单元测试 ✅
-- `test_utils_local.py` 覆盖 `intersects_central_point()`：bbox 中心点落入不同道路多边形时返回正确 road id，落在所有道路外或多边形边界上时返回 `None`。
-- 2026-07-02 utility verification：`python -m pytest test_utils_local.py -q` 通过 3 个测试。
+- `test/test_utils_local.py` 覆盖 `intersects_central_point()`：bbox 中心点落入不同道路多边形时返回正确 road id，落在所有道路外或多边形边界上时返回 `None`。
+- 2026-07-02 utility verification：`python -m pytest test/test_utils_local.py -q` 通过 3 个测试。
 
 ### ByteTrack 核心单元测试 ✅
-- `test_byte_tracker_core.py` 覆盖高置信检测创建轨迹、保留检测类别 ID，以及第二帧低置信但 IoU 匹配的检测延续同一 track id，保护航拍小目标连续跟踪能力。
-- 2026-07-02 ByteTrack verification：`python -m pytest test_byte_tracker_core.py -q` 通过 2 个测试。
+- `test/test_byte_tracker_core.py` 覆盖高置信检测创建轨迹、保留检测类别 ID，以及第二帧低置信但 IoU 匹配的检测延续同一 track id，保护航拍小目标连续跟踪能力。
+- 2026-07-02 ByteTrack verification：`python -m pytest test/test_byte_tracker_core.py -q` 通过 2 个测试。
 
 ### 告警处置复盘 ✅
 - AlertEngine 创建和确认告警会写入 PostgreSQL `alerts` 表；Platform 启动时加载历史告警到内存查询缓存，数据库不可用时降级为内存告警但不影响实时 WebSocket 推送。
@@ -207,8 +218,8 @@ SRT文件 → SrtTelemetryParser → VideoReader(telemetry注入)
 全链路验证通过 ✅
 
 ### Kafka 输出契约单元验证 ✅
-- `test_kafka_active_trajectories.py` 覆盖 KafkaProducerNode 在单帧处理中向 `statistics_*`、`track_complete_*`、`conflicts_*`、`telemetry_*` 四类 topic 入队，并校验统计、完成轨迹、冲突事件、无人机遥测的核心字段。
-- 2026-07-02 Kafka producer verification：`python -m pytest test_kafka_active_trajectories.py -q` 通过 3 个测试。
+- `test/test_kafka_active_trajectories.py` 覆盖 KafkaProducerNode 在单帧处理中向 `statistics_*`、`track_complete_*`、`conflicts_*`、`telemetry_*` 四类 topic 入队，并校验统计、完成轨迹、冲突事件、无人机遥测的核心字段。
+- 2026-07-02 Kafka producer verification：`python -m pytest test/test_kafka_active_trajectories.py -q` 通过 3 个测试。
 
 ---
 
@@ -226,8 +237,8 @@ SRT文件 → SrtTelemetryParser → VideoReader(telemetry注入)
 
 - `cd console2 && npm test -- --run`：15 个测试文件、83 个测试通过；`npm run build` 成功。
 - `python -m pytest platform/tests -q`：142 passed、5 skipped、10 subtests passed。
-- `python -m pytest test_kafka_active_trajectories.py test_utils_local.py test_byte_tracker_core.py test_main_optimized_batch.py test_main_optimized_eof.py -q`：12 passed。
-- `python test_pipeline_inter_xqh.py`：56 PASS / 0 FAIL / 0 WARN；真实 4K 视频前 100 帧检测、遥测、H 矩阵均为 100/100，运动补偿为 90/100。
+- `python -m pytest test/test_kafka_active_trajectories.py test/test_utils_local.py test/test_byte_tracker_core.py test/test_main_optimized_batch.py test/test_main_optimized_eof.py -q`：12 passed。
+- `python test/test_pipeline_inter_xqh.py`：56 PASS / 0 FAIL / 0 WARN；真实 4K 视频前 100 帧检测、遥测、H 矩阵均为 100/100，运动补偿为 90/100。
 - `python scripts/audit_adr019_retirement.py --scope local --strict`、`docker compose config --quiet`、`git diff --check`：全部通过。
 
 ---
@@ -236,7 +247,7 @@ SRT文件 → SrtTelemetryParser → VideoReader(telemetry注入)
 
 ### 修复与结果
 
-- `test_refactor_unit.py` 的 TCC 正样本夹具补齐 `max_speed_kmh`，恢复 `52 PASS / 0 FAIL`；既有 CPA、擦肩、车型同类配对和去重负样本门禁保持通过。
+- `test/test_refactor_unit.py` 的 TCC 正样本夹具补齐 `max_speed_kmh`，恢复 `52 PASS / 0 FAIL`；既有 CPA、擦肩、车型同类配对和去重负样本门禁保持通过。
 - 默认业务配置恢复为 `path_intersection + 同时空共同冲突区`；`enable_same_time_cpa=false`，实验 CPA 不进入正式 `conflict_count` 或 Monitoring 默认展示。
 - `ConflictDetectionNode` 每帧输出标定、输入/合格机非轨迹、候选配对、预测、证据、去重、正式/实验事件计数；`uav_stats`、road9 历史统计和 Monitoring 均保留该漏斗。
 - 历史冲突 API 支持 `source_profile_id`、`pipeline_id`、`prediction_type`；Monitoring 按当前 SourceProfile 回填最近 24 小时严格路径交点事件，以 canonical `message_id` 与实时消息去重，并明确显示 WebSocket 历史/REST 降级状态。浏览器实机核对 `SRC-MP4NEW-CH-0625-AM` 在 road9 有 5 条严格路径交点事实；短于任务结束时间的 30 分钟窗口会误显示 0，因此采用 24 小时回填。
@@ -245,9 +256,9 @@ SRT文件 → SrtTelemetryParser → VideoReader(telemetry注入)
 
 ### 自动化门禁
 
-- `python test_refactor_unit.py`：`52 PASS / 0 FAIL`。
-- `python -m pytest test_tcc_diagnostics.py test_kafka_active_trajectories.py test_utils_local.py test_byte_tracker_core.py test_main_optimized_eof.py -q`：`14 passed`。
+- `python test/test_refactor_unit.py`：`52 PASS / 0 FAIL`。
+- `python -m pytest test/test_tcc_diagnostics.py test/test_kafka_active_trajectories.py test/test_utils_local.py test/test_byte_tracker_core.py test/test_main_optimized_eof.py -q`：`14 passed`。
 - `python -m pytest platform/tests -q`：`143 passed / 5 skipped / 10 subtests passed`。
 - `cd console2 && npm test -- --run`：`15` 个测试文件、`89` 个测试通过；`npm run build` 成功。
-- `python test_pipeline_inter_xqh.py`：`56 PASS / 0 FAIL / 0 WARN`；100/100 帧有检测和有效 H，90/100 帧有运动补偿，冲突为 0。
+- `python test/test_pipeline_inter_xqh.py`：`56 PASS / 0 FAIL / 0 WARN`；100/100 帧有检测和有效 H，90/100 帧有运动补偿，冲突为 0。
 - `python scripts/audit_adr019_retirement.py --scope local --strict`、`docker compose config --quiet`、`git diff --check`：全部通过。

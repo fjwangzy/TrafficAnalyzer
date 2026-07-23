@@ -172,6 +172,11 @@ class TelemetryFileReader:
             return (0, 0)
         return (self._timestamps[0], self._timestamps[-1])
 
+    @property
+    def records(self) -> tuple[dict, ...]:
+        """Return an immutable view for ingestion-quality analysis."""
+        return tuple(dict(record) for record in self._records)
+
     def start(self) -> None:
         """兼容TelemetrySubscriber接口（无操作）。"""
         pass

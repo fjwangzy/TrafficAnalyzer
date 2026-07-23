@@ -21,10 +21,10 @@ TrafficAnalyzer/
 ├── byte_tracker/                  # ByteTrack 实现
 ├── platform/                      # FastAPI 单体、Alembic、road9/TimescaleDB 访问与测试
 ├── console2/                      # React/Vite 正式前端
+├── test/                          # 根检测、契约、脚本式回归与运行态 E2E
 ├── scripts/                       # ADR-019、重建、性能/soak/故障演练与原生 MPS 九源验收脚本
 ├── docs/                          # current-state 契约、ADR、任务与验收证据
-├── test_videos/                   # 本机大文件视频/SRT/Cloud JSON 资产（通常不进 Git）
-└── test_*.py                      # 根检测、契约与真实管道回归
+└── test_videos/                   # 本机大文件视频/SRT/Cloud JSON 资产（通常不进 Git）
 ```
 
 生产统一镜像把 Platform 与检测代码写入 `/app`，Compose 仅将 `weights/` 和 `test_videos/`
@@ -147,9 +147,10 @@ console2/
 | 路径 | 说明 |
 |---|---|
 | `.github/workflows/uat-code-gates.yml` | Platform/Console 测试、构建预算、Ruff、canonical 契约、ADR strict、whitespace |
+| `test/` | 根级 pytest、脚本式管道回归与运行态 E2E；分类和执行方式见 `test/README.md` |
 | `scripts/audit_adr019_retirement.py` | current-state 静态合同与本机证据审计 |
 | `scripts/validate_adr019_local_retirement.py` | canonical 容器、road9、Topic、旧存储隔离与恢复/soak 证据 |
-| `test_pipeline_inter_xqh.py` | 真实 4K MP4 + DJI SRT 的 56 项管道回归 |
+| `test/test_pipeline_inter_xqh.py` | 真实 4K MP4 + DJI SRT 的 56 项管道回归 |
 | `scripts/run_native_mps_replays.py` | Apple Silicon 原生 MPS 多源检测、Kafka 直采、轨迹/TCC 诊断与断点续跑 |
 | `platform/scripts/inventory_trajectory_replay.py` | 清理前按固定 SourceProfile 只读盘点 canonical 轨迹、统计、冲突、遥测、证据和 Inbox 影响范围 |
 | `platform/scripts/build_demo_channelized_maps.py` | YCX 按需只读导入、九源影像配准、四路口质量门禁和不可变地图发布 |
@@ -166,3 +167,9 @@ console2/
 - `traffic-fly-console` 已退出运行、Compose、Nginx 和发布构建；当前工作树中的删除属于用户既有状态，本轮不恢复、不提交兼容层。
 - 旧 Grafana、Telegraf、InfluxDB、旧 Platform 微服务和无 `uav_` 前缀 Topic/channel 只可出现在明确标记的历史文档或审计证据中。
 - Docker/镜像 pin、SBOM/签名、共享 UAT secret/TLS/SASL、容器最小权限/healthcheck 属于下一阶段门禁；本文不把它们标记为已完成。
+# 2026-07 路口渠化项目化扩展
+
+- `platform/app/services/intersection_video_discovery.py`：1Hz 悬停发现、WGS84→GCJ-02 坐标边界与候选距离置信度。
+- `platform/app/api/v1/calibration.py`：路口项目、统一视频接入/确认、工作台聚合与标定检查接口。
+- `platform/alembic/versions/20260722_0018_intersection_video_ingestion.py`：项目、接入任务、分段绑定和检查审计迁移。
+- `console2/src/pages/IntersectionProjectPages.jsx`：项目库、双入口向导、项目工作台和接入确认。

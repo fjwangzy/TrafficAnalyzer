@@ -41,6 +41,116 @@ class RoadContextSnapshot(Base):
     )
 
 
+class IntersectionProject(Base):
+    __tablename__ = "uav_intersection_projects"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    inter_id: Mapped[str | None] = mapped_column(String(100), nullable=True, unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    center_gcj02: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    stage: Mapped[str] = mapped_column(String(24), nullable=False, default="discovered", index=True)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    created_by: Mapped[int | None] = mapped_column(ForeignKey("uav_users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=lambda: datetime.now(UTC), nullable=False
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "stage IN ('discovered','road_matched','source_ready','keyframes_ready','drafting','checking','published','retired')",
+            name="ck_uav_intersection_project_stage",
+        ),
+    )
+
+
+class VideoIngestionJob(Base):
+    __tablename__ = "uav_video_ingestion_jobs"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    project_id: Mapped[str | None] = mapped_column(
+        ForeignKey("uav_intersection_projects.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    mode: Mapped[str] = mapped_column(String(24), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="uploaded", index=True)
+    source_profile_id: Mapped[str | None] = mapped_column(
+        ForeignKey("uav_video_sources.profile_id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    drone_id: Mapped[str | None] = mapped_column(ForeignKey("uav_drones.id"), nullable=True, index=True)
+    video_location: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    telemetry_location: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    telemetry_type: Mapped[str | None] = mapped_column(String(24), nullable=True)
+    hover_evidence: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    candidate_intersections: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    error_code: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    created_by: Mapped[int | None] = mapped_column(ForeignKey("uav_users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=lambda: datetime.now(UTC), nullable=False
+    )
+
+    __table_args__ = (
+        CheckConstraint("mode IN ('video_first','project_first')", name="ck_uav_video_ingestion_mode"),
+        CheckConstraint(
+            "status IN ('uploaded','parsing','hover_detected','candidates_ready','awaiting_confirmation','bound','failed')",
+            name="ck_uav_video_ingestion_status",
+        ),
+    )
+
+
+class SourceIntersectionBinding(Base):
+    __tablename__ = "uav_source_intersection_bindings"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    source_profile_id: Mapped[str] = mapped_column(
+        ForeignKey("uav_video_sources.profile_id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    project_id: Mapped[str] = mapped_column(
+        ForeignKey("uav_intersection_projects.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    inter_id: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
+    start_offset_sec: Mapped[float] = mapped_column(Float, nullable=False, default=0)
+    end_offset_sec: Mapped[float | None] = mapped_column(Float, nullable=True)
+    binding_quality: Mapped[str] = mapped_column(String(32), nullable=False)
+    coordinate_evidence: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    confirmed_by: Mapped[int | None] = mapped_column(ForeignKey("uav_users.id"), nullable=True)
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "source_profile_id", "project_id", "start_offset_sec", "end_offset_sec",
+            name="uq_uav_source_intersection_binding_segment",
+        ),
+        CheckConstraint(
+            "binding_quality IN ('auto_high_confidence','admin_confirmed','manual_unverified','rejected')",
+            name="ck_uav_source_intersection_binding_quality",
+        ),
+    )
+
+
+class CalibrationReviewRecord(Base):
+    __tablename__ = "uav_calibration_review_records"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    map_version_id: Mapped[str] = mapped_column(
+        ForeignKey("uav_channelized_map_versions.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    result: Mapped[str] = mapped_column(String(24), nullable=False)
+    issues: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    checklist: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    comment: Mapped[str | None] = mapped_column(Text, nullable=True)
+    actor_id: Mapped[int | None] = mapped_column(ForeignKey("uav_users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    __table_args__ = (
+        CheckConstraint(
+            "result IN ('submitted','approved','rejected')",
+            name="ck_uav_calibration_review_result",
+        ),
+    )
+
+
 class VisualLaneBinding(Base):
     __tablename__ = "uav_visual_lane_bindings"
 

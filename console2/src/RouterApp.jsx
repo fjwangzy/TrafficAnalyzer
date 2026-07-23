@@ -22,6 +22,8 @@ const EnforcementEventsPage = lazyNamed(() => import('./pages/EnforcementPages')
 const EnforcementZonesPage = lazyNamed(() => import('./pages/EnforcementPages'), 'EnforcementZonesPage')
 const TrucksPage = lazyNamed(() => import('./pages/EnforcementPages'), 'TrucksPage')
 const CalibrationPage = lazyNamed(() => import('./pages/AdminPages'), 'CalibrationPage')
+const IntersectionProjectsPage = lazyNamed(() => import('./pages/IntersectionProjectPages'), 'IntersectionProjectsPage')
+const IntersectionProjectWorkspacePage = lazyNamed(() => import('./pages/IntersectionProjectPages'), 'IntersectionProjectWorkspacePage')
 const SystemPage = lazyNamed(() => import('./pages/AdminPages'), 'SystemPage')
 const IntegrationPage = DEMO_GOVERNANCE_ENABLED ? lazyNamed(() => import('./pages/IntegrationPage'), 'IntegrationPage') : null
 
@@ -65,6 +67,12 @@ function DisabledIntegrationPage() {
   </AppShell>
 }
 
+function LegacyCalibrationRoute() {
+  const location = useLocation()
+  if (new URLSearchParams(location.search).get('tab') === 'lanes') return <CalibrationPage />
+  return <Navigate to='/admin/intersection-projects' replace />
+}
+
 function RequireAuth({ children }) {
   const location = useLocation()
   const { status, isAuthenticated } = useAuth()
@@ -92,7 +100,10 @@ function ProtectedRoutes() {
     <Route path='/enforcement' element={<EnforcementEventsPage />} />
     <Route path='/enforcement/zones' element={<EnforcementZonesPage />} />
     <Route path='/enforcement/trucks' element={<TrucksPage />} />
-    <Route path='/admin/calibration' element={<CalibrationPage />} />
+    <Route path='/admin/calibration' element={<LegacyCalibrationRoute />} />
+    <Route path='/admin/calibration/editor' element={<CalibrationPage />} />
+    <Route path='/admin/intersection-projects' element={<IntersectionProjectsPage />} />
+    <Route path='/admin/intersection-projects/:projectId' element={<IntersectionProjectWorkspacePage />} />
     <Route path='/admin/integration' element={DEMO_GOVERNANCE_ENABLED ? <IntegrationPage /> : <DisabledIntegrationPage />} />
     <Route path='/admin/system' element={<SystemPage />} />
 

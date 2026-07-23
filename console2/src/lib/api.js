@@ -114,6 +114,22 @@ export const platformApi = {
   calibrationSummary: () => get('/calibration/summary'),
   calibrationRecords: () => get('/calibration/records'),
   calibrationCoverage: (intersectionId) => get(`/calibration/coverage/${encodeURIComponent(intersectionId)}`),
+  intersectionProjects: () => get('/calibration/intersection-projects'),
+  intersectionProject: (projectId) => get(`/calibration/intersection-projects/${encodeURIComponent(projectId)}`),
+  intersectionProjectWorkspace: (projectId) => get(`/calibration/intersection-projects/${encodeURIComponent(projectId)}/workspace`),
+  createIntersectionProject: (body) => post('/calibration/intersection-projects', body),
+  updateIntersectionProject: (projectId, body) => patch(`/calibration/intersection-projects/${encodeURIComponent(projectId)}`, body),
+  createVideoIngestion: (body) => post('/calibration/video-ingestions', body, { timeout: 0 }),
+  uploadVideoIngestion: ({ video, telemetry, droneId, projectId }) => {
+    const form = new FormData()
+    form.append('video', video)
+    if (telemetry) form.append('telemetry', telemetry)
+    if (droneId) form.append('drone_id', droneId)
+    if (projectId) form.append('project_id', projectId)
+    return post('/calibration/video-ingestions', form, { timeout: 0, headers: { 'Content-Type': 'multipart/form-data' } })
+  },
+  videoIngestion: (jobId) => get(`/calibration/video-ingestions/${encodeURIComponent(jobId)}`),
+  resolveVideoIngestion: (jobId, body) => post(`/calibration/video-ingestions/${encodeURIComponent(jobId)}/resolve`, body),
   laneTasks: () => get('/calibration/lane-tasks'),
   laneTaskImage: (taskId) => api.get(`/calibration/lane-tasks/${encodeURIComponent(taskId)}/image`, { responseType: 'blob' }).then((response) => response.data),
   startLaneKeyframeExtraction: (body, idempotencyKey) => post('/calibration/lane-keyframe-extractions', body, { headers: { 'Idempotency-Key': idempotencyKey } }),
@@ -125,6 +141,8 @@ export const platformApi = {
   fitChannelizedMapFromImage: (mapVersionId, body) => post(`/calibration/channelized-maps/${encodeURIComponent(mapVersionId)}/fit-from-image`, body),
   verifyVisualRegistration: (registrationId, verified = true) => post(`/calibration/visual-registrations/${encodeURIComponent(registrationId)}/verify`, { verified }),
   publishChannelizedMap: (mapVersionId, targetStatus) => post(`/calibration/channelized-maps/${encodeURIComponent(mapVersionId)}/publish`, { target_status: targetStatus }),
+  submitChannelizedMapCheck: (mapVersionId) => post(`/calibration/channelized-maps/${encodeURIComponent(mapVersionId)}/submit-check`),
+  checkChannelizedMap: (mapVersionId, body) => post(`/calibration/channelized-maps/${encodeURIComponent(mapVersionId)}/check`, body),
 
   surveyTasks: (state) => get('/survey-tasks', { params: state ? { state } : {} }),
   createSurveyTask: (body, idempotencyKey) => post('/survey-tasks', body, { headers: { 'Idempotency-Key': idempotencyKey } }),

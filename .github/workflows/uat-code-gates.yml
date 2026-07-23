@@ -28,7 +28,7 @@ jobs:
       - name: Platform tests
         run: python -m pytest platform/tests -q
       - name: Canonical contract tests
-        run: python -m pytest test_telemetry_file_reader.py test_video_reader_frame_stride.py test_uat_proxy_security.py -q
+        run: python -m pytest test/test_telemetry_file_reader.py test/test_video_reader_frame_stride.py test/test_uat_proxy_security.py -q
       - name: Static quality
         run: ruff check platform/app platform/tests nodes services main_optimized.py
       - name: ADR-019 contract audit

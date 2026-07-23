@@ -2,7 +2,7 @@
 """管道集成测试（无YOLO）：使用合成检测数据验证遥测→标定→运动补偿→统计全链路。
 
 用法（Docker内运行）：
-  docker run --rm -v $(pwd):/app -w /app traffic_analyzer python3 test_pipeline_no_yolo.py
+  docker run --rm -v $(pwd):/app -w /app traffic_analyzer python3 test/test_pipeline_no_yolo.py
 """
 
 import os
@@ -11,7 +11,13 @@ import json
 import time
 import math
 import logging
+from pathlib import Path
+
 import numpy as np
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 os.environ["VIDEO_SRC"] = "test_videos/inter_xqh/DJI_20260403142902_0001_V小清河北路与水屯路路口.mp4"
 os.environ["TOPIC_NAME"] = "uav_statistics_1"

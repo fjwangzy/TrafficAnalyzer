@@ -513,8 +513,9 @@ class SurveyService:
             validation_status = telemetry_source.validation_status
         if not video_asset or not telemetry_asset:
             raise ValueError("source_profile_id or both video_asset and telemetry_asset are required")
-        video_path = resolve_allowlisted_asset(video_asset, settings.survey_asset_roots, platform_dir)
-        telemetry_path = resolve_allowlisted_asset(telemetry_asset, settings.survey_asset_roots, platform_dir)
+        source_roots = [*settings.survey_asset_roots, settings.survey_storage_dir]
+        video_path = resolve_allowlisted_asset(video_asset, source_roots, platform_dir)
+        telemetry_path = resolve_allowlisted_asset(telemetry_asset, source_roots, platform_dir)
         package = await self._package(task.id)
         video_stored, telemetry_stored = await asyncio.gather(
             asyncio.to_thread(self.storage.reference_path, video_path, video_asset),

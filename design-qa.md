@@ -44,6 +44,75 @@ final result: passed
 
 ---
 
+# Design QA · 路口项目工作台 B 方案（2026-07-22）
+
+- source visual truth path: `/var/folders/pn/nqzgl4zn26v8_864_4nws7_r0000gn/T/codex-clipboard-7ea7bb8c-94bb-441b-a0b3-0456016637c5.png`
+- current draft screenshot path: `/Users/yaoyao/.codex/visualizations/2026/07/22/019f8781-04fc-7642-8f7e-33281848d46e/16-current-draft-b-audit.png`
+- published overview screenshot path: `/Users/yaoyao/.codex/visualizations/2026/07/22/019f8781-04fc-7642-8f7e-33281848d46e/18-overview-b-final-audit.png`
+- version comparison screenshot path: `/Users/yaoyao/.codex/visualizations/2026/07/22/019f8781-04fc-7642-8f7e-33281848d46e/14-version-compare-open.png`
+- normalized side-by-side path: `/Users/yaoyao/.codex/visualizations/2026/07/22/019f8781-04fc-7642-8f7e-33281848d46e/17-b-reference-current-final.png`
+- viewport: reference 1586 × 992；implementation 1357 × 912，device scale 1；side-by-side 将 reference 等比归一到 1357 × 912
+- state: 当前项目 `IPR-2316df5aa119c35953467a12`；概览使用 `lane_verified v1`、23 条车道、6/6 门禁，编辑器使用真实 `draft v2`、68% / 2/5 阶段、6/9 门禁；抽帧修复后已载入真实关键帧 `FRM-C4DF19FD1CF8`
+
+**Full-view comparison evidence**
+
+- 顶部项目栏、左侧档案与五阶段进度、中部五页签和主画布、右侧任务/质量/版本、底部唯一下一步动作均按 B 方案重排为单屏三栏工作台。
+- 中央画布保持视觉主导地位；有关键帧时展示真实正拍影像和服务端车道几何，无关键帧时自动使用完整 GCJ-02 路网，不使用占位资产。
+- 渠化拟合页按当前 `inter_id` 隔离关键帧任务；当前项目不再混入其他路口的 XQH 任务，旧 `/admin/calibration?tab=lanes` 深链仍保持兼容。
+- 工作台补取完整地图详情，避免 workspace 摘要把 23 条车道误显示为“待拟合”；项目已有地图时不再与 bootstrap 竞态覆盖版本。
+
+**Focused region comparison evidence**
+
+- 左栏：档案字段、项目就绪度和五阶段与 B 稿信息层级一致；概览的 `lane_verified` 为 5/5，编辑器的 `draft v2` 为 68% / 2/5，不再用项目已发布状态掩盖正在编辑的草稿。
+- 中栏：画布顶部选择器、右侧竖向工具、左下图例、右下迷你地图、底部编辑工具和下一步操作均落在 B 稿对应位置。
+- 右栏：待办、关键帧素材、9 项质量门禁、高级配准参数和版本状态分卡呈现；素材面板默认收起，由“载入正拍关键帧”任务打开，不再挤掉质量与版本卡片。
+- 概览“版本对比”可展开并选择真实 `draft v2` 对照 `lane_verified v1`；发布后的“进入运行应用”CTA 实际进入 Runtime 页签，不再错误回到拟合页。
+- 车道编辑：单击任一参考/拟合车道后按 `link_id` 高亮并拖拽整组，双击改为琥珀色单车道编辑并出现顶点控制柄；删除、拆分、合并按钮随选择范围启停。
+
+**Findings**
+
+- 无剩余 P0/P1/P2 视觉或核心交互差异。
+- 字体与排版：沿用 Console2 中文系统无衬线字体；顶部、分栏标题、标签和辅助文字的层级与 B 稿对齐。
+- 间距与布局节奏：三栏比例、8px 卡片圆角、画布边界、页签和底部操作条在 1357 × 912 视口无裁切或重叠。
+- 色彩与视觉令牌：使用深海军蓝底、蓝色交互态、绿色通过态和琥珀待办态；参考车道由初版绿色收紧为 B 稿蓝色低透明叠加。
+- 图片与资产：保留真实正拍关键帧、现有品牌资产和 Phosphor 图标；无伪造插图、占位框或手绘 SVG 图标。
+- 文案与内容：实现使用真实路口/版本/门禁动态数据；设计稿为已加载正拍影像的发布态，当前项目编辑器为无关键帧的草稿态，影像与完成度差异属于业务状态差异，不用假数据消除。
+- 可访问性：主导航、画布选择器、版本对比面板、素材折叠和 CTA 均有语义化角色/名称；截图不能证明键盘遍历顺序、读屏完整性或色觉对比合规，这些仍需专项测试。
+
+**Comparison history**
+
+1. 初始实现：长纵向配置表单、画布首屏占比不足、右侧信息无明确层级，并混入非当前路口关键帧。
+2. 第一轮工作台：完成 B 稿三栏结构和真实画布接入，但参考路网仍偏绿、发布状态仍显示待办。
+3. 完成校对：补齐地图详情水合与 bootstrap 竞态防护，修正草稿阶段、素材折叠、6/6/9 项门禁、版本对比和 Runtime 路由；当前真实草稿/发布两种状态均无首屏纵向溢出。
+
+**Audited flow**
+
+1. 渠化拟合草稿：健康。真实 `draft v2` 显示 68% / 2/5、2 个待办和 5/9 门禁；素材面板默认收起。
+2. 素材面板：健康。点击“载入正拍关键帧/关键帧与素材”展开现有抽帧和测绘关键帧路径，关闭后恢复 B 稿右栏密度。
+3. 项目概览：健康。`lane_verified v1`、23 条车道、6/6 门禁和 Runtime 下一步一致。
+4. 版本对比：健康。真实历史列表显示当前 v1 与草稿 v2，并可切换对照版本。
+5. 运行应用：健康。右栏和底部 CTA 均进入 `?tab=runtime`，可见当前 `lane_verified` 与不可变 Bundle 规则。
+6. Link 车道编辑：健康。真实 Link `12wwe297gwwe29k101` 单击选中 3 条车道；双击仅保留 1 条和 8 个控制柄；拆分后 3→4、删除后 4→3，重载后合并 3→1 且保留单车道编辑状态。733px 中栏下工具栏为 72px 双行布局，`scrollWidth=width`，无裁切。
+
+**Implementation Checklist**
+
+- [x] B 方案单屏三栏项目工作台及五页签。
+- [x] 真实正拍关键帧、路网叠加、图层控制、拟合工具和版本操作。
+- [x] 当前路口关键帧隔离与旧深链兼容。
+- [x] 137 项 Console2 测试、生产构建、`git diff --check` 和真实浏览器 DOM/视觉验收。
+- [x] Platform 全量 `201 passed / 5 skipped / 10 subtests passed`。
+- [x] XQH 真实视频/SRT 管道回归 `56 PASS / 0 FAIL / 0 WARN`，GCJ-02 锚点约 `117.028271, 36.703260`。
+- [x] 浏览器无脚本崩溃或错误横幅；既有编辑 tab 仅记录源码热更新时产生的 1 条 React dependency-array 长度变化警告，完整重载及后续选择/拆分/删除/合并未新增错误，生产构建通过。
+- [ ] ADR-019 `--scope local --strict` 的代码与拓扑检查全部通过，但仓库级 `local_runtime_evidence` 仍是既有外部门禁；不属于本页面设计实现完成条件，也不冒充发布绿色。
+
+**Follow-up Polish**
+
+- P3：项目补齐行政区、所属道路和责任人字段后，左侧档案可自然达到 B 稿相同的信息密度；当前数据模型尚未提供这些事实，不阻断交付。
+
+final result: passed
+
+---
+
 # Design QA · 实时轨迹数量主卡（2026-07-21）
 
 - source visual truth path: `browser:Comment 1 / 6.6 / 10 拥堵指数 / 实时计算`

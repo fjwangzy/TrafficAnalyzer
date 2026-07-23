@@ -119,14 +119,14 @@ canonical WebSocket channel：`uav_intersection:*`、`uav_alerts`、`uav_alerts:
 
 ```bash
 python -m pytest platform/tests -q
-python -m pytest test_kafka_active_trajectories.py test_utils_local.py test_byte_tracker_core.py -q
-python test_pipeline_inter_xqh.py
+python -m pytest test/test_kafka_active_trajectories.py test/test_utils_local.py test/test_byte_tracker_core.py -q
+python test/test_pipeline_inter_xqh.py
 cd console2 && npm test && npm run build
 python scripts/audit_adr019_retirement.py --scope local --strict
 git diff --check
 ```
 
-`test_pipeline_inter_xqh.py` 的基线为 `56 PASS / 0 FAIL / 0 WARN`。
+`test/test_pipeline_inter_xqh.py` 的基线为 `56 PASS / 0 FAIL / 0 WARN`。
 
 ## 旧存储保留
 

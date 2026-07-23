@@ -20,9 +20,14 @@ from utils_local.coordinates import COORDINATE_SYSTEM, TRANSFORM_VERSION, enu_to
 from app.core.config import settings
 from app.core.database import get_db
 from app.models.mission import (
+    CalibrationReviewRecord,
     ChannelizedMapVersion,
     DroneRecord,
+    IntersectionProject,
     RoadContextSnapshot,
+    SourceIntersectionBinding,
+    TelemetrySourceRecord,
+    VideoIngestionJob,
     VideoSourceRecord,
     VisualLaneBinding,
     VisualRegistration,
@@ -30,7 +35,10 @@ from app.models.mission import (
 from app.models.survey import SurveyCaptureBatch, SurveyFrame, SurveyTask
 from app.services.survey_geometry import align_homography_to_map_enu
 from app.services.survey_service import SurveyService
+from app.services.intersection_video_discovery import HoverIntersectionDiscovery
 from app.services.ycx_road_import import YcxRoadImporter
+from services.SrtTelemetryParser import SrtTelemetryParser
+from services.TelemetryFileReader import TelemetryFileReader
 
 logger = logging.getLogger(__name__)
 
@@ -137,6 +145,82 @@ class YcxRoadImportPayload(BaseModel):
     inter_id: str = Field(min_length=1, max_length=100)
     road_data_version: str | None = Field(default=None, max_length=100)
     create_draft: bool = True
+
+
+class IntersectionProjectCreatePayload(BaseModel):
+    inter_id: str | None = Field(default=None, max_length=100)
+    name: str = Field(min_length=1, max_length=200)
+    center_gcj02: list[float] | None = Field(default=None, min_length=2, max_length=2)
+
+
+class IntersectionProjectPatchPayload(BaseModel):
+    revision: int = Field(ge=1)
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    inter_id: str | None = Field(default=None, max_length=100)
+    center_gcj02: list[float] | None = Field(default=None, min_length=2, max_length=2)
+
+
+class VideoIngestionPayload(BaseModel):
+    project_id: str | None = Field(default=None, max_length=40)
+    source_profile_id: str | None = Field(default=None, max_length=40)
+    drone_id: str | None = Field(default=None, max_length=40)
+    video_location: str | None = Field(default=None, max_length=500)
+    telemetry_location: str | None = Field(default=None, max_length=500)
+    telemetry_type: str | None = Field(default=None, pattern="^(srt|json|file|mqtt)$")
+
+
+class VideoIngestionResolvePayload(BaseModel):
+    action: str = Field(pattern="^(bind_expected_project|bind_existing_project|create_project)$")
+    project_id: str | None = Field(default=None, max_length=40)
+    segment_index: int = Field(default=0, ge=0)
+    project_name: str | None = Field(default=None, max_length=200)
+    inter_id: str | None = Field(default=None, max_length=100)
+
+
+class CalibrationCheckPayload(BaseModel):
+    result: str = Field(pattern="^(approved|rejected)$")
+    issues: list[dict] = Field(default_factory=list)
+    checklist: dict[str, bool] = Field(default_factory=dict)
+    comment: str | None = Field(default=None, max_length=2000)
+
+
+REQUIRED_CALIBRATION_REVIEW_CHECKS = frozenset({
+    "imagery_map_alignment",
+    "version_diff",
+    "registration_error",
+    "topology",
+    "lane_directions",
+    "stop_lines",
+})
+
+def _calibration_review_checklist_failures(checklist: dict[str, bool]) -> list[str]:
+    return sorted(
+        key for key in REQUIRED_CALIBRATION_REVIEW_CHECKS
+        if checklist.get(key) is not True
+    )
+
+
+def _project_stage_after_source_binding(stage: str) -> str:
+    if stage in {"discovered", "road_matched"}:
+        return "source_ready"
+    return stage
+
+
+def _intersection_project_next_action(
+    *, has_inter_id: bool, has_verified_road: bool,
+    has_bindings: bool, map_statuses: set[str],
+) -> str:
+    if not has_inter_id:
+        return "match_road_context"
+    if not has_verified_road:
+        return "verify_road_context"
+    if not has_bindings:
+        return "connect_video"
+    if "lane_verified" in map_statuses:
+        return "operate_runtime"
+    if map_statuses & {"draft", "candidate", "link_verified"}:
+        return "continue_draft"
+    return "extract_keyframes"
 
 
 def _load_calibration_db(path: str) -> dict:
@@ -488,10 +572,529 @@ def _require_admin(request: Request) -> None:
         raise HTTPException(status_code=403, detail="administrator capability is required")
 
 
+def _project_response(row: IntersectionProject) -> dict[str, Any]:
+    return {
+        "project_id": row.id,
+        "inter_id": row.inter_id,
+        "name": row.name,
+        "center_gcj02": row.center_gcj02,
+        "stage": row.stage,
+        "revision": row.revision,
+        "created_at": row.created_at,
+        "updated_at": row.updated_at,
+    }
+
+
+def _ingestion_response(row: VideoIngestionJob) -> dict[str, Any]:
+    return {
+        "job_id": row.id,
+        "project_id": row.project_id,
+        "mode": row.mode,
+        "status": row.status,
+        "source_profile_id": row.source_profile_id,
+        "drone_id": row.drone_id,
+        "video_location": row.video_location,
+        "telemetry_location": row.telemetry_location,
+        "telemetry_type": row.telemetry_type,
+        "hover_evidence": row.hover_evidence,
+        "candidate_intersections": row.candidate_intersections,
+        "error_code": row.error_code,
+        "created_at": row.created_at,
+        "updated_at": row.updated_at,
+    }
+
+
+async def _road_candidates(db: AsyncSession) -> list[dict[str, Any]]:
+    snapshots = (
+        await db.execute(
+            select(RoadContextSnapshot).order_by(
+                RoadContextSnapshot.inter_id, RoadContextSnapshot.created_at.desc()
+            )
+        )
+    ).scalars().all()
+    seen: set[str] = set()
+    result: list[dict[str, Any]] = []
+    for snapshot in snapshots:
+        if snapshot.inter_id in seen:
+            continue
+        seen.add(snapshot.inter_id)
+        intersection = (snapshot.payload or {}).get("intersection") or {}
+        center = intersection.get("center_gcj02")
+        if isinstance(center, list) and len(center) >= 2:
+            result.append(
+                {
+                    "inter_id": snapshot.inter_id,
+                    "name": intersection.get("name") or snapshot.inter_id,
+                    "center_gcj02": center[:2],
+                    "road_data_version": snapshot.road_data_version,
+                    "quality_status": snapshot.quality_status,
+                    "source": "road_context",
+                }
+            )
+    return result
+
+
+def _telemetry_records(location: str | None, source_type: str | None) -> tuple[dict, ...]:
+    if not location or source_type == "mqtt":
+        return ()
+    path = _calibration_media_path(location, field="telemetry_location")
+    if (source_type or path.suffix.lower().lstrip(".")) == "srt":
+        return SrtTelemetryParser(str(path)).records
+    return TelemetryFileReader(str(path)).records
+
+
+async def _store_ingestion_upload(upload: Any, job_token: str, expected: set[str]) -> str:
+    suffix = Path(upload.filename or "").suffix.lower()
+    if suffix not in expected:
+        raise HTTPException(status_code=422, detail=f"unsupported uploaded file type: {suffix or 'missing'}")
+    directory = Path(settings.survey_storage_dir).expanduser().resolve() / "video_ingestions" / job_token
+    directory.mkdir(parents=True, exist_ok=True)
+    target = directory / f"{uuid.uuid4().hex}{suffix}"
+    total = 0
+    maximum = int(settings.survey_upload_max_bytes)
+    with target.open("xb") as handle:
+        while chunk := await upload.read(1024 * 1024):
+            total += len(chunk)
+            if total > maximum:
+                target.unlink(missing_ok=True)
+                raise HTTPException(status_code=413, detail="uploaded calibration media exceeds configured limit")
+            handle.write(chunk)
+    return str(target)
+
+
+async def _parse_video_ingestion_payload(request: Request) -> VideoIngestionPayload:
+    content_type = request.headers.get("content-type", "")
+    if "multipart/form-data" not in content_type:
+        return VideoIngestionPayload.model_validate(await request.json())
+    form = await request.form()
+    token = uuid.uuid4().hex[:16]
+    video_upload = form.get("video")
+    telemetry_upload = form.get("telemetry")
+    video_location = None
+    telemetry_location = None
+    telemetry_type = form.get("telemetry_type") or None
+    if getattr(video_upload, "filename", None):
+        video_location = await _store_ingestion_upload(video_upload, token, {".mp4"})
+    if getattr(telemetry_upload, "filename", None):
+        telemetry_location = await _store_ingestion_upload(telemetry_upload, token, {".srt", ".json", ".txt"})
+        telemetry_type = "srt" if Path(telemetry_upload.filename).suffix.lower() == ".srt" else "json"
+    if not video_location:
+        raise HTTPException(status_code=422, detail="browser ingestion requires an MP4 video")
+    return VideoIngestionPayload(
+        project_id=form.get("project_id") or None,
+        source_profile_id=form.get("source_profile_id") or None,
+        drone_id=form.get("drone_id") or None,
+        video_location=video_location,
+        telemetry_location=telemetry_location,
+        telemetry_type=telemetry_type,
+    )
+
+
+@router.get("/intersection-projects")
+async def list_intersection_projects(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    _require_admin(request)
+    rows = (
+        await db.execute(
+            select(IntersectionProject).order_by(IntersectionProject.updated_at.desc())
+        )
+    ).scalars().all()
+    return [_project_response(row) for row in rows]
+
+
+@router.post("/intersection-projects", status_code=201)
+async def create_intersection_project(
+    payload: IntersectionProjectCreatePayload,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    _require_admin(request)
+    if payload.inter_id:
+        existing = (
+            await db.execute(
+                select(IntersectionProject).where(IntersectionProject.inter_id == payload.inter_id)
+            )
+        ).scalar_one_or_none()
+        if existing:
+            raise HTTPException(status_code=409, detail={"code": "intersection_project_exists", "project_id": existing.id})
+    row = IntersectionProject(
+        id=f"IPR-{uuid.uuid4().hex[:24]}",
+        inter_id=payload.inter_id,
+        name=payload.name,
+        center_gcj02=payload.center_gcj02,
+        stage="road_matched" if payload.inter_id else "discovered",
+        created_by=_actor_id(request),
+    )
+    db.add(row)
+    await db.commit()
+    await db.refresh(row)
+    return _project_response(row)
+
+
+@router.get("/intersection-projects/{project_id}")
+async def get_intersection_project(
+    project_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    _require_admin(request)
+    row = await db.get(IntersectionProject, project_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="intersection project not found")
+    return _project_response(row)
+
+
+@router.patch("/intersection-projects/{project_id}")
+async def patch_intersection_project(
+    project_id: str,
+    payload: IntersectionProjectPatchPayload,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    _require_admin(request)
+    row = await db.get(IntersectionProject, project_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="intersection project not found")
+    if row.revision != payload.revision:
+        raise HTTPException(status_code=409, detail={"code": "revision_conflict", "current_revision": row.revision})
+    for field in ("name", "inter_id", "center_gcj02"):
+        value = getattr(payload, field)
+        if value is not None:
+            setattr(row, field, value)
+    row.revision += 1
+    if row.inter_id and row.stage == "discovered":
+        row.stage = "road_matched"
+    await db.commit()
+    await db.refresh(row)
+    return _project_response(row)
+
+
+@router.get("/intersection-projects/{project_id}/workspace")
+async def get_intersection_project_workspace(
+    project_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    _require_admin(request)
+    project = await db.get(IntersectionProject, project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="intersection project not found")
+    bindings = (
+        await db.execute(
+            select(SourceIntersectionBinding).where(
+                SourceIntersectionBinding.project_id == project_id,
+                SourceIntersectionBinding.active.is_(True),
+            )
+        )
+    ).scalars().all()
+    maps = []
+    if project.inter_id:
+        maps = (
+            await db.execute(
+                select(ChannelizedMapVersion)
+                .where(ChannelizedMapVersion.inter_id == project.inter_id)
+                .order_by(ChannelizedMapVersion.version_no.desc())
+            )
+        ).scalars().all()
+    latest_reviews: dict[str, CalibrationReviewRecord] = {}
+    if maps:
+        reviews = (
+            await db.execute(
+                select(CalibrationReviewRecord)
+                .where(CalibrationReviewRecord.map_version_id.in_([item.id for item in maps]))
+                .order_by(CalibrationReviewRecord.created_at.desc())
+            )
+        ).scalars().all()
+        for review in reviews:
+            latest_reviews.setdefault(review.map_version_id, review)
+    has_verified_road = False
+    road_data_version = None
+    if project.inter_id:
+        road = (
+            await db.execute(
+                select(RoadContextSnapshot)
+                .where(RoadContextSnapshot.inter_id == project.inter_id)
+                .order_by(RoadContextSnapshot.created_at.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        has_verified_road = bool(road and road.quality_status == "verified")
+        road_data_version = road.road_data_version if road else None
+    next_action = _intersection_project_next_action(
+        has_inter_id=bool(project.inter_id),
+        has_verified_road=has_verified_road,
+        has_bindings=bool(bindings),
+        map_statuses={item.status for item in maps},
+    )
+    return {
+        "project": _project_response(project),
+        "readiness": {
+            "formal_intersection": bool(project.inter_id),
+            "road_context_verified": has_verified_road,
+            "source_bound": bool(bindings),
+            "road_data_version": road_data_version,
+            "next_action": next_action,
+        },
+        "bindings": [
+            {
+                "binding_id": item.id,
+                "source_profile_id": item.source_profile_id,
+                "inter_id": item.inter_id,
+                "start_offset_sec": item.start_offset_sec,
+                "end_offset_sec": item.end_offset_sec,
+                "binding_quality": item.binding_quality,
+            }
+            for item in bindings
+        ],
+        "channelized_maps": [
+            {
+                **_map_response(item),
+                "latest_review": (
+                    {
+                        "review_id": latest_reviews[item.id].id,
+                        "result": latest_reviews[item.id].result,
+                        "issues": latest_reviews[item.id].issues,
+                        "checklist": latest_reviews[item.id].checklist,
+                        "comment": latest_reviews[item.id].comment,
+                        "actor_id": latest_reviews[item.id].actor_id,
+                        "created_at": latest_reviews[item.id].created_at,
+                    }
+                    if item.id in latest_reviews else None
+                ),
+            }
+            for item in maps
+        ],
+    }
+
+
+@router.post("/video-ingestions", status_code=201)
+async def create_video_ingestion(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    _require_admin(request)
+    payload = await _parse_video_ingestion_payload(request)
+    if payload.project_id and await db.get(IntersectionProject, payload.project_id) is None:
+        raise HTTPException(status_code=404, detail="expected intersection project not found")
+    video_location, telemetry_location, telemetry_type = (
+        payload.video_location, payload.telemetry_location, payload.telemetry_type
+    )
+    if video_location:
+        video_location = str(_calibration_media_path(video_location, field="video_location"))
+    if payload.source_profile_id:
+        video = (
+            await db.execute(
+                select(VideoSourceRecord).where(VideoSourceRecord.profile_id == payload.source_profile_id)
+            )
+        ).scalar_one_or_none()
+        telemetry = (
+            await db.execute(
+                select(TelemetrySourceRecord).where(TelemetrySourceRecord.profile_id == payload.source_profile_id)
+            )
+        ).scalar_one_or_none()
+        if video is None:
+            raise HTTPException(status_code=422, detail="source profile does not exist")
+        video_location = video.location
+        if telemetry:
+            telemetry_location, telemetry_type = telemetry.location, telemetry.source_type
+    records = _telemetry_records(telemetry_location, telemetry_type)
+    discovery = HoverIntersectionDiscovery()
+    local_candidates = await _road_candidates(db)
+    analysis = discovery.discover(records, local_candidates)
+    first_segment = ((analysis.get("hover_segments") or [None])[0])
+    if first_segment and not first_segment.get("candidates"):
+        try:
+            ycx_candidates = await YcxRoadImporter(settings).nearby_intersections(
+                first_segment["center_gcj02"], 250.0
+            )
+        except (OSError, TimeoutError, RuntimeError) as exc:
+            logger.warning("YCX nearby candidate lookup unavailable: %s", exc)
+            ycx_candidates = []
+        if ycx_candidates:
+            analysis = discovery.discover(records, ycx_candidates)
+    segments = analysis.get("hover_segments") or []
+    row = VideoIngestionJob(
+        id=f"VIJ-{uuid.uuid4().hex[:24]}",
+        project_id=payload.project_id,
+        mode="project_first" if payload.project_id else "video_first",
+        status=analysis["status"],
+        source_profile_id=payload.source_profile_id,
+        drone_id=payload.drone_id,
+        video_location=video_location,
+        telemetry_location=telemetry_location,
+        telemetry_type=telemetry_type,
+        hover_evidence=analysis,
+        candidate_intersections=[item for segment in segments for item in segment.get("candidates", [])],
+        error_code=analysis.get("reason_code"),
+        created_by=_actor_id(request),
+    )
+    db.add(row)
+    await db.commit()
+    await db.refresh(row)
+    return _ingestion_response(row)
+
+
+@router.get("/video-ingestions/{job_id}")
+async def get_video_ingestion(
+    job_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    _require_admin(request)
+    row = await db.get(VideoIngestionJob, job_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="video ingestion job not found")
+    return _ingestion_response(row)
+
+
+@router.post("/video-ingestions/{job_id}/resolve")
+async def resolve_video_ingestion(
+    job_id: str,
+    payload: VideoIngestionResolvePayload,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    _require_admin(request)
+    job = await db.get(VideoIngestionJob, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="video ingestion job not found")
+    segments = (job.hover_evidence or {}).get("hover_segments") or []
+    resolved_segments = set((job.hover_evidence or {}).get("resolved_segment_indexes") or [])
+    if payload.segment_index in resolved_segments:
+        raise HTTPException(status_code=409, detail="hover segment is already resolved")
+    if job.status == "bound" and not segments:
+        raise HTTPException(status_code=409, detail="video ingestion is already resolved")
+    segment = segments[payload.segment_index] if payload.segment_index < len(segments) else None
+    if segments and segment is None:
+        raise HTTPException(status_code=422, detail="hover segment does not exist")
+    top_candidate = ((segment or {}).get("candidates") or [None])[0]
+    target_id = job.project_id if payload.action == "bind_expected_project" else payload.project_id
+    project = await db.get(IntersectionProject, target_id) if target_id else None
+    if payload.action == "create_project":
+        inter_id = payload.inter_id or (top_candidate or {}).get("inter_id")
+        if inter_id:
+            existing = (
+                await db.execute(select(IntersectionProject).where(IntersectionProject.inter_id == inter_id))
+            ).scalar_one_or_none()
+            if existing:
+                raise HTTPException(status_code=409, detail={"code": "intersection_project_exists", "project_id": existing.id})
+        project = IntersectionProject(
+            id=f"IPR-{uuid.uuid4().hex[:24]}", inter_id=inter_id,
+            name=payload.project_name or (top_candidate or {}).get("name") or "待路网匹配项目",
+            center_gcj02=(segment or {}).get("center_gcj02"),
+            stage="road_matched" if inter_id else "discovered", created_by=_actor_id(request),
+        )
+        db.add(project)
+        await db.flush()
+    if project is None:
+        raise HTTPException(status_code=422, detail="target intersection project is required")
+    if payload.action == "bind_expected_project" and top_candidate:
+        if project.inter_id != top_candidate.get("inter_id") or float(top_candidate.get("distance_m", 999)) > 80:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "video_intersection_mismatch", "candidate": top_candidate, "expected_project_id": project.id},
+            )
+    if not job.source_profile_id:
+        if not job.drone_id or not job.video_location:
+            raise HTTPException(status_code=422, detail={"code": "source_profile_required", "message": "上传素材绑定前必须选择登记无人机"})
+        drone = await db.get(DroneRecord, job.drone_id)
+        if drone is None:
+            raise HTTPException(status_code=422, detail="selected drone does not exist")
+        profile_id = f"SRC-ING-{uuid.uuid4().hex[:16].upper()}"
+        telemetry_location = job.telemetry_location
+        telemetry_type = job.telemetry_type or "file"
+        telemetry_status = "valid"
+        telemetry_error = None
+        if not telemetry_location:
+            placeholder_directory = (
+                Path(settings.survey_storage_dir).expanduser().resolve()
+                / "video_ingestions" / job.id
+            )
+            placeholder_directory.mkdir(parents=True, exist_ok=True)
+            placeholder = placeholder_directory / "telemetry-missing.json"
+            placeholder.write_text("[]", encoding="utf-8")
+            telemetry_location = str(placeholder)
+            telemetry_type = "file"
+            telemetry_status = "invalid"
+            telemetry_error = "telemetry_unavailable_manual_binding"
+        video_source = VideoSourceRecord(
+            id=f"VID-{uuid.uuid4().hex[:24]}", profile_id=profile_id,
+            drone_id=job.drone_id, mode="local", source_type="mp4",
+            location=job.video_location, enabled=True, validation_status="valid",
+            validated_at=datetime.now(UTC),
+        )
+        telemetry_source = TelemetrySourceRecord(
+            id=f"TEL-{uuid.uuid4().hex[:24]}", profile_id=profile_id,
+            drone_id=job.drone_id, mode="local", source_type=telemetry_type,
+            location=telemetry_location,
+            config={"format": "dji_cloud_json"} if telemetry_type == "file" else {},
+            enabled=True, validation_status=telemetry_status,
+            validation_error_code=telemetry_error,
+            validated_at=datetime.now(UTC) if telemetry_status == "valid" else None,
+        )
+        db.add_all([video_source, telemetry_source])
+        await db.flush()
+        job.source_profile_id = profile_id
+    source = (
+        await db.execute(select(VideoSourceRecord).where(VideoSourceRecord.profile_id == job.source_profile_id))
+    ).scalar_one_or_none()
+    if source is None:
+        raise HTTPException(status_code=422, detail="source profile does not exist")
+    quality = (segment or {}).get("confidence") or "manual_unverified"
+    if quality == "auto_high_confidence" and payload.action != "bind_expected_project":
+        quality = "admin_confirmed"
+    start_offset = (segment or {}).get("start_offset_sec", 0)
+    end_offset = (segment or {}).get("end_offset_sec")
+    binding_conditions = [
+        SourceIntersectionBinding.source_profile_id == job.source_profile_id,
+        SourceIntersectionBinding.project_id == project.id,
+        SourceIntersectionBinding.start_offset_sec == start_offset,
+        SourceIntersectionBinding.active.is_(True),
+    ]
+    binding_conditions.append(
+        SourceIntersectionBinding.end_offset_sec.is_(None)
+        if end_offset is None else SourceIntersectionBinding.end_offset_sec == end_offset
+    )
+    binding = (
+        await db.execute(select(SourceIntersectionBinding).where(*binding_conditions))
+    ).scalar_one_or_none()
+    if binding is None:
+        binding = SourceIntersectionBinding(
+            id=f"SIB-{uuid.uuid4().hex[:24]}", source_profile_id=job.source_profile_id,
+            project_id=project.id, inter_id=project.inter_id,
+            start_offset_sec=start_offset, end_offset_sec=end_offset, binding_quality=quality,
+            coordinate_evidence={
+                **((job.hover_evidence or {}).get("coordinate_evidence") or {}),
+                "segment": segment,
+            },
+            confirmed_by=_actor_id(request),
+        )
+        db.add(binding)
+        project.stage = _project_stage_after_source_binding(project.stage)
+        project.revision += 1
+    job.project_id = project.id
+    evidence = dict(job.hover_evidence or {})
+    evidence["resolved_segment_indexes"] = sorted([*resolved_segments, payload.segment_index])
+    job.hover_evidence = evidence
+    job.status = "bound" if not segments or len(evidence["resolved_segment_indexes"]) >= len(segments) else "awaiting_confirmation"
+    await db.commit()
+    return {"job": _ingestion_response(job), "project": _project_response(project), "binding_id": binding.id}
+
+
 def _calibration_media_path(value: str, *, field: str) -> Path:
     """Resolve a retained media file without allowing arbitrary filesystem reads."""
-    path = Path(value).expanduser().resolve()
-    roots = [Path(root).expanduser().resolve() for root in settings.calibration_media_roots]
+    repository_root = Path(__file__).resolve().parents[4]
+
+    def anchored(raw_value: str) -> Path:
+        candidate = Path(raw_value).expanduser()
+        if not candidate.is_absolute():
+            candidate = repository_root / candidate
+        return candidate.resolve()
+
+    path = anchored(value)
+    roots = [anchored(root) for root in settings.calibration_media_roots]
     if not any(path == root or root in path.parents for root in roots):
         raise HTTPException(
             status_code=422,
@@ -1187,6 +1790,88 @@ async def get_visual_registration_orthophoto(
     return FileResponse(path)
 
 
+@router.post("/channelized-maps/{map_version_id}/submit-check", status_code=201)
+async def submit_channelized_map_check(
+    map_version_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    _require_admin(request)
+    row = await db.get(ChannelizedMapVersion, map_version_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="channelized map not found")
+    if row.status not in {"draft", "candidate"}:
+        raise HTTPException(status_code=409, detail="only a draft or candidate can be submitted")
+    record = CalibrationReviewRecord(
+        id=f"CRV-{uuid.uuid4().hex[:24]}", map_version_id=row.id,
+        result="submitted", issues=[], checklist={}, actor_id=_actor_id(request),
+    )
+    db.add(record)
+    await db.execute(
+        IntersectionProject.__table__.update()
+        .where(IntersectionProject.inter_id == row.inter_id)
+        .values(stage="checking", revision=IntersectionProject.revision + 1)
+    )
+    await db.commit()
+    return {"review_id": record.id, "map_version_id": row.id, "result": record.result}
+
+
+@router.post("/channelized-maps/{map_version_id}/check", status_code=201)
+async def check_channelized_map(
+    map_version_id: str,
+    payload: CalibrationCheckPayload,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    _require_admin(request)
+    row = await db.get(ChannelizedMapVersion, map_version_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="channelized map not found")
+    submitted = (
+        await db.execute(
+            select(CalibrationReviewRecord)
+            .where(
+                CalibrationReviewRecord.map_version_id == row.id,
+                CalibrationReviewRecord.result == "submitted",
+            )
+            .order_by(CalibrationReviewRecord.created_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if submitted is None:
+        raise HTTPException(status_code=409, detail="submit the draft for checking first")
+    failed_checks = _calibration_review_checklist_failures(payload.checklist)
+    if payload.result == "approved" and (payload.issues or failed_checks):
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "calibration_review_incomplete",
+                "message": "approved checks require all quality gates and no open issues",
+                "failed_checks": failed_checks,
+            },
+        )
+    record = CalibrationReviewRecord(
+        id=f"CRV-{uuid.uuid4().hex[:24]}", map_version_id=row.id,
+        result=payload.result, issues=payload.issues, checklist=payload.checklist,
+        comment=payload.comment, actor_id=_actor_id(request),
+    )
+    db.add(record)
+    quality = dict(row.quality or {})
+    quality["reviewed"] = payload.result == "approved"
+    quality["review_record_id"] = record.id
+    row.quality = quality
+    await db.execute(
+        IntersectionProject.__table__.update()
+        .where(IntersectionProject.inter_id == row.inter_id)
+        .values(
+            stage="checking" if payload.result == "approved" else "drafting",
+            revision=IntersectionProject.revision + 1,
+        )
+    )
+    await db.commit()
+    return {"review_id": record.id, "map_version_id": row.id, "result": record.result}
+
+
 @router.post("/channelized-maps/{map_version_id}/publish")
 async def publish_channelized_map(
     map_version_id: str,
@@ -1208,6 +1893,16 @@ async def publish_channelized_map(
         if int(quality.get("topology_errors", 1)) != 0:
             failures.append("topology_errors must be 0")
     if payload.target_status == "lane_verified":
+        latest_review = (
+            await db.execute(
+                select(CalibrationReviewRecord)
+                .where(CalibrationReviewRecord.map_version_id == row.id)
+                .order_by(CalibrationReviewRecord.created_at.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if latest_review is None or latest_review.result != "approved":
+            failures.append("an approved calibration check is required")
         if float(quality.get("lane_residual_median_m", 999)) > 0.75:
             failures.append("lane_residual_median_m must be <= 0.75")
         if float(quality.get("lane_residual_p95_m", 999)) > 1.5:
@@ -1283,5 +1978,11 @@ async def publish_channelized_map(
         .where(VisualLaneBinding.map_version_id == row.id)
         .values(status=payload.target_status)
     )
+    if payload.target_status == "lane_verified":
+        await db.execute(
+            IntersectionProject.__table__.update()
+            .where(IntersectionProject.inter_id == row.inter_id)
+            .values(stage="published", revision=IntersectionProject.revision + 1)
+        )
     await db.commit()
     return await get_channelized_map(row.id, db)

@@ -79,7 +79,20 @@ class ConflictDetectionNode:
             frame_element.conflict_events = []
             return frame_element
 
-        H = frame_element.homography_matrix
+        if (
+            getattr(frame_element, "geo_reference_quality", None) is not None
+            and not getattr(frame_element, "formal_analytics_eligible", False)
+        ):
+            frame_element.conflict_events = []
+            diagnostics["status"] = "quality_gate_blocked"
+            diagnostics["quality_reasons"] = frame_element.geo_reference_quality.get(
+                "reasons", []
+            )
+            return frame_element
+
+        H = getattr(frame_element, "pixel_to_map_enu", None)
+        if not is_valid_homography(H):
+            H = frame_element.homography_matrix
         if not is_valid_homography(H):
             frame_element.conflict_events = []
             diagnostics["status"] = "missing_calibration"
@@ -111,14 +124,24 @@ class ConflictDetectionNode:
             if track.max_speed_kmh < 5.0:
                 continue
             # 过滤轨迹长度不足的目标（路边停靠车辆等），要求世界坐标累计位移 >= 阈值
-            if len(track.position_history) >= 2:
+            world_history = getattr(track, "position_history_enu_m", None) or []
+            if len(world_history) >= 2:
+                pts_world = np.asarray(
+                    [(p[0], p[1]) for p in world_history], dtype=np.float64
+                )
+                traj_length = float(np.sum(np.linalg.norm(np.diff(pts_world, axis=0), axis=1)))
+                current_position = np.asarray(pts_world[-1], dtype=np.float64)
+                position_is_absolute = True
+            elif len(track.position_history) >= 2:
                 pts_px = np.array([(p[0], p[1]) for p in track.position_history])
                 pts_world = pixel_to_world(pts_px, H)
                 traj_length = float(np.sum(np.linalg.norm(np.diff(pts_world, axis=0), axis=1)))
-                if traj_length < self.min_trajectory_length_m:
-                    continue
+                current_position = pixel_to_world(np.asarray([[cx, cy]]), H)[0]
+                position_is_absolute = False
             else:
                 continue  # 位置点不足，无法判断轨迹
+            if traj_length < self.min_trajectory_length_m:
+                continue
             entry = {
                 "track_id": track_id,
                 "center_px": (cx, cy),
@@ -126,6 +149,9 @@ class ConflictDetectionNode:
                 "velocity_ms": velocity_ms,
                 "vehicle_class": track.vehicle_class,
                 "motion_profile": motion_profile,
+                "position_enu_m": current_position,
+                "position_is_absolute": position_is_absolute,
+                "tracking_quality": getattr(track, "tracking_quality", "degraded"),
             }
             if track.vehicle_class == "motor":
                 motor_tracks.append(entry)
@@ -154,8 +180,9 @@ class ConflictDetectionNode:
                     max(motor["track_id"], non_motor["track_id"]),
                 )
                 # 计算当前世界坐标（无人机相对米制坐标）
-                pts = pixel_to_world(
-                    np.array([motor["center_px"], non_motor["center_px"]]), H
+                pts = np.asarray(
+                    [motor["position_enu_m"], non_motor["position_enu_m"]],
+                    dtype=np.float64,
                 )
 
                 # 距离预过滤：两车世界坐标距离 > 阈值，直接跳过
@@ -209,6 +236,11 @@ class ConflictDetectionNode:
                         "evidence": evidence,
                         "risk_score": self._risk_score(prediction, evidence),
                         "motor_speed_kmh": round(motor["speed_kmh"], 1),
+                        "flight_phase": getattr(frame_element, "flight_phase", None),
+                        "tracking_quality": {
+                            "motor": motor["tracking_quality"],
+                            "non_motor": non_motor["tracking_quality"],
+                        },
                     }
                     if "motor_arrival_ttc_sec" in prediction:
                         event["motor_arrival_ttc_sec"] = round(
@@ -222,9 +254,16 @@ class ConflictDetectionNode:
                     # 预测冲突点世界坐标（含运动补偿）
                     drone_disp = getattr(frame_element, "drone_displacement_m", None)
                     anchor_gcj02 = getattr(frame_element, "anchor_gcj02", None)
-                    if drone_disp is not None:
-                        motor_world = prediction["motor_position_enu_m"] + drone_disp
-                        non_motor_world = prediction["non_motor_position_enu_m"] + drone_disp
+                    if drone_disp is not None or (
+                        motor["position_is_absolute"] and non_motor["position_is_absolute"]
+                    ):
+                        offset = (
+                            np.zeros(2, dtype=np.float64)
+                            if motor["position_is_absolute"] and non_motor["position_is_absolute"]
+                            else drone_disp
+                        )
+                        motor_world = prediction["motor_position_enu_m"] + offset
+                        non_motor_world = prediction["non_motor_position_enu_m"] + offset
                         event["motor_position_enu_m"] = [
                             round(float(motor_world[0]), 2),
                             round(float(motor_world[1]), 2),
@@ -307,7 +346,8 @@ class ConflictDetectionNode:
         return recent_velocity / recent_speed * speed
 
     def _motion_profile(self, track, H) -> dict | None:
-        history = getattr(track, "position_history", None) or []
+        world_history = getattr(track, "position_history_enu_m", None) or []
+        history = world_history or (getattr(track, "position_history", None) or [])
         if len(history) < self.min_history_points:
             return None
 
@@ -324,7 +364,7 @@ class ConflictDetectionNode:
         if np.any(np.diff(times) <= 0):
             return None
 
-        pts_world = pixel_to_world(pts_px, H)
+        pts_world = pts_px if world_history else pixel_to_world(pts_px, H)
         deltas = np.diff(pts_world, axis=0)
         dt = np.diff(times)
         segment_velocities = deltas / dt[:, None]

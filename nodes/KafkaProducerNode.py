@@ -15,13 +15,10 @@ import uuid
 from datetime import UTC, datetime
 
 import cv2
-import numpy as np
 from kafka import KafkaProducer
 from json import dumps
 
 from utils_local.utils import profile_time
-from utils_local.homography import is_valid_homography, undistort_points
-from utils_local.motion_compensation import pixel_to_world_compensated
 from utils_local.coordinates import enu_to_gcj02, normalize_telemetry_position
 from elements.VideoEndBreakElement import VideoEndBreakElement
 from elements.FrameElement import FrameElement
@@ -159,12 +156,33 @@ class KafkaProducerNode:
         telemetry = getattr(frame_element, "telemetry", None) or {}
         recorded_at = telemetry.get("recorded_at")
         occurred_at = recorded_at or produced_at.isoformat()
-        if recorded_at:
+        if recorded_at and getattr(frame_element, "source_is_realtime", False):
+            semantics = "event_time"
+            time_quality = "verified"
+        elif recorded_at:
             semantics = "reconstructed"
             time_quality = "reconstructed"
         else:
             semantics = "consumer_time"
             time_quality = "ingest_only"
+        frame_quality = getattr(frame_element, "geo_reference_quality", None)
+        dynamic_quality = (
+            frame_quality.get("status")
+            if isinstance(frame_quality, dict)
+            else getattr(self, "quality_status", "unverified")
+        )
+        payload_quality = data.get("tracking_quality")
+        if isinstance(payload_quality, str) and payload_quality in {"degraded", "unverified"}:
+            dynamic_quality = payload_quality
+        elif isinstance(payload_quality, dict) and any(
+            value in {"degraded", "unverified"} for value in payload_quality.values()
+        ):
+            dynamic_quality = "degraded"
+        if msg_type == "uav_conflict":
+            if time_quality in {"ingest_only", "quarantined"}:
+                dynamic_quality = "unverified"
+            elif time_quality == "inferred" and dynamic_quality == "verified":
+                dynamic_quality = "degraded"
         return {
             "message_id": str(uuid.uuid4()),
             "msg_type": msg_type,
@@ -182,7 +200,7 @@ class KafkaProducerNode:
             "source_time_raw": {"frame_timestamp_sec": frame_element.timestamp},
             "source_time_semantics": semantics,
             "time_quality": time_quality,
-            "quality_status": getattr(self, "quality_status", "unverified"),
+            "quality_status": dynamic_quality,
             "data": {
                 "mission_id": getattr(self, "mission_id", None),
                 "pipeline_id": getattr(self, "pipeline_id", None),
@@ -297,6 +315,22 @@ class KafkaProducerNode:
             "annotation_snapshot_height": out_height,
         }
 
+    def _needs_hover_annotation_snapshot(self, frame_element: FrameElement) -> bool:
+        """Return whether this hover frame still needs a lane-annotation image.
+
+        A complete Runtime Road Map Bundle already contains the published
+        lane-verified map. Re-sending a base64 JPEG on every hover stats sample
+        is redundant and can push the canonical realtime record over Kafka's
+        request-size limit.
+        """
+        if not getattr(self, "_hover_annotation_snapshot_enabled", True):
+            return False
+        if not getattr(frame_element, "is_hovering", False):
+            return False
+        frame_status = getattr(frame_element, "road_context_status", None)
+        pipeline_status = getattr(self, "road_context_status", "missing")
+        return "complete" not in {frame_status, pipeline_status}
+
     def _build_active_trajectories(self, frame_element: FrameElement) -> list[dict]:
         """Serialize active track trajectories for real-time BEV rendering.
 
@@ -308,22 +342,17 @@ class KafkaProducerNode:
         if not buffer_tracks:
             return []
 
-        H = getattr(frame_element, "homography_matrix", None)
-        drone_disp = getattr(frame_element, "drone_displacement_m", None)
-        can_convert_world = is_valid_homography(H) and drone_disp is not None
-
-        dist_coeffs = getattr(frame_element, "dist_coeffs", None)
-        cam_intrinsics = getattr(frame_element, "camera_intrinsics", None)
-        img_size = (
-            (frame_element.frame.shape[1], frame_element.frame.shape[0])
-            if dist_coeffs is not None and frame_element.frame is not None
-            else None
-        )
         anchor_gcj02 = getattr(frame_element, "anchor_gcj02", None)
 
         active = []
         for track_id, track in sorted(buffer_tracks.items(), key=lambda item: item[0]):
-            trajectory_px = getattr(track, "trajectory_points", None) or []
+            bbox_center_px = getattr(track, "trajectory_points", None) or []
+            ground_contact_px = getattr(track, "ground_contact_points_px", None) or []
+            trajectory_px = (
+                ground_contact_px
+                if len(ground_contact_px) == len(bbox_center_px) and ground_contact_px
+                else bbox_center_px
+            )
             if not trajectory_px:
                 continue
 
@@ -355,12 +384,30 @@ class KafkaProducerNode:
                 "timestamp_first": track.timestamp_first,
                 "timestamp_last": track.timestamp_last,
             }
+            if getattr(track, "association_id", None) is not None:
+                item["association_id"] = int(track.association_id)
+            if len(ground_contact_px) == len(bbox_center_px) and ground_contact_px:
+                item["trajectory_bbox_center_px"] = [
+                    [round(float(x), 2), round(float(y), 2)]
+                    for x, y in bbox_center_px[tail_start:]
+                ]
+            timestamps = getattr(track, "trajectory_timestamps_sec", None) or []
+            if len(timestamps) == total_points:
+                item["trajectory_timestamps_sec"] = [
+                    round(float(value), 3) for value in timestamps[tail_start:]
+                ]
+            frame_nums = getattr(track, "trajectory_frame_nums", None) or []
+            if len(frame_nums) == total_points:
+                item["trajectory_frame_nums"] = [
+                    int(value) for value in frame_nums[tail_start:]
+                ]
 
-            if can_convert_world:
-                pts_px = np.array(trajectory_tail_px, dtype=np.float64)
-                if dist_coeffs and cam_intrinsics and img_size:
-                    pts_px = undistort_points(pts_px, cam_intrinsics, img_size, dist_coeffs)
-                pts_world = pixel_to_world_compensated(pts_px, H, drone_disp)
+            trajectory_enu = getattr(track, "trajectory_enu_m", None) or []
+            # Every ENU point was resolved with the projection of its own source
+            # frame in TrackerInfoUpdateNode.  Reprojecting trajectory_px with the
+            # latest frame H corrupts history whenever the UAV is moving.
+            if len(trajectory_enu) == total_points:
+                pts_world = trajectory_enu[tail_start:]
                 world_points = [
                     [round(float(x), 2), round(float(y), 2)]
                     for x, y in pts_world
@@ -372,12 +419,16 @@ class KafkaProducerNode:
                         round(anchor_gcj02[0], 6),
                         round(anchor_gcj02[1], 6),
                     ]
-                    item["trajectory_gcj02"] = [
-                        [round(lon, 8), round(lat, 8)]
-                        for lon, lat in (
+                    stored_gcj02 = getattr(track, "trajectory_gcj02", None) or []
+                    if len(stored_gcj02) == total_points:
+                        gcj02_tail = stored_gcj02[tail_start:]
+                    else:
+                        gcj02_tail = [
                             enu_to_gcj02(point[0], point[1], anchor_gcj02)
                             for point in world_points
-                        )
+                        ]
+                    item["trajectory_gcj02"] = [
+                        [round(lon, 8), round(lat, 8)] for lon, lat in gcj02_tail
                     ]
                 item["map_version_id"] = getattr(track, "map_version_id", None)
                 item["matched_lane_key"] = getattr(track, "matched_lane_key", None)
@@ -385,10 +436,54 @@ class KafkaProducerNode:
                 item["matched_link_id"] = getattr(track, "matched_link_id", None)
                 item["movement_key"] = getattr(track, "movement_key", None)
                 item["map_match_confidence"] = getattr(track, "map_match_confidence", None)
+            elif trajectory_enu:
+                item["tracking_quality"] = "degraded"
+                item["quality_reasons"] = ["trajectory_point_alignment_mismatch"]
 
             active.append(item)
 
         return active
+
+    def _build_candidate_trajectories(self, frame_element: FrameElement) -> list[dict]:
+        """Serialize only the bounded candidate preview contract for realtime BEV."""
+        scalar_keys = (
+            "track_id", "association_id", "tracking_method", "tracking_quality",
+            "quality_status", "formal_analytics_eligible", "quality_reasons",
+            "flight_phase", "flight_segment_id", "anchor_gcj02",
+            "vehicle_class", "yolo_class_id", "yolo_class_name",
+        )
+        sequence_keys = (
+            "trajectory_px", "trajectory_bbox_center_px", "trajectory_enu_m",
+            "trajectory_gcj02", "trajectory_timestamps_sec", "trajectory_frame_nums",
+        )
+        tail_points = max(getattr(self, "_active_trajectory_tail_points", 30), 1)
+        result = []
+        for candidate in getattr(frame_element, "candidate_trajectories", None) or []:
+            if not isinstance(candidate, dict):
+                continue
+            item = {key: candidate[key] for key in scalar_keys if key in candidate}
+            for key in sequence_keys:
+                values = candidate.get(key)
+                if isinstance(values, list):
+                    item[key] = values[-tail_points:]
+            result.append(item)
+        return result
+
+    def publish_completed_tracks(self, frame_element: FrameElement) -> int:
+        """Publish completed tracks before a terminal sentinel closes the publisher."""
+        completed_tracks = getattr(frame_element, "completed_tracks", None) or []
+        for track in completed_tracks:
+            message = {"intersection_id": self.intersection_id, **track}
+            message = self._canonical_envelope(
+                "uav_track_complete", message, frame_element
+            )
+            self._enqueue(self.track_complete_topic, message, durable=True)
+            logger.debug(
+                "KAFKA enqueued track_complete: id=%s topic=%s",
+                track.get("track_id"),
+                self.track_complete_topic,
+            )
+        return len(completed_tracks)
 
     @profile_time
     def process(self, frame_element: FrameElement):
@@ -408,8 +503,11 @@ class KafkaProducerNode:
             self.last_send_time = current_time
 
         if current_time - self.last_send_time > self.how_often_sec or self.last_send_time == current_time:
-            cars_amount = frame_element.info["cars_amount"]
-            roads_activity = frame_element.info["roads_activity"]
+            cars_amount = frame_element.info.get("cars_amount")
+            roads_activity = frame_element.info.get("roads_activity") or {}
+            formal_eligible = bool(
+                getattr(frame_element, "formal_analytics_eligible", False)
+            ) if getattr(frame_element, "geo_reference_quality", None) is not None else True
 
             # T-201: 动态道路数 — 从 roads_activity dict 构建数组
             roads_array = []
@@ -420,9 +518,22 @@ class KafkaProducerNode:
                     "activity": round(val, 2) if timestamp >= self.buffer_analytics_sec else None,
                 })
 
-            congestion_index = self._compute_congestion_index(
-                cars_amount, roads_activity, frame_element
+            congestion_index = (
+                self._compute_congestion_index(
+                    int(cars_amount or 0), roads_activity, frame_element
+                )
+                if formal_eligible
+                else None
             )
+            tracking_diagnostics = getattr(frame_element, "tracking_diagnostics", None)
+            if isinstance(tracking_diagnostics, dict):
+                tracking_diagnostics = {
+                    key: value
+                    for key, value in tracking_diagnostics.items()
+                    if not key.startswith("shadow_")
+                }
+            geo_quality = getattr(frame_element, "geo_reference_quality", None)
+            candidate_trajectories = self._build_candidate_trajectories(frame_element)
             data = {
                 "camera_id": f"id_{self.camera_id}",
                 "cars": cars_amount,
@@ -430,19 +541,29 @@ class KafkaProducerNode:
                 # ── 前端所需字段：FPS / 推理 / 跟踪 / 累计 ──
                 "fps": current_fps,
                 "inference_ms": getattr(frame_element, "inference_ms", 0),
-                "active_tracks": len(frame_element.id_list),
+                "source_capture_time": getattr(frame_element, "source_capture_time", None),
+                "source_drop_count": getattr(frame_element, "source_drop_count", 0),
+                "source_drop_reason": getattr(frame_element, "source_drop_reason", None),
+                "active_tracks": len(frame_element.buffer_tracks or {}),
+                "candidate_tracks": len(candidate_trajectories),
                 "total_vehicles": cars_amount,
                 "active_trajectories": self._build_active_trajectories(frame_element),
+                "candidate_trajectories": candidate_trajectories,
                 # T-201: 动态道路数组（替代 road_1..road_5）
                 "roads": roads_array,
                 "road_polygons": frame_element.roads_info,
                 # T-203: 多因子拥堵指数
                 "congestion_index": congestion_index,
+                "flight_phase": getattr(frame_element, "flight_phase", None),
+                "flight_segment_id": getattr(frame_element, "flight_segment_id", None),
+                "geo_reference_quality": geo_quality,
+                "tracking_diagnostics": tracking_diagnostics,
+                "formal_analytics_eligible": formal_eligible,
                 **self._delivery_snapshot(),
             }
             snapshot_threshold = getattr(self, "_event_snapshot_congestion_threshold", 4.0)
             snapshot_samples = getattr(self, "_event_snapshot_consecutive_samples", 30)
-            if congestion_index > snapshot_threshold:
+            if congestion_index is not None and congestion_index > snapshot_threshold:
                 self._congestion_snapshot_count = getattr(self, "_congestion_snapshot_count", 0) + 1
                 if self._congestion_snapshot_count == snapshot_samples:
                     snapshot = self._encode_annotation_snapshot(frame_element)
@@ -555,7 +676,7 @@ class KafkaProducerNode:
                 }
                 data["coordinate_system"] = "GCJ02"
             data["is_hovering"] = getattr(frame_element, "is_hovering", False)
-            if data["is_hovering"] and self._hover_annotation_snapshot_enabled:
+            if self._needs_hover_annotation_snapshot(frame_element):
                 snapshot = self._encode_annotation_snapshot(frame_element)
                 if snapshot:
                     data.update(snapshot)
@@ -567,13 +688,7 @@ class KafkaProducerNode:
             frame_element.send_to_kafka = True
 
         # 发布完成轨迹到独立topic（T-101: 异步发送）
-        completed_tracks = getattr(frame_element, "completed_tracks", None)
-        if completed_tracks:
-            for ct in completed_tracks:
-                ct_msg = {"intersection_id": self.intersection_id, **ct}
-                ct_msg = self._canonical_envelope("uav_track_complete", ct_msg, frame_element)
-                self._enqueue(self.track_complete_topic, ct_msg, durable=True)
-                logger.debug(f"KAFKA enqueued track_complete: id={ct.get('track_id')} topic={self.track_complete_topic}")
+        self.publish_completed_tracks(frame_element)
 
         # 发布冲突事件到独立topic（T-101: 异步发送）
         conflict_events = getattr(frame_element, "conflict_events", None)

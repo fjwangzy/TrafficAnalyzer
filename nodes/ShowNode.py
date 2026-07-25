@@ -10,6 +10,9 @@ from elements.FrameElement import FrameElement
 class ShowNode:
     """负责结果可视化的模块 — 使用 supervision 库优化展示效果"""
 
+    CANDIDATE_COLOR_BGR = (0, 191, 255)
+    CANDIDATE_TRACE_MAX_POINTS = 30
+
     CLASS_COLOR_KEYS = [
         "pedestrian",
         "bicycle",
@@ -221,6 +224,271 @@ class ShowNode:
         key = str(class_name).strip().lower().replace(" ", "-")
         return cls.CLASS_ALIASES.get(key, "unknown")
 
+    @staticmethod
+    def _draw_candidate_box(frame, box, track_id, class_name):
+        """Draw a preview-only target without implying formal analytics status."""
+        amber = ShowNode.CANDIDATE_COLOR_BGR
+        height, width = frame.shape[:2]
+        delivery_scale = max(
+            1.0,
+            min(width / 1280.0, height / 720.0),
+        )
+        x1, y1, x2, y2 = [int(value) for value in box]
+        dash = max(10, round(10 * delivery_scale))
+        gap = max(6, round(6 * delivery_scale))
+        line_thickness = max(2, round(2 * delivery_scale))
+        for start in range(x1, x2 + 1, dash + gap):
+            cv2.line(
+                frame,
+                (start, y1),
+                (min(start + dash, x2), y1),
+                amber,
+                line_thickness,
+            )
+            cv2.line(
+                frame,
+                (start, y2),
+                (min(start + dash, x2), y2),
+                amber,
+                line_thickness,
+            )
+        for start in range(y1, y2 + 1, dash + gap):
+            cv2.line(
+                frame,
+                (x1, start),
+                (x1, min(start + dash, y2)),
+                amber,
+                line_thickness,
+            )
+            cv2.line(
+                frame,
+                (x2, start),
+                (x2, min(start + dash, y2)),
+                amber,
+                line_thickness,
+            )
+
+        label = f"#{track_id} {class_name} C"
+        font_scale = 0.42 * delivery_scale
+        text_thickness = max(1, round(0.8 * delivery_scale))
+        padding = max(3, round(2 * delivery_scale))
+        label_gap = max(3, round(3 * delivery_scale))
+        (text_width, text_height), baseline = cv2.getTextSize(
+            label,
+            cv2.FONT_HERSHEY_SIMPLEX,
+            font_scale,
+            text_thickness,
+        )
+        label_height = text_height + baseline + padding * 2
+        if y1 >= label_height + label_gap:
+            label_top = y1 - label_gap - label_height
+        else:
+            label_top = min(max(y2 + label_gap, 0), max(height - label_height, 0))
+        label_left = max(0, min(x1, max(width - 1, 0)))
+        label_right = min(label_left + text_width + padding * 2, max(width - 1, 0))
+        label_bottom = min(label_top + label_height, max(height - 1, 0))
+        overlay = frame.copy()
+        cv2.rectangle(
+            overlay,
+            (label_left, label_top),
+            (label_right, label_bottom),
+            (18, 18, 18),
+            -1,
+        )
+        cv2.addWeighted(overlay, 0.82, frame, 0.18, 0, frame)
+        cv2.rectangle(
+            frame,
+            (label_left, label_top),
+            (label_right, label_bottom),
+            amber,
+            max(1, round(delivery_scale)),
+        )
+        text_y = min(
+            label_top + padding + text_height,
+            max(label_bottom - baseline, 0),
+        )
+        cv2.putText(
+            frame,
+            label,
+            (label_left + padding, text_y),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            font_scale,
+            amber,
+            text_thickness,
+            cv2.LINE_AA,
+        )
+        return frame
+
+    @staticmethod
+    def _draw_candidate_legend(frame):
+        """Explain the amber candidate style once without crowding every target."""
+        amber = ShowNode.CANDIDATE_COLOR_BGR
+        height, width = frame.shape[:2]
+        delivery_scale = max(
+            1.0,
+            min(width / 1280.0, height / 720.0),
+        )
+        label = "AMBER DASHED = CANDIDATE / NO STATS-TCC"
+        font_scale = 0.42 * delivery_scale
+        text_thickness = max(1, round(0.8 * delivery_scale))
+        padding = max(4, round(3 * delivery_scale))
+        margin = max(8, round(8 * delivery_scale))
+        (text_width, text_height), baseline = cv2.getTextSize(
+            label,
+            cv2.FONT_HERSHEY_SIMPLEX,
+            font_scale,
+            text_thickness,
+        )
+        panel_width = min(text_width + padding * 2, max(width - margin * 2, 1))
+        panel_height = min(
+            text_height + baseline + padding * 2,
+            max(height - margin * 2, 1),
+        )
+        left = max(width - margin - panel_width, 0)
+        top = min(margin, max(height - panel_height, 0))
+        right = min(left + panel_width, max(width - 1, 0))
+        bottom = min(top + panel_height, max(height - 1, 0))
+        cv2.rectangle(frame, (left, top), (right, bottom), amber, -1)
+        cv2.putText(
+            frame,
+            label,
+            (left + padding, min(top + padding + text_height, bottom - baseline)),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            font_scale,
+            (20, 20, 20),
+            text_thickness,
+            cv2.LINE_AA,
+        )
+        return frame
+
+    @classmethod
+    def _draw_candidate_trace(cls, frame, candidate):
+        """Draw a bounded preview-only trajectory without creating business state."""
+        if not isinstance(candidate, dict):
+            return frame
+
+        raw_points = (
+            candidate.get("trajectory_display_px")
+            or candidate.get("trajectory_px")
+        )
+        if not isinstance(raw_points, (list, tuple)):
+            return frame
+
+        height, width = frame.shape[:2]
+        delivery_scale = max(
+            1.0,
+            min(width / 1280.0, height / 720.0),
+        )
+        points = cls._prepare_trace_points(
+            raw_points,
+            frame.shape,
+            max_points=cls.CANDIDATE_TRACE_MAX_POINTS,
+        )
+        for start, end in zip(points, points[1:]):
+            cls._draw_dashed_line(
+                frame,
+                start,
+                end,
+                cls.CANDIDATE_COLOR_BGR,
+                thickness=max(2, round(2 * delivery_scale)),
+                dash_length=max(8, round(8 * delivery_scale)),
+                gap_length=max(6, round(6 * delivery_scale)),
+            )
+        return frame
+
+    @staticmethod
+    def _prepare_trace_points(raw_points, frame_shape, *, max_points=30):
+        """Validate and display-simplify a current-frame pixel trail.
+
+        The simplification is rendering-only. It suppresses sub-pixel bbox jitter
+        but never writes back into image/world trajectory facts.
+        """
+        if not isinstance(raw_points, (list, tuple)):
+            return []
+        height, width = frame_shape[:2]
+        diagonal = float(np.hypot(width, height))
+        max_jump = max(60.0, diagonal * 0.04)
+        max_total_length = max(80.0, diagonal * 0.08)
+        min_movement = max(4.0, diagonal * 0.001)
+        newest_to_oldest = []
+        total_length = 0.0
+        for raw_point in reversed(raw_points[-max(max_points, 1):]):
+            try:
+                coordinates = np.asarray(raw_point, dtype=np.float64).reshape(-1)
+            except (TypeError, ValueError):
+                if newest_to_oldest:
+                    break
+                continue
+            if coordinates.size != 2 or not np.isfinite(coordinates).all():
+                if newest_to_oldest:
+                    break
+                continue
+            point = (int(round(coordinates[0])), int(round(coordinates[1])))
+            if not (0 <= point[0] < width and 0 <= point[1] < height):
+                if newest_to_oldest:
+                    break
+                continue
+            if newest_to_oldest:
+                distance = float(np.hypot(
+                    point[0] - newest_to_oldest[-1][0],
+                    point[1] - newest_to_oldest[-1][1],
+                ))
+                if distance < min_movement:
+                    continue
+                if distance > max_jump or total_length + distance > max_total_length:
+                    break
+                total_length += distance
+            newest_to_oldest.append(point)
+        return list(reversed(newest_to_oldest))
+
+    @classmethod
+    def _draw_formal_trace(cls, frame, raw_points, color):
+        points = cls._prepare_trace_points(
+            raw_points,
+            frame.shape,
+            max_points=cls.CANDIDATE_TRACE_MAX_POINTS,
+        )
+        if len(points) >= 2:
+            height, width = frame.shape[:2]
+            delivery_scale = max(1.0, min(width / 1280.0, height / 720.0))
+            cv2.polylines(
+                frame,
+                [np.asarray(points, dtype=np.int32)],
+                False,
+                color,
+                max(2, round(3 * delivery_scale)),
+                cv2.LINE_AA,
+            )
+        return frame
+
+    @classmethod
+    def _class_color_bgr(cls, class_name):
+        normalized = cls._normalize_class_name(class_name)
+        index = cls.CLASS_COLOR_KEYS.index(normalized)
+        value = cls.CLASS_COLOR_HEX[index].lstrip("#")
+        red, green, blue = (
+            int(value[0:2], 16),
+            int(value[2:4], 16),
+            int(value[4:6], 16),
+        )
+        return blue, green, red
+
+    def _formal_trace_color(self, class_name, track_id, frame_element):
+        """Match explicit traces to the configured box/label color policy."""
+        if self.show_class_different_colors:
+            return self._class_color_bgr(class_name)
+        if self.show_track_id_different_colors:
+            return sv.ColorPalette.DEFAULT.by_idx(int(track_id)).as_bgr()
+        buffer_tracks = (
+            getattr(frame_element, "buffer_tracks", None) or {}
+            if frame_element is not None
+            else {}
+        )
+        track = buffer_tracks.get(int(track_id))
+        road_id = getattr(track, "start_road", None) if track is not None else None
+        palette_index = self.road_id_to_palette_idx.get(int(road_id), 0) if road_id is not None else 0
+        return self.road_palette.by_idx(palette_index).as_bgr()
+
     def _class_color_indices(self, cls_names):
         """Map class labels to stable palette indices."""
         unknown_idx = self.class_color_idx["unknown"]
@@ -249,9 +517,12 @@ class ShowNode:
             n = len(detections)
             color_idx = np.zeros(n, dtype=int)
             buffer_tracks = frame_element.buffer_tracks or {}
+            formal_map = (
+                getattr(frame_element, "formal_track_id_by_association", None) or {}
+            )
             for i in range(n):
                 tid = int(detections.tracker_id[i])
-                track = buffer_tracks.get(tid)
+                track = buffer_tracks.get(int(formal_map.get(tid, tid)))
                 if track and track.start_road is not None:
                     road_id = int(track.start_road)
                     color_idx[i] = self.road_id_to_palette_idx.get(road_id, 0)
@@ -261,11 +532,14 @@ class ShowNode:
         """生成每个跟踪目标的标签字符串列表。"""
         labels = []
         buffer_tracks = frame_element.buffer_tracks or {}
+        formal_map = (
+            getattr(frame_element, "formal_track_id_by_association", None) or {}
+        )
         for tid, cls_name in zip(frame_element.id_list, frame_element.tracked_cls):
             label = f"#{tid} {cls_name}"
             # 叠加车速标签（km/h）
             if self.show_speed_labels and buffer_tracks:
-                track = buffer_tracks.get(int(tid))
+                track = buffer_tracks.get(int(formal_map.get(int(tid), int(tid))))
                 if track and track.avg_speed_kmh > 0:
                     label += f" {track.avg_speed_kmh:.0f}km/h"
             labels.append(label)
@@ -416,14 +690,67 @@ class ShowNode:
 
         valid_idx = []
         valid_xyxy = []
+        candidate_boxes = []
         buffer_tracks = frame_element.buffer_tracks or {}
+        candidate_trajectories = {}
+        for candidate in getattr(frame_element, "candidate_trajectories", None) or []:
+            if not isinstance(candidate, dict):
+                continue
+            try:
+                candidate_trajectories[int(candidate.get("track_id"))] = candidate
+            except (TypeError, ValueError):
+                continue
+        association_trajectories = {}
+        for trajectory in getattr(frame_element, "association_trajectories", None) or []:
+            if not isinstance(trajectory, dict):
+                continue
+            try:
+                association_id = int(
+                    trajectory.get("association_id", trajectory.get("track_id"))
+                )
+                association_trajectories[association_id] = trajectory
+            except (TypeError, ValueError):
+                continue
+        formal_map = (
+            getattr(frame_element, "formal_track_id_by_association", None) or {}
+        )
+        formal_track_ids_raw = getattr(frame_element, "formal_track_ids", None)
+        formal_track_ids = (
+            {int(track_id) for track_id in formal_track_ids_raw}
+            if formal_track_ids_raw is not None
+            else None
+        )
         for i, box in enumerate(frame_element.tracked_xyxy):
             normalized = self._normalize_visible_box(box, frame.shape)
             if normalized is None:
                 continue
 
             track_id = frame_element.id_list[i] if frame_element.id_list and i < len(frame_element.id_list) else None
-            track = buffer_tracks.get(int(track_id)) if track_id is not None else None
+            if (
+                formal_track_ids is not None
+                and track_id is not None
+                and int(track_id) not in formal_track_ids
+            ):
+                class_name = (
+                    frame_element.tracked_cls[i]
+                    if frame_element.tracked_cls and i < len(frame_element.tracked_cls)
+                    else "unknown"
+                )
+                candidate_boxes.append(
+                    (
+                        normalized,
+                        track_id,
+                        class_name,
+                        candidate_trajectories.get(int(track_id)),
+                    )
+                )
+                continue
+            formal_id = (
+                int(formal_map.get(int(track_id), int(track_id)))
+                if track_id is not None
+                else None
+            )
+            track = buffer_tracks.get(formal_id) if formal_id is not None else None
             is_assigned_to_road = track is not None and track.start_road is not None
             if not is_assigned_to_road and not self._box_center_in_roads(normalized, frame_element.roads_info):
                 continue
@@ -432,6 +759,12 @@ class ShowNode:
             valid_xyxy.append(normalized)
 
         if not valid_idx:
+            for box, track_id, class_name, candidate in candidate_boxes:
+                if self.show_trace_trails:
+                    self._draw_candidate_trace(frame, candidate)
+                self._draw_candidate_box(frame, box, track_id, class_name)
+            if candidate_boxes:
+                self._draw_candidate_legend(frame)
             return frame
 
         valid_cls = [frame_element.tracked_cls[i] for i in valid_idx] if frame_element.tracked_cls else None
@@ -464,14 +797,15 @@ class ShowNode:
         labels = []
         for i in valid_idx:
             tid = frame_element.id_list[i]
+            formal_tid = int(formal_map.get(int(tid), int(tid)))
             # 有冲突时隐藏非冲突目标的标签
-            if conflict_ids and str(tid) not in conflict_ids:
+            if conflict_ids and str(formal_tid) not in conflict_ids:
                 labels.append("")
                 continue
             cls_name = frame_element.tracked_cls[i] if frame_element.tracked_cls else ""
             label = f"#{tid} {cls_name}"
             if self.show_speed_labels and buffer_tracks:
-                track = buffer_tracks.get(int(tid))
+                track = buffer_tracks.get(formal_tid)
                 if track and track.avg_speed_kmh > 0:
                     label += f" {track.avg_speed_kmh:.0f}km/h"
             labels.append(label)
@@ -484,8 +818,6 @@ class ShowNode:
         self.sv_box_annotator.color_lookup = color_lookup
         self.sv_label_annotator.color = palette
         self.sv_label_annotator.color_lookup = color_lookup
-        self.sv_trace_annotator.color = palette
-        self.sv_trace_annotator.color_lookup = color_lookup
 
         # 圆角边框
         frame = self.sv_box_annotator.annotate(scene=frame, detections=detections)
@@ -498,7 +830,34 @@ class ShowNode:
         cv2.addWeighted(overlay, 0.7, frame, 0.3, 0, frame)
         # 轨迹尾迹
         if self.show_trace_trails:
-            frame = self.sv_trace_annotator.annotate(scene=frame, detections=detections)
+            for index, track_id in zip(valid_idx, valid_ids or []):
+                formal_id = int(formal_map.get(int(track_id), int(track_id)))
+                track = buffer_tracks.get(formal_id)
+                if track is None:
+                    continue
+                association_trajectory = association_trajectories.get(int(track_id))
+                display_points = (
+                    association_trajectory.get("trajectory_display_px")
+                    if association_trajectory
+                    else None
+                ) or (getattr(track, "ground_contact_points_px", None) or [])
+                class_name = (
+                    frame_element.tracked_cls[index]
+                    if frame_element.tracked_cls
+                    else "unknown"
+                )
+                self._draw_formal_trace(
+                    frame,
+                    display_points,
+                    self._formal_trace_color(class_name, track_id, frame_element),
+                )
+
+        for box, track_id, class_name, candidate in candidate_boxes:
+            if self.show_trace_trails:
+                self._draw_candidate_trace(frame, candidate)
+            self._draw_candidate_box(frame, box, track_id, class_name)
+        if candidate_boxes:
+            self._draw_candidate_legend(frame)
 
         return frame
 

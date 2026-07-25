@@ -1,4 +1,5 @@
 """Traffic Platform Monolith — unified configuration."""
+import time
 from functools import lru_cache
 from typing import Literal
 
@@ -73,6 +74,10 @@ class Settings(BaseSettings):
     pipeline_max_active: int = 4
     pipeline_device: str | None = None
     pipeline_imgsz: int | None = None
+    # Dynamic detector camera IDs scope canonical Kafka topics. Seed each
+    # Platform runtime uniquely so a recovered Mission cannot publish behind
+    # an older replay backlog on a reused uav_statistics_10 topic.
+    pipeline_camera_id_start: int = int(time.time())
     mission_pipeline_missing_grace_sec: float = 15.0
     video_max_active_streams: int = 4
     uav_rtsp_allowed_hosts: list[str] = ["localhost", "127.0.0.1"]

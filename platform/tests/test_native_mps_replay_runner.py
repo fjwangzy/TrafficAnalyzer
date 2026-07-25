@@ -1,14 +1,14 @@
-from pathlib import Path
 import os
 import subprocess
 import sys
+from pathlib import Path
 
 from scripts.run_native_mps_replays import (
     PlatformClient,
     hydra_string,
     inference_summary,
-    source_result_passed,
     source_catalog,
+    source_result_passed,
     tcc_diagnostics_summary,
     validate_tcc_events,
 )
@@ -155,7 +155,8 @@ def test_batch_runner_disables_repeated_hover_jpeg_but_keeps_interactive_default
     producer = (ROOT / "nodes/KafkaProducerNode.py").read_text(encoding="utf-8")
     assert "hover_annotation_snapshot_enabled: true" in config
     assert '"kafka_producer_node.hover_annotation_snapshot_enabled=false"' in runner
-    assert 'data["is_hovering"] and self._hover_annotation_snapshot_enabled' in producer
+    assert "self._needs_hover_annotation_snapshot(frame_element)" in producer
+    assert 'return "complete" not in {frame_status, pipeline_status}' in producer
 
 
 def test_native_runner_requires_immutable_lane_verified_runtime_bundle():
@@ -179,6 +180,7 @@ def test_native_runner_registers_browser_reachable_detector_stream_address():
         camera_id=5701,
         video_port=15701,
         runtime_bundle={"map_version_id": "CMV-1", "road_data_version": "20260501"},
+        tracking_profile="hover_only_legacy",
     )
 
     assert result == {"pipeline_id": "pipe-native"}
@@ -186,6 +188,7 @@ def test_native_runner_registers_browser_reachable_detector_stream_address():
     assert captured["path"] == "/api/v1/pipelines/register"
     assert captured["body"]["video_stream_url"] == "http://127.0.0.1:15701/video"
     assert captured["body"]["map_version_id"] == "CMV-1"
+    assert captured["body"]["tracking_profile"] == "hover_only_legacy"
 
 
 def test_stale_cleanup_only_stops_runner_reserved_registrations():

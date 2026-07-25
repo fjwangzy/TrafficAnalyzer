@@ -1,9 +1,14 @@
 {
-  "schema_version": "uav.adr019-local-retirement/v1",
-  "generated_at": "2026-07-17T06:36:18.069099Z",
+  "schema_version": "uav.adr019-local-retirement/v2",
+  "generated_at": "2026-07-25T01:51:47.097360Z",
   "scope": "local_development_only",
+  "runtime_topology": "native_macos_platform_with_docker_infra",
   "containers": {
     "running": [
+      "traffic_analyzer-kafka-1",
+      "traffic_analyzer-road9-1"
+    ],
+    "all": [
       "traffic_analyzer-console2-1",
       "traffic_analyzer-kafka-1",
       "traffic_analyzer-nginx-1",
@@ -11,19 +16,7 @@
       "traffic_analyzer-road9-1"
     ],
     "states": {
-      "traffic_analyzer-console2-1": {
-        "status": "running",
-        "health": "none"
-      },
       "traffic_analyzer-kafka-1": {
-        "status": "running",
-        "health": "healthy"
-      },
-      "traffic_analyzer-nginx-1": {
-        "status": "running",
-        "health": "none"
-      },
-      "traffic_analyzer-platform-1": {
         "status": "running",
         "health": "healthy"
       },
@@ -33,9 +26,21 @@
       }
     }
   },
+  "native_platform": {
+    "status": "ready",
+    "services": {
+      "database": "healthy",
+      "kafka": "healthy",
+      "timescaledb": "healthy",
+      "pipeline_manager": "healthy"
+    },
+    "pipelines_active": 0,
+    "single_instance": true,
+    "mps_available": true
+  },
   "database": {
     "name": "road9",
-    "alembic_revision": "20260717_0013",
+    "alembic_revision": "20260723_0019",
     "timescaledb_version": "2.28.2",
     "hypertables": 5,
     "hypertable_names": [
@@ -45,15 +50,17 @@
       "uav_track_points",
       "uav_traffic_metrics"
     ],
-    "uav_tables": 42,
+    "uav_tables": 49,
     "uav_table_names": [
       "uav_ai_events",
       "uav_alembic_version",
       "uav_alerts",
       "uav_audit_logs",
+      "uav_calibration_review_records",
       "uav_capture_batches",
       "uav_capture_frames",
       "uav_capture_ingestion_jobs",
+      "uav_channelized_map_versions",
       "uav_conflict_events",
       "uav_conflict_reviews",
       "uav_dead_letters",
@@ -69,6 +76,8 @@
       "uav_evidence_items",
       "uav_evidence_packages",
       "uav_flight_plans",
+      "uav_flight_segments",
+      "uav_intersection_projects",
       "uav_lane_annotation_tasks",
       "uav_message_dead_letters",
       "uav_message_inbox",
@@ -77,6 +86,7 @@
       "uav_road_context_snapshots",
       "uav_rule_versions",
       "uav_scene_annotations",
+      "uav_source_intersection_bindings",
       "uav_survey_measurements",
       "uav_survey_reports",
       "uav_survey_tasks",
@@ -87,17 +97,32 @@
       "uav_track_points",
       "uav_traffic_metrics",
       "uav_users",
+      "uav_video_ingestion_jobs",
       "uav_video_sources",
-      "uav_visual_lane_bindings"
+      "uav_visual_lane_bindings",
+      "uav_visual_registrations"
     ],
     "admin_rows": 1,
-    "business_rows": 106871,
+    "user_rows": 3,
+    "business_rows": 1308743,
     "legacy_database_count": 0,
     "migration_isolation_tables": []
   },
   "kafka": {
     "topics": [
       "__consumer_offsets",
+      "uav_conflicts_10",
+      "uav_conflicts_11",
+      "uav_conflicts_12",
+      "uav_conflicts_13",
+      "uav_conflicts_5701",
+      "uav_conflicts_5702",
+      "uav_conflicts_5703",
+      "uav_conflicts_5704",
+      "uav_conflicts_5705",
+      "uav_conflicts_5706",
+      "uav_conflicts_5707",
+      "uav_conflicts_5708",
       "uav_statistics_10",
       "uav_statistics_11",
       "uav_statistics_12",
@@ -105,6 +130,14 @@
       "uav_statistics_14",
       "uav_statistics_15",
       "uav_statistics_16",
+      "uav_statistics_5701",
+      "uav_statistics_5702",
+      "uav_statistics_5703",
+      "uav_statistics_5704",
+      "uav_statistics_5705",
+      "uav_statistics_5706",
+      "uav_statistics_5707",
+      "uav_statistics_5708",
       "uav_statistics_97",
       "uav_statistics_98",
       "uav_statistics_local_probe",
@@ -115,6 +148,14 @@
       "uav_telemetry_14",
       "uav_telemetry_15",
       "uav_telemetry_16",
+      "uav_telemetry_5701",
+      "uav_telemetry_5702",
+      "uav_telemetry_5703",
+      "uav_telemetry_5704",
+      "uav_telemetry_5705",
+      "uav_telemetry_5706",
+      "uav_telemetry_5707",
+      "uav_telemetry_5708",
       "uav_telemetry_97",
       "uav_track_complete_10",
       "uav_track_complete_11",
@@ -123,6 +164,14 @@
       "uav_track_complete_14",
       "uav_track_complete_15",
       "uav_track_complete_16",
+      "uav_track_complete_5701",
+      "uav_track_complete_5702",
+      "uav_track_complete_5703",
+      "uav_track_complete_5704",
+      "uav_track_complete_5705",
+      "uav_track_complete_5706",
+      "uav_track_complete_5707",
+      "uav_track_complete_5708",
       "uav_track_complete_97",
       "uav_track_complete_98"
     ]
@@ -139,7 +188,8 @@
     "bind_paths": [
       "/Users/yaoyao/ai/TrafficAnalyzer/services/influxdb_data"
     ],
-    "policy": "保留 7 天且不再挂载；到期后仅允许人工显式执行，不迁移、不备份、不校验旧内容。"
+    "policy": "保留 7 天且不再挂载；到期后仅允许人工显式执行，不迁移、不备份、不校验旧内容。",
+    "at_least_seven_days": true
   },
   "storage": {
     "old_volumes": [
@@ -149,8 +199,9 @@
     ],
     "old_bind": "/Users/yaoyao/ai/TrafficAnalyzer/services/influxdb_data",
     "mounted_sources": [
-      "/Users/yaoyao/ai/TrafficAnalyzer",
       "/Users/yaoyao/ai/TrafficAnalyzer/services/nginx/nginx.conf",
+      "/Users/yaoyao/ai/TrafficAnalyzer/test_videos",
+      "/Users/yaoyao/ai/TrafficAnalyzer/weights",
       "4cdcab25955d72b4faa008c35576eed1c548f865a4f98fa06fc939feb81d4d21",
       "e09677c6177604bff0b5ce08e9e605092cb3be1ea4e7445810e5ee73497ac851",
       "traffic_calibration_data",
@@ -160,27 +211,39 @@
       "traffic_pipeline_spool_data",
       "traffic_road9_data",
       "traffic_survey_data"
-    ]
+    ],
+    "stable_volume_mounted": true,
+    "old_storage_retained": true,
+    "old_storage_unmounted": true
+  },
+  "resilience": {
+    "database_outage_recovered": true,
+    "thirty_minute_soak": true,
+    "database_outage_report_generated_at": "2026-07-16T04:43:35.291456Z",
+    "soak_report_generated_at": "2026-07-16T05:21:53.107531Z"
+  },
+  "retirement_isolation": {
+    "old_containers_absent": true
   },
   "checks": {
-    "compose_config": true,
-    "only_canonical_containers_running": true,
-    "expected_containers_healthy": true,
-    "old_containers_absent": true,
+    "only_canonical_infrastructure_running": true,
+    "infrastructure_containers_healthy": true,
+    "docker_application_containers_stopped": true,
+    "native_platform_ready": true,
+    "native_mps_available": true,
     "stable_new_volume_mounted": true,
     "old_storage_retained": true,
     "old_storage_unmounted": true,
     "retention_is_seven_days": true,
     "road9_at_head": true,
     "timescaledb_hypertables": true,
-    "only_seed_admin": true,
+    "canonical_admin_present": true,
     "no_legacy_database_or_isolation_tables": true,
     "canonical_topics_only": true,
-    "platform_ready": true,
-    "nginx_ready": true,
-    "console_auth": true,
     "database_outage_recovered": true,
-    "thirty_minute_soak": true
+    "thirty_minute_soak": true,
+    "compose_config": true,
+    "old_containers_absent": true
   },
   "passed": true,
   "production_acceptance": "blocked_external"

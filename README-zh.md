@@ -7,7 +7,7 @@ TrafficAnalyzer 使用无人机视频、遥测和已发布渠化地图完成车�
 ADR-019 已在本机开发环境完成纯净切换：
 
 - 唯一数据库为 PostgreSQL connection database `road9`，镜像启用 TimescaleDB；
-- 数据库由 Alembic 初始化，当前 head 为 `20260721_0017`；
+- 数据库由 Alembic 初始化，当前 head 为 `20260723_0019`；
 - Kafka 使用 Apache Kafka KRaft；
 - Topic、`msg_type`、WebSocket channel 和自建表统一使用 `uav_` 前缀；
 - 旧观测链路已从代码和 Compose 删除，历史数据不迁移；
@@ -41,6 +41,33 @@ ENU 计算并以 GCJ-02 投放轨迹。当前四路口地图、9 个视频源配
 [`docs/runbook_trajectory_data_reset_and_replay.md`](docs/runbook_trajectory_data_reset_and_replay.md)，
 本轮证据见
 [`docs/test_report_gcj02_two_stage_demo_20260722.md`](docs/test_report_gcj02_two_stage_demo_20260722.md)。
+
+## 巡航跟踪与悬停正拍融合状态
+
+`hover_cruise_v1` 已把同一 Mission 内的进场巡航、悬停正拍和离场巡航接入统一质量链。YOLO
+仍在进程 1；进程 2 先用背景图像运动补偿执行纯图像 ByteTrack，再由
+`PostTrackingWorldProjectionNode` 做逐帧 pixel→ENU/GCJ-02 投影与正式业务分段。H、遥测、ENU 和
+地图覆盖不进入 ByteTrack 关联代价，坐标转换误差只能降级正式业务，不能改变图像 ID。
+悬停关键帧仍是发布 `lane_verified` 地图的唯一来源，巡航帧不能创建或修改地图。
+
+2026-07-25 使用真实 `inter_xqh` 后半程在原生 MPS 完成最终工程复验：悬停正式窗口正常，离场
+越界后仅保留候选检测，进入正式统计或 TCC 的降级轨迹为 0。当前结论是
+`local_engineering_acceptance_passed / production_accuracy_not_claimed`。项目不建设人工轨迹标注、
+AI 预标注或标注复核工作包；IDF1/HOTA、世界位置/速度精度和正式 12m/s 巡航能力在无外部批准
+真值时统一为 `not_evaluated`，不得从观测 ID、IoU 或尾迹观感推导。
+
+2026-07-24 完成检测输出轨迹几何修复：Apple MPS 强制使用安全的非原地 bbox 裁剪，非法框在
+检测边界丢弃并阻断该帧正式研判；正式和候选轨迹同时保留源帧图像接地点、ENU/GCJ-02、时间、
+帧号和质量谱系，ShowNode 只绘制由背景视觉 warp 递推得到的当前帧图像历史。正式轨迹为类别色实线，
+候选轨迹为最多30点的琥珀虚线；显示简化不改写轨迹事实，也不允许候选进入统计、速度、车道或 TCC。
+
+运行、验收、回滚和故障定位见
+[`docs/runbook_hover_cruise_tracking.md`](docs/runbook_hover_cruise_tracking.md)，原始工程证据见
+[`docs/test_report_inter_xqh.md`](docs/test_report_inter_xqh.md) 和
+[`docs/generated/xqh-hover-departure-acceptance.json`](docs/generated/xqh-hover-departure-acceptance.json)。
+当前自动化基线为根测试 `139 passed`、Platform `207 passed / 5 skipped / 10 subtests`、Console2
+`139 passed`、xqh `56 PASS / 0 FAIL / 0 WARN`、全尾段 MPS 工程门禁 `24/24`，ADR-019 strict
+本机审计 `10/10`。
 
 默认入口：
 
@@ -121,12 +148,15 @@ canonical WebSocket channel：`uav_intersection:*`、`uav_alerts`、`uav_alerts:
 python -m pytest platform/tests -q
 python -m pytest test/test_kafka_active_trajectories.py test/test_utils_local.py test/test_byte_tracker_core.py -q
 python test/test_pipeline_inter_xqh.py
+.venv-mps/bin/python scripts/accept_xqh_hover_departure.py --start-offset-sec 840 --departure-offset-sec 902 --stride 4
 cd console2 && npm test && npm run build
 python scripts/audit_adr019_retirement.py --scope local --strict
 git diff --check
 ```
 
 `test/test_pipeline_inter_xqh.py` 的基线为 `56 PASS / 0 FAIL / 0 WARN`。
+
+检测输出中的正式轨迹使用类别色实线和常规速度标签；未通过地理参考门禁的候选轨迹使用琥珀虚线、紧凑的 `#ID class C` 标签，并在右上角统一提示 `CANDIDATE / NO STATS-TCC`。ShowNode 不连接不同相机帧中的原始像素点，而使用当前帧派生坐标；候选框、标签和尾迹按 4K→1280×720 交付比例缩放，保证浏览器/MJPEG 中可读，但候选数据仍不会进入速度、车道、统计、TCC 或事件中心。
 
 ## 旧存储保留
 

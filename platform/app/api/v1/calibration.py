@@ -12,6 +12,8 @@ import numpy as np
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
+from services.SrtTelemetryParser import SrtTelemetryParser
+from services.TelemetryFileReader import TelemetryFileReader
 from shapely.geometry import LineString, Polygon
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -23,6 +25,7 @@ from app.models.mission import (
     CalibrationReviewRecord,
     ChannelizedMapVersion,
     DroneRecord,
+    FlightSegmentRecord,
     IntersectionProject,
     RoadContextSnapshot,
     SourceIntersectionBinding,
@@ -33,12 +36,10 @@ from app.models.mission import (
     VisualRegistration,
 )
 from app.models.survey import SurveyCaptureBatch, SurveyFrame, SurveyTask
+from app.services.intersection_video_discovery import HoverIntersectionDiscovery
 from app.services.survey_geometry import align_homography_to_map_enu
 from app.services.survey_service import SurveyService
-from app.services.intersection_video_discovery import HoverIntersectionDiscovery
 from app.services.ycx_road_import import YcxRoadImporter
-from services.SrtTelemetryParser import SrtTelemetryParser
-from services.TelemetryFileReader import TelemetryFileReader
 
 logger = logging.getLogger(__name__)
 
@@ -98,6 +99,9 @@ class VisualRegistrationPayload(BaseModel):
     homography_pixel_to_enu: list | None = None
     residuals: dict = Field(default_factory=dict)
     orthophoto_bounds_gcj02: list[list[float]] | None = None
+    registration_pose: dict = Field(default_factory=dict)
+    camera_calibration: dict = Field(default_factory=dict)
+    map_coverage_enu_m: dict = Field(default_factory=dict)
 
 
 class PublishChannelizedMapPayload(BaseModel):
@@ -139,6 +143,9 @@ class ImageFitPayload(BaseModel):
     direction_checks_passed: bool = False
     stop_line_checks_passed: bool = False
     reviewed: bool = False
+    registration_pose: dict = Field(default_factory=dict)
+    camera_calibration: dict = Field(default_factory=dict)
+    map_coverage_enu_m: dict = Field(default_factory=dict)
 
 
 class YcxRoadImportPayload(BaseModel):
@@ -931,6 +938,22 @@ async def create_video_ingestion(
         created_by=_actor_id(request),
     )
     db.add(row)
+    if payload.source_profile_id:
+        for segment in analysis.get("flight_segments") or []:
+            db.add(
+                FlightSegmentRecord(
+                    id=f"FSG-{uuid.uuid4().hex[:24]}",
+                    source_profile_id=payload.source_profile_id,
+                    mission_id=None,
+                    start_offset_sec=segment["start_offset_sec"],
+                    end_offset_sec=segment["end_offset_sec"],
+                    phase=segment["phase"],
+                    quality_status=segment["quality_status"],
+                    classifier_version=segment["classifier_version"],
+                    motion_statistics=segment.get("motion_statistics") or {},
+                    map_version_id=None,
+                )
+            )
     await db.commit()
     await db.refresh(row)
     return _ingestion_response(row)
@@ -947,6 +970,41 @@ async def get_video_ingestion(
     if row is None:
         raise HTTPException(status_code=404, detail="video ingestion job not found")
     return _ingestion_response(row)
+
+
+@router.get("/source-profiles/{source_profile_id}/flight-segments")
+async def list_source_flight_segments(
+    source_profile_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    _require_admin(request)
+    rows = (
+        await db.execute(
+            select(FlightSegmentRecord)
+            .where(FlightSegmentRecord.source_profile_id == source_profile_id)
+            .order_by(
+                FlightSegmentRecord.created_at.desc(),
+                FlightSegmentRecord.start_offset_sec,
+            )
+        )
+    ).scalars().all()
+    return [
+        {
+            "id": item.id,
+            "source_profile_id": item.source_profile_id,
+            "mission_id": item.mission_id,
+            "start_offset_sec": item.start_offset_sec,
+            "end_offset_sec": item.end_offset_sec,
+            "phase": item.phase,
+            "quality_status": item.quality_status,
+            "classifier_version": item.classifier_version,
+            "motion_statistics": item.motion_statistics,
+            "map_version_id": item.map_version_id,
+            "created_at": item.created_at,
+        }
+        for item in rows
+    ]
 
 
 @router.post("/video-ingestions/{job_id}/resolve")
@@ -1326,6 +1384,9 @@ async def get_channelized_map(map_version_id: str, db: AsyncSession = Depends(ge
             "source_profile_id": registration.source_profile_id,
             "status": registration.status,
             "residuals": registration.residuals,
+            "registration_pose": registration.registration_pose,
+            "camera_calibration": registration.camera_calibration,
+            "map_coverage_enu_m": registration.map_coverage_enu_m,
             "orthophoto_url": (
                 f"/api/v1/calibration/visual-registrations/{registration.id}/orthophoto"
                 if registration.orthophoto_path else None
@@ -1340,6 +1401,9 @@ async def get_channelized_map(map_version_id: str, db: AsyncSession = Depends(ge
             "source_profile_id": item.source_profile_id,
             "status": item.status,
             "residuals": item.residuals,
+            "registration_pose": item.registration_pose,
+            "camera_calibration": item.camera_calibration,
+            "map_coverage_enu_m": item.map_coverage_enu_m,
         }
         for item in registrations
     ]
@@ -1397,6 +1461,9 @@ async def get_runtime_map_bundle(
             "source_profile_id": registration.source_profile_id,
             "homography_pixel_to_enu": registration.homography_pixel_to_enu,
             "residuals": registration.residuals,
+            "registration_pose": registration.registration_pose,
+            "camera_calibration": registration.camera_calibration,
+            "map_coverage_enu_m": registration.map_coverage_enu_m,
         },
         "visual_registrations": [
             {
@@ -1404,6 +1471,9 @@ async def get_runtime_map_bundle(
                 "source_profile_id": item.source_profile_id,
                 "homography_pixel_to_enu": item.homography_pixel_to_enu,
                 "residuals": item.residuals,
+                "registration_pose": item.registration_pose,
+                "camera_calibration": item.camera_calibration,
+                "map_coverage_enu_m": item.map_coverage_enu_m,
             }
             for item in registrations
         ],
@@ -1692,6 +1762,9 @@ async def fit_channelized_map_from_image(
             control_points=payload.control_points,
             homography_pixel_to_enu=payload.homography_pixel_to_enu,
             residuals=control_residuals,
+            registration_pose=payload.registration_pose,
+            camera_calibration=payload.camera_calibration,
+            map_coverage_enu_m=payload.map_coverage_enu_m,
             status="registered",
             created_by=_actor_id(request),
         )
@@ -1701,6 +1774,9 @@ async def fit_channelized_map_from_image(
         registration.control_points = payload.control_points
         registration.homography_pixel_to_enu = payload.homography_pixel_to_enu
         registration.residuals = control_residuals
+        registration.registration_pose = payload.registration_pose
+        registration.camera_calibration = payload.camera_calibration
+        registration.map_coverage_enu_m = payload.map_coverage_enu_m
         registration.status = "registered"
         registration.created_by = _actor_id(request)
     await db.commit()
@@ -1742,6 +1818,9 @@ async def add_visual_registration(
             **({"orthophoto_bounds_gcj02": payload.orthophoto_bounds_gcj02}
                if payload.orthophoto_bounds_gcj02 else {}),
         },
+        registration_pose=payload.registration_pose,
+        camera_calibration=payload.camera_calibration,
+        map_coverage_enu_m=payload.map_coverage_enu_m,
         status="registered" if payload.homography_pixel_to_enu else "draft",
         created_by=_actor_id(request),
     )

@@ -1,8 +1,9 @@
-import pytest
 from pathlib import Path
 
-from app.services.intersection_video_discovery import HoverIntersectionDiscovery
+import pytest
 from services.SrtTelemetryParser import SrtTelemetryParser
+
+from app.services.intersection_video_discovery import HoverIntersectionDiscovery
 
 
 def _hover_records(longitude=117.022326, latitude=36.702909, start=0, seconds=20):
@@ -64,6 +65,7 @@ def test_no_telemetry_requires_manual_confirmation():
             "gps_coverage": 0.0,
         },
         "hover_segments": [],
+        "flight_segments": [],
         "binding_quality": "manual_unverified",
         "reason_code": "telemetry_unavailable",
     }
@@ -129,6 +131,24 @@ def test_non_nadir_or_moving_segments_are_not_hover_segments():
 
     assert HoverIntersectionDiscovery().discover(non_nadir, [])["reason_code"] == "hover_not_detected"
     assert HoverIntersectionDiscovery().discover(moving, [])["reason_code"] == "hover_not_detected"
+
+
+def test_source_discovery_exposes_shared_flight_phase_segments():
+    records = [
+        {
+            **item,
+            "altitude_agl": 100.0,
+            "gimbal_roll": 0.0,
+            "vertical_speed": 0.0,
+            "zoom_factor": 1.0,
+        }
+        for item in _hover_records(seconds=20)
+    ]
+
+    result = HoverIntersectionDiscovery().discover(records, [])
+
+    assert result["flight_segments"][-1]["phase"] == "hover_verified"
+    assert result["flight_segments"][-1]["classifier_version"] == "flight-motion/v1"
 
 
 def test_two_hover_centres_more_than_250_metres_are_kept_as_separate_segments():

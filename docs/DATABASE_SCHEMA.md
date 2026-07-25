@@ -27,7 +27,7 @@
 ### 1.1 本地开发库实况（2026-07-16 纯净切换）
 
 - 当前连接 database 为 `road9`，应用对象位于 `public`；这只是本地开发现状，不代表生产目标 schema 已冻结。
-- migration head 为 `20260722_0018`，版本表为 `uav_alembic_version`；`0012` 增加检测事实 lineage，`0013` 增加 inbox 可恢复派发，`0014/0015` 增加轨迹研判维度/索引，`0016/0017` 建立 GCJ-02 渠化地图与多视频源视觉配准，`0018` 增加路口项目、视频接入、分段素材绑定和标定检查审计。
+- migration head 为 `20260723_0019`，版本表为 `uav_alembic_version`；`0012` 增加检测事实 lineage，`0013` 增加 inbox 可恢复派发，`0014/0015` 增加轨迹研判维度/索引，`0016/0017` 建立 GCJ-02 渠化地图与多视频源视觉配准，`0018` 增加路口项目、视频接入、分段素材绑定和标定检查审计，`0019` 增加飞行分段、跟踪 profile 与运行质量字段。
 - 正式本机端口 `5432` 由根 Compose 的 TimescaleDB 提供，使用稳定新卷 `traffic_road9_data`；不挂载旧 PostgreSQL、实验 TimescaleDB 或旧目标卷。
 - migration 自动启用 TimescaleDB 并创建 5 张 `uav_*` hypertable。初始化数据仅允许管理员账号，业务、指标、轨迹、任务和告警表为空。
 - `uav_traffic_metrics`、`uav_track_points`、`uav_conflict_events`、`uav_telemetry_metrics`、`uav_system_metrics`、普通表 `uav_track_events` 及长期 `uav_message_inbox` 已实现。永久性输入错误进入独立的 `uav_message_dead_letters`；可变技术复核状态位于普通表 `uav_conflict_reviews`，两者都不更新追加型冲突事实。
@@ -348,7 +348,7 @@ CREATE EXTENSION IF NOT EXISTS timescaledb;
 
 ### 5.2 `uav_track_events` 与 `uav_track_points`
 
-`uav_track_events` 是普通业务表，至少包含 `track_id`、车辆类别、转向行为、起止时间、持续时长、均速/最高速、入口/出口 Link/车道、世界锚点和地图匹配质量。`uav_track_points` 是按 `observed_at` 分区的 hypertable，逐点保存 `track_event_id`、`point_seq`、ENU/像素坐标和点质量；同一轨迹内 `point_seq` 单调递增。批量写入、抽稀和长期保留规则仍为 `【待确认】`。
+`uav_track_events` 是普通业务表，至少包含 `track_id`、车辆类别、转向行为、起止时间、持续时长、均速/最高速、入口/出口 Link/车道、世界锚点和地图匹配质量。`uav_track_points` 是按 `observed_at` 分区的 hypertable，逐点保存 `track_event_id`、`point_seq`、ENU/像素坐标和点质量；同一轨迹内 `point_seq` 单调递增。像素坐标使用车辆地面接触点并与ENU、业务时间按 `point_seq` 同索引；bbox中心、源帧号和完整质量谱系保留在 `uav_track_events.payload` 的可选 `trajectory_bbox_center_px/trajectory_frame_nums/point_quality_lineage` 中，不新增第二套类型化事实表。`trajectory_display_px` 是进程内当前帧渲染缓存，不持久化。批量写入、抽稀和长期保留规则仍为 `【待确认】`。
 
 ### 5.3 `uav_conflict_events`
 
@@ -532,7 +532,8 @@ Alembic `20260721_0014` 为 `uav_track_events` 增加可空列：
 
 Alembic `20260721_0016` 删除新写入链路中的旧坐标列并建立渠化地图实体；后续
 `20260721_0017` 将视觉配准唯一键扩展为 `map_version_id + source_profile_id`，保证同一路口
-多个正拍视频各自固定 pixel→ENU 单应矩阵。当前本机 schema head 为 `20260721_0017`：
+多个正拍视频各自固定 pixel→ENU 单应矩阵。该阶段 schema head 为 `20260721_0017`；当前本机
+head 已前向迁移到 10.5 节的 `20260723_0019`：
 
 - `uav_channelized_map_versions`：路口、YCX/地图版本、`draft → candidate → link_verified → lane_verified → retired` 状态、GCJ-02/ENU 几何、锚点、拓扑和质量结果；
 - `uav_visual_registrations`：原图/正射影像、控制点、pixel→ENU 单应矩阵、残差和复核状态；
@@ -563,3 +564,25 @@ GCJ-02，米制计算字段明确以 `_enu_m` 结尾。`source_lane_id` 与 `mat
 本机 2026-07-21 已执行一次性清理：除一条重建起点审计外，所有历史业务/派生表为零；主数据、
 Alembic 版本和 20 个原始文件 SHA-256 保留。证据见
 `docs/test_report_gcj02_rebuild_local.json`，操作见 `docs/runbook_trajectory_data_reset_and_replay.md`。
+
+### 10.5 巡航跟踪质量事实（2026-07-23）
+
+Alembic revision `20260723_0019` 增加：
+
+- `uav_flight_plans.tracking_profile`：旧记录回填 `hover_only_legacy`，新记录 server default 为 `hover_cruise_v1`。
+- `uav_visual_registrations.registration_pose/camera_calibration/map_coverage_enu_m`：JSON 质量谱系。
+- `uav_pipelines.flight_phase/tracking_quality/formal_analytics_eligible/runtime_quality`：由 canonical `uav_stats` 在 inbox 与指标事实的同一数据库事务内更新。
+- `uav_flight_segments`：`id`、`source_profile_id`、`mission_id`、起止 offset、`phase`、`quality_status`、`classifier_version`、`motion_statistics`、`map_version_id`、`created_at`。
+
+飞行分段是 SourceProfile/Mission 的类型化索引事实；完整轨迹、冲突及逐帧诊断仍保存在既有 payload JSON 和轨迹点表中，不建立第二套轨迹事实。迁移 downgrade 故意拒绝执行，因为质量事实与已生成轨迹不可安全回退；业务回滚通过 `tracking_profile=hover_only_legacy` 完成。
+
+本机开发库已于 2026-07-23 从 `20260722_0018` 前向迁移到 `20260723_0019`。现有 xqh verified registration `VRG-3351d2719cf74f1798ef0fc0` 仅回填可从 selected capture frame `FRM-4221C85DCB81@49.616233s` 和 32 条 `lane_verified` 车道证明的谱系：配准位姿、相机参数哈希与车道覆盖 MultiPolygon；未修改 homography、车道几何或发布状态。`platform/scripts/backfill_cruise_registration_lineage.py` 默认 dry-run，目标 ID 必填，遇到非空且不同的既有谱系时拒绝覆盖；回填后重复 dry-run 为 `changed=false / would_change=false`。浮点比较仅容忍 `1e-12` 级数据库序列化舍入，ID、字符串、结构或超容差数值变化仍拒绝覆盖。
+
+### 10.6 图像关联 ID 与正式业务 ID（2026-07-24）
+
+ADR-023 将 ByteTrack 前移到所有 H/ENU 处理之前，但不增加数据库迁移。`uav_track_events.track_id`
+继续表示正式业务轨迹分段 ID；可选 `association_id`、`tracking_method=motion_compensated_image_v2`、
+`track_family_id` 和 `previous_track_id` 保存在既有 canonical payload JSON，用于解释同一图像身份在
+地理参考质量中断前后的多个正式分段。候选 `association_id` 不写入正式轨迹事实表，也不得作为
+统计、车道或冲突外键。若后续实际查询证明需要按 association family 检索，再以独立 Alembic
+迁移增加类型化列；当前不得为显示缓存复制第二套轨迹表。

@@ -9,9 +9,9 @@ from dataclasses import dataclass
 from typing import Any
 
 import asyncpg
+from utils_local.coordinates import TRANSFORM_VERSION, gcj02_to_enu
 
 from app.core.config import Settings
-from utils_local.coordinates import TRANSFORM_VERSION, gcj02_to_enu
 
 
 @dataclass(frozen=True)

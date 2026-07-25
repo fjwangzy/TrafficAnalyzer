@@ -36,6 +36,14 @@ class LaneAnalysisNode:
         if isinstance(frame_element, VideoEndBreakElement):
             return frame_element
 
+        if (
+            getattr(frame_element, "geo_reference_quality", None) is not None
+            and not getattr(frame_element, "formal_analytics_eligible", False)
+        ):
+            frame_element.lane_stats = None
+            frame_element.queue_count = 0
+            return frame_element
+
         if getattr(frame_element, "runtime_map_bundle", None):
             lane_stats: dict[str, dict] = {}
             for track in (frame_element.buffer_tracks or {}).values():

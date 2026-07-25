@@ -2,6 +2,7 @@ import unittest
 from unittest.mock import patch
 
 from app.kafka.consumer import KafkaConsumerService
+from app.services.alert_engine import AlertEngine
 
 
 class _RecordingWS:
@@ -15,6 +16,11 @@ class _RecordingWS:
 class _FailingLaneAnnotationStore:
     def observe_stats(self, intersection_id, data):
         raise OSError("[Errno 30] Read-only file system: '/calibration'")
+
+
+class _FailingAlertEngine:
+    async def check_stats(self, intersection_id, data):
+        raise TypeError("broken alert rule")
 
 
 class _FailingKafkaConsumer:
@@ -88,6 +94,55 @@ class KafkaConsumerStatsTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(message["type"], "uav_stats")
         self.assertEqual(message["data"]["active_trajectories"][0]["track_id"], 7)
         self.assertEqual(message["data"]["lanes"][0]["vehicle_count"], 2)
+
+    async def test_stats_with_null_optional_metrics_reaches_realtime_channel(self):
+        ws = _RecordingWS()
+        alert_engine = AlertEngine(ws)
+        service = KafkaConsumerService(
+            bootstrap_servers="localhost:9092",
+            group_id="test",
+            topics_pattern="uav_statistics_.*",
+            ws_manager=ws,
+            alert_engine=alert_engine,
+        )
+
+        await service._handle_stats(
+            {
+                "msg_type": "uav_stats",
+                "lanes": [{"lane_id": 1, "queue_length_m": None}],
+                "congestion_index": None,
+                "lane_match_rate": None,
+                "avg_speed_kmh": None,
+                "active_trajectories": [{"track_id": 7, "trajectory_gcj02": [[117.0, 36.7]]}],
+            },
+            "INT_camera_1",
+        )
+
+        self.assertEqual(len(ws.messages), 1)
+        self.assertEqual(ws.messages[0][1]["data"]["active_trajectories"][0]["track_id"], 7)
+        self.assertEqual(alert_engine.get_alerts_list(), [])
+
+    async def test_stats_broadcast_continues_when_alert_evaluation_fails(self):
+        ws = _RecordingWS()
+        service = KafkaConsumerService(
+            bootstrap_servers="localhost:9092",
+            group_id="test",
+            topics_pattern="uav_statistics_.*",
+            ws_manager=ws,
+            alert_engine=_FailingAlertEngine(),
+        )
+
+        with self.assertLogs("app.kafka.consumer", level="WARNING") as logs:
+            await service._handle_stats(
+                {
+                    "msg_type": "uav_stats",
+                    "active_trajectories": [{"track_id": 8, "trajectory_gcj02": [[117.0, 36.7]]}],
+                },
+                "INT_camera_1",
+            )
+
+        self.assertEqual(len(ws.messages), 1)
+        self.assertIn("continuing realtime stats dispatch", " ".join(logs.output))
 
     async def test_conflict_events_are_upserted_by_motor_non_motor_pair(self):
         ws = _RecordingWS()

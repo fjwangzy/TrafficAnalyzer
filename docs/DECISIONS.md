@@ -179,7 +179,7 @@
 
 ## ADR-009: 混合运动补偿（GPS锚定 + 遥测速度积分）
 
-**状态**：已采纳（2026-05-30）
+**状态**：已被 ADR-023 取代用于 `hover_cruise_v1`；仅作为 `hover_only_legacy` 历史回滚依据（2026-05-30）
 
 **背景**：无人机巡飞时（最高12 m/s = 43 km/h），所有空间计算（车速、方向、轨迹、冲突TTC）都被无人机运动污染。
 
@@ -382,6 +382,8 @@
 - ✅ 新增 `show_trace_trails` 配置项
 - ✅ 标签格式增强：`#id class_name speed km/h`
 - ❌ 新增 supervision 运行时依赖（已存在于 requirements.txt）
+
+**2026-07-24 补充**：巡航质量隔离引入 `formal_track_ids` 后，候选目标曾只绘制虚线框而被排除在 `sv.TraceAnnotator` 输入之外，造成检测输出视频中大部分尾迹消失。第一阶段恢复了候选琥珀虚线、紧凑 `#ID class C` 和统一图例，并以生产 `ShowNode.process` 差分形成显示门禁。后续真实数据排查又发现 MPS 非法框和正式/候选坐标基准混用；最终坐标与渲染决策由 ADR-022 取代第一阶段的 camera-warp递推和正式 `sv.TraceAnnotator` 历史方案。候选仍不进入正式业务，地理参考、地图覆盖和关联阈值均未放宽。
 
 **替代方案**：
 - 保持纯 OpenCV — 代码冗长，效果差
@@ -739,3 +741,118 @@ Platform 在容器内启动 YOLO 时只能走 CPU，真实任务常态 `inferenc
   `operator_signoff_required`，不得把自动检查写成人工准确率。
 - 用户可显式降低单次视频回归样本数；报告必须记录选择的 SourceProfile、最小样本数以及未跑
   来源，并继续保留默认 9 源/100 条严格模式。本次 2 条样本仅用于演示链验收。
+
+## ADR-021：位姿感知 ByteTrack 位于逐帧地理参考之后（2026-07-23）
+
+### 状态
+
+已被 ADR-023 取代；本节仅保留 2026-07-23 首版世界关联的历史依据。
+
+### 决策
+
+将 YOLO 与 ByteTrack 从 `DetectionTrackingNodes` 拆开。YOLO 保持在进程 1；ByteTrack 关联迁至进程 2 的 `GroundTrajectoryTrackerNode`，严格位于 `FlightGeoReferenceNode` 之后。关联保留 ByteTrack 的高/低置信度双轮机制，同时使用相机补偿后 IoU、ENU Mahalanobis 距离、类别软约束和真实源时间。跟踪状态以时间制 2 秒丢失窗口管理，0.5 秒以上源时间断裂不续接。
+
+地理参考质量是所有正式交通研判的前置条件。只有 `formal_analytics_eligible=true` 的 `formal_track_ids` 可以进入业务轨迹缓冲；候选 ID 可视化但永不进入统计/TCC。悬停正拍继续独占地图创建与发布权，巡航仅消费不可变 `lane_verified` Runtime Bundle。
+
+### 回滚与后果
+
+`tracking_profile=hover_only_legacy` 恢复旧悬停处理路径，但不回滚数据库迁移、不恢复旧 Topic、不删除质量事实。旧 ByteTrack 路径在生产门禁与稳定观察期完成前保留；之后删除，避免长期双实现。首版不引入神经 ReID；若正式标注集 IDF1 不达门禁，保持发布阻断并单独评审 ReID，不能放宽关联距离掩盖问题。
+
+### 真实尾段验收补充
+
+2026-07-23 使用 `inter_xqh` 的 840s–992.291s 真实 MP4+SRT、stride=4 和原生 MPS 执行工程验收。离场开始时先出现 `unsupported_pose`，没有经过普通 `transition`；这是姿态/速度质量越界优先于模式迟滞的安全结果。验收因此要求“悬停退出质量断点、正式轨迹以 `mode_transition_quality_break` 终止、之后业务泄漏为 0”，而不强制每个素材必须出现 `transition` 标签。
+
+世界关联代价保持不变，但实现从每个 track×detection 都求一次 2×2 逆矩阵，改为每个 track 求逆一次并对 detections 向量化。该优化不改变阈值或匹配语义；标量/向量代价等价性由单元测试保护。真实尾段完整单进程帧 p95 为 383.11ms，工程吞吐门禁通过；无人工真值，ADR 状态仍为“已实施、生产准确率门禁阻断”。
+
+## ADR-022：MPS 检测几何门禁与双坐标轨迹事实（2026-07-24）
+
+### 状态
+
+部分被 ADR-023 取代：MPS 安全检测几何继续有效；世界反投影显示与世界关联已废止。生产跟踪准确率仍受人工真值数据集阻断。
+
+### 背景与决定
+
+真实 xqh 悬停回放出现跨画面长线和局部折返。排查证明这不只是候选尾迹漏画：macOS 15.6、PyTorch 2.2.2 与 MPS 下，Ultralytics 选择的 sliced in-place `clamp_` 路径可静默产生零宽 bbox；同一帧 MPS 原路径有9个零宽框，MPS非原地裁剪与CPU均为0。这与 PyTorch 已记录的 [MPS sliced clamp correctness issue](https://github.com/pytorch/pytorch/issues/147510) 一致；Ultralytics 后续按系统版本恢复原地裁剪的 [PR 21878](https://github.com/ultralytics/ultralytics/pull/21878) 不能覆盖旧 Torch + 新 macOS 组合。
+
+因此检测深模块在 Apple MPS 上固定选择非原地裁剪，并在 YOLO/ByteTrack 边界再次按行校验 bbox、置信度和类别。非法行永不进入关联；出现任一非法行时，剩余合法检测仍可预览，但该帧以 `invalid_detector_geometry` 阻断正式研判。新旧 tracking profile 共用这一边界，回滚不能恢复已知错误裁剪。
+
+轨迹坐标同时保留但职责分离：`trajectory_px` 为源帧车辆接地点，`trajectory_enu_m/trajectory_gcj02` 为使用该帧矩阵得到的世界事实，`trajectory_bbox_center_px` 只保留旧中心锚点；四类坐标与源时间、帧号、质量谱系按同一索引保存。`trajectory_display_px` 是世界历史反投影到当前画面的派生缓存，只允许 ShowNode 使用，Kafka 发布前剔除。正式轨迹不再依赖 supervision 的隐式跨帧中心点缓存。
+
+### 后果与证据
+
+- 显示层可抑制小于交付尺度阈值的往返抖动，但不得改写任何图像或世界事实。
+- `TrajectoryNode` 对长轨迹降采样必须对所有坐标和 lineage 使用同一索引。
+- xqh 840s–EOF 原生MPS复验为24/24工程门禁：109899个检测、非法框0，active/completed/candidate对齐失败0，候选显示/世界残差P95 0.006px、最大0.007px，降级业务泄漏0，自然EOF通过。
+- 对比图与机器报告分别为 `docs/test-screenshots/xqh-hover-trajectory-before-after-880.jpg` 和 `docs/generated/xqh-hover-departure-acceptance.json`。这些证据不等于IDF1/HOTA、位置RMSE或速度MAE生产验收。
+
+## ADR-023：ByteTrack 前置纯图像关联，世界坐标只作 ID 后事实（2026-07-24）
+
+### 状态
+
+已实施并通过单元、真实 xqh 工程回归；生产准确率不在无真值条件下作声明。
+
+### 背景
+
+ADR-021 把 ByteTrack 放在逐帧地理参考之后，并将 ENU Mahalanobis 距离和 H 导出的相机 warp
+写入关联代价。确定性反例证明：保持两帧图像、检测框和视觉 warp 完全相同，只给第二帧 H 增加
+6m 平移，就会改变 ByteTrack 的匹配和 ID。H 来自遥测、相机模型、配准和视觉校正，误差不可避免；
+因此世界坐标适合决定业务结果是否可信，不适合作为图像身份事实。
+
+### 决策
+
+`hover_cruise_v1` 的进程 2 固定为：
+
+```text
+ImageMotionEstimationNode
+  → GroundTrajectoryTrackerNode（纯图像 ByteTrack）
+  → HomographyCalibration/MotionCompensation/FlightGeoReference
+  → PostTrackingWorldProjectionNode（ID 后世界事实与正式业务分段）
+```
+
+- `camera_motion_warp` 只允许来自排除目标检测框后的背景 LK/RANSAC 图像运动；H 导出的
+  `pose_motion_warp` 只用于遥测/视觉一致性诊断。
+- ByteTrack 公共接口不接受 H、ENU、世界位置、世界协方差、地图覆盖或地理参考质量；关联只使用
+  视觉补偿后的 bbox IoU、高低置信两轮、类别软约束和真实源时间。
+- `association_id` 是图像身份，在 H/遥测/地图质量中断时仍可连续用于候选显示；正式 `track_id`
+  是通过世界投影和质量门禁的业务分段身份。质量中断立即结束正式分段，恢复时创建新正式 ID，
+  用 `track_family_id/previous_track_id` 保留可审计关系。
+- `trajectory_px` 保留各源帧接地点；`trajectory_display_px` 只由背景视觉 warp 递推；
+  `trajectory_enu_m/trajectory_gcj02` 在 ID 确定后使用各点所属源帧 H 生成。ShowNode 禁止使用
+  当前 H 重投影历史，世界误差不得反馈修改图像轨迹。
+- `PostTrackingWorldProjectionNode` 独占新版像素→ENU→GCJ-02 转换，并让去畸变后的同一个接地点
+  同时参与地图覆盖判断；`TrackerInfoUpdateNode` 只能消费该事实。`SpeedEstimationNode` 只回归逐帧
+  ENU 历史，世界点不足时不使用当前 H 重投影历史像素；旧回退只保留在 `hover_only_legacy`。
+- 源时间倒退或相邻处理帧超过0.5秒可以重置图像关联；遥测缺失、位姿越界、地图外和 H 抖动只能
+  结束或降级正式业务分段，不能成为图像 ID 重置条件。
+
+### 备选方案比较
+
+1. **继续世界主关联**：在理想 H 下有利于高速相机运动，但把坐标误差直接转化为 ID switch，否决。
+2. **图像主关联 + 弱世界提示**：可在歧义场景辅助，但仍无法保证 H 抖动不改变 ID，暂不采用。
+3. **纯图像主关联 + 世界 shadow 审计**：边界最清晰；当前采用纯图像主关联，世界只做正式门禁和
+   后验诊断。若正式数据集 IDF1 不达标，优先评审外观 ReID 或更强视觉运动模型，不放宽 H/世界权重。
+
+### 证据与限制
+
+- 单元测试固定“仅改变 H 不改变 ID”“H 只改变 ID 后世界点”“地理质量中断保持 association ID、
+  新建正式业务 ID”“ShowNode 完全忽略当前 H”。
+- 真实 xqh 840s–EOF 使用同一视频、SRT、模型和 stride 与世界关联版比较；观测 ID 数和寿命仅是
+  无真值诊断，不能代替 IDF1/HOTA/ID switch。
+- `hover_only_legacy` 回滚仍只恢复旧悬停业务，不恢复 ADR-021 的世界关联，也不回滚数据库迁移或
+  canonical Topic。
+
+## ADR-024：巡航跟踪采用自动化工程验收，不建设人工轨迹标注包（2026-07-25）
+
+### 状态
+
+已决定并实施。
+
+### 决策
+
+本项目不建设人工轨迹标注、AI预标注、标注任务分派或真值复核工作包。xqh和后续巡航视频只进入自动化工程回归，验证检测几何、图像关联代理、双坐标逐点对齐、质量断点、候选业务隔离、性能与自然EOF。IDF1、HOTA、正式ID switch、世界位置RMSE和速度MAE依赖独立真值；没有外部已批准真值时统一记为`not_evaluated`，不得把它们登记为内部交付待办或从观测ID、寿命、IoU、尾迹观感推导。
+
+现有`uav.cruise-eval/v1`只保留为外部真值的可选只读评测入口，不生成或修改任何标注。该决定不改变悬停关键帧上的车道/地图人工复核，也不降低`degraded/unverified`业务泄漏必须为0、轨迹点列必须对齐、MPS吞吐和EOF等工程门禁。
+
+### 后果
+
+工程状态使用`local_engineering_acceptance_passed / production_accuracy_not_claimed`。它表示已验证的检测、候选跟踪、正式质量隔离与悬停流程可以交付，不等于宣称12m/s巡航精度。若未来外部项目提供经批准真值，可另行运行只读评测，但不扩大本项目范围。

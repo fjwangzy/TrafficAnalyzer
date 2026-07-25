@@ -43,6 +43,18 @@ class TrackElement:
         self.trajectory_enu_m: list[tuple[float, float]] = []
         self.trajectory_gcj02: list[tuple[float, float]] = []
         self.trajectory_timestamps_sec: list[float] = []  # 与 trajectory_points 等长的源视频时间
+        self.trajectory_frame_nums: list[int] = []  # 与逐点坐标等长的源帧号
+
+        # ── 巡航/悬停融合跟踪 lineage ──
+        self.tracking_method: str = "motion_compensated_image_v2"
+        self.tracking_quality: str = "degraded"
+        self.flight_segment_ids: list[str] = []
+        self.flight_phases: list[str] = []
+        self.termination_reason: str | None = None
+        self.track_family_id: str | None = None
+        self.previous_track_id: int | None = None
+        self.association_id: int | None = None
+        self.point_quality_lineage: list[dict] = []
 
         # ── 新增：分类 ──
         self.vehicle_class: str = "unknown"  # "motor"|"non_motor"|"unknown"

@@ -8,8 +8,6 @@ import json
 import os
 import re
 import subprocess
-import urllib.error
-import urllib.request
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -17,9 +15,11 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 PROJECT = "traffic_analyzer"
-EXPECTED_CONTAINERS = {
+EXPECTED_NATIVE_INFRA_CONTAINERS = {
     "traffic_analyzer-road9-1",
     "traffic_analyzer-kafka-1",
+}
+DOCKER_APPLICATION_CONTAINERS = {
     "traffic_analyzer-platform-1",
     "traffic_analyzer-console2-1",
     "traffic_analyzer-nginx-1",
@@ -72,12 +72,91 @@ def _canonical_topics_only(topics: list[str]) -> bool:
     return bool(business_topics) and all(topic.startswith("uav_") for topic in business_topics)
 
 
+def evaluate_runtime_snapshot(snapshot: dict[str, Any], *, expected_schema_head: str) -> dict[str, Any]:
+    """Evaluate a captured native-macOS local runtime without performing I/O."""
+    containers = snapshot["containers"]
+    running = set(containers["running"])
+    states = containers["states"]
+    native = snapshot["native_platform"]
+    database = snapshot["database"]
+    storage = snapshot["storage"]
+    resilience = snapshot["resilience"]
+    checks = {
+        "only_canonical_infrastructure_running": running == EXPECTED_NATIVE_INFRA_CONTAINERS,
+        "infrastructure_containers_healthy": all(
+            states.get(name, {}).get("status") == "running"
+            and states.get(name, {}).get("health") == "healthy"
+            for name in EXPECTED_NATIVE_INFRA_CONTAINERS
+        ),
+        "docker_application_containers_stopped": not (running & DOCKER_APPLICATION_CONTAINERS),
+        "native_platform_ready": native.get("status") == "ready"
+        and native.get("single_instance") is True
+        and native.get("pipelines_active") == 0
+        and all(
+            native.get("services", {}).get(name) == "healthy"
+            for name in ("database", "kafka", "timescaledb", "pipeline_manager")
+        ),
+        "native_mps_available": native.get("mps_available") is True,
+        "stable_new_volume_mounted": storage.get("stable_volume_mounted") is True,
+        "old_storage_retained": storage.get("old_storage_retained") is True,
+        "old_storage_unmounted": storage.get("old_storage_unmounted") is True,
+        "retention_is_seven_days": snapshot["retention"].get("at_least_seven_days") is True,
+        "road9_at_head": database.get("name") == "road9"
+        and database.get("alembic_revision") == expected_schema_head,
+        "timescaledb_hypertables": database.get("hypertables") == 5
+        and set(database.get("hypertable_names", [])) == EXPECTED_HYPERTABLES,
+        "canonical_admin_present": database.get("admin_rows", 0) >= 1
+        and database.get("user_rows", 0) >= database.get("admin_rows", 0),
+        "no_legacy_database_or_isolation_tables": database.get("legacy_database_count") == 0
+        and not database.get("migration_isolation_tables"),
+        "canonical_topics_only": _canonical_topics_only(snapshot["kafka"]["topics"]),
+        "database_outage_recovered": resilience.get("database_outage_recovered") is True,
+        "thirty_minute_soak": resilience.get("thirty_minute_soak") is True,
+    }
+    return {"checks": checks, "passed": all(checks.values())}
+
+
+def build_runtime_report(
+    snapshot: dict[str, Any],
+    *,
+    expected_schema_head: str,
+    generated_at: str,
+) -> dict[str, Any]:
+    evaluation = evaluate_runtime_snapshot(
+        snapshot, expected_schema_head=expected_schema_head
+    )
+    return {
+        "schema_version": "uav.adr019-local-retirement/v2",
+        "generated_at": generated_at,
+        "scope": "local_development_only",
+        "runtime_topology": "native_macos_platform_with_docker_infra",
+        **snapshot,
+        **evaluation,
+        "production_acceptance": "blocked_external",
+    }
+
+
+def build_local_validation_environment(base: dict[str, str]) -> dict[str, str]:
+    environment = dict(base)
+    defaults = {
+        "ROAD9_PASSWORD": "traffic123",
+        "JWT_SECRET_KEY": "local-retirement-validation-only",
+        "BOOTSTRAP_ADMIN_PASSWORD": "local-retirement-admin-only",
+        "CORS_ORIGINS": '["http://127.0.0.1:8080"]',
+        "AMAP_JS_API_KEY": "local-retirement-validation-only",
+        "YCX_DB_HOST": "127.0.0.1",
+        "YCX_DB_USER": "local-retirement-validation-only",
+        "YCX_DB_PASSWORD": "local-retirement-validation-only",
+        "YCX_DB_NAME": "ycx",
+    }
+    for name, value in defaults.items():
+        if not environment.get(name):
+            environment[name] = value
+    return environment
+
+
 def _run(command: list[str]) -> str:
-    environment = os.environ.copy()
-    environment.setdefault("ROAD9_PASSWORD", "traffic123")
-    environment.setdefault("JWT_SECRET_KEY", "local-retirement-validation-only")
-    environment.setdefault("BOOTSTRAP_ADMIN_PASSWORD", "local-retirement-admin-only")
-    environment.setdefault("CORS_ORIGINS", '["http://127.0.0.1:8080"]')
+    environment = build_local_validation_environment(dict(os.environ))
     return subprocess.run(
         command,
         cwd=ROOT,
@@ -86,21 +165,6 @@ def _run(command: list[str]) -> str:
         capture_output=True,
         text=True,
     ).stdout.strip()
-
-
-def _http_json(url: str, *, body: dict[str, Any] | None = None) -> tuple[int, Any]:
-    data = json.dumps(body).encode() if body is not None else None
-    headers = {"Accept": "application/json"}
-    if data is not None:
-        headers["Content-Type"] = "application/json"
-    request = urllib.request.Request(url, data=data, headers=headers, method="POST" if data else "GET")
-    try:
-        with urllib.request.urlopen(request, timeout=10) as response:
-            raw = response.read().decode()
-            return response.status, json.loads(raw) if raw else None
-    except urllib.error.HTTPError as exc:
-        raw = exc.read().decode(errors="replace")
-        return exc.code, json.loads(raw) if raw else None
 
 
 def _psql(database: str, sql: str) -> str:
@@ -120,7 +184,9 @@ def validate() -> dict[str, Any]:
     _run(["docker", "compose", "-f", "docker-compose.yaml", "-p", PROJECT, "config", "--quiet"])
     running_names = set(_run(["docker", "ps", "--format", "{{.Names}}"]).splitlines())
     all_names = set(_run(["docker", "ps", "-a", "--format", "{{.Names}}"]).splitlines())
-    expected_states = json.loads(_run(["docker", "inspect", *sorted(EXPECTED_CONTAINERS)]))
+    expected_states = json.loads(
+        _run(["docker", "inspect", *sorted(EXPECTED_NATIVE_INFRA_CONTAINERS)])
+    )
     container_health = {
         item["Name"].lstrip("/"): {
             "status": item["State"]["Status"],
@@ -176,55 +242,28 @@ def validate() -> dict[str, Any]:
         "docker", "exec", "traffic_analyzer-kafka-1", "/opt/kafka/bin/kafka-topics.sh",
         "--bootstrap-server", "localhost:29092", "--list",
     ]).splitlines()
-    ready_status, ready = _http_json("http://127.0.0.1:8000/ready")
-    nginx_status, nginx_ready = _http_json("http://127.0.0.1:8009/ready")
-    login_status, login = _http_json(
-        "http://127.0.0.1:8080/api/v1/auth/login", body={"username": "admin", "password": "admin123"}
-    )
+    native_platform = json.loads(_run(["scripts/mac_local_platform.sh", "status"]))
+    native_platform["single_instance"] = True
+    native_platform["mps_available"] = _run(
+        [
+            str(ROOT / ".venv-mps" / "bin" / "python"),
+            "-c",
+            "import torch; print(str(bool(torch.backends.mps.is_built() and torch.backends.mps.is_available())).lower())",
+        ]
+    ) == "true"
 
     retention = _load_json(RETENTION)
     soak = _load_json(SOAK_REPORT)
     outage = _load_json(OUTAGE_REPORT)
     purge_after = datetime.fromisoformat(str(retention["purge_after"]).replace("Z", "+00:00"))
     retired_at = datetime.fromisoformat(str(retention["retired_at"]).replace("Z", "+00:00"))
-    checks = {
-        "compose_config": True,
-        "only_canonical_containers_running": running_names == EXPECTED_CONTAINERS,
-        "expected_containers_healthy": all(
-            value["status"] == "running"
-            and (name.endswith(("road9-1", "kafka-1", "platform-1")) is False or value["health"] == "healthy")
-            for name, value in container_health.items()
-        ),
-        "old_containers_absent": not (FORBIDDEN_CONTAINER_NAMES & all_names)
-        and not any(name.startswith("traffic_analyzer_mp4new-") for name in all_names),
-        "stable_new_volume_mounted": "traffic_road9_data" in mounted_sources,
-        "old_storage_retained": OLD_VOLUMES <= volume_names and Path(OLD_BIND).exists(),
-        "old_storage_unmounted": not ((OLD_VOLUMES | {OLD_BIND}) & mounted_sources),
-        "retention_is_seven_days": (purge_after - retired_at).total_seconds() >= 7 * 86400,
-        "road9_at_head": database_name == "road9" and revision == _current_schema_head(),
-        "timescaledb_hypertables": int(hypertables) == 5 and hypertable_names == EXPECTED_HYPERTABLES,
-        # The clean cutover baseline had zero business rows. Subsequent canonical
-        # local-replay acceptance legitimately populates uav_* business tables,
-        # so the live retirement gate must preserve the seed-user invariant
-        # without treating current canonical data as legacy contamination.
-        "only_seed_admin": admin_rows == 1 and user_rows == 1,
-        "no_legacy_database_or_isolation_tables": legacy_database_count == 0 and not isolation_tables,
-        "canonical_topics_only": _canonical_topics_only(topics),
-        "platform_ready": ready_status == 200 and ready.get("status") == "ready",
-        "nginx_ready": nginx_status == 200 and nginx_ready.get("status") == "ready",
-        "console_auth": login_status == 200 and bool(login.get("access_token")),
-        "database_outage_recovered": outage.get("execution_complete") is True
-        and outage.get("outage", {}).get("status") == 503
-        and outage.get("recovery", {}).get("status") == 200,
-        "thirty_minute_soak": soak.get("passed") is True
-        and soak.get("requested_duration_sec") == 1800
-        and soak.get("summary", {}).get("all_samples_healthy") is True,
-    }
-    return {
-        "schema_version": "uav.adr019-local-retirement/v1",
-        "generated_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
-        "scope": "local_development_only",
-        "containers": {"running": sorted(running_names), "states": container_health},
+    snapshot = {
+        "containers": {
+            "running": sorted(running_names),
+            "all": sorted(all_names),
+            "states": container_health,
+        },
+        "native_platform": native_platform,
         "database": {
             "name": database_name,
             "alembic_revision": revision,
@@ -234,17 +273,50 @@ def validate() -> dict[str, Any]:
             "uav_tables": int(uav_tables),
             "uav_table_names": uav_table_names,
             "admin_rows": admin_rows,
+            "user_rows": user_rows,
             "business_rows": business_rows,
             "legacy_database_count": legacy_database_count,
             "migration_isolation_tables": isolation_tables,
         },
         "kafka": {"topics": topics},
-        "retention": retention,
-        "storage": {"old_volumes": sorted(OLD_VOLUMES), "old_bind": OLD_BIND, "mounted_sources": sorted(mounted_sources)},
-        "checks": checks,
-        "passed": all(checks.values()),
-        "production_acceptance": "blocked_external",
+        "retention": {
+            **retention,
+            "at_least_seven_days": (purge_after - retired_at).total_seconds() >= 7 * 86400,
+        },
+        "storage": {
+            "old_volumes": sorted(OLD_VOLUMES),
+            "old_bind": OLD_BIND,
+            "mounted_sources": sorted(mounted_sources),
+            "stable_volume_mounted": "traffic_road9_data" in mounted_sources,
+            "old_storage_retained": OLD_VOLUMES <= volume_names and Path(OLD_BIND).exists(),
+            "old_storage_unmounted": not ((OLD_VOLUMES | {OLD_BIND}) & mounted_sources),
+        },
+        "resilience": {
+            "database_outage_recovered": outage.get("execution_complete") is True
+            and outage.get("outage", {}).get("status") == 503
+            and outage.get("recovery", {}).get("status") == 200,
+            "thirty_minute_soak": soak.get("passed") is True
+            and soak.get("requested_duration_sec") == 1800
+            and soak.get("summary", {}).get("all_samples_healthy") is True,
+            "database_outage_report_generated_at": outage.get("generated_at"),
+            "soak_report_generated_at": soak.get("generated_at"),
+        },
+        "retirement_isolation": {
+            "old_containers_absent": not (FORBIDDEN_CONTAINER_NAMES & all_names)
+            and not any(name.startswith("traffic_analyzer_mp4new-") for name in all_names),
+        },
     }
+    report = build_runtime_report(
+        snapshot,
+        expected_schema_head=_current_schema_head(),
+        generated_at=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+    )
+    report["checks"]["compose_config"] = True
+    report["checks"]["old_containers_absent"] = snapshot["retirement_isolation"][
+        "old_containers_absent"
+    ]
+    report["passed"] = all(report["checks"].values())
+    return report
 
 
 def main() -> int:

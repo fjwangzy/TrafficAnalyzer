@@ -4,11 +4,12 @@
 main_stream_optimized_v2.py 的特性：
 
     进程 1 (proc_frame_reader_and_detection)
-        VideoReader → DetectionTrackingNodes (YOLO)
+        VideoReader → DetectionNode (YOLO only)
         产出: 带检测结果的 FrameElement
 
     进程 2 (proc_tracker_update_and_calc)
-        Homography → MotionCompensation → TrackerInfoUpdate →
+        Homography → MotionCompensation → FlightGeoReference →
+        GroundTrajectoryTracker → TrackerInfoUpdate →
         Speed → DirectionFlow → LaneDetection → LaneAnalysis → Trajectory →
         AutoLaneInference → ConflictDetection → CalcStatistics → KafkaProducer
         产出: 完整分析后的 FrameElement
@@ -35,12 +36,17 @@ from tqdm import tqdm
 from nodes.VideoReader import VideoReader
 from nodes.ShowNode import ShowNode
 from nodes.VideoSaverNode import VideoSaverNode
+from nodes.DetectionNode import DetectionNode
 from nodes.DetectionTrackingNodes import DetectionTrackingNodes
+from nodes.FlightGeoReferenceNode import FlightGeoReferenceNode
+from nodes.GroundTrajectoryTrackerNode import GroundTrajectoryTrackerNode
+from nodes.PostTrackingWorldProjectionNode import PostTrackingWorldProjectionNode
 from nodes.TrackerInfoUpdateNode import TrackerInfoUpdateNode
 from nodes.CalcStatisticsNode import CalcStatisticsNode
 from nodes.FlaskServerVideoNode import VideoServer
 from nodes.KafkaProducerNode import KafkaProducerNode
 from nodes.HomographyCalibrationNode import HomographyCalibrationNode
+from nodes.ImageMotionEstimationNode import ImageMotionEstimationNode
 from nodes.SpeedEstimationNode import SpeedEstimationNode
 from nodes.DirectionFlowNode import DirectionFlowNode
 from nodes.LaneAnalysisNode import LaneAnalysisNode
@@ -158,7 +164,11 @@ def proc_frame_reader_and_detection(
     for _ in tqdm(range(time_sleep_start), desc=sleep_message):
         sleep(1)
     video_reader = VideoReader(config["video_reader"], config.get("telemetry"))
-    detection_node = DetectionTrackingNodes(config)
+    detection_node = (
+        DetectionTrackingNodes(config)
+        if config.get("tracking_profile", "hover_cruise_v1") == "hover_only_legacy"
+        else DetectionNode(config)
+    )
     for frame_element in video_reader.process():
         shm = None
         ts0 = time()
@@ -223,6 +233,13 @@ def proc_tracker_update_and_calc(
     _setup_logging_in_subprocess()
     homography_node = HomographyCalibrationNode(config)
     motion_compensation_node = MotionCompensationNode(config)
+    cruise_tracking = config.get("tracking_profile", "hover_cruise_v1") == "hover_cruise_v1"
+    image_motion_node = ImageMotionEstimationNode(config) if cruise_tracking else None
+    flight_geo_reference_node = FlightGeoReferenceNode(config) if cruise_tracking else None
+    ground_trajectory_tracker_node = GroundTrajectoryTrackerNode(config) if cruise_tracking else None
+    post_tracking_world_projection_node = (
+        PostTrackingWorldProjectionNode(config) if cruise_tracking else None
+    )
     tracker_info_update_node = TrackerInfoUpdateNode(config)
     speed_node = SpeedEstimationNode(config)
     direction_flow_node = DirectionFlowNode(config)
@@ -261,8 +278,17 @@ def proc_tracker_update_and_calc(
             except Exception as e:
                 print(f"[proc_tracker] Failed to attach shm: {e}")
                 frame_element.frame = None
+        if cruise_tracking:
+            frame_element = image_motion_node.process(frame_element)
+            # ByteTrack is a pure image-space association stage.  It deliberately
+            # runs before every H/ENU/map operation so projection error cannot
+            # change identities.
+            frame_element = ground_trajectory_tracker_node.process(frame_element)
         frame_element = homography_node.process(frame_element)
         frame_element = motion_compensation_node.process(frame_element)
+        if cruise_tracking:
+            frame_element = flight_geo_reference_node.process(frame_element)
+            frame_element = post_tracking_world_projection_node.process(frame_element)
         frame_element = tracker_info_update_node.process(frame_element)
         frame_element = speed_node.process(frame_element)
         frame_element = direction_flow_node.process(frame_element)
@@ -273,6 +299,21 @@ def proc_tracker_update_and_calc(
         frame_element = auto_lane_node.process(frame_element)
         frame_element = conflict_node.process(frame_element)
         frame_element = calc_statistics_node.process(frame_element)
+        if isinstance(frame_element, VideoEndBreakElement):
+            projection_flush = (
+                post_tracking_world_projection_node.last_flush_result
+                if post_tracking_world_projection_node is not None
+                else None
+            ) or {}
+            flush_frame = tracker_info_update_node.flush(
+                timestamp=frame_element.timestamp,
+                reason=projection_flush.get("termination_reason", "natural_eof"),
+                terminated_track_ids=projection_flush.get("terminated_track_ids"),
+            )
+            if flush_frame is not None:
+                geojson_export_node.process(flush_frame)
+                if send_info_kafka:
+                    kafka_producer_node.publish_completed_tracks(flush_frame)
         frame_element = geojson_export_node.process(frame_element)
         if send_info_kafka:
             frame_element = kafka_producer_node.process(frame_element)

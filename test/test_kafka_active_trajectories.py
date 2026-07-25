@@ -93,6 +93,7 @@ class KafkaActiveTrajectoriesTest(unittest.TestCase):
         self.assertEqual(sent[1][1]["msg_type"], "uav_track_complete")
         self.assertEqual(sent[1][1]["data"]["track_id"], 101)
         self.assertEqual(sent[2][1]["msg_type"], "uav_conflict")
+        self.assertEqual(sent[2][1]["quality_status"], "unverified")
         self.assertEqual(sent[2][1]["data"]["conflict_scene"], "suspected_right_turn_mv_nmv")
         evidence_images = sent[2][1]["data"]["evidence_images"]
         self.assertEqual(
@@ -127,14 +128,88 @@ class KafkaActiveTrajectoriesTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             KafkaProducerNode._canonical_topics("../10")
 
+    def test_degraded_frame_sets_dynamic_quality_and_does_not_emit_formal_counts(self):
+        frame = np.zeros((20, 20, 3), dtype=np.uint8)
+        frame_element = FrameElement("test", frame, 2.0, 1, {})
+        frame_element.info = {"cars_amount": None, "roads_activity": {}}
+        frame_element.id_list = [101]
+        frame_element.tracked_xyxy = [[2, 2, 8, 8]]
+        frame_element.buffer_tracks = {}
+        frame_element.flight_phase = "unsupported_pose"
+        frame_element.geo_reference_quality = {
+            "status": "degraded",
+            "reasons": ["gimbal_pitch_out_of_range"],
+        }
+        frame_element.tracking_diagnostics = {
+            "tracking_quality": "degraded",
+            "shadow_comparison": {"legacy_track_count": 1},
+        }
+        frame_element.formal_analytics_eligible = False
+        frame_element.candidate_trajectories = [{"track_id": 101}]
+
+        producer = self._producer_without_kafka()
+        sent = []
+        producer._enqueue = lambda topic, data, **_kwargs: sent.append((topic, data))
+        producer.process(frame_element)
+
+        message = sent[0][1]
+        self.assertEqual(message["quality_status"], "degraded")
+        self.assertIsNone(message["data"]["cars"])
+        self.assertEqual(message["data"]["active_tracks"], 0)
+        self.assertEqual(message["data"]["candidate_tracks"], 1)
+        self.assertFalse(message["data"]["formal_analytics_eligible"])
+        self.assertNotIn(
+            "shadow_comparison", message["data"]["tracking_diagnostics"]
+        )
+
+    def test_realtime_device_event_time_is_verified(self):
+        frame = FrameElement(
+            "Processing of rtsp://camera/live",
+            np.zeros((20, 20, 3), dtype=np.uint8),
+            2.0,
+            1,
+            {},
+        )
+        frame.source_is_realtime = True
+        frame.telemetry = {"recorded_at": "2026-07-23T03:00:00+00:00"}
+        frame.geo_reference_quality = {"status": "verified"}
+        producer = self._producer_without_kafka()
+
+        message = producer._canonical_envelope("uav_stats", {}, frame)
+
+        self.assertEqual(message["source_time_semantics"], "event_time")
+        self.assertEqual(message["time_quality"], "verified")
+        self.assertEqual(message["quality_status"], "verified")
+
+    def test_offline_recorded_time_remains_reconstructed(self):
+        frame = FrameElement(
+            "Processing of replay.mp4",
+            np.zeros((20, 20, 3), dtype=np.uint8),
+            2.0,
+            1,
+            {},
+        )
+        frame.telemetry = {"recorded_at": "2026-07-23T03:00:00+00:00"}
+        frame.geo_reference_quality = {"status": "verified"}
+        producer = self._producer_without_kafka()
+
+        message = producer._canonical_envelope("uav_conflict", {}, frame)
+
+        self.assertEqual(message["source_time_semantics"], "reconstructed")
+        self.assertEqual(message["time_quality"], "reconstructed")
+        self.assertEqual(message["quality_status"], "verified")
+
     def test_build_active_trajectories_includes_world_points_and_track_metadata(self):
         frame = np.zeros((100, 100, 3), dtype=np.uint8)
         frame_element = FrameElement("test", frame, 3.0, 90, {})
         frame_element.homography_matrix = np.eye(3, dtype=np.float64)
-        frame_element.drone_displacement_m = np.array([100.0, 200.0], dtype=np.float64)
+        # Deliberately wrong current-frame pose: active history must use the ENU
+        # points captured with each source frame, never reproject old pixels here.
+        frame_element.drone_displacement_m = np.array([999.0, 999.0], dtype=np.float64)
         frame_element.anchor_gcj02 = (117.0223, 36.7029)
 
         track = TrackElement(id=7, timestamp_first=1.0)
+        track.association_id = 42
         track.timestamp_last = 3.0
         track.vehicle_class = "motor"
         track.yolo_class_id = 3
@@ -146,6 +221,8 @@ class KafkaActiveTrajectoriesTest(unittest.TestCase):
         track.avg_speed_kmh = 18.4
         track.max_speed_kmh = 27.6
         track.trajectory_points = [(10.0, 20.0), (12.0, 24.0), (14.0, 28.0)]
+        track.ground_contact_points_px = [(10.0, 30.0), (12.0, 34.0), (14.0, 38.0)]
+        track.trajectory_enu_m = [(110.0, 220.0), (112.0, 224.0), (114.0, 228.0)]
         frame_element.buffer_tracks = {7: track}
 
         producer = object.__new__(KafkaProducerNode)
@@ -155,6 +232,7 @@ class KafkaActiveTrajectoriesTest(unittest.TestCase):
         self.assertEqual(len(active), 1)
         self.assertEqual(active[0], {
                 "track_id": 7,
+                "association_id": 42,
                 "vehicle_class": "motor",
                 "yolo_class_id": 3,
                 "yolo_class_name": "car",
@@ -165,7 +243,8 @@ class KafkaActiveTrajectoriesTest(unittest.TestCase):
                 "duration_sec": 2.0,
                 "avg_speed_kmh": 18.4,
                 "max_speed_kmh": 27.6,
-                "trajectory_px": [[10.0, 20.0], [12.0, 24.0], [14.0, 28.0]],
+                "trajectory_px": [[10.0, 30.0], [12.0, 34.0], [14.0, 38.0]],
+                "trajectory_bbox_center_px": [[10.0, 20.0], [12.0, 24.0], [14.0, 28.0]],
                 "trajectory_point_count": 3,
                 "trajectory_tail_start": 0,
                 "is_trajectory_tail": False,
@@ -184,6 +263,107 @@ class KafkaActiveTrajectoriesTest(unittest.TestCase):
             })
         self.assertEqual(len(active[0]["trajectory_gcj02"]), 3)
 
+    def test_stats_carries_candidate_trajectories_only_as_diagnostics(self):
+        frame = np.zeros((20, 20, 3), dtype=np.uint8)
+        frame_element = FrameElement("test", frame, 2.0, 1, {})
+        frame_element.info = {"cars_amount": None, "roads_activity": {}}
+        frame_element.id_list = [44]
+        frame_element.buffer_tracks = {}
+        frame_element.geo_reference_quality = {
+            "status": "degraded",
+            "reasons": ["telemetry_gap"],
+        }
+        frame_element.formal_analytics_eligible = False
+        frame_element.candidate_trajectories = [{
+            "track_id": 44,
+            "tracking_method": "motion_compensated_image_v2",
+            "tracking_quality": "degraded",
+            "quality_reasons": ["telemetry_gap"],
+            "trajectory_px": [[10.0, 20.0], [11.0, 20.0]],
+            "trajectory_display_px": [[9.0, 20.0], [11.0, 20.0]],
+        }]
+
+        producer = self._producer_without_kafka()
+        sent = []
+        producer._enqueue = lambda topic, data, **_kwargs: sent.append((topic, data))
+        producer.process(frame_element)
+
+        stats = next(message for topic, message in sent if topic.startswith("uav_statistics_"))
+        self.assertEqual(
+            stats["data"]["candidate_trajectories"],
+            [{
+                "track_id": 44,
+                "tracking_method": "motion_compensated_image_v2",
+                "tracking_quality": "degraded",
+                "quality_reasons": ["telemetry_gap"],
+                "trajectory_px": [[10.0, 20.0], [11.0, 20.0]],
+            }],
+        )
+        self.assertEqual(stats["data"]["active_trajectories"], [])
+        self.assertEqual(stats["data"]["active_tracks"], 0)
+        self.assertEqual(stats["data"]["candidate_tracks"], 1)
+
+    def test_complete_runtime_map_does_not_repeat_hover_annotation_snapshot(self):
+        producer = self._producer_without_kafka()
+        producer.road_context_status = "complete"
+        frame_element = FrameElement(
+            "test",
+            np.zeros((20, 20, 3), dtype=np.uint8),
+            2.0,
+            1,
+            {},
+        )
+        frame_element.is_hovering = True
+        frame_element.road_context_status = "missing"
+
+        self.assertFalse(producer._needs_hover_annotation_snapshot(frame_element))
+
+    def test_missing_runtime_map_keeps_hover_annotation_snapshot_available(self):
+        producer = self._producer_without_kafka()
+        producer.road_context_status = "missing"
+        frame_element = FrameElement(
+            "test",
+            np.zeros((20, 20, 3), dtype=np.uint8),
+            2.0,
+            1,
+            {},
+        )
+        frame_element.is_hovering = True
+
+        self.assertTrue(producer._needs_hover_annotation_snapshot(frame_element))
+
+    def test_candidate_realtime_contract_drops_internal_lineage_and_keeps_all_targets(self):
+        producer = self._producer_without_kafka()
+        frame_element = FrameElement(
+            "test",
+            np.zeros((20, 20, 3), dtype=np.uint8),
+            2.0,
+            1,
+            {},
+        )
+        points = [[float(index), float(index * 2)] for index in range(40)]
+        frame_element.candidate_trajectories = [
+            {
+                "track_id": track_id,
+                "tracking_quality": "degraded",
+                "quality_reasons": ["hover_not_verified"],
+                "trajectory_px": points,
+                "trajectory_enu_m": points,
+                "trajectory_gcj02": points,
+                "point_quality_lineage": [{"large": "internal"}] * 40,
+                "trajectory_display_px": points,
+            }
+            for track_id in (101, 102)
+        ]
+
+        candidates = producer._build_candidate_trajectories(frame_element)
+
+        self.assertEqual([item["track_id"] for item in candidates], [101, 102])
+        self.assertEqual(len(candidates[0]["trajectory_px"]), 30)
+        self.assertEqual(candidates[0]["trajectory_px"][0], [10.0, 20.0])
+        self.assertNotIn("point_quality_lineage", candidates[0])
+        self.assertNotIn("trajectory_display_px", candidates[0])
+
     def test_build_active_trajectories_limits_realtime_payload_to_tail_points(self):
         frame = np.zeros((100, 100, 3), dtype=np.uint8)
         frame_element = FrameElement("test", frame, 5.0, 150, {})
@@ -193,6 +373,7 @@ class KafkaActiveTrajectoriesTest(unittest.TestCase):
         track = TrackElement(id=9, timestamp_first=1.0)
         track.timestamp_last = 5.0
         track.trajectory_points = [(float(i), float(i * 2)) for i in range(5)]
+        track.trajectory_enu_m = [(float(i), float(i * 2)) for i in range(5)]
         frame_element.buffer_tracks = {9: track}
 
         producer = object.__new__(KafkaProducerNode)

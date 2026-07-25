@@ -23,9 +23,11 @@ def test_retirement_allowlists_are_fixed_to_approved_assets():
         "trafficanalyzer_timescaledb_local_data",
         "traffic_analyzer_mp4new_road9_target_data",
     }
-    assert module.EXPECTED_CONTAINERS == {
+    assert module.EXPECTED_NATIVE_INFRA_CONTAINERS == {
         "traffic_analyzer-road9-1",
         "traffic_analyzer-kafka-1",
+    }
+    assert module.DOCKER_APPLICATION_CONTAINERS == {
         "traffic_analyzer-platform-1",
         "traffic_analyzer-console2-1",
         "traffic_analyzer-nginx-1",
@@ -47,6 +49,6 @@ def test_canonical_topic_check_ignores_kafka_internal_topics():
 
 def test_live_retirement_gate_tracks_current_schema_head():
     source = SCRIPT.read_text(encoding="utf-8")
-    assert 'revision == _current_schema_head()' in source
+    assert "expected_schema_head=_current_schema_head()" in source
     assert module._current_schema_head().startswith("2026")
     assert "business_rows == 0" not in source

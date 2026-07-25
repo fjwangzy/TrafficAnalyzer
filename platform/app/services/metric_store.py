@@ -31,7 +31,7 @@ from app.models.metrics import (
     TrackPoint,
     TrafficMetric,
 )
-from app.models.mission import MessageDeadLetter, MessageInbox
+from app.models.mission import MessageDeadLetter, MessageInbox, PipelineRecord
 from app.models.survey import EvidenceItem, EvidencePackage
 from app.services.survey_storage import ContentAddressedStore
 from app.services.trajectory_analysis import build_trajectory_analysis
@@ -265,6 +265,7 @@ class PostgresMetricStoreAdapter:
                 )
                 session.add(inbox)
                 references = self._add_facts(session, envelope, normalized)
+                await self._update_pipeline_runtime(session, normalized)
                 inbox.status = "processed"
                 inbox.fact_references = references
                 inbox.processed_at = datetime.now(UTC)
@@ -406,6 +407,45 @@ class PostgresMetricStoreAdapter:
             "pipeline_id": data.get("pipeline_id") or data.get("run_id"),
             "source_profile_id": data.get("source_profile_id"),
         }
+
+    @staticmethod
+    def _pipeline_runtime_values(data: dict[str, Any]) -> dict[str, Any]:
+        geo_quality = data.get("geo_reference_quality")
+        tracking = data.get("tracking_diagnostics")
+        geo_quality = geo_quality if isinstance(geo_quality, dict) else {}
+        tracking = tracking if isinstance(tracking, dict) else {}
+        tracking_quality = tracking.get("tracking_quality") or geo_quality.get("status")
+        return {
+            "flight_phase": data.get("flight_phase") or geo_quality.get("flight_phase"),
+            "tracking_quality": tracking_quality,
+            "formal_analytics_eligible": bool(data.get("formal_analytics_eligible", False)),
+            "runtime_quality": _json_safe({
+                "flight_segment_id": data.get("flight_segment_id"),
+                "geo_reference_quality": geo_quality,
+                "tracking_diagnostics": tracking,
+                "candidate_track_count": data.get("candidate_tracks"),
+                "source_drop_count": data.get("source_drop_count"),
+                "source_drop_reason": data.get("source_drop_reason"),
+            }),
+            "updated_at": datetime.now(UTC),
+        }
+
+    async def _update_pipeline_runtime(
+        self,
+        session: AsyncSession,
+        value: dict[str, Any],
+    ) -> None:
+        if value.get("msg_type") != "uav_stats":
+            return
+        data = value.get("data") or {}
+        pipeline_id = data.get("pipeline_id") or data.get("run_id")
+        if not pipeline_id:
+            return
+        await session.execute(
+            update(PipelineRecord)
+            .where(PipelineRecord.id == str(pipeline_id))
+            .values(**self._pipeline_runtime_values(data))
+        )
 
     def _add_facts(
         self, session: AsyncSession, envelope: MessageEnvelope, value: dict[str, Any]

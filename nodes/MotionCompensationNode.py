@@ -69,7 +69,10 @@ class MotionCompensationNode:
             if not anchor:
                 raise ValueError("runtime_map frame is missing anchor_gcj02")
             residuals = registration.get("residuals") or {}
-            reference = residuals.get("registration_position_gcj02")
+            registration_pose = registration.get("registration_pose") or {}
+            reference = registration_pose.get("position_gcj02") or residuals.get(
+                "registration_position_gcj02"
+            )
             if not isinstance(reference, (list, tuple)) or len(reference) != 2:
                 raise ValueError(
                     "runtime visual registration is missing registration_position_gcj02"
@@ -93,7 +96,9 @@ class MotionCompensationNode:
             hovering = is_hovering(telemetry or {}, self.hover_threshold_ms)
             if hovering:
                 drone_vel = np.zeros(2, dtype=np.float64)
-            reference_yaw = residuals.get("registration_gimbal_yaw_deg")
+            reference_yaw = registration_pose.get("gimbal_yaw")
+            if reference_yaw is None:
+                reference_yaw = residuals.get("registration_gimbal_yaw_deg")
             if reference_yaw is None:
                 reference_yaw = (telemetry or {}).get("gimbal_yaw", 0) or 0
             gimbal_yaw = (telemetry or {}).get("gimbal_yaw", reference_yaw) or reference_yaw

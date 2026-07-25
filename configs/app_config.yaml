@@ -16,6 +16,10 @@ pipeline:
   show_in_web: True  # 在Web界面（Flask）中显示视频流处理结果，而不是使用cv2.imshow
   send_info_kafka: True  # 是否将信息发送到Kafka
 
+# Mission-level rollback boundary. Existing records migrated as hover_only_legacy;
+# newly created plans use hover_cruise_v1.
+tracking_profile: ${oc.env:TRACKING_PROFILE,hover_cruise_v1}
+
 #--------------------------------------------------GENERAL--------------------------------------------------
 
 general:
@@ -51,7 +55,45 @@ tracking_node:
   first_track_thresh: 0.05  # 初始化新轨迹的阈值；保留低置信度非机动车小目标
   second_track_thresh: 0.01  # 维持已有轨迹的低分匹配阈值
   match_thresh: 0.95  # 值越大，相邻帧中检测框的最大允许距离（用于维持轨迹）越大
-  track_buffer: 50  # 目标消失后轨迹保持存活的时间（以帧数为单位）
+  track_buffer: 50  # 仅供 hover_only_legacy 回滚路径使用的帧制缓冲
+  max_lost_sec: 2.0  # 图像运动补偿跟踪器的时间制最大丢失窗口
+  max_frame_gap_sec: 0.5  # 超过此真实源时间间隔禁止续接同一轨迹
+  class_switch_confirm_frames: 3  # 机动车/非机动车跨组需连续确认，避免单帧类别抖动
+  candidate_trajectory_tail_points: 30  # 候选态只读预览尾迹上限
+
+# 离线迁移验证：旁路运行旧式纯像素 ByteTrack，只生成逐帧差异证据，
+# 不参与任何业务输出。实时 profile 默认禁止，避免增加在线延迟。
+tracking_shadow:
+  enabled: ${oc.decode:${oc.env:TRACKING_SHADOW_ENABLED,false}}
+  offline_only: true
+  report_path: ${oc.env:TRACKING_SHADOW_REPORT,output/tracking-shadow.jsonl}
+
+flight_motion:
+  hover_confirm_sec: 15.0
+  hover_enter_speed_mps: 1.0
+  hover_exit_speed_mps: 1.5
+  hover_max_radius_p95_m: 5.0
+  hover_exit_radius_m: 8.0
+  hover_exit_confirm_sec: 2.0
+  min_agl_m: 60.0
+  max_agl_m: 150.0
+  max_nadir_deviation_deg: 10.0
+  max_roll_deg: 5.0
+  max_vertical_speed_mps: 2.0
+  max_yaw_rate_dps: 15.0
+  max_zoom_drift_ratio: 0.02
+  max_cruise_speed_mps: 12.0
+  speed_consistency_mps: 3.0
+  speed_inconsistency_confirm_sec: 1.0
+
+geo_reference:
+  require_visual_validation: true
+  visual_max_width: 960
+  min_background_points: 40
+  min_inlier_ratio: 0.5
+  max_reprojection_p95_px: 3.0
+  max_pose_visual_residual_p95_px: 5.0
+  forward_backward_max_error_px: 1.5  # LK前后向一致性误差，超出点不参与背景warp
 
 vehicle_classification:
   # 只配置非机动车类别；未命中的检测类别默认按机动车处理。

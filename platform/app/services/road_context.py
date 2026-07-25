@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Protocol
 
 from sqlalchemy import select
@@ -31,10 +31,26 @@ class RoadContextResult:
     map_version_id: str | None = None
     map_status: str = "missing"
     runtime_map_bundle: dict | None = None
+    selected_registration_id: str | None = None
+    selection_strategy: str | None = None
 
 
 class RoadContextAdapter(Protocol):
-    async def get(self, inter_id: str, road_data_version: str) -> RoadContextResult | None: ...
+    async def get(
+        self,
+        inter_id: str,
+        road_data_version: str,
+        map_version_id: str | None = None,
+    ) -> RoadContextResult | None: ...
+
+    async def select_runtime(
+        self,
+        inter_id: str,
+        source_profile_id: str,
+        *,
+        road_data_version: str | None = None,
+        map_version_id: str | None = None,
+    ) -> RoadContextResult | None: ...
 
 
 class RoadContext:
@@ -43,40 +59,142 @@ class RoadContext:
     def __init__(self, adapter: RoadContextAdapter):
         self._adapter = adapter
 
-    async def get(self, inter_id: str, road_data_version: str) -> RoadContextResult:
-        result = await self._adapter.get(inter_id, road_data_version)
+    async def get(
+        self,
+        inter_id: str,
+        road_data_version: str,
+        map_version_id: str | None = None,
+    ) -> RoadContextResult:
+        result = (
+            await self._adapter.get(inter_id, road_data_version, map_version_id)
+            if map_version_id
+            else await self._adapter.get(inter_id, road_data_version)
+        )
         if result is None:
             raise LookupError(f"road context not found: {inter_id}@{road_data_version}")
         return result
+
+    async def select_runtime(
+        self,
+        inter_id: str,
+        source_profile_id: str,
+        *,
+        road_data_version: str | None = None,
+        map_version_id: str | None = None,
+    ) -> RoadContextResult | None:
+        return await self._adapter.select_runtime(
+            inter_id,
+            source_profile_id,
+            road_data_version=road_data_version,
+            map_version_id=map_version_id,
+        )
+
+
+def _runtime_registration_payload(registration: VisualRegistration) -> dict:
+    """Serialize every coordinate-lineage fact required by hover_cruise_v1.
+
+    Keep this adapter aligned with the calibration runtime-bundle endpoint.  A
+    missing field here silently degrades Mission-started pipelines even when the
+    verified registration in road9 contains the required pose lineage.
+    """
+    return {
+        "id": registration.id,
+        "source_profile_id": registration.source_profile_id,
+        "status": registration.status,
+        "homography_pixel_to_enu": registration.homography_pixel_to_enu,
+        "residuals": registration.residuals,
+        "registration_pose": registration.registration_pose,
+        "camera_calibration": registration.camera_calibration,
+        "map_coverage_enu_m": registration.map_coverage_enu_m,
+    }
+
+
+def _runtime_registration_ready(registration: VisualRegistration) -> bool:
+    """Require the complete source-specific coordinate lineage for map projection."""
+    return bool(
+        registration.status == "verified"
+        and registration.source_profile_id
+        and registration.homography_pixel_to_enu
+        and registration.registration_pose
+        and registration.camera_calibration
+        and registration.map_coverage_enu_m
+    )
+
+
+def _select_runtime_candidate(
+    rows: list[tuple[ChannelizedMapVersion, VisualRegistration]],
+    road_data_version: str | None = None,
+) -> tuple[ChannelizedMapVersion, VisualRegistration, str] | None:
+    ready = [
+        (channelized_map, registration)
+        for channelized_map, registration in rows
+        if _runtime_registration_ready(registration)
+    ]
+    if not ready:
+        return None
+    preferred = [
+        item for item in ready
+        if road_data_version and item[0].road_data_version == road_data_version
+    ]
+    selected_map, selected_registration = (preferred or ready)[0]
+    strategy = "requested_road_data_version" if preferred else "latest_source_verified"
+    return selected_map, selected_registration, strategy
+
+
+async def _resolve_source_checksum(
+    session: AsyncSession,
+    channelized_map: ChannelizedMapVersion | None,
+) -> str | None:
+    """Resolve the immutable upstream snapshot through explicit map lineage."""
+    if channelized_map is None or channelized_map.source_checksum:
+        return channelized_map.source_checksum if channelized_map is not None else None
+
+    # A derived imagery-fit version may retain the exact reviewed geometry of
+    # an earlier local map. Follow only that declared parent; using an arbitrary
+    # latest snapshot would make a Mission bundle depend on mutable query order.
+    source_map_id = (channelized_map.quality or {}).get("source_map_version_id")
+    if not source_map_id or source_map_id == channelized_map.id:
+        return None
+    source_map = await session.get(ChannelizedMapVersion, source_map_id)
+    if source_map is None or source_map.inter_id != channelized_map.inter_id:
+        return None
+    return source_map.source_checksum
 
 
 class Road9RoadContextAdapter:
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]):
         self._session_factory = session_factory
 
-    async def get(self, inter_id: str, road_data_version: str) -> RoadContextResult | None:
+    async def get(
+        self,
+        inter_id: str,
+        road_data_version: str,
+        map_version_id: str | None = None,
+    ) -> RoadContextResult | None:
         async with self._session_factory() as session:
+            map_statement = select(ChannelizedMapVersion).where(
+                ChannelizedMapVersion.inter_id == inter_id,
+                ChannelizedMapVersion.road_data_version == road_data_version,
+                ChannelizedMapVersion.status == "lane_verified",
+            )
+            if map_version_id:
+                map_statement = map_statement.where(ChannelizedMapVersion.id == map_version_id)
             channelized_map = (
                 await session.execute(
-                    select(ChannelizedMapVersion)
-                    .where(
-                        ChannelizedMapVersion.inter_id == inter_id,
-                        ChannelizedMapVersion.road_data_version == road_data_version,
-                        ChannelizedMapVersion.status == "lane_verified",
-                    )
-                    .order_by(ChannelizedMapVersion.version_no.desc())
+                    map_statement.order_by(ChannelizedMapVersion.version_no.desc())
                 )
             ).scalars().first()
             snapshot_statement = select(RoadContextSnapshot).where(
                 RoadContextSnapshot.inter_id == inter_id
             )
-            if channelized_map is not None and channelized_map.source_checksum:
+            source_checksum = await _resolve_source_checksum(session, channelized_map)
+            if channelized_map is not None and source_checksum:
                 # A published local map has its own immutable version.  Its
                 # source snapshot retains the upstream YCX version and is joined
                 # through the content checksum, not by pretending the versions
                 # have the same semantics.
                 snapshot_statement = snapshot_statement.where(
-                    RoadContextSnapshot.checksum == channelized_map.source_checksum
+                    RoadContextSnapshot.checksum == source_checksum
                 )
             else:
                 snapshot_statement = snapshot_statement.where(
@@ -163,22 +281,12 @@ class Road9RoadContextAdapter:
                         "topology": channelized_map.topology,
                         "quality": channelized_map.quality,
                         "visual_registration": (
-                            {
-                                "id": registrations[0].id,
-                                "source_profile_id": registrations[0].source_profile_id,
-                                "homography_pixel_to_enu": registrations[0].homography_pixel_to_enu,
-                                "residuals": registrations[0].residuals,
-                            }
+                            _runtime_registration_payload(registrations[0])
                             if registrations
                             else None
                         ),
                         "visual_registrations": [
-                            {
-                                "id": item.id,
-                                "source_profile_id": item.source_profile_id,
-                                "homography_pixel_to_enu": item.homography_pixel_to_enu,
-                                "residuals": item.residuals,
-                            }
+                            _runtime_registration_payload(item)
                             for item in registrations
                         ],
                         "lanes": [
@@ -199,3 +307,77 @@ class Road9RoadContextAdapter:
                     else None
                 ),
             )
+
+    async def select_runtime(
+        self,
+        inter_id: str,
+        source_profile_id: str,
+        *,
+        road_data_version: str | None = None,
+        map_version_id: str | None = None,
+    ) -> RoadContextResult | None:
+        """Select a deterministic lane_verified map that is usable by this source.
+
+        A caller-supplied map id is strict. A legacy/raw road version is only a
+        preference: if it has no complete source registration, the newest ready
+        source-bound map is selected. No ready map remains a valid detector-only
+        mission and therefore returns ``None``.
+        """
+        async with self._session_factory() as session:
+            statement = (
+                select(ChannelizedMapVersion, VisualRegistration)
+                .join(
+                    VisualRegistration,
+                    VisualRegistration.map_version_id == ChannelizedMapVersion.id,
+                )
+                .where(
+                    ChannelizedMapVersion.inter_id == inter_id,
+                    ChannelizedMapVersion.status == "lane_verified",
+                    VisualRegistration.source_profile_id == source_profile_id,
+                    VisualRegistration.status == "verified",
+                )
+                .order_by(
+                    ChannelizedMapVersion.version_no.desc(),
+                    VisualRegistration.updated_at.desc(),
+                )
+            )
+            if map_version_id:
+                statement = statement.where(ChannelizedMapVersion.id == map_version_id)
+            rows = (await session.execute(statement)).all()
+
+        selected = _select_runtime_candidate(rows, road_data_version)
+        if map_version_id and selected is None:
+            raise LookupError(
+                f"runtime map is not ready for source: {map_version_id}@{source_profile_id}"
+            )
+        if selected is None:
+            return None
+
+        selected_map, selected_registration, strategy = selected
+        if map_version_id:
+            strategy = "explicit_map_version"
+        result = await self.get(
+            inter_id,
+            selected_map.road_data_version,
+            map_version_id=selected_map.id,
+        )
+        if result is None:
+            if map_version_id:
+                raise LookupError(
+                    f"runtime map context is incomplete: {map_version_id}@{source_profile_id}"
+                )
+            return None
+
+        bundle = dict(result.runtime_map_bundle or {})
+        registrations = list(bundle.get("visual_registrations") or [])
+        registrations.sort(
+            key=lambda item: item.get("id") != selected_registration.id
+        )
+        bundle["visual_registrations"] = registrations
+        bundle["visual_registration"] = _runtime_registration_payload(selected_registration)
+        return replace(
+            result,
+            runtime_map_bundle=bundle,
+            selected_registration_id=selected_registration.id,
+            selection_strategy=strategy,
+        )

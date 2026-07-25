@@ -1,0 +1,17 @@
+{
+  "schema_version": "uav.cruise-acceptance-audit/v1",
+  "status": "production_evidence_blocked",
+  "failures": [
+    "manifest_intersections_below_3",
+    "manifest_missions_per_intersection_below_2",
+    "mission_XQH-20260403-PM-NEGATIVE_required_phases_missing",
+    "mission_XQH-20260403-PM-NEGATIVE_config_sha256_missing",
+    "mission_XQH-20260403-PM-NEGATIVE_runtime_bundle_sha256_missing",
+    "required_scenarios_missing",
+    "identity_truth_provenance_missing",
+    "position_truth_provenance_missing",
+    "speed_truth_provenance_missing"
+  ],
+  "mission_count": 1,
+  "frame_count": 0
+}

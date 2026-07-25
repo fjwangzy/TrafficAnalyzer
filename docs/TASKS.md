@@ -1,6 +1,117 @@
 # TASKS.md — TrafficAnalyzer 任务追踪
 
-> 最后更新：2026-07-22（根级测试已集中到 `test/`；Console2 启动 P1 已关闭；剩余 1 个 P1、4 个 P2，当前仍 No-Go）
+## 2026-07-25 五路口视频整体回归
+
+- [x] 对 `mp4new` 五个 canonical SourceProfile 以原生 macOS arm64/MPS、`frame_stride=10`、`imgsz=640`、独立 `run_id/pipeline_id` 串行回放至自然 EOF；显式使用 `hover_only_legacy` 验证经典五源既有业务链，5/5 返回码 0。
+- [x] Kafka/road9 精确对账：2,223 条 Stats、12,238 条完成轨迹、571,058 个轨迹点、26 个严格 TCC；12,238/12,238 双坐标序列对齐，26/26 冲突均有 complete 三图 EvidencePackage。
+- [x] 保留巡航安全边界：经典五源缺少 `registration_pose/camera_calibration/map_coverage_enu_m`，默认 `hover_cruise_v1` 的 469/469 帧按候选隔离且正式轨迹为 0，不伪造注册数据、不宣称巡航精度。
+- [x] 修复 GeoJSON EOF flush 对空帧取 shape 的崩溃、MPS runner 缺少显式 profile、运行态验证器使用被禁 query token、ADR-019 测试拓扑漂移，并补聚焦回归。
+- [x] 运行态控制面目录 9/9 通过 Mission、重复启动保护、MJPEG、canonical WebSocket 与停止回收；真实 Chromium 验证海右路历史 500 条 GCJ-02 轨迹、6 条冲突事件、实时检测画面和正确质量门禁，Console 0 error。
+- [x] 最终门禁：根 143 passed；Platform 213 passed/5 skipped/10 subtests；Console2 147 passed + production build；refactor 52/0；xqh 56/0/0；ADR-019 strict 10/10；ruff、compileall、diff check 通过；最终 `pipelines_active=0`。
+- [x] 完整证据与生产边界见 [`test_report_five_source_regression_20260725.md`](test_report_five_source_regression_20260725.md)；IDF1/HOTA/ID switch/位置 RMSE/速度 MAE 继续为 `not_evaluated`。
+
+## 2026-07-25 实时 BEV 视口跳动修复
+
+- [x] 定位紧凑 BEV 在实时轨迹刷新时跳动的根因：覆盖物 effect 每个批次都调用 `map.setCenter()`，并在轨迹短暂为空后再次执行 `setFitView()`；该问题属于前端地图视口生命周期，与路网绑定无关。
+- [x] 将地图中心同步从轨迹覆盖物更新中拆分，只在业务中心点实际变化时执行；首次轨迹自动适配增加地图实例级门闩，实时空批次不再重置视口。
+- [x] 增加连续轨迹批次、短暂空批次、轨迹恢复回归；地图组件与实时监测聚焦测试 `53 passed`、production build、`git diff --check` 通过。
+- [x] 真实浏览器连续 6 秒观察期间轨迹从 295 增到 312 条，地图容器、图层、画布 transform 和画布尺寸均保持单一稳定值，确认轨迹持续刷新且紧凑 BEV 不再重置视口。
+
+## 2026-07-25 实时轨迹消费阻塞修复
+
+- [x] 定位检测器持续发布而 BEV 只显示旧快照的根因：`uav_stats` 车道可选指标 `queue_length_m=null` 触发告警规则 `None > float`，消费器反复 seek 同一 Kafka offset，阻断后续实时轨迹。
+- [x] 告警引擎对 `queue_length_m`、`congestion_index`、`lane_match_rate`、`avg_speed_kmh` 的空值、非法值和非有限值按“无可用测量”跳过，不生成伪告警。
+- [x] 告警评估作为统计广播后的旁路处理；规则异常记录 warning，但不得阻止实时 WebSocket 投递、inbox dispatch 完成或 Kafka offset 提交。
+- [x] 新增空值消息和告警异常两组回归；Kafka/实时频道/告警持久化聚焦测试 `14 passed`。
+- [x] 运行恢复中排除一项消息放大风险：已验证路网仍重复携带 960px base64 悬停标注图；发布态路网无需该冗余截图。
+- [x] 已绑定 `complete` Runtime Road Map Bundle 的 Pipeline 不再重复发送悬停标注图；所有活动/候选目标及其实时尾迹继续发送，完成轨迹仍由独立 canonical Topic 完整持久化。
+- [x] 定位重启后的谱系积压：动态相机号固定从 10 开始导致新 Pipeline 复用旧 Topic，当前 `pipe-*` 消息排在历史回放积压后，Console2 按谱系正确拒绝旧消息并显示过期。
+- [x] Platform 每次启动以 epoch 秒初始化动态相机号，恢复 Mission 使用新的 canonical Topic；视频端口仍从 8101 分配，物理 SourceProfile/路口身份不由该运行时相机号承载。
+- [x] 候选轨迹实时消息改为显式白名单：保留全部候选目标、质量原因及最多 30 个像素/ENU/GCJ-02 对齐尾迹点，剔除逐点 `point_quality_lineage` 等内部历史，避免候选阶段约 1.08–1.14 MB 的无界统计消息。
+- [x] 最终真实运行跨过完整候选阶段，`uav_stats` 连续发布且未再出现消息超限/空值告警阻塞；浏览器红态转绿为 `LIVE 1.9 FPS`、`实时更新`、71 辆当前目标及可见 GCJ-02 轨迹投放。聚焦回归 `45 passed, 1 subtest passed`，ruff 与改动范围 `git diff --check` 通过；Platform 全量 `210 passed, 5 skipped`，仍有 2 项既有 ADR-019 审计脚本/测试漂移失败未混入本次修复。
+
+## 2026-07-25 Console2 BEV 最近 5 分钟 / 150 条混合窗口
+
+- [x] 实时 BEV 保留全部活动/候选轨迹和最近 5 分钟到达的完成轨迹，即使总量超过 150 条；不再用固定上限裁剪高流量实时画面。
+- [x] 五分钟窗口不足 150 条时，从本次 Pipeline 会话中更早的最新完成轨迹补足到 150 条；窗口只影响展示，不裁剪 Kafka 或 `road9` 中的完整事实。
+- [x] `LiveModules.test.jsx` 覆盖 162 条五分钟内轨迹全部可见，以及窗口不足时回填到 150 条并保留实时轨迹；Console2 `146 passed`，production build 通过。
+
+## 2026-07-25 xqh 尾部离场巡航全链路复验
+
+- [x] 独占原生 MPS 重跑 xqh 840s–自然 EOF：真实 4K MP4、逐帧 SRT、YOLO、背景视觉 warp、纯图像 ByteTrack、ID 后世界投影、质量门禁、ShowNode、统计/TCC 隔离和 EOF flush 全部进入同一验收链。
+- [x] 24/24 工程门禁通过：1142 个采样帧、107603 个合法检测、非法框 0、60940 次图像关联、757 个观测 ID、active/completed/candidate 点对齐失败 `0/0/0`、降级业务泄漏 0、自然 EOF 通过。
+- [x] 原生 MPS 源采样 7.4925Hz，YOLO 稳态 P95 175.51ms，完整单进程帧 P95 270.401ms；正式帧视觉有效率 100%，候选末点/bbox 接地点残差 P95/最大值 1.146/1.4px。
+- [x] 人工核查悬停、质量断点、离场巡航和离场降级四组生产 ShowNode 截图；正式轨迹与琥珀候选轨迹同时可见，候选明确标记 `NO STATS-TCC`。
+- [x] 仓库级回归：根 `139 passed`；Platform `207 passed, 5 skipped, 1 warning, 10 subtests passed`；Console2 `139 passed` 且 production build 通过；xqh 基线 `56 PASS / 0 FAIL / 0 WARN`；改动 Python ruff 与 `git diff --check` 通过（仅既有 FrameElement CRLF 提示）。
+- [x] 刷新 `docs/generated/xqh-hover-departure-acceptance.json`、四组长期截图和严格证据审计；xqh 素材哈希有效，但严格生产审计仍精确列出 9 个数据/真值 blocker。
+- [x] ADR-019 strict 本机审计 10/10 通过；`docs/test_report_adr019_local_retirement.json` 已记录当前 native macOS Platform + Docker road9/Kafka 拓扑、MPS、Alembic `20260723_0019`、canonical Topic、旧存储未挂载及历史清库重建证据。
+- [x] 明确项目不建设人工标注、预标注或标注工作包；xqh 自动化工程验收结论保持有效，IDF1/HOTA/ID switch/位置 RMSE/速度 MAE 统一列为“不评估、不宣称”，不再登记为项目待办。
+- [x] 收尾同步 README、协作约束、项目结构、架构、业务逻辑、契约、ADR、任务、Runbook 与真实回归报告，统一 `local_engineering_acceptance_passed / production_accuracy_not_claimed` 口径。
+- [x] 生成脱敏最终交接手册 `/private/tmp/TrafficAnalyzer-hover-cruise-final-handoff-2026-07-25.md`；只引用权威材料，不复制凭证或 `docs/road_pg.md` 内容。
+
+## 2026-07-24 ByteTrack 前置纯图像关联与 ID 后世界投影
+
+- [x] 用确定性两帧反例证明：图像、检测框和视觉 warp 不变，仅让第二帧 H 平移6m，旧世界关联会改变匹配与 ID。
+- [x] 新增背景 `ImageMotionEstimator`，排除扩张后的检测目标区域，以 LK 前后向光流、RANSAC 和重投影门禁输出唯一 `camera_motion_warp`；不读取遥测、H 或地图。
+- [x] 从 ByteTrack 删除世界位置、ENU Kalman、Mahalanobis 代价和 `world_positions` 接口；高低置信两轮只使用视觉补偿后 IoU、类别软约束、置信度和真实源时间。
+- [x] 将主链拆为 `ImageMotion → GroundTrajectoryTracker(ByteTrack) → Homography/Motion/FlightGeoReference → PostTrackingWorldProjection`，代码级保证坐标转换只发生在 ID 确定之后。
+- [x] 分离图像 `association_id` 与正式业务 `track_id` 生命周期：H/遥测/地图质量中断保留图像 ID、结束正式分段；恢复后用 `track_family_id/previous_track_id` 创建新正式 ID。
+- [x] 同时保留源帧 `trajectory_px`、视觉递推 `trajectory_display_px` 和 ID 后逐帧 H 生成的 `trajectory_enu_m/trajectory_gcj02`；ShowNode 禁止用当前 H 重投影历史。
+- [x] 将 `PostTrackingWorldProjectionNode` 收敛为新版唯一世界事实所有者：同一点完成去畸变、ENU/GCJ-02与地图覆盖；TrackerInfo只消费结果，后续H/锚点变化不能二次改写。
+- [x] `hover_cruise_v1` 速度只使用至少3个逐帧ENU点，删除当前H重投影历史像素回退；`hover_only_legacy` 行为保持。
+- [x] 新增 H 抖动不改 ID、ID 后世界点变化、节点顺序、质量断点、双 ID、漏检恢复、单一投影所有者、去畸变覆盖一致性、内部 ENU 全精度、速度坐标契约、图像尾迹与 EOF 测试；撤回标注包后当前根 `test/` 为 `139 passed`。
+- [x] 完成同一 xqh 840s–EOF 的最终原生 MPS 重跑和旧世界关联版/image-v2 对比图：24/24工程门禁、三类轨迹对齐失败0、降级业务泄漏0、自然EOF通过。
+- [x] Platform 为 `207 passed, 5 skipped, 1 warning, 10 subtests passed`；Console2 为 `139 passed` 且 production build 通过；xqh 基线维持 `56 PASS / 0 FAIL / 0 WARN`；ruff 与 `git diff --check` 通过。
+- [x] 生成脱敏临时交接手册 `/private/tmp/TrafficAnalyzer-image-motion-tracking-v2-handoff-2026-07-24.md`，明确权威材料、复现命令、脏工作树、回滚和生产阻断。
+- [x] ADR-019 strict 本机审计已补齐实时证据并达到 10/10；当前报告 schema 为 `uav.adr019-local-retirement/v2`。
+- [x] 验收边界改为自动化工程门禁；项目不安排人工轨迹真值工作包，相关精度指标不进入交付承诺，也不得从无真值代理推导。
+
+## 2026-07-24 检测输出轨迹几何与候选尾迹回归修复（历史阶段）
+
+- [x] 用 `ShowNode.process` 最小复现“候选 ID 存在但输出视频没有尾迹”，确认根因是候选分支只画框并跳过 trace。
+- [x] 正式轨迹保留类别色实线；候选轨迹保留原始像素历史，新增相机补偿的当前帧显示历史，绘制最多30点的琥珀虚线、紧凑 `#ID class C` 标签和一次性非正式图例。
+- [x] 过滤空值、NaN/Inf、越界、重复、单点和大幅跳变；限制尾迹总显示长度，避免真实巡航画面出现跨屏蜘蛛网；不改关联、地图、地理参考或 TCC 阈值。
+- [x] 显示缓存在Kafka发布前剔除，不改变 canonical candidate schema；覆盖候选、正式+候选混合、相机warp、异常点、跳变截断和30点上限。
+- [x] 增加4K生产渲染缩放到1280×720的可读性红测，覆盖候选标签高度、单段虚线长度、强琥珀尾迹像素和右上角图例；避免只在4K原图上“看起来存在”、交付视频里实际消失。
+- [x] 第一阶段根 `test/` 为 `87 passed`，Show/GroundTracker/Kafka/EOF/验收渲染组合为 `30 passed`，ShowNode聚焦测试为 `8 passed`；最终双坐标实现后的结果见下方99 passed门禁。
+- [x] 真实 xqh 901–905 秒 MPS 短窗确认 30/30 帧有检测、3395 个检测、2022 次候选关联、降级业务泄漏0；生产 `ShowNode` 在901.134秒产生8188个候选尾迹差异像素且无跨屏蜘蛛网。
+- [x] 第一阶段840秒至自然EOF的真实MPS复验通过20/20显示/隔离门禁；其检测和坐标指标已由下方最终24/24几何门禁报告取代，历史数字保留在回归报告历史小节。
+- [x] 同一短窗 shadow 诊断中 pose-aware / legacy 分别为108/156个观测ID、首帧后新增ID 7/55、中位活跃帧19/1、中位活跃轨迹66/39.5；该结果只是不依赖真值的ID churn代理，不声明IDF1或ID switch达标。
+- [x] 840–901秒稳定悬停的457帧同输入对照中，pose-aware / legacy 分别为401/439个观测ID、中位活跃帧34/18、首帧后新增ID221/306、中位活跃轨迹101.5/96、匹配框中位IoU 0.998075；未见旧版可用而新版大面积丢ID的代理信号。
+- [x] 定位真实数据异常：macOS 15.6 + PyTorch 2.2.2 MPS 的 sliced `clamp_` 可把右边界框裁成零宽；同帧 MPS 原路径出现9个零宽框，CPU与MPS非原地裁剪为0。新旧 profile 共用安全裁剪和检测几何过滤，非法框阻断正式研判。
+- [x] 冻结双坐标契约：源帧接地点 `trajectory_px`、同点 ENU/GCJ-02、源时间、源帧号、质量谱系逐点对齐；bbox中心单列 `trajectory_bbox_center_px`。该阶段用世界历史反投影显示，已由 ADR-023 的纯图像显示历史取代。
+- [x] 移除正式轨迹对 `sv.TraceAnnotator` 隐式历史的依赖；正式/候选统一接地点与当前帧坐标，绘制层抑制小幅往返抖动但不改事实。
+- [x] 修复长完成轨迹降采样遗漏新坐标字段；`TrajectoryNode` 同索引处理像素、bbox中心、ENU、GCJ-02、时间、帧号与质量谱系。
+- [x] 最终根 `test/` 为99 passed，xqh为56 PASS / 0 FAIL / 0 WARN；840秒至自然EOF原生MPS为24/24工程门禁：1142帧、109899个合法检测、非法框0、active/completed/candidate对齐失败0、降级业务泄漏0、显示/世界残差P95 0.006px/最大0.007px。
+- [x] 固化结果对比图 `docs/test-screenshots/xqh-hover-trajectory-before-after-880.jpg`、机器报告 `docs/generated/xqh-hover-departure-acceptance.json` 和可复现拼图脚本 `scripts/build_xqh_trajectory_comparison.py`。
+
+本修复只恢复检测输出视频的候选尾迹可见性。没有人工真值时，IDF1/HOTA 不评估、不宣称；不能把可见尾迹解释为 ID 连续性精度已经得到证明。
+
+## 2026-07-23 无人机巡航轨迹跟踪与悬停正拍融合
+
+- [x] 拆分 YOLO 与 ByteTrack；ADR-023 已进一步把 ByteTrack 前移到逐帧地理参考之前。
+- [x] 统一 SRT/JSON/MQTT 时间容忍、速度派生和共享飞行状态机。
+- [x] 实现动态绝对 `pixel_to_map_enu`、相机 warp、背景视觉校验、地图覆盖和正式质量门禁。
+- [x] 修复 active trajectory 使用当前 H 重投影历史像素的问题。
+- [x] 接入 Kafka 动态质量、road9 FlightSegment/Pipeline 运行质量、Source/Mission/Pipeline 增量接口。
+- [x] Console2 展示飞行阶段、五类质量、正式研判开关，并将候选轨迹显示为琥珀虚线。
+- [x] 实现 RTSP 有界最新帧策略和 MP4 完整帧反压边界。
+- [x] 增加 `hover_only_legacy` profile 业务回滚和旧计划迁移策略。
+- [x] 增加 `uav.cruise-eval/v1` 评测器，覆盖 IDF1、HOTA、ID switch、位置/速度/车道及质量泄漏。
+- [x] 增加证据先行采集包审计和三路口六 Mission 模板，校验素材哈希、4K29.97/30、Mission/帧 lineage、AGL/UAV地速分层及人工/RTK/雷达参考与校准；当前 xqh 机器审计明确保持 blocked。
+- [x] 增加默认关闭、仅离线运行的 legacy ByteTrack shadow 对比；ADR-023 后输出 `uav.tracking-shadow/v2` JSONL 且不影响业务结果。
+- [x] 使用当前单一世界投影代码对 `inter_xqh` 真实 MP4+SRT 的840s–自然EOF执行原生MPS工程复验：1142个采样帧、107603个合法检测、非法框0、稳态YOLO p95 164.21ms、完整单进程帧p95 264.439ms、正式帧视觉有效率100%、降级业务泄漏0；24/24工程门禁、JSON和四组生产ShowNode证据已刷新。
+- [x] 历史阶段曾向量化世界 Mahalanobis；ADR-023 已完全删除世界关联代价，保留该记录只用于说明演进过程。
+- [x] 修复 Mission Runtime Bundle 漏传 `registration_pose/camera_calibration/map_coverage_enu_m`，并按 `quality.source_map_version_id` 精确追溯衍生地图的上游 snapshot checksum；禁止“取最新快照”回退。
+- [x] 本机 `road9` 已前向迁移到唯一 Alembic head `20260723_0019`；xqh verified registration 的位姿、相机哈希和 32 条 verified lane 覆盖已完成增量回填，重复 dry-run 为 `would_change=false`，未修改 H、车道或发布状态。
+- [x] 收尾 current-state 文档并新增 `docs/runbook_hover_cruise_tracking.md`，固定 ByteTrack 节点、原生 MPS 验收、质量诊断、数据库幂等检查、业务回滚和生产门禁；临时交接手册仅引用这些权威材料，不复制敏感配置。
+- [x] 明确本项目不交付人工标注/预标注工作包；后续新增巡航视频只进入自动化回放、质量隔离和运行稳定性回归。
+- [x] IDF1/HOTA/ID switch/位置 RMSE/速度 MAE 因无人工/独立真值而不评估、不宣称；若未来由外部项目提供已批准真值，可选运行现有只读评测器，但本项目不负责生成或审核真值。
+- [ ] 满足门禁与稳定观察期后删除 legacy `DetectionTrackingNodes` ByteTrack 路径。
+
+当前发布结论：`local_engineering_acceptance_passed / production_accuracy_not_claimed`。本机 MPS 已证明真实尾段的吞吐、质量隔离和 EOF；离场段因速度/视觉/地图覆盖门禁仅作候选。项目不建设人工标注工作包，因此不声明 IDF1/HOTA、世界位置/速度精度或正式 12m/s 巡航支持。
+
+> 最后更新：2026-07-25（xqh 尾部离场全链路 24/24 工程复验及 ADR-019 strict 10/10 通过；人工标注工作包不属于项目范围，生产准确率不作声明）
 
 ## 2026-07-22 测试目录整理
 
@@ -25,7 +136,7 @@
 
 - [x] **Gate A / P0 清零**：关闭匿名管理员注册、WebSocket 客户端消息注入和 SRT 遥测超容差/越界返回。
 - [x] **应用 Gate B 完成**：认证与 active-user 回查、Pipeline/视频 RBAC、媒体鉴权、持久审计、Kafka 可恢复 dispatch、测绘错误态/复核、Demo 隔离、暂停语义、拆包、可访问性、Nginx 安全头和 Ruff/CI 门禁已统一落地。
-- [x] 本机 canonical 栈已前向迁移到唯一 Alembic head `20260721_0017`；Platform、显式 PostgreSQL/TimescaleDB、Console2、根回归、`inter_xqh 56 PASS` 和 ADR-019 strict audit 均复核通过。
+- [x] 本机 canonical 栈已前向迁移到唯一 Alembic head `20260723_0019`；Platform、显式 PostgreSQL/TimescaleDB、Console2、根回归和 `inter_xqh 56 PASS` 均复核通过；ADR-019 strict 当前本机证据 10/10 通过。
 - [ ] **完整发布 UAT 仍 No-Go**：按确认范围延期 GPU/Platform/Console 镜像修复、干净制品 digest、SBOM/签名、共享 UAT secret/TLS/SASL、容器最小权限/healthcheck 和 HA/容量门禁；详见 [`UAT_FULL_REVIEW_2026-07-17.md`](UAT_FULL_REVIEW_2026-07-17.md)。
 
 ## PRD/UI 滚动交付
@@ -268,6 +379,7 @@
 | T-494 | 路口项目工作台 B 方案视觉重构 | ✅ | 按选定 B 设计稿把项目概览与渠化编辑器统一重构为顶部项目栏、左侧路口档案/五阶段进度、中部五页签大画布、右侧待办/质量门禁/版本状态及底部唯一下一步动作的单屏工作台；保留真实关键帧、GCJ-02 路网、拖拽拟合、抽帧、检查发布和旧标定深链。编辑器仅加载当前 `inter_id` 的关键帧任务；地图详情水合避免摘要丢失 23 条车道，已有项目地图不会再被 bootstrap 竞态覆盖；`draft/candidate/lane_verified` 分别驱动真实阶段，素材面板默认收起，版本对比可切换真实历史版本，发布后的 CTA 正确进入 Runtime。当前项目草稿态与发布概览均完成真实浏览器对照；Console2 17 文件 127 项、Platform 201 项与 10 个子测试、XQH `56 PASS / 0 FAIL / 0 WARN`、生产构建和 `git diff --check` 通过。ADR-019 严格审计仅保留仓库级 `local_runtime_evidence` 外部门禁，不冒充发布绿色。验收证据见根 `design-qa.md`。 |
 | T-495 | SourceProfile 抽帧 500 修复 | ✅ | 修复 `SurveyService.import_capture_batch()` 中服务器素材路径解析被错误缩进到参数缺失异常分支，导致合法本地 SourceProfile 抽帧在引用 `video_path` 时触发 `UnboundLocalError` 的问题；新增真实 `server_asset` 路径解析回归。崇华路与新泺大街项目浏览器复验由 500 恢复为 `201 Created`，批次 `BATCH-EA6BCB93577A` 进入 `ready`、生成 6 个关键帧，并成功载入 `FRM-C4DF19FD1CF8` 进入渠化画布。 |
 | T-496 | Link 组车道编辑与拆分合并 | ✅ | 渠化画布单击车道默认按 `link_id` 选择并拖拽整组，双击切换为单车道顶点/平移编辑；工具栏新增“删除所选、拆分车道、合并车道”，拆分按多边形主轴中点生成同 Link 的两个合法多边形，合并以所选同 Link 车道的凸包生成可继续编辑的包络，衍生车道清空不再唯一对应的 `source_lane_id`。崇华路真实关键帧 `FRM-C4DF19FD1CF8` 浏览器实测 Link 组 3 条车道：整组选中与按钮门禁正确，单车道拆分 3→4、删除 4→3、合并 3→1；733px 中栏工具栏自动换行至 72px 且无横向溢出。Console2 18 文件 137 项与生产构建通过。 |
+| T-497 | 实时 BEV SourceProfile 地图绑定与状态隔离 | ✅ | 根因是监控快速启动把无人机档案原始 `road_data_version=20260501` 写入 Mission，未命中 XQH 已发布 V2 SourceProfile 配准；同时旧 Platform 进程与 5 分钟历史 REST 快照覆盖实时轨迹状态，使右侧 BEV 始终显示 0。手动 Mission 现按 `inter_id + source_profile_id` 自动选择完整 `lane_verified` 地图，显式 map id 严格校验并冻结 map/version/registration/checksum/策略；无图仍允许检测器降级启动。Console2 分离历史/实时状态，历史刷新不再清空 WebSocket 轨迹；`uav_stats/uav_track_complete/uav_conflict` 必须匹配当前 `pipeline_id`，同源 Pipeline 切换会清空旧会话，解决旧 Pipeline backlog 再次把质量卡覆盖成 missing 的终验问题。候选 GCJ-02 路径以虚线投放，仅像素候选显示“地理投影不可用”。road9 和 Mission `MSN-DE5382C1C405` 均命中 `CMV-b83a25740598430bb996f75d / VRG-3351d2719cf74f1798ef0fc0`，Runtime 为 complete；原生 MPS Pipeline `pipe-30642be2` 运行中。真实浏览器右侧 BEV 从 3/11 条增长到 67 条，跨完整 REST 刷新周期未归零；加入 Pipeline lineage 门禁并热更新后仅保留当前质量，地图覆盖恢复为可信且仍有 125 条 GCJ-02 轨迹，Console 0 error/warn。候选轨迹始终隔离于正式统计/TCC。Console2 全量、production build、本次后端针对性回归与 `git diff --check` 通过；Platform 全量另有 2 个既有 ADR-019 脚本/测试合同漂移失败，未纳入本修复。 |
 | T-492 | BEV 轨迹覆盖物 SDK 引用修复 | ✅ | `MonitoringBevMap` 不再假设高德 Loader 会写入 `window.AMap`；地图初始化时保存 `loadAmap()` 实际返回的 SDK，并由轨迹覆盖物 effect 复用同一实例。回归测试精确覆盖“Loader 返回 SDK、全局变量缺失”时仍执行 `map.add`。用户停止检测器后保持停止；只读核对截图对应的 `pipe-a9d58965 / INT_camera_1 / SRC-E2BA6A8F6D0F` 为 `stopped` 且 `map_version_id=null`。最近统计中的 143 条活动轨迹具有 3,067 个有效 GCJ-02 点，但 `road_context_status=missing`、`quality_status=unverified`、0 条匹配车道，排除启用 `lane_verified` 路网参数。真实 XQH 历史切片 60 条轨迹已在高德底图可见。 |
 | T-493 | 轨迹研判质量提示下沉 | ✅ | `/gis` 的限量、空间覆盖、降级证据、未归因冲突和去重提示整体移动到研判内容最底部；顶部统计卡、地图/流向侧栏和轨迹证据保持原顺序。DOM 回归锁定 `trajectory-quality-notices` 为分析页最后一个子区块；真实页面确认顺序为统计卡 → 工作区 → 证据 → 质量提示。Console2 `17 files / 125 tests`、production build 与 `git diff --check` 通过。 |
 | T-438 | GIS 历史轨迹与冲突复盘 | ✅ | `traffic-fly-console/src/features/gis/index.tsx` — 选中路口后调用 `/api/v1/trajectories/{intersection_id}?period=1h&limit=200` 和 `/api/v1/trajectories/{intersection_id}/conflicts?period=1h&limit=200`，显示历史轨迹数量、Track ID、转向、车辆类型、均速、时长、轨迹点数，以及历史冲突 pair、TTC/PET、场景、证据和风险分；`traffic-fly-console/src/features/gis/index.test.tsx` 覆盖 `INT_camera_1` 历史轨迹与冲突证据复盘详情 |

@@ -95,15 +95,17 @@ class TelemetrySubscriber:
             "longitude": payload.get("longitude"),
             "height": height,
             "elevation": elevation,
-            "altitude_agl": height - elevation,
+            # DJI ``height`` is relative-to-takeoff and is the best available
+            # AGL proxy when no DEM is attached.
+            "altitude_agl": height,
             "attitude_head": payload.get("attitude_head", 0),
             "attitude_pitch": payload.get("attitude_pitch", 0),
             "gimbal_pitch": osd.get("gimbal_pitch", -90),
             "gimbal_yaw": osd.get("gimbal_yaw", 0),
             "gimbal_roll": osd.get("gimbal_roll", 0),
             "zoom_factor": osd.get("zoom_factor", 1.0),
-            "horizontal_speed": payload.get("horizontal_speed", 0),
-            "vertical_speed": payload.get("vertical_speed", 0),
+            "horizontal_speed": payload.get("horizontal_speed"),
+            "vertical_speed": payload.get("vertical_speed"),
         }
 
     def get_nearest(self, frame_timestamp: float) -> dict | None:
@@ -126,9 +128,6 @@ class TelemetrySubscriber:
                     best_diff = diff
                     best = entry
             if best_diff <= self.sync_tolerance_sec:
-                return best
-            # 放宽容忍：使用最近的一条（即使超出严格窗口）
-            if best is not None:
                 return best
             return None
 

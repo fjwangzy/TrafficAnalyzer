@@ -5,6 +5,7 @@
   新增 multiple_conflicts (P2): conflict_count > 3/min 滑动窗口
 """
 import logging
+import math
 import time
 import uuid
 from collections import deque
@@ -17,6 +18,15 @@ from app.kafka.ws_manager import WSManager
 from app.models.alert import AlertRecord
 
 logger = logging.getLogger(__name__)
+
+
+def _optional_metric(value: Any) -> float | None:
+    """Return a finite numeric metric, or None when the producer has no reading."""
+    try:
+        metric = float(value)
+    except (TypeError, ValueError):
+        return None
+    return metric if math.isfinite(metric) else None
 
 
 class Alert:
@@ -267,8 +277,8 @@ class AlertEngine:
         # Queue overflow check
         max_queue = 0.0
         for lane in data.get("lanes", []):
-            q = lane.get("queue_length_m", 0)
-            if q > max_queue:
+            q = _optional_metric(lane.get("queue_length_m"))
+            if q is not None and q > max_queue:
                 max_queue = q
 
         if max_queue > self._queue_threshold:
@@ -282,8 +292,8 @@ class AlertEngine:
             )
 
         # Congestion index check with consecutive frame counter
-        congestion = data.get("congestion_index", 0)
-        if congestion > self._congestion_threshold:
+        congestion = _optional_metric(data.get("congestion_index"))
+        if congestion is not None and congestion > self._congestion_threshold:
             count = self._consecutive_congestion.get(intersection_id, 0) + 1
             self._consecutive_congestion[intersection_id] = count
             if count >= self._consecutive_frames:
@@ -300,8 +310,8 @@ class AlertEngine:
             self._consecutive_congestion[intersection_id] = 0
 
         # Calibration drift check
-        match_rate = data.get("lane_match_rate", 1.0)
-        if match_rate < self._calibration_threshold:
+        match_rate = _optional_metric(data.get("lane_match_rate"))
+        if match_rate is not None and match_rate < self._calibration_threshold:
             await self._create_alert(
                 intersection_id,
                 alert_type="calibration_drift",
@@ -312,8 +322,8 @@ class AlertEngine:
             )
 
         # T-104: high_avg_speed check — 连续帧计数
-        avg_speed = data.get("avg_speed_kmh", 0)
-        if avg_speed and avg_speed > self._high_speed_threshold_kmh:
+        avg_speed = _optional_metric(data.get("avg_speed_kmh"))
+        if avg_speed is not None and avg_speed > self._high_speed_threshold_kmh:
             count = self._consecutive_high_speed.get(intersection_id, 0) + 1
             self._consecutive_high_speed[intersection_id] = count
             if count >= self._high_speed_frames:

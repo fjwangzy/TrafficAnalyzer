@@ -72,17 +72,18 @@ class TrajectoryNode:
                 indices = list(range(0, len(trajectory_px), step))
                 ct["trajectory_px"] = [trajectory_px[index] for index in indices]
                 for key in (
+                    "trajectory_bbox_center_px",
                     "ground_contact_points_px",
                     "trajectory_enu_m",
                     "trajectory_gcj02",
+                    "trajectory_timestamps_sec",
+                    "trajectory_frame_nums",
+                    "point_quality_lineage",
                 ):
                     values = ct.get(key)
                     if isinstance(values, list) and len(values) == len(trajectory_px):
                         ct[key] = [values[index] for index in indices]
                 if len(trajectory_timestamps) == len(trajectory_px):
-                    ct["trajectory_timestamps_sec"] = [
-                        trajectory_timestamps[index] for index in indices
-                    ]
                     ct["trajectory_time_offsets_sec"] = [
                         round(value - trajectory_timestamps[0], 3)
                         for value in ct["trajectory_timestamps_sec"]

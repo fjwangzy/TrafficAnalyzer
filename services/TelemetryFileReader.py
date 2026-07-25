@@ -118,8 +118,8 @@ class TelemetryFileReader:
             "gimbal_yaw": osd.get("gimbal_yaw", 0),
             "gimbal_roll": osd.get("gimbal_roll", 0),
             "zoom_factor": osd.get("zoom_factor", 1.0),
-            "horizontal_speed": payload.get("horizontal_speed", 0) or 0,
-            "vertical_speed": payload.get("vertical_speed", 0) or 0,
+            "horizontal_speed": payload.get("horizontal_speed"),
+            "vertical_speed": payload.get("vertical_speed"),
         }
 
     def get_nearest(self, frame_timestamp: float) -> dict | None:

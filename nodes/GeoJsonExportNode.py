@@ -86,45 +86,56 @@ class GeoJsonExportNode:
         Returns:
             包含 BEV 坐标轨迹的字典，准备写入 GeoJSON。
         """
-        H = frame_element.homography_matrix
-        has_H = is_valid_homography(H)
-        drone_disp = getattr(frame_element, "drone_displacement_m", None)
-        anchor_gcj02 = getattr(frame_element, "anchor_gcj02", None)
-        dist_coeffs = getattr(frame_element, "dist_coeffs", None)
-        cam_intrinsics = getattr(frame_element, "camera_intrinsics", None)
-        img_h, img_w = frame_element.frame.shape[:2]
-        img_size = (img_w, img_h)
+        anchor_gcj02 = ct.get("anchor_gcj02") or getattr(
+            frame_element, "anchor_gcj02", None
+        )
 
         # 记住锚点（取第一个有效值）
         if anchor_gcj02 and self._anchor_gcj02 is None:
             self._anchor_gcj02 = tuple(anchor_gcj02)
 
-        trajectory_px = ct.get("trajectory_px", [])
-        if not trajectory_px or len(trajectory_px) < 2:
-            return None
+        # Completed tracks already own their point-wise world facts. Prefer the
+        # canonical GCJ-02 sequence so EOF flushes never depend on a synthetic
+        # current frame or reproject history through the final frame's H.
+        geo_coordinates = [
+            [round(float(point[0]), 8), round(float(point[1]), 8)]
+            for point in (ct.get("trajectory_gcj02") or [])
+            if isinstance(point, (list, tuple))
+            and len(point) >= 2
+            and point[0] is not None
+            and point[1] is not None
+            and math.isfinite(float(point[0]))
+            and math.isfinite(float(point[1]))
+        ]
+        crs = "GCJ02"
 
-        # ── 像素 → BEV 世界坐标（米）──────────────────────────────
-        bev_points = None
-        can_project = has_H and drone_disp is not None
-
-        if can_project:
+        if len(geo_coordinates) < 2:
+            trajectory_px = ct.get("trajectory_px", [])
+            if (
+                not trajectory_px
+                or len(trajectory_px) < 2
+                or frame_element.frame is None
+            ):
+                return None
+            H = frame_element.homography_matrix
+            drone_disp = getattr(frame_element, "drone_displacement_m", None)
+            if not is_valid_homography(H) or drone_disp is None:
+                return None
+            img_h, img_w = frame_element.frame.shape[:2]
             pts_px = np.array(trajectory_px, dtype=np.float64)
-            # 镜头畸变校正
+            dist_coeffs = getattr(frame_element, "dist_coeffs", None)
+            cam_intrinsics = getattr(frame_element, "camera_intrinsics", None)
             if dist_coeffs and cam_intrinsics:
-                pts_px = undistort_points(pts_px, cam_intrinsics, img_size, dist_coeffs)
-            # H 投影 + 无人机位移补偿
-            pts_world = pixel_to_world_compensated(pts_px, H, drone_disp)
-            bev_points = pts_world.tolist()
-
-        # ── ENU（米）→ GCJ-02 ──────────────────────────────────
-        geo_coordinates = None
-        crs = "Local"
-        if bev_points and self.use_gps and anchor_gcj02:
+                pts_px = undistort_points(
+                    pts_px, cam_intrinsics, (img_w, img_h), dist_coeffs
+                )
+            bev_points = pixel_to_world_compensated(pts_px, H, drone_disp).tolist()
+            if not self.use_gps or not anchor_gcj02:
+                return None
             geo_coordinates = []
-            for pt in bev_points:
-                lon, lat = enu_to_gcj02(pt[0], pt[1], anchor_gcj02)
+            for point in bev_points:
+                lon, lat = enu_to_gcj02(point[0], point[1], anchor_gcj02)
                 geo_coordinates.append([round(lon, 8), round(lat, 8)])
-            crs = "GCJ02"
 
         if not geo_coordinates or len(geo_coordinates) < 2:
             return None

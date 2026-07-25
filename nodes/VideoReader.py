@@ -1,6 +1,7 @@
 import os
 import time
 import logging
+import threading
 from typing import Generator
 import cv2
 
@@ -8,6 +9,49 @@ from elements.FrameElement import FrameElement
 from elements.VideoEndBreakElement import VideoEndBreakElement
 
 logger = logging.getLogger(__name__)
+
+
+class _LatestFrameStream:
+    """Continuously drain a realtime decoder into one bounded latest-frame slot."""
+
+    def __init__(self, stream) -> None:
+        self.stream = stream
+        self._condition = threading.Condition()
+        self._latest = None
+        self._sequence = 0
+        self._stopped = False
+        self._thread: threading.Thread | None = None
+
+    def start(self) -> None:
+        if self._thread is not None:
+            return
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def _run(self) -> None:
+        while True:
+            ok, frame = self.stream.read()
+            captured_at = time.time()
+            with self._condition:
+                if not ok:
+                    self._stopped = True
+                    self._condition.notify_all()
+                    return
+                self._sequence += 1
+                self._latest = (self._sequence, captured_at, frame)
+                self._condition.notify_all()
+
+    def read_latest(self, previous_sequence: int) -> tuple[bool, object, int, float, int]:
+        self.start()
+        with self._condition:
+            self._condition.wait_for(
+                lambda: self._sequence > previous_sequence or self._stopped
+            )
+            if self._latest is None or self._sequence <= previous_sequence:
+                return False, None, previous_sequence, time.time(), 0
+            sequence, captured_at, frame = self._latest
+            dropped = max(sequence - previous_sequence - 1, 0)
+            return True, frame, sequence, captured_at, dropped
 
 
 class VideoReader:
@@ -24,6 +68,11 @@ class VideoReader:
 
         self.stream = cv2.VideoCapture(self.video_pth)
         self._seekable_file = not isinstance(self.video_pth, int) and "://" not in str(self.video_pth)
+        self._realtime = not self._seekable_file
+        self._latest_stream = None
+        if self._realtime:
+            self.stream.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+            self._latest_stream = _LatestFrameStream(self.stream)
         self._total_source_frames = (
             int(self.stream.get(cv2.CAP_PROP_FRAME_COUNT)) if self._seekable_file else 0
         )
@@ -97,10 +146,11 @@ class VideoReader:
     def process(self) -> Generator[FrameElement, None, None]:
         # 当前视频源的原始帧号；跳帧后 FrameElement.frame_num 仍保留原始帧号
         source_frame_number = 0
+        realtime_sequence = 0
 
         while True:
             next_frame_number = source_frame_number + 1
-            if (next_frame_number - 1) % self.frame_stride != 0:
+            if not self._realtime and (next_frame_number - 1) % self.frame_stride != 0:
                 if self._seekable_file and self.frame_stride >= self.seek_stride_threshold:
                     # 文件源可直接定位到下一个抽样帧；相比逐帧 grab，H.264 4K
                     # 回放不再为所有被跳过帧执行关键帧间解码。
@@ -126,7 +176,15 @@ class VideoReader:
                 source_frame_number = next_frame_number
                 continue
 
-            ret, frame = self.stream.read()
+            if self._latest_stream is not None:
+                ret, frame, realtime_sequence, captured_at, dropped = (
+                    self._latest_stream.read_latest(realtime_sequence)
+                )
+                next_frame_number = realtime_sequence
+            else:
+                ret, frame = self.stream.read()
+                captured_at = time.time()
+                dropped = 0
             if not ret:
                 logger.warning("无法接收帧（流结束？）。退出...")
                 if not self.break_element_sent:
@@ -135,14 +193,18 @@ class VideoReader:
                     yield VideoEndBreakElement(self.video_pth, self.last_frame_timestamp)
                 break
 
+            if self._realtime and (realtime_sequence - 1) % self.frame_stride != 0:
+                source_frame_number = realtime_sequence
+                continue
+
             source_frame_number = next_frame_number
 
             # 计算时间戳（如果从视频或摄像机提取，从0秒开始）
             if isinstance(self.video_pth, int) or "://" in self.video_pth:
                 # 从摄像机：
                 if source_frame_number == 1:
-                    self.first_timestamp = time.time()
-                timestamp = time.time() - self.first_timestamp
+                    self.first_timestamp = captured_at
+                timestamp = captured_at - self.first_timestamp
             else:
                 # 从视频：
                 timestamp = self.stream.get(cv2.CAP_PROP_POS_MSEC) / 1000
@@ -156,9 +218,18 @@ class VideoReader:
             frame_element = FrameElement(
                 self.video_source, frame, timestamp, source_frame_number, self.roads_info
             )
+            frame_element.source_capture_time = captured_at
+            frame_element.source_is_realtime = self._realtime
+            frame_element.source_drop_count = dropped
+            frame_element.source_drop_reason = (
+                "realtime_latest_frame_superseded" if dropped else None
+            )
             # 注入车道多边形数据（供LaneAnalysisNode数据驱动使用）
             frame_element.lane_polygons = self.lane_polygons
             # 注入遥测数据（与帧时间戳同步）
             if self.telemetry_subscriber:
-                frame_element.telemetry = self.telemetry_subscriber.get_nearest(timestamp)
+                telemetry_timestamp = captured_at if self._realtime else timestamp
+                frame_element.telemetry = self.telemetry_subscriber.get_nearest(
+                    telemetry_timestamp
+                )
             yield frame_element

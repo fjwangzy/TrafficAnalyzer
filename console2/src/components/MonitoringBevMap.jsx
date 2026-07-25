@@ -17,6 +17,12 @@ export function trajectoryGcj02(item) {
     .map(([longitude, latitude]) => [Number(longitude), Number(latitude)])
 }
 
+export function isCandidateTrajectory(item) {
+  return item?.tracking_quality === 'degraded'
+    || item?.quality_status === 'degraded'
+    || item?.formal_analytics_eligible === false
+}
+
 export function mapFitPadding({ compact = false, embedded = false } = {}) {
   if (compact) return [12, 12, 12, 12]
   if (embedded) return [32, 32, 32, 32]
@@ -29,15 +35,17 @@ export function trajectoryOverlaySignature(trajectories = []) {
   return JSON.stringify(trajectories.map((item, index) => [
     Number(item?.color_index ?? index) % TRACK_COLORS.length,
     Boolean(item?.selected),
+    isCandidateTrajectory(item),
     trajectoryGcj02(item),
   ]))
 }
 
-export function MonitoringBevMap({ centerLat, centerLon, trajectories = [], activeCount = 0, compact = false, embedded = false, showEndpoints = true, label }) {
+export function MonitoringBevMap({ centerLat, centerLon, trajectories = [], activeCount = 0, compact = false, embedded = false, showEndpoints = true, emptyMessage = '', label }) {
   const targetRef = useRef(null)
   const mapRef = useRef(null)
   const amapRef = useRef(null)
   const overlaysRef = useRef([])
+  const hasFittedTrajectoriesRef = useRef(false)
   const [loadFailed, setLoadFailed] = useState(false)
   const [mapReady, setMapReady] = useState(false)
   const center = validMapCenter(centerLat, centerLon)
@@ -60,13 +68,18 @@ export function MonitoringBevMap({ centerLat, centerLon, trajectories = [], acti
       })
       setMapReady(true)
     }).catch(() => { if (!disposed) setLoadFailed(true) })
-    return () => { disposed = true; setMapReady(false); mapRef.current?.destroy(); mapRef.current = null; amapRef.current = null; overlaysRef.current = [] }
+    return () => { disposed = true; setMapReady(false); mapRef.current?.destroy(); mapRef.current = null; amapRef.current = null; overlaysRef.current = []; hasFittedTrajectoriesRef.current = false }
   }, [compact, loadFailed])
 
   useEffect(() => {
     const map = mapRef.current
     if (!map) return
     map.setCenter([center.lon, center.lat])
+  }, [center.lat, center.lon, mapReady])
+
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map) return
     const previousOverlays = overlaysRef.current
     const AMap = amapRef.current
     if (!AMap) return
@@ -74,10 +87,14 @@ export function MonitoringBevMap({ centerLat, centerLon, trajectories = [], acti
     stableTrajectories.forEach((item, index) => {
       const path = trajectoryGcj02(item)
       if (!path.length) return
-      const color = TRACK_COLORS[Number(item.color_index ?? index) % TRACK_COLORS.length]
+      const candidate = isCandidateTrajectory(item)
+      const color = candidate ? '#ffb454' : TRACK_COLORS[Number(item.color_index ?? index) % TRACK_COLORS.length]
       if (path.length >= 2) overlays.push(new AMap.Polyline({
         path, strokeColor: color, strokeWeight: item.selected ? 5 : (item.selected || index < activeCount ? 3.5 : 2.5),
-        strokeOpacity: 0.92, lineJoin: 'round', lineCap: 'round', zIndex: 20,
+        strokeOpacity: candidate ? 0.82 : 0.92,
+        strokeStyle: candidate ? 'dashed' : 'solid',
+        strokeDasharray: candidate ? [10, 7] : undefined,
+        lineJoin: 'round', lineCap: 'round', zIndex: candidate ? 19 : 20,
       }))
       if (showEndpoints || item.selected) overlays.push(new AMap.CircleMarker({
         center: path.at(-1), radius: 4.5, fillColor: color, fillOpacity: 1,
@@ -86,18 +103,20 @@ export function MonitoringBevMap({ centerLat, centerLon, trajectories = [], acti
     })
     if (overlays.length) {
       map.add(overlays)
-      if (!previousOverlays.length) {
+      if (!hasFittedTrajectoriesRef.current) {
         map.setFitView(overlays, false, mapFitPadding({ compact, embedded }), compact || embedded ? 19 : 20)
+        hasFittedTrajectoriesRef.current = true
       }
     }
     if (previousOverlays.length) map.remove(previousOverlays)
     overlaysRef.current = overlays
-  }, [stableTrajectories, activeCount, center.lat, center.lon, compact, embedded, showEndpoints, mapReady])
+  }, [stableTrajectories, activeCount, compact, embedded, showEndpoints, mapReady])
 
   if (loadFailed) return <div className='map-offline'><strong>高德地图服务不可用</strong><button className='secondary-button' onClick={() => setLoadFailed(false)}>重试底图</button></div>
   return <div className={`monitoring-bev-map ${compact ? 'compact' : 'main'}`} role='img' aria-label={label || 'GCJ-02 轨迹地图'}>
     <div ref={targetRef} className='monitoring-bev-map-canvas amap-map' />
     <div className='monitoring-bev-grid' />
     <div className='monitoring-bev-source'>高德地图 · GCJ-02</div>
+    {!trajectories.length && emptyMessage ? <div className='monitoring-bev-empty' role='status'>{emptyMessage}</div> : null}
   </div>
 }

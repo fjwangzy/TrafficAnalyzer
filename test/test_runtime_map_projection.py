@@ -10,12 +10,17 @@ from nodes.TrackerInfoUpdateNode import TrackerInfoUpdateNode
 from utils_local.coordinates import enu_to_gcj02
 
 
-def _bundle(*, include_reference: bool = True) -> dict:
+def _bundle(*, include_reference: bool = True, legacy_reference: bool = False) -> dict:
     residuals = {
         "registration_gimbal_yaw_deg": 0.0,
     }
-    if include_reference:
+    if include_reference and legacy_reference:
         residuals["registration_position_gcj02"] = [117.0, 36.0]
+    registration_pose = (
+        {"position_gcj02": [117.0, 36.0], "gimbal_yaw": 0.0}
+        if include_reference and not legacy_reference
+        else {}
+    )
     return {
         "map_status": "lane_verified",
         "coordinate_system": "GCJ02",
@@ -31,6 +36,7 @@ def _bundle(*, include_reference: bool = True) -> dict:
                     [0.0, 0.0, 1.0],
                 ],
                 "residuals": residuals,
+                "registration_pose": registration_pose,
             },
             {
                 "source_profile_id": "SRC-B",
@@ -41,6 +47,7 @@ def _bundle(*, include_reference: bool = True) -> dict:
                     [0.0, 0.0, 1.0],
                 ],
                 "residuals": residuals,
+                "registration_pose": registration_pose,
             },
         ],
     }
@@ -87,6 +94,25 @@ def test_runtime_map_requires_motion_reference(monkeypatch):
 
     with pytest.raises(ValueError, match="registration_position_gcj02"):
         MotionCompensationNode({}).process(frame)
+
+
+def test_runtime_map_accepts_legacy_residual_motion_reference(monkeypatch):
+    monkeypatch.setenv("SOURCE_PROFILE_ID", "SRC-B")
+    monkeypatch.setenv(
+        "RUNTIME_MAP_BUNDLE_JSON",
+        json.dumps(_bundle(legacy_reference=True)),
+    )
+    frame = HomographyCalibrationNode({"calibration": {}}).process(_frame())
+    frame.telemetry = {
+        "position_gcj02": {"longitude": 117.0, "latitude": 36.0},
+        "coordinate_system": "GCJ02",
+        "horizontal_speed": 0.0,
+        "gimbal_yaw": 0.0,
+    }
+
+    result = MotionCompensationNode({}).process(frame)
+
+    assert np.allclose(result.drone_displacement_m, [0.0, 0.0])
 
 
 def test_tracker_accumulates_each_frames_ground_contact_in_map_enu(monkeypatch):

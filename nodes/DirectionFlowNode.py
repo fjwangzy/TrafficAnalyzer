@@ -46,6 +46,14 @@ class DirectionFlowNode:
         if not self.enabled:
             return frame_element
 
+        if (
+            getattr(frame_element, "geo_reference_quality", None) is not None
+            and not getattr(frame_element, "formal_analytics_eligible", False)
+        ):
+            frame_element.direction_stats = None
+            frame_element.queue_count = 0
+            return frame_element
+
         buffer_tracks = frame_element.buffer_tracks
         if not buffer_tracks:
             frame_element.direction_stats = self._empty_stats()

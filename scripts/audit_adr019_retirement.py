@@ -36,31 +36,66 @@ def _current_schema_head() -> str:
     return heads.pop()
 
 
-def _report_passed() -> bool:
-    try:
-        rebuild = json.loads(GCJ02_REBUILD_REPORT.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        rebuild = {}
-    if (
+def _known_schema_revisions() -> set[str]:
+    revisions: set[str] = set()
+    for path in (ROOT / "platform" / "alembic" / "versions").glob("*.py"):
+        source = path.read_text(encoding="utf-8")
+        revision = re.search(r'^revision\s*=\s*["\']([^"\']+)["\']', source, re.MULTILINE)
+        if revision:
+            revisions.add(revision.group(1))
+    return revisions
+
+
+def runtime_evidence_passed(
+    rebuild: dict,
+    runtime: dict,
+    *,
+    current_schema_head: str,
+    known_revisions: set[str],
+) -> bool:
+    rebuild_revision = rebuild.get("database", {}).get("alembic_revision")
+    clean_rebuild_passed = (
         rebuild.get("schema_version") == "uav.gcj02-local-rebuild/v1"
         and rebuild.get("passed") is True
-        and rebuild.get("database", {}).get("alembic_revision") == _current_schema_head()
+        and rebuild_revision in known_revisions
         and rebuild.get("database", {}).get("hypertables") == 5
         and rebuild.get("database", {}).get("business_tables_empty") is True
         and not rebuild.get("raw_materials", {}).get("missing_files")
         and not rebuild.get("kafka", {}).get("nonzero_end_offsets")
         and not rebuild.get("kafka", {}).get("managed_consumer_groups_remaining")
-    ):
-        return True
+    )
+    runtime_schema = runtime.get("schema_version")
+    topology_matches_schema = (
+        runtime_schema == "uav.adr019-local-retirement/v1"
+        or (
+            runtime_schema == "uav.adr019-local-retirement/v2"
+            and runtime.get("runtime_topology")
+            == "native_macos_platform_with_docker_infra"
+        )
+    )
+    current_runtime_passed = (
+        topology_matches_schema
+        and runtime.get("passed") is True
+        and runtime.get("database", {}).get("alembic_revision") == current_schema_head
+        and runtime.get("database", {}).get("hypertables") == 5
+    )
+    return clean_rebuild_passed and current_runtime_passed
+
+
+def _report_passed() -> bool:
+    try:
+        rebuild = json.loads(GCJ02_REBUILD_REPORT.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        rebuild = {}
     try:
         report = json.loads(LOCAL_REPORT.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        return False
-    return (
-        report.get("schema_version") == "uav.adr019-local-retirement/v1"
-        and report.get("passed") is True
-        and report.get("database", {}).get("alembic_revision") == _current_schema_head()
-        and report.get("database", {}).get("hypertables") == 5
+        report = {}
+    return runtime_evidence_passed(
+        rebuild,
+        report,
+        current_schema_head=_current_schema_head(),
+        known_revisions=_known_schema_revisions(),
     )
 
 

@@ -1,0 +1,59 @@
+{
+  "schema_version": "uav.tracking-architecture-comparison/v1",
+  "generated_at": "2026-07-24",
+  "scope": {
+    "video_window": "inter_xqh 840s-natural EOF",
+    "sample_frames": 1142,
+    "frame_stride": 4,
+    "detector_inputs_identical": true,
+    "raw_detections": 109899,
+    "invalid_detection_geometry": 0,
+    "comparison_type": "unannotated_engineering_diagnostic",
+    "non_claims": [
+      "IDF1",
+      "HOTA",
+      "ID switch rate",
+      "world-position RMSE",
+      "speed MAE"
+    ]
+  },
+  "world_aware_v1": {
+    "architecture": "FlightGeoReference then H/ENU-aware ByteTrack",
+    "tracking_method": "pose_aware_world_v1",
+    "total_associations": 73406,
+    "unique_observed_ids": 984,
+    "formal_track_observations": 13169,
+    "candidate_track_observations": 60237,
+    "completed_formal_tracks": 134,
+    "steady_detector_p95_ms": 284.61,
+    "single_process_frame_p95_ms": 750.59,
+    "source": "historical full-tail acceptance recorded in docs/test_report_inter_xqh.md before ADR-023"
+  },
+  "image_motion_v2": {
+    "architecture": "visual image motion then ByteTrack, followed by world projection",
+    "tracking_method": "motion_compensated_image_v2",
+    "total_associations": 61908,
+    "unique_observed_ids": 747,
+    "median_observed_track_lifetime_sec": 5.873,
+    "p95_observed_track_lifetime_sec": 61.795,
+    "formal_track_observations": 17590,
+    "candidate_track_observations": 44318,
+    "completed_formal_tracks": 200,
+    "steady_detector_p95_ms": 192.74,
+    "single_process_frame_p95_ms": 425.52,
+    "active_alignment_failures": 0,
+    "completed_alignment_failures": 0,
+    "candidate_alignment_failures": 0,
+    "degraded_business_leaks": 0,
+    "engineering_gates": "24/24",
+    "source": "docs/generated/xqh-hover-departure-acceptance.json"
+  },
+  "diagnostic_delta_percent": {
+    "total_associations": -15.7,
+    "unique_observed_ids": -24.1,
+    "formal_track_observations": 33.6,
+    "candidate_track_observations": -26.4,
+    "completed_formal_tracks": 49.3
+  },
+  "interpretation": "Fewer observed IDs and longer surviving image tracks are directionally consistent with lower churn, while formal/candidate count changes also reflect the new dual-ID segmentation boundary. None of these unannotated counts proves tracking accuracy; production release remains blocked until annotated IDF1/HOTA/ID-switch and world/speed truth gates pass."
+}

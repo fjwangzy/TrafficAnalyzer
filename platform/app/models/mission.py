@@ -5,11 +5,11 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from sqlalchemy import (
-    CheckConstraint,
-    Float,
     JSON,
     Boolean,
+    CheckConstraint,
     DateTime,
+    Float,
     ForeignKey,
     Integer,
     String,
@@ -129,6 +129,45 @@ class SourceIntersectionBinding(Base):
     )
 
 
+class FlightSegmentRecord(Base):
+    __tablename__ = "uav_flight_segments"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    source_profile_id: Mapped[str] = mapped_column(
+        ForeignKey("uav_video_sources.profile_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    mission_id: Mapped[str | None] = mapped_column(
+        ForeignKey("uav_missions.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    start_offset_sec: Mapped[float] = mapped_column(Float, nullable=False)
+    end_offset_sec: Mapped[float] = mapped_column(Float, nullable=False)
+    phase: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    quality_status: Mapped[str] = mapped_column(String(24), nullable=False)
+    classifier_version: Mapped[str] = mapped_column(String(40), nullable=False)
+    motion_statistics: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    map_version_id: Mapped[str | None] = mapped_column(
+        ForeignKey("uav_channelized_map_versions.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "phase IN ('hover_candidate','hover_verified','cruise_nadir','transition','unsupported_pose','telemetry_unavailable')",
+            name="ck_uav_flight_segment_phase",
+        ),
+        CheckConstraint(
+            "quality_status IN ('verified','degraded','unverified')",
+            name="ck_uav_flight_segment_quality",
+        ),
+    )
+
+
 class CalibrationReviewRecord(Base):
     __tablename__ = "uav_calibration_review_records"
 
@@ -231,6 +270,9 @@ class VisualRegistration(Base):
     control_points: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     homography_pixel_to_enu: Mapped[list | None] = mapped_column(JSON, nullable=True)
     residuals: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    registration_pose: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    camera_calibration: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    map_coverage_enu_m: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     status: Mapped[str] = mapped_column(String(24), nullable=False, default="draft")
     created_by: Mapped[int | None] = mapped_column(ForeignKey("uav_users.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
@@ -355,6 +397,9 @@ class FlightPlanRecord(Base):
     inter_id: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     road_data_version: Mapped[str] = mapped_column(String(100), nullable=False)
     ai_mode: Mapped[str] = mapped_column(String(40), nullable=False, default="traffic_monitoring")
+    tracking_profile: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="hover_cruise_v1"
+    )
     schedule_type: Mapped[str] = mapped_column(String(16), nullable=False)
     schedule: Mapped[dict] = mapped_column(JSON, nullable=False)
     timezone: Mapped[str] = mapped_column(String(64), nullable=False, default="Asia/Shanghai")
@@ -414,6 +459,12 @@ class PipelineRecord(Base):
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     stopped_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    flight_phase: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    tracking_quality: Mapped[str | None] = mapped_column(String(24), nullable=True)
+    formal_analytics_eligible: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
+    runtime_quality: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=lambda: datetime.now(UTC), nullable=False

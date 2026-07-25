@@ -1,0 +1,114 @@
+{
+  "schema_version": "uav.cruise-eval/v1",
+  "package_status": "template_replace_all_placeholders",
+  "template_instructions": [
+    "Duplicate or rename missions only if the final package still has at least three intersections and two complete missions per intersection.",
+    "Replace every REPLACE_* value and run scripts/evaluate_cruise_tracking.py --audit-only before annotation metrics.",
+    "Keep MP4, telemetry and truth references content-addressed; do not infer truth from model predictions or filenames.",
+    "Populate frames only after identity, position and speed truth have independent review and calibration evidence."
+  ],
+  "ground_truth_provenance": {
+    "identity": {
+      "source": "manual",
+      "reference_id": "",
+      "independently_reviewed": false
+    },
+    "position": {
+      "source": "verified_map_gcp",
+      "reference_id": "",
+      "calibration_valid": false
+    },
+    "speed": {
+      "source": "radar",
+      "reference_id": "",
+      "calibration_valid": false
+    }
+  },
+  "mission_manifest": [
+    {
+      "mission_id": "I1-M1",
+      "intersection_id": "I1",
+      "source_profile_id": "REPLACE_SOURCE_PROFILE",
+      "map_version_id": "REPLACE_LANE_VERIFIED_MAP",
+      "runtime_bundle_sha256": "REPLACE_WITH_64_LOWERCASE_HEX",
+      "model_id": "REPLACE_MODEL_FILE_AT_SHA12",
+      "config_sha256": "REPLACE_WITH_64_LOWERCASE_HEX",
+      "phases": ["entry_cruise", "hover_verified", "exit_cruise"],
+      "scenario_tags": ["motor", "non_motor"],
+      "capture_profile": {"agl_target_m": 80, "ground_speed_target_mps": 2, "gimbal_pitch_deg": -90, "resolution": "3840x2160", "fps": 29.97},
+      "video": {"path": "assets/I1-M1.mp4", "sha256": "REPLACE_WITH_64_LOWERCASE_HEX"},
+      "telemetry": {"path": "assets/I1-M1.srt", "sha256": "REPLACE_WITH_64_LOWERCASE_HEX"}
+    },
+    {
+      "mission_id": "I1-M2",
+      "intersection_id": "I1",
+      "source_profile_id": "REPLACE_SOURCE_PROFILE",
+      "map_version_id": "REPLACE_LANE_VERIFIED_MAP",
+      "runtime_bundle_sha256": "REPLACE_WITH_64_LOWERCASE_HEX",
+      "model_id": "REPLACE_MODEL_FILE_AT_SHA12",
+      "config_sha256": "REPLACE_WITH_64_LOWERCASE_HEX",
+      "phases": ["entry_cruise", "hover_verified", "exit_cruise"],
+      "scenario_tags": ["dense_traffic"],
+      "capture_profile": {"agl_target_m": 100, "ground_speed_target_mps": 5, "gimbal_pitch_deg": -90, "resolution": "3840x2160", "fps": 29.97},
+      "video": {"path": "assets/I1-M2.mp4", "sha256": "REPLACE_WITH_64_LOWERCASE_HEX"},
+      "telemetry": {"path": "assets/I1-M2.srt", "sha256": "REPLACE_WITH_64_LOWERCASE_HEX"}
+    },
+    {
+      "mission_id": "I2-M1",
+      "intersection_id": "I2",
+      "source_profile_id": "REPLACE_SOURCE_PROFILE",
+      "map_version_id": "REPLACE_LANE_VERIFIED_MAP",
+      "runtime_bundle_sha256": "REPLACE_WITH_64_LOWERCASE_HEX",
+      "model_id": "REPLACE_MODEL_FILE_AT_SHA12",
+      "config_sha256": "REPLACE_WITH_64_LOWERCASE_HEX",
+      "phases": ["entry_cruise", "hover_verified", "exit_cruise"],
+      "scenario_tags": ["crossing"],
+      "capture_profile": {"agl_target_m": 110, "ground_speed_target_mps": 8, "gimbal_pitch_deg": -90, "resolution": "3840x2160", "fps": 29.97},
+      "video": {"path": "assets/I2-M1.mp4", "sha256": "REPLACE_WITH_64_LOWERCASE_HEX"},
+      "telemetry": {"path": "assets/I2-M1.srt", "sha256": "REPLACE_WITH_64_LOWERCASE_HEX"}
+    },
+    {
+      "mission_id": "I2-M2",
+      "intersection_id": "I2",
+      "source_profile_id": "REPLACE_SOURCE_PROFILE",
+      "map_version_id": "REPLACE_LANE_VERIFIED_MAP",
+      "runtime_bundle_sha256": "REPLACE_WITH_64_LOWERCASE_HEX",
+      "model_id": "REPLACE_MODEL_FILE_AT_SHA12",
+      "config_sha256": "REPLACE_WITH_64_LOWERCASE_HEX",
+      "phases": ["entry_cruise", "hover_verified", "exit_cruise"],
+      "scenario_tags": ["occlusion"],
+      "capture_profile": {"agl_target_m": 130, "ground_speed_target_mps": 11, "gimbal_pitch_deg": -90, "resolution": "3840x2160", "fps": 29.97},
+      "video": {"path": "assets/I2-M2.mp4", "sha256": "REPLACE_WITH_64_LOWERCASE_HEX"},
+      "telemetry": {"path": "assets/I2-M2.srt", "sha256": "REPLACE_WITH_64_LOWERCASE_HEX"}
+    },
+    {
+      "mission_id": "I3-M1",
+      "intersection_id": "I3",
+      "source_profile_id": "REPLACE_SOURCE_PROFILE",
+      "map_version_id": "REPLACE_LANE_VERIFIED_MAP",
+      "runtime_bundle_sha256": "REPLACE_WITH_64_LOWERCASE_HEX",
+      "model_id": "REPLACE_MODEL_FILE_AT_SHA12",
+      "config_sha256": "REPLACE_WITH_64_LOWERCASE_HEX",
+      "phases": ["entry_cruise", "hover_verified", "exit_cruise"],
+      "scenario_tags": ["low_confidence_small_target"],
+      "capture_profile": {"agl_target_m": 90, "ground_speed_target_mps": 4, "gimbal_pitch_deg": -90, "resolution": "3840x2160", "fps": 29.97},
+      "video": {"path": "assets/I3-M1.mp4", "sha256": "REPLACE_WITH_64_LOWERCASE_HEX"},
+      "telemetry": {"path": "assets/I3-M1.srt", "sha256": "REPLACE_WITH_64_LOWERCASE_HEX"}
+    },
+    {
+      "mission_id": "I3-M2",
+      "intersection_id": "I3",
+      "source_profile_id": "REPLACE_SOURCE_PROFILE",
+      "map_version_id": "REPLACE_LANE_VERIFIED_MAP",
+      "runtime_bundle_sha256": "REPLACE_WITH_64_LOWERCASE_HEX",
+      "model_id": "REPLACE_MODEL_FILE_AT_SHA12",
+      "config_sha256": "REPLACE_WITH_64_LOWERCASE_HEX",
+      "phases": ["entry_cruise", "hover_verified", "exit_cruise"],
+      "scenario_tags": ["motor", "non_motor", "dense_traffic"],
+      "capture_profile": {"agl_target_m": 130, "ground_speed_target_mps": 7, "gimbal_pitch_deg": -90, "resolution": "3840x2160", "fps": 29.97},
+      "video": {"path": "assets/I3-M2.mp4", "sha256": "REPLACE_WITH_64_LOWERCASE_HEX"},
+      "telemetry": {"path": "assets/I3-M2.srt", "sha256": "REPLACE_WITH_64_LOWERCASE_HEX"}
+    }
+  ],
+  "frames": []
+}

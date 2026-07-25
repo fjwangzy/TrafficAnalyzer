@@ -1,0 +1,33 @@
+{
+  "schema_version": "uav.cruise-eval/v1",
+  "package_status": "negative_quality_isolation_evidence_only",
+  "mission_manifest": [
+    {
+      "mission_id": "XQH-20260403-PM-NEGATIVE",
+      "intersection_id": "011wwe0z19700001",
+      "source_profile_id": "SRC-INTER-XQH-0403-PM",
+      "map_version_id": "CMV-b83a25740598430bb996f75d",
+      "runtime_bundle_sha256": "",
+      "model_id": "yolo11s-visdrone.pt@9679a16c7c2b",
+      "config_sha256": "",
+      "phases": ["hover_verified", "exit_cruise"],
+      "scenario_tags": ["motor", "non_motor", "dense_traffic"],
+      "capture_profile": {
+        "agl_target_m": 130,
+        "ground_speed_target_mps": 0,
+        "gimbal_pitch_deg": -90,
+        "resolution": "3840x2160",
+        "fps": 29.97003
+      },
+      "video": {
+        "path": "test_videos/inter_xqh/DJI_20260403142902_0001_V小清河北路与水屯路路口.mp4",
+        "sha256": "342dea78baf9acdb526a969333ec1c319b6aa39dc92a010548194b5c99b3fcbc"
+      },
+      "telemetry": {
+        "path": "test_videos/inter_xqh/telemetry.srt",
+        "sha256": "12ea683bafe9b69066438e02211de30dcb1780924b406e35e63dcb90188010ac"
+      }
+    }
+  ],
+  "frames": []
+}

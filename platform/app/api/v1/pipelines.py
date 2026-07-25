@@ -82,6 +82,9 @@ class PipelineCreateRequest(BaseModel):
     )
     telemetry_time_offset_sec: float | None = Field(default=None, ge=-86400, le=86400)
     telemetry_sync_tolerance_sec: float | None = Field(default=None, gt=0, le=60)
+    tracking_profile: str = Field(
+        default="hover_cruise_v1", pattern="^(hover_cruise_v1|hover_only_legacy)$"
+    )
 
 
 class PipelineResponse(BaseModel):
@@ -191,6 +194,7 @@ async def start_pipeline(body: PipelineCreateRequest, request: Request):
             road_data_version=body.road_data_version,
             road_context_status="complete",
             quality_status="verified",
+            tracking_profile=body.tracking_profile,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -209,6 +213,9 @@ class PipelineRegisterRequest(BaseModel):
     video_port: int | None = Field(default=None, ge=1024, le=65535)
     topic_name: str | None = None
     video_stream_url: str | None = None
+    tracking_profile: str = Field(
+        default="hover_cruise_v1", pattern="^(hover_cruise_v1|hover_only_legacy)$"
+    )
 
 
 @router.post("/register", status_code=201, summary="Register an externally-running pipeline")
@@ -244,6 +251,7 @@ async def register_pipeline(body: PipelineRegisterRequest, request: Request):
             video_port=body.video_port,
             topic_name=body.topic_name,
             video_stream_url=body.video_stream_url,
+            tracking_profile=body.tracking_profile,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc

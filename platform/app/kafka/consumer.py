@@ -314,7 +314,17 @@ class KafkaConsumerService:
 
         # Check alert rules
         if self._alert_engine:
-            await self._alert_engine.check_stats(intersection_id, data)
+            try:
+                await self._alert_engine.check_stats(intersection_id, data)
+            except Exception as error:
+                # Alerts are a side effect of a canonical stats record. A rule
+                # failure must not pin the Kafka partition and stop realtime
+                # trajectory delivery for every later record.
+                logger.warning(
+                    "Alert evaluation failed for %s; continuing realtime stats dispatch: %s",
+                    intersection_id,
+                    error,
+                )
 
     async def _handle_detections(self, data: dict, intersection_id: str):
         """Handle detections message."""

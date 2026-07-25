@@ -1,6 +1,6 @@
 # PROJECT_STRUCTURE.md — TrafficAnalyzer 当前项目结构
 
-> 当前状态：2026-07-21。本文只描述 ADR-019 之后的 canonical 运行代码；已退役资产仅在“历史与保留边界”中列出。
+> 当前状态：2026-07-25。本文只描述 ADR-019、ADR-023 与 ADR-024 之后的 canonical 运行代码；已退役资产仅在“历史与保留边界”中列出。
 
 ## 1. 顶层结构
 
@@ -38,9 +38,13 @@ Pipeline API/Mission 在 Platform 所在环境按需启动，不随 Platform 自
 
 ```text
 VideoReader
-  → DetectionTrackingNodes
+  → DetectionNode
+  → ImageMotionEstimationNode
+  → GroundTrajectoryTrackerNode
   → HomographyCalibrationNode
   → MotionCompensationNode
+  → FlightGeoReferenceNode
+  → PostTrackingWorldProjectionNode
   → TrackerInfoUpdateNode
   → SpeedEstimationNode
   → DirectionFlowNode
@@ -62,12 +66,20 @@ VideoReader
 |---|---|
 | `elements/` | 帧、轨迹与 EOF 数据结构 |
 | `nodes/VideoReader.py` | MP4/RTSP、固定 Runtime Road Map Bundle、SRT/JSON/MQTT 遥测注入；启用遥测时 fail-fast |
-| `nodes/DetectionTrackingNodes.py` | YOLO11 + ByteTrack |
+| `nodes/DetectionNode.py` | 当前 `hover_cruise_v1` 的 YOLO11-only 检测节点，输出已校验的 `detected_*` 与检测几何诊断 |
+| `utils_local/detection_geometry.py` | 新旧profile共享的MPS安全bbox裁剪、字段对齐和非法几何过滤边界 |
+| `utils_local/image_motion.py`、`nodes/ImageMotionEstimationNode.py` | 排除检测框后的背景 LK/RANSAC 图像运动估计；输出唯一关联 warp，不读取遥测/H |
+| `nodes/GroundTrajectoryTrackerNode.py` | 地理参考之前的纯图像 ByteTrack，输出兼容 `tracked_*`/`id_list` 和显示轨迹；含离线 shadow |
+| `nodes/FlightGeoReferenceNode.py` | ByteTrack 后计算逐帧绝对 pixel→map ENU，并执行遥测/视觉/地图质量门禁 |
+| `nodes/PostTrackingWorldProjectionNode.py` | ID 确定后唯一执行去畸变、ENU/GCJ-02投影和同点地图覆盖，并维护独立正式业务 ID |
+| `nodes/DetectionTrackingNodes.py` | 仅 `hover_only_legacy` 回滚使用的旧 YOLO+ByteTrack 组合节点 |
 | `nodes/HomographyCalibrationNode.py`、`nodes/MotionCompensationNode.py` | pixel→ENU、GCJ-02 展示坐标与无人机运动补偿 |
 | `nodes/RoadMapMatchingNode.py` | 基于 `lane_verified` 车道面、航向、拓扑和连续性的正式匹配 |
 | `nodes/Lane*`、`nodes/AutoLaneInferenceNode.py` | 视觉/自动候选，仅辅助质量检查，不覆盖已发布地图 |
 | `nodes/ConflictDetectionNode.py` | 路径交点 TTC/PET、同一时空占用与证据评分 |
 | `nodes/KafkaProducerNode.py` | 只生成 canonical `uav_*` Topic 与 `msg_type` |
+| `scripts/accept_xqh_hover_departure.py` | xqh MPS全尾段、检测几何、三类轨迹对齐、坐标残差、显示和EOF工程门禁 |
+| `scripts/build_xqh_trajectory_comparison.py` | 从历史异常帧与最终生产ShowNode帧生成确定性前后对比图 |
 | `services/TelemetrySubscriber.py` | DJI Cloud API MQTT 实时遥测 |
 | `services/TelemetryFileReader.py` | JSON/TXT 离线遥测 |
 | `services/SrtTelemetryParser.py` | DJI SRT 帧级遥测，严格 offset/tolerance |
@@ -77,7 +89,7 @@ VideoReader
 ```text
 platform/
 ├── alembic/
-│   └── versions/                  # 当前唯一 head：20260721_0017
+│   └── versions/                  # 当前唯一 head：20260723_0019
 ├── app/
 │   ├── main.py                    # lifespan、路由、strict readiness、HLS 受控挂载、WebSocket
 │   ├── core/
@@ -96,12 +108,13 @@ platform/
 │       ├── pipeline_manager.py    # 子进程/端口/资产/RTSP allowlist 与生命周期
 │       ├── survey_service.py      # 测绘、证据、量算、六项复核门禁
 │       ├── mission_orchestrator.py# Mission/Pipeline 调度和终态同步
-│       └── ...                    # dashboard、alert、enforcement、road context 等领域模块
+│       ├── road_context.py        # SourceProfile 级 lane_verified 地图/配准选择与 Runtime Bundle
+│       └── ...                    # dashboard、alert、enforcement 等领域模块
 ├── tests/                         # 单元、契约和显式 PostgreSQL/TimescaleDB integration
 ├── pyproject.toml                 # 应用与 dev 依赖、Ruff/pytest 配置
 ```
 
-Platform 唯一数据库是 PostgreSQL connection database `road9` + TimescaleDB。当前 Alembic 单 head 为 `20260721_0017`，`uav_message_inbox` 记录事实处理和可恢复派发状态。
+Platform 唯一数据库是 PostgreSQL connection database `road9` + TimescaleDB。当前 Alembic 单 head 为 `20260723_0019`，`uav_message_inbox` 记录事实处理和可恢复派发状态。
 
 ## 4. Console2
 
@@ -158,7 +171,9 @@ console2/
 | `platform/scripts/verify_gcj02_demo_replays.py` | 默认九源/100 条严格对账；也支持显式 SourceProfile 和最小样本数的技术演示抽检，始终执行旧坐标拒绝与 GCJ-02/ENU 一致性检查 |
 | `scripts/mac_local_platform.sh` | 以用户级 launchd 启停原生 macOS Platform，并强制检测子进程使用 MPS |
 | `docs/test_report_five_source_trajectory_tcc_full_flow_20260721.md` | 五源轨迹检测、Console 回放、TCC 三图证据全流程验收 |
+| `docs/test_report_five_source_regression_20260725.md` | 五源原生 MPS 自然 EOF、Kafka/road9 对账、控制面与真实浏览器整体回归 |
 | `docs/runbook_trajectory_data_reset_and_replay.md` | GCJ-02 数据清理、渠化地图发布、MPS 重跑、样本验收、对账门禁与单源回滚 Runbook |
+| `docs/runbook_hover_cruise_tracking.md` | 巡航/悬停融合的本机运行、xqh 验收、质量诊断、回滚与生产数据门禁 Runbook |
 | `docs/UAT_FULL_REVIEW_2026-07-17.md` | 发布前全量审查、修复状态和延期门禁 |
 
 ## 7. 历史与保留边界
@@ -167,6 +182,25 @@ console2/
 - `traffic-fly-console` 已退出运行、Compose、Nginx 和发布构建；当前工作树中的删除属于用户既有状态，本轮不恢复、不提交兼容层。
 - 旧 Grafana、Telegraf、InfluxDB、旧 Platform 微服务和无 `uav_` 前缀 Topic/channel 只可出现在明确标记的历史文档或审计证据中。
 - Docker/镜像 pin、SBOM/签名、共享 UAT secret/TLS/SASL、容器最小权限/healthcheck 属于下一阶段门禁；本文不把它们标记为已完成。
+## 2026-07-23 巡航跟踪模块
+
+- `utils_local/flight_motion.py`：共享飞行状态机与速度/航向派生。
+- `nodes/DetectionNode.py`：仅 YOLO 检测。
+- `utils_local/image_motion.py`、`nodes/ImageMotionEstimationNode.py`：只从背景图像估计 previous→current warp。
+- `nodes/GroundTrajectoryTrackerNode.py`：地理参考前的纯图像 ByteTrack、图像 ID/显示历史，以及默认关闭的离线 legacy shadow 对比报告。
+- `nodes/FlightGeoReferenceNode.py`、`nodes/PostTrackingWorldProjectionNode.py`：ByteTrack 后生成世界事实、质量门禁、同点地图覆盖和正式业务分段；PostProjection 是新版唯一坐标转换所有者，不得反馈修改图像 ID。
+- `test/test_speed_estimation_coordinate_contract.py`：锁定新版仅消费逐帧 ENU、当前 H 不重投影历史，以及 legacy 回退继续可用。
+- `utils_local/cruise_evaluation.py`、`scripts/evaluate_cruise_tracking.py`：未来外部项目提供批准真值时的可选只读评测入口；本项目不生成、预标注或审核真值。
+- `utils_local/cruise_acceptance_package.py`：只读校验外部资产、内容哈希、Mission/帧 lineage、拍摄包线和真值来源，不构成人工标注工作包。
+- `docs/templates/cruise-acceptance-package-v1.json`：仅供未来外部批准真值接入时参考的只读输入示例；不作为本项目采集、预标注、标注分派或复核工作流。
+- `docs/generated/xqh-current-cruise-evidence-*.json`：当前 xqh 负样本的内容寻址包和生产证据缺口，不代表准确率通过。
+- `scripts/accept_xqh_hover_departure.py`：真实 xqh 840s–EOF 的 MPS 工程验收，输出性能、飞行阶段、正式质量隔离、shadow、EOF 与可视证据；明确不替代带真值生产准确率门禁。
+- `scripts/validate_adr019_local_retirement.py`、`scripts/audit_adr019_retirement.py`：本机实时拓扑证据与 ADR-019 strict 10/10 审计。
+- `test/test_adr019_runtime_evidence.py`：ADR-019 当前拓扑、历史清库证据和严格审计组合回归。
+- `platform/scripts/backfill_cruise_registration_lineage.py`：从指定 selected capture frame 与 verified lanes dry-run/回填 visual registration 位姿、相机哈希和地图覆盖；不修改 H、车道或发布状态。
+- `platform/alembic/versions/20260723_0019_cruise_tracking.py`：FlightSegment、profile 与运行质量谱系。
+- `docs/runbook_hover_cruise_tracking.md`：当前阶段长期运维、自动化工程验收与精度非声明边界入口。
+
 # 2026-07 路口渠化项目化扩展
 
 - `platform/app/services/intersection_video_discovery.py`：1Hz 悬停发现、WGS84→GCJ-02 坐标边界与候选距离置信度。

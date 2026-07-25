@@ -11,7 +11,7 @@ from shapely.geometry import Point, shape
 from elements.FrameElement import FrameElement
 from elements.VideoEndBreakElement import VideoEndBreakElement
 from utils_local.coordinates import enu_to_gcj02
-from utils_local.homography import is_valid_homography
+from utils_local.homography import is_valid_homography, pixel_to_world
 from utils_local.motion_compensation import pixel_to_world_compensated
 from utils_local.runtime_map import (
     load_runtime_map_bundle,
@@ -79,6 +79,12 @@ class RoadMapMatchingNode:
     def _pixel_to_enu(
         self, frame_element: FrameElement, x: float, y: float
     ) -> tuple[float, float]:
+        absolute_matrix = getattr(frame_element, "pixel_to_map_enu", None)
+        if is_valid_homography(absolute_matrix):
+            projected = pixel_to_world(
+                np.asarray([[x, y]], dtype=np.float64), absolute_matrix
+            )[0]
+            return float(projected[0]), float(projected[1])
         matrix = frame_element.homography_matrix
         if not is_valid_homography(matrix):
             matrix = self._homography
@@ -132,6 +138,17 @@ class RoadMapMatchingNode:
         frame_element.runtime_map_bundle = self.bundle
         frame_element.map_version_id = self.bundle["map_version_id"]
         frame_element.anchor_gcj02 = tuple(self.bundle["anchor_gcj02"])
+        if (
+            getattr(frame_element, "geo_reference_quality", None) is not None
+            and not getattr(frame_element, "formal_analytics_eligible", False)
+        ):
+            frame_element.info["map_matching"] = {
+                "map_version_id": self.bundle["map_version_id"],
+                "map_status": "quality_gate_blocked",
+                "matched_tracks": 0,
+                "total_tracks": 0,
+            }
+            return frame_element
         matched = 0
         for index, track_id in enumerate(frame_element.id_list or []):
             if index >= len(frame_element.tracked_xyxy or []):
@@ -140,9 +157,13 @@ class RoadMapMatchingNode:
             if track is None:
                 continue
             x1, _y1, x2, y2 = frame_element.tracked_xyxy[index]
-            easting, northing = self._pixel_to_enu(
-                frame_element, (x1 + x2) / 2.0, y2
-            )
+            current_position = getattr(track, "current_position_enu_m", None)
+            if current_position is not None:
+                easting, northing = float(current_position[0]), float(current_position[1])
+            else:
+                easting, northing = self._pixel_to_enu(
+                    frame_element, (x1 + x2) / 2.0, y2
+                )
             world_history = getattr(track, "position_history_enu_m", [])
             previous_position = world_history[-2][:2] if len(world_history) >= 2 else None
             vehicle_heading = None
@@ -175,6 +196,6 @@ class RoadMapMatchingNode:
             "map_version_id": self.bundle["map_version_id"],
             "map_status": "lane_verified",
             "matched_tracks": matched,
-            "total_tracks": len(frame_element.id_list or []),
+            "total_tracks": len(frame_element.buffer_tracks or {}),
         }
         return frame_element

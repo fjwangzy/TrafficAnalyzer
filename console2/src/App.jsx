@@ -28,6 +28,82 @@ const eventTime = (value) => {
   return Number.isNaN(date.getTime()) ? '—' : date.toLocaleTimeString('zh-CN', { hour12: false })
 }
 const eventTone = (severity) => severity === 'critical' || severity === 'P1' ? 'critical' : severity === 'warning' || severity === 'P2' ? 'warning' : 'info'
+const LIVE_BEV_TRAJECTORY_MIN_COUNT = 150
+const LIVE_BEV_TRAJECTORY_WINDOW_MS = 5 * 60 * 1000
+const BEV_RECEIVED_AT_FIELD = '__console_received_at_ms'
+
+const latestItems = (items, limit) => limit > 0 ? items.slice(-limit) : []
+const projectableTrajectories = (items) => items.filter(
+  (item) => Array.isArray(item?.trajectory_gcj02) && item.trajectory_gcj02.length >= 2,
+)
+const splitRecentTrajectories = (items, now) => {
+  const cutoff = now - LIVE_BEV_TRAJECTORY_WINDOW_MS
+  return items.reduce((groups, item) => {
+    groups[Number(item?.[BEV_RECEIVED_AT_FIELD]) >= cutoff ? 1 : 0].push(item)
+    return groups
+  }, [[], []])
+}
+const retainCompletedTrajectories = (items, now) => {
+  const [older, recent] = splitRecentTrajectories(items, now)
+  return [...latestItems(older, LIVE_BEV_TRAJECTORY_MIN_COUNT - recent.length), ...recent]
+}
+
+const FLIGHT_PHASE_LABELS = {
+  hover_candidate: '悬停确认中',
+  hover_verified: '悬停正拍',
+  cruise_nadir: '近正射巡航',
+  transition: '模式过渡',
+  unsupported_pose: '姿态不支持',
+  telemetry_unavailable: '遥测不可用',
+}
+const QUALITY_LABELS = {
+  verified: '可信',
+  bootstrap: '建立基线',
+  degraded: '降级',
+  unavailable: '不可用',
+  unverified: '未验证',
+}
+const QUALITY_REASON_LABELS = {
+  telemetry_gap: '遥测短缺或超出同步窗口',
+  telemetry_unavailable: '遥测不可用',
+  telemetry_inconsistent: '报告速度与派生速度不一致',
+  target_outside_map_coverage: '目标已离开发布地图覆盖范围',
+  map_coverage_not_verified: '地图覆盖未通过验证',
+  registration_pose_lineage_required: '配准帧缺少位姿/相机谱系',
+  visual_warp_not_verified: '视觉变换未通过质量门禁',
+  flight_pose_not_eligible: '飞行姿态超出正式包线',
+  flight_phase_not_verified: '飞行阶段尚未稳定确认',
+  lane_verified_map_required: '缺少 lane_verified 运行时地图',
+  pixel_to_map_projection_unavailable: '逐帧像素到地图投影不可用',
+  formal_analytics_disabled: '正式研判未启用',
+}
+
+export function monitoringQualitySummary(stats) {
+  const geo = stats?.geo_reference_quality || {}
+  const tracking = stats?.tracking_diagnostics || {}
+  const formal = stats?.formal_analytics_eligible
+  const reasons = [...new Set([
+    ...(Array.isArray(geo.reasons) ? geo.reasons : []),
+    ...(Array.isArray(tracking.quality_reasons) ? tracking.quality_reasons : []),
+  ])]
+  return {
+    phase: stats?.flight_phase || geo.flight_phase || 'telemetry_unavailable',
+    phaseLabel: FLIGHT_PHASE_LABELS[stats?.flight_phase || geo.flight_phase] || '等待飞行状态',
+    formal,
+    formalLabel: formal === true ? '正式研判开启' : formal === false ? '正式研判关闭' : '正式研判待定',
+    tone: formal === true ? 'verified' : formal === false ? 'degraded' : 'unavailable',
+    reasonLabels: reasons.map((reason) => QUALITY_REASON_LABELS[reason] || reason),
+    qualities: [
+      ['地理参考', geo.status],
+      ['遥测', geo.telemetry?.status],
+      ['视觉变换', geo.visual_warp?.status],
+      ['地图覆盖', geo.map_coverage?.status],
+      ['目标跟踪', tracking.tracking_quality],
+    ].map(([label, status]) => ({ label, status: status || 'unavailable', value: QUALITY_LABELS[status] || status || '不可用' })),
+    method: tracking.tracking_method || '—',
+    terminationReason: tracking.termination_reason || '—',
+  }
+}
 
 function normalizeAlert(alert) {
   const rawType = alert.alert_type || alert.event_type || 'risk'
@@ -48,6 +124,12 @@ export function isBusinessTccConflict(data) {
   return distance != null && Math.abs(distance) <= 0.01 && (data?.prediction_type == null || data.prediction_type === 'path_intersection')
 }
 
+export function realtimeMessageMatchesPipeline(message, pipelineId) {
+  if (!['uav_stats', 'uav_track_complete', 'uav_conflict'].includes(message?.type)) return true
+  const messagePipelineId = message?.data?.pipeline_id || message?.data?.run_id
+  return Boolean(pipelineId && messagePipelineId === pipelineId)
+}
+
 function normalizeConflict(data, occurredAt, realtime = true) {
   return {
     id: data.message_id || data.source_message_id || data.id || `conflict-${data.motor_id}-${data.non_motor_id}-${occurredAt || Date.now()}`,
@@ -66,6 +148,7 @@ export function tccStatusText(diagnostics, streamActive) {
   if (!streamActive) return 'TCC 未运行：当前视频源无检测管道'
   if (!diagnostics) return 'TCC 状态等待统计'
   if (!diagnostics.enabled) return 'TCC 检测已停用'
+  if (diagnostics.status === 'quality_gate_blocked') return 'TCC 已关闭：正式质量门禁未通过'
   if (!diagnostics.calibration_valid || diagnostics.status === 'missing_calibration') return 'TCC 无法检测：缺少有效标定'
   if ((diagnostics.business_events_emitted ?? diagnostics.events_emitted ?? 0) > 0) return `TCC 已产生 ${diagnostics.business_events_emitted ?? diagnostics.events_emitted} 条事件`
   if (diagnostics.status === 'deduplicated') return `TCC 已启用：候选事件已去重 ${diagnostics.deduplicated ?? 0} 条`
@@ -140,7 +223,8 @@ export function App() {
   const [rightPanelOpen, setRightPanelOpen] = useState(true)
   const [rightPanelPinned, setRightPanelPinned] = useState(true)
   const [timelineOpen, setTimelineOpen] = useState(false)
-  const [latestStats, setLatestStats] = useState(null)
+  const [historicalStats, setHistoricalStats] = useState(null)
+  const [realtimeStats, setRealtimeStats] = useState(null)
   const [telemetry, setTelemetry] = useState(null)
   const [activeTrajectories, setActiveTrajectories] = useState([])
   const [completedTrajectories, setCompletedTrajectories] = useState([])
@@ -158,6 +242,9 @@ export function App() {
   const liveRef = useRef(true)
   const videoRef = useRef(null)
   const pausedBuffer = useRef({ trendRows: null, telemetry: null, conflicts: null, realtime: [] })
+  const latestStats = useMemo(() => historicalStats || realtimeStats
+    ? { ...(historicalStats || {}), ...(realtimeStats || {}) }
+    : null, [historicalStats, realtimeStats])
 
   const intersectionsQuery = useQuery({ queryKey: ['monitoring-intersections'], queryFn: platformApi.intersections })
   const sourcesQuery = useQuery({ queryKey: ['monitoring-sources'], queryFn: platformApi.sources })
@@ -218,7 +305,7 @@ export function App() {
     return () => window.clearInterval(timer)
   }, [])
   useEffect(() => {
-    setLatestStats(null); setTelemetry(null); setActiveTrajectories([]); setCompletedTrajectories([]); setRealtimeConflicts([]); setVisibleHistoryConflicts([]); setVisibleTrendRows([]); setSelectedEvent(null); setVideoError(false); setVideoRetry(0); setLastStatsAt(0); setLastTelemetryAt(0); statsFingerprint.current = ''; telemetryFingerprint.current = ''; pausedBuffer.current = { trendRows: null, telemetry: null, conflicts: null, realtime: [] }
+    setHistoricalStats(null); setRealtimeStats(null); setTelemetry(null); setActiveTrajectories([]); setCompletedTrajectories([]); setRealtimeConflicts([]); setVisibleHistoryConflicts([]); setVisibleTrendRows([]); setSelectedEvent(null); setVideoError(false); setVideoRetry(0); setLastStatsAt(0); setLastTelemetryAt(0); statsFingerprint.current = ''; telemetryFingerprint.current = ''; pausedBuffer.current = { trendRows: null, telemetry: null, conflicts: null, realtime: [] }
   }, [selectedId, selectedSource?.profile_id])
   const pipeline = pipelines.find((item) => item.status === 'running' && (
     selectedSource
@@ -226,6 +313,9 @@ export function App() {
       : item.intersection_id === selectedId
   )) || null
   const intersectionPipeline = pipelines.find((item) => item.status === 'running' && item.intersection_id === selectedId) || null
+  useEffect(() => {
+    setRealtimeStats(null); setActiveTrajectories([]); setCompletedTrajectories([]); setRealtimeConflicts([]); setLastStatsAt(0); statsFingerprint.current = ''; pausedBuffer.current = { ...pausedBuffer.current, realtime: [] }
+  }, [pipeline?.pipeline_id])
   const quickStartMutation = useMutation({
     mutationFn: async ({ source, intersection }) => {
       const mission = await platformApi.createMission({
@@ -233,7 +323,6 @@ export function App() {
         drone_id: source.drone_id,
         source_profile_id: source.profile_id,
         inter_id: intersection,
-        ...(source.drone.default_road_data_version ? { road_data_version: source.drone.default_road_data_version } : {}),
         scheduled_end_at: new Date(Date.now() + 3_600_000).toISOString(),
       })
       if (mission?.status !== 'running') {
@@ -246,11 +335,16 @@ export function App() {
   const cameraId = pipeline?.camera_id
   const telemetryDroneId = pipeline?.drone_id || selectedSource?.drone_id || (cameraId != null ? `drone_${cameraId}` : '')
   const telemetryQuery = useQuery({ queryKey: ['monitoring-telemetry', telemetryDroneId], queryFn: () => platformApi.telemetry(telemetryDroneId), enabled: Boolean(telemetryDroneId), refetchInterval: 10_000 })
-  const applyStatsSnapshot = useCallback((snapshot, merge = false) => {
+  const applyHistoricalStatsSnapshot = useCallback((snapshot) => {
+    if (snapshot) setHistoricalStats(snapshot)
+  }, [])
+  const applyRealtimeStatsSnapshot = useCallback((snapshot) => {
     if (!snapshot) return
     const fingerprint = JSON.stringify(snapshot)
-    setLatestStats((previous) => merge ? ({ ...(previous || {}), ...snapshot }) : snapshot)
-    setActiveTrajectories(Array.isArray(snapshot.active_trajectories) ? snapshot.active_trajectories : [])
+    setRealtimeStats((previous) => ({ ...(previous || {}), ...snapshot }))
+    if (Array.isArray(snapshot.active_trajectories)) {
+      setActiveTrajectories(snapshot.active_trajectories)
+    }
     if (fingerprint !== statsFingerprint.current) {
       statsFingerprint.current = fingerprint
       setLastStatsAt(Date.now())
@@ -274,8 +368,8 @@ export function App() {
       return
     }
     setVisibleTrendRows(rows)
-    applyStatsSnapshot(snapshot)
-  }, [trendQuery.data, applyStatsSnapshot])
+    applyHistoricalStatsSnapshot(snapshot)
+  }, [trendQuery.data, applyHistoricalStatsSnapshot])
   useEffect(() => {
     const rows = Array.isArray(conflictsQuery.data) ? conflictsQuery.data : []
     if (!liveRef.current) pausedBuffer.current.conflicts = rows
@@ -300,10 +394,13 @@ export function App() {
   const droneId = telemetry?.drone_id || telemetryDroneIds[0] || ''
   const applyRealtimeMessage = useCallback((message) => {
     if (message.data?.source_profile_id && selectedSource?.profile_id && message.data.source_profile_id !== selectedSource.profile_id) return
+    if (!realtimeMessageMatchesPipeline(message, pipeline?.pipeline_id)) return
     if (message.type === 'uav_stats') {
-      applyStatsSnapshot(message.data, true)
+      applyRealtimeStatsSnapshot(message.data)
     } else if (message.type === 'uav_track_complete') {
-      setCompletedTrajectories((items) => [...items.slice(-198), message.data])
+      const receivedAt = Date.now()
+      const completed = { ...message.data, [BEV_RECEIVED_AT_FIELD]: receivedAt }
+      setCompletedTrajectories((items) => retainCompletedTrajectories([...items, completed], receivedAt))
     } else if (message.type === 'uav_conflict') {
       if (!isBusinessTccConflict(message.data)) return
       const conflict = normalizeConflict(message.data, message.occurredAt || message.occurred_at)
@@ -315,7 +412,7 @@ export function App() {
     } else if (message.type === 'uav_telemetry') {
       applyTelemetrySnapshot(message.data)
     }
-  }, [applyStatsSnapshot, applyTelemetrySnapshot, selectedSource?.profile_id])
+  }, [applyRealtimeStatsSnapshot, applyTelemetrySnapshot, pipeline?.pipeline_id, selectedSource?.profile_id])
   const onRealtimeMessage = useCallback((message) => {
     if (!liveRef.current) {
       pausedBuffer.current.realtime = [...pausedBuffer.current.realtime.slice(-499), message]
@@ -375,10 +472,20 @@ export function App() {
     }, retryDelay)
     return () => window.clearTimeout(timer)
   }, [videoError, videoRetry, streamActive])
-  const liveWorldTrajectories = useMemo(
-    () => [...activeTrajectories, ...completedTrajectories].filter((item) => Array.isArray(item?.trajectory_gcj02) && item.trajectory_gcj02.length),
-    [activeTrajectories, completedTrajectories],
-  )
+  const candidateTrajectories = Array.isArray(realtimeStats?.candidate_trajectories) ? realtimeStats.candidate_trajectories : []
+  const liveWorldTrajectories = useMemo(() => {
+    const active = projectableTrajectories(activeTrajectories)
+    const candidates = projectableTrajectories(candidateTrajectories)
+    const [olderCompleted, recentCompleted] = splitRecentTrajectories(
+      projectableTrajectories(completedTrajectories),
+      now,
+    )
+    const olderBackfill = latestItems(
+      olderCompleted,
+      LIVE_BEV_TRAJECTORY_MIN_COUNT - active.length - candidates.length - recentCompleted.length,
+    )
+    return [...olderBackfill, ...recentCompleted, ...candidates, ...active]
+  }, [activeTrajectories, candidateTrajectories, completedTrajectories, now])
   const historicalTrajectories = useMemo(
     () => (Array.isArray(trajectoriesQuery.data) ? trajectoriesQuery.data : []).filter((item) => Array.isArray(item?.trajectory_gcj02) && item.trajectory_gcj02.length >= 2),
     [trajectoriesQuery.data],
@@ -401,6 +508,13 @@ export function App() {
   const pitch = asNumber(attitude.attitude_pitch ?? attitude.pitch ?? attitude.gimbal_pitch)
   const roll = asNumber(attitude.attitude_roll ?? attitude.roll ?? attitude.gimbal_roll)
   const tccStatus = tccStatusText(latestStats?.tcc_diagnostics, streamActive)
+  const flightQuality = monitoringQualitySummary(latestStats)
+  const unprojectedCandidateCount = candidateTrajectories.filter((item) => !Array.isArray(item?.trajectory_gcj02) || item.trajectory_gcj02.length < 2).length
+  const bevEmptyMessage = streamActive
+    ? unprojectedCandidateCount
+      ? `候选目标 ${unprojectedCandidateCount} · 地理投影不可用`
+      : '等待 GCJ-02 实时轨迹'
+    : '暂无可回放的 GCJ-02 历史轨迹'
   const realtimeStatus = wsStatus === 'connected'
     ? '实时链路已连接'
     : wsStatus === 'connecting'
@@ -438,7 +552,7 @@ export function App() {
     const buffered = pausedBuffer.current
     if (buffered.trendRows) {
       setVisibleTrendRows(buffered.trendRows)
-      applyStatsSnapshot(buffered.trendRows.at(-1))
+      applyHistoricalStatsSnapshot(buffered.trendRows.at(-1))
     }
     if (buffered.conflicts) setVisibleHistoryConflicts(buffered.conflicts)
     if (buffered.telemetry) applyTelemetrySnapshot(buffered.telemetry)
@@ -450,7 +564,7 @@ export function App() {
 
   return <ConsoleFrame pageTitle='实时监测' immersive>
     <h1 className='sr-only'>实时监测</h1>
-    {mainIsVideo && streamActive && videoStreamAvailable && !videoError ? <img ref={videoRef} className={`map-image ${primaryView}`} src={mjpegSrc} alt={primaryView === 'raw' ? '原始视频流' : '检测器输出视频流'} onLoad={() => { setVideoError(false); setVideoRetry(0) }} onError={() => setVideoError(true)} /> : primaryView === 'bev' ? <MonitoringBevMap centerLat={mapCenterLat} centerLon={mapCenterLon} trajectories={worldTrajectories} activeCount={activeTrajectories.length} label='BEV 地图轨迹主视图' /> : <div className='map-image feed-unavailable'><strong>{streamActive ? (!videoStreamAvailable ? '检测器未登记直连视频地址' : videoRetry >= 5 ? '视频流连接失败' : `视频流重连中 · ${videoRetry + 1}/5`) : '当前路口没有运行中的检测管道'}</strong><span>{monitoringError ? apiErrorMessage(monitoringError) : streamActive ? (videoStreamAvailable ? (videoRetry >= 5 ? '检测器仍在运行，10 秒后继续自动重试视频流' : '每 3 秒直连检测器重试；持续失败后转为每 10 秒自动恢复') : '请重启 Pipeline 以登记浏览器可访问的 MJPEG 地址') : '可直接启动当前视频源的一小时演示检测'}</span>{!streamActive && selectedSource && <div className='quick-start-actions'><button className='quick-start-button' type='button' title={quickStartUnavailableReason || '启动当前视频源的一小时演示检测'} disabled={Boolean(quickStartUnavailableReason) || quickStartMutation.isPending} onClick={() => quickStartMutation.mutate({ source: selectedSource, intersection: selectedId })}><Play size={15} weight='fill' />{quickStartMutation.isPending ? '正在启动…' : '启动演示检测'}</button>{quickStartMutation.error && <span className='quick-start-error' role='alert'>{apiErrorMessage(quickStartMutation.error, '演示检测启动失败')}</span>}</div>}</div>}
+    {mainIsVideo && streamActive && videoStreamAvailable && !videoError ? <img ref={videoRef} className={`map-image ${primaryView}`} src={mjpegSrc} alt={primaryView === 'raw' ? '原始视频流' : '检测器输出视频流'} onLoad={() => { setVideoError(false); setVideoRetry(0) }} onError={() => setVideoError(true)} /> : primaryView === 'bev' ? <MonitoringBevMap centerLat={mapCenterLat} centerLon={mapCenterLon} trajectories={worldTrajectories} activeCount={activeTrajectories.length} emptyMessage={bevEmptyMessage} label='BEV 地图轨迹主视图' /> : <div className='map-image feed-unavailable'><strong>{streamActive ? (!videoStreamAvailable ? '检测器未登记直连视频地址' : videoRetry >= 5 ? '视频流连接失败' : `视频流重连中 · ${videoRetry + 1}/5`) : '当前路口没有运行中的检测管道'}</strong><span>{monitoringError ? apiErrorMessage(monitoringError) : streamActive ? (videoStreamAvailable ? (videoRetry >= 5 ? '检测器仍在运行，10 秒后继续自动重试视频流' : '每 3 秒直连检测器重试；持续失败后转为每 10 秒自动恢复') : '请重启 Pipeline 以登记浏览器可访问的 MJPEG 地址') : '可直接启动当前视频源的一小时演示检测'}</span>{!streamActive && selectedSource && <div className='quick-start-actions'><button className='quick-start-button' type='button' title={quickStartUnavailableReason || '启动当前视频源的一小时演示检测'} disabled={Boolean(quickStartUnavailableReason) || quickStartMutation.isPending} onClick={() => quickStartMutation.mutate({ source: selectedSource, intersection: selectedId })}><Play size={15} weight='fill' />{quickStartMutation.isPending ? '正在启动…' : '启动演示检测'}</button>{quickStartMutation.error && <span className='quick-start-error' role='alert'>{apiErrorMessage(quickStartMutation.error, '演示检测启动失败')}</span>}</div>}</div>}
     <div className='map-vignette' />
 
     <section className='context-bar'>
@@ -477,7 +591,7 @@ export function App() {
       <div className='context-meta'><span>{realtimeStatus}</span><i /><span role='status'>{tccStatus}</span><i /><span>{statsStale ? '数据过期' : `推理 ${inferenceMs ?? '—'}ms`}</span></div>
     </section>
 
-    <div className={`main-feed-status ${primaryView} ${leftPanelOpen || leftPanelPinned ? '' : 'side-collapsed'}`}>{mainIsVideo ? <VideoCamera size={14} weight='fill' /> : <Crosshair size={14} weight='fill' />}<span>{primaryView === 'bev' ? (streamActive ? 'BEV 鸟瞰轨迹 · ENU / GCJ02' : `BEV 历史轨迹回放 · ${historicalTrajectories.length} TRACKS`) : primaryView === 'raw' ? '原始视频流' : '检测器输出 · YOLO11 / ByteTrack'}</span><small><i />{streamActive ? ` LIVE · ${displayNumber(fps, 1)} FPS` : ' OFFLINE'}</small></div>
+    <div className={`main-feed-status ${primaryView} ${leftPanelOpen || leftPanelPinned ? '' : 'side-collapsed'}`}>{mainIsVideo ? <VideoCamera size={14} weight='fill' /> : <Crosshair size={14} weight='fill' />}<span>{primaryView === 'bev' ? (streamActive ? 'BEV 鸟瞰轨迹 · ENU / GCJ02' : `BEV 历史轨迹回放 · ${historicalTrajectories.length} TRACKS`) : primaryView === 'raw' ? '原始视频流' : '检测器输出 · YOLO11 → 位姿感知 ByteTrack'}</span><small><i />{streamActive ? ` LIVE · ${displayNumber(fps, 1)} FPS` : ' OFFLINE'}</small></div>
 
     <section
       className={`left-panel monitoring-side-panel ${leftPanelOpen || leftPanelPinned ? 'expanded' : 'collapsed'} ${leftPanelPinned ? 'pinned' : ''}`}
@@ -492,6 +606,12 @@ export function App() {
       <button className='side-panel-edge' aria-label={leftPanelOpen || leftPanelPinned ? '收缩实时态势面板' : '展开实时态势面板'} onClick={() => { setLeftPanelPinned(false); setLeftPanelOpen((value) => !value) }}>{leftPanelOpen || leftPanelPinned ? <CaretLeft size={17} /> : <CaretRight size={17} />}</button>
       {(leftPanelOpen || leftPanelPinned) && <button className='side-panel-pin' aria-label={leftPanelPinned ? '取消锁定实时态势面板' : '锁定实时态势面板'} aria-pressed={leftPanelPinned} onClick={() => { setLeftPanelPinned((value) => !value); setLeftPanelOpen(true) }}>{leftPanelPinned ? <PushPinSlash size={16} /> : <PushPin size={16} />}</button>}
       <div className='panel-heading'><div><span>实时态势</span><small>{lastStatsAt ? eventTime(lastStatsAt) : '等待数据'}</small></div></div>
+      <article className={`flight-quality-card ${flightQuality.tone}`} aria-label='巡航与悬停融合质量状态'>
+        <header><div><Drone size={15} weight='fill' /><strong>{flightQuality.phaseLabel}</strong></div><span>{flightQuality.formalLabel}</span></header>
+        <div className='flight-quality-grid'>{flightQuality.qualities.map((item) => <span key={item.label} className={item.status}><small>{item.label}</small><strong>{item.value}</strong></span>)}</div>
+        {flightQuality.formal === false && <div className='candidate-only-notice'><strong>仅候选，不进入统计/TCC</strong><small>{flightQuality.reasonLabels.join('；') || '等待全部质量门禁通过'}{candidateTrajectories.length ? ` · 候选轨迹 ${candidateTrajectories.length} 条` : ''}</small></div>}
+        <footer title={`终止原因 ${flightQuality.terminationReason}`}>关联 {flightQuality.method} · 终止 {flightQuality.terminationReason}</footer>
+      </article>
       <article className='congestion-card'><div className='score-ring'><strong>{displayNumber(realtimeTrajectoryCount)}</strong><small>条</small></div><div className='score-copy'><span>实时轨迹数量</span><strong>{realtimeTrajectoryCount == null ? '暂无实时数据' : '活动轨迹'}</strong><small><TrendUp size={13} />{statsStale ? '实时数据已过期' : '实时更新'}</small></div><Crosshair size={24} weight='duotone' /></article>
       <div className='metrics-grid'><MetricCard icon={Target} label='当前目标' value={displayNumber(cars)} unit='辆' delta='' /><MetricCard icon={ListBullets} label='最长排队' value={displayNumber(longestQueue)} unit='m' delta='' tone='amber' /><MetricCard icon={Gauge} label='平均车速' value={displayNumber(avgSpeed, 1)} unit='km/h' delta='' tone='cyan' /><MetricCard icon={ShieldWarning} label='活动风险' value={String(events.length)} unit='起' delta='' tone='red' /></div>
       <article className='glass-card trend-card'><div className='card-title'><div><strong>态势趋势</strong><small>最近 30 分钟</small></div><span className='chip'>REST 5m</span></div><div className='chart-box'>{trendData.length ? <ResponsiveContainer width='100%' height='100%'><AreaChart data={trendData} margin={{ top: 8, right: 4, left: -28, bottom: 0 }}><CartesianGrid vertical={false} stroke='rgba(151,171,206,.12)' /><XAxis dataKey='time' tick={{ fill: '#8290aa', fontSize: 10 }} axisLine={false} tickLine={false} /><YAxis tick={{ fill: '#8290aa', fontSize: 10 }} axisLine={false} tickLine={false} /><Tooltip contentStyle={{ background: '#111a2a', border: '1px solid #33415b', borderRadius: 8, fontSize: 11 }} /><Area type='monotone' dataKey='value' stroke='#62a1ff' fill='#294c7b' fillOpacity={0.36} strokeWidth={2} /></AreaChart></ResponsiveContainer> : <div className='monitor-empty'>{trendQuery.isPending ? '正在加载历史态势…' : trendQuery.error ? '历史态势加载失败' : '暂无历史态势数据'}</div>}</div></article>
@@ -515,7 +635,7 @@ export function App() {
     >
       <button className='side-panel-edge' aria-label={rightPanelOpen || rightPanelPinned ? '收缩BEV与实时事件面板' : '展开BEV与实时事件面板'} onClick={() => { setRightPanelPinned(false); setRightPanelOpen((value) => !value) }}>{rightPanelOpen || rightPanelPinned ? <CaretRight size={17} /> : <CaretLeft size={17} />}</button>
       {(rightPanelOpen || rightPanelPinned) && <button className='side-panel-pin' aria-label={rightPanelPinned ? '取消锁定BEV与实时事件面板' : '锁定BEV与实时事件面板'} aria-pressed={rightPanelPinned} onClick={() => { setRightPanelPinned((value) => !value); setRightPanelOpen(true) }}>{rightPanelPinned ? <PushPinSlash size={16} /> : <PushPin size={16} />}</button>}
-      <article className='camera-card'><div className='camera-head'><span>{primaryView === 'bev' ? <VideoCamera size={16} weight='fill' /> : <Crosshair size={16} weight='fill' />}{primaryView === 'bev' ? '检测器输出' : 'BEV 轨迹投放'}</span><small><i />{primaryView === 'bev' ? `${displayNumber(fps, 1)} FPS` : `${worldTrajectories.length} TRACKS`}</small></div>{primaryView === 'bev' ? <div className='detector-preview'>{streamActive && videoStreamAvailable && !videoError ? <img ref={videoRef} src={mjpegSrc} alt='检测器输出视频流预览' onLoad={() => { setVideoError(false); setVideoRetry(0) }} onError={() => setVideoError(true)} /> : <div className='monitor-empty'>{streamActive && !videoStreamAvailable ? '检测器未登记直连地址' : '检测流不可用'}</div>}</div> : <div className='bev-preview'><MonitoringBevMap compact centerLat={mapCenterLat} centerLon={mapCenterLon} trajectories={worldTrajectories} activeCount={streamActive ? activeTrajectories.length : 0} label='BEV 地图轨迹投放图' /><span className='bev-origin'><Crosshair size={13} weight='bold' /> ENU 0,0</span></div>}<div className='camera-foot'><span>{primaryView === 'bev' ? (streamActive && videoStreamAvailable ? '检测器直连输出' : '检测器离线') : streamActive ? `活动轨迹 ${activeTrajectories.length} · 世界坐标投放` : `历史回放 ${historicalTrajectories.length} · 世界坐标投放`}</span><button className='swap-view' onClick={() => selectView(primaryView === 'bev' ? 'detector' : 'bev')}><ArrowsClockwise size={14} weight='bold' />切为主视图</button></div></article>
+      <article className='camera-card'><div className='camera-head'><span>{primaryView === 'bev' ? <VideoCamera size={16} weight='fill' /> : <Crosshair size={16} weight='fill' />}{primaryView === 'bev' ? '检测器输出' : 'BEV 轨迹投放'}</span><small><i />{primaryView === 'bev' ? `${displayNumber(fps, 1)} FPS` : `${worldTrajectories.length} TRACKS`}</small></div>{primaryView === 'bev' ? <div className='detector-preview'>{streamActive && videoStreamAvailable && !videoError ? <img ref={videoRef} src={mjpegSrc} alt='检测器输出视频流预览' onLoad={() => { setVideoError(false); setVideoRetry(0) }} onError={() => setVideoError(true)} /> : <div className='monitor-empty'>{streamActive && !videoStreamAvailable ? '检测器未登记直连地址' : '检测流不可用'}</div>}</div> : <div className='bev-preview'><MonitoringBevMap compact centerLat={mapCenterLat} centerLon={mapCenterLon} trajectories={worldTrajectories} activeCount={streamActive ? activeTrajectories.length : 0} emptyMessage={bevEmptyMessage} label='BEV 地图轨迹投放图' /><span className='bev-origin'><Crosshair size={13} weight='bold' /> ENU 0,0</span></div>}<div className='camera-foot'><span>{primaryView === 'bev' ? (streamActive && videoStreamAvailable ? '检测器直连输出' : '检测器离线') : streamActive ? (worldTrajectories.length ? `空间轨迹 ${worldTrajectories.length} · GCJ-02 投放` : bevEmptyMessage) : `历史回放 ${historicalTrajectories.length} · GCJ-02 投放`}</span><button className='swap-view' onClick={() => selectView(primaryView === 'bev' ? 'detector' : 'bev')}><ArrowsClockwise size={14} weight='bold' />切为主视图</button></div></article>
       <div className='events-head'><div><strong>近期事件</strong><span>{events.length}</span></div><button onClick={() => navigate('/events')}><ListBullets size={16} />全部事件</button></div>
       <div className='event-filters'>{[['all','全部'],['critical','高风险'],['warning','关注']].map(([id,label]) => <button key={id} className={eventFilter === id ? 'active' : ''} onClick={() => setEventFilter(id)}>{label}</button>)}</div>
       <div className='event-list'>{conflictsQuery.isLoading && !events.length ? <div className='monitor-empty'>正在加载事件…</div> : filteredEvents.length ? filteredEvents.map((event) => <button key={event.id} className={`event-card ${event.level} ${selectedEvent?.id === event.id ? 'selected' : ''}`} onClick={() => setSelectedEvent(event)}><span className='event-icon'><EventIcon type={event.type} /></span><span className='event-copy'><strong>{event.title}</strong><small>{event.detail}</small><span>{event.metric}</span></span><time>{event.time}</time></button>) : <div className='monitor-empty'>当前视频源暂无近期事件</div>}</div>

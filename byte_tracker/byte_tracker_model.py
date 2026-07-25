@@ -1,10 +1,4 @@
 import numpy as np
-from collections import deque
-import os
-import os.path as osp
-import copy
-import torch
-import torch.nn.functional as F
 
 from byte_tracker.utils.kalman_filter import KalmanFilter
 from byte_tracker.utils import matching
@@ -12,7 +6,14 @@ from byte_tracker.utils.basetrack import BaseTrack, TrackState
 
 class STrack(BaseTrack):
     shared_kalman = KalmanFilter()
-    def __init__(self, tlwh, score, class_name):
+    def __init__(
+        self,
+        tlwh,
+        score,
+        class_name,
+        class_group=None,
+        class_switch_confirm_frames=1,
+    ):
 
         # wait activate
         self._tlwh = np.asarray(tlwh, dtype=np.float64)
@@ -22,7 +23,78 @@ class STrack(BaseTrack):
 
         self.score = score
         self.class_name = class_name
+        self.class_group = class_group
+        self.class_switch_confirm_frames = max(int(class_switch_confirm_frames), 1)
+        self.pending_class_name = None
+        self.pending_class_group = None
+        self.pending_class_count = 0
         self.tracklet_len = 0
+        self.last_seen_timestamp = None
+
+    def update_class(self, new_track):
+        observed_class = new_track.class_name
+        observed_group = new_track.class_group
+        if (
+            self.class_group is None
+            or observed_group is None
+            or observed_group == self.class_group
+        ):
+            self.class_name = observed_class
+            self.class_group = observed_group or self.class_group
+            self.pending_class_name = None
+            self.pending_class_group = None
+            self.pending_class_count = 0
+            return
+        if (
+            self.pending_class_name == observed_class
+            and self.pending_class_group == observed_group
+        ):
+            self.pending_class_count += 1
+        else:
+            self.pending_class_name = observed_class
+            self.pending_class_group = observed_group
+            self.pending_class_count = 1
+        if self.pending_class_count >= self.class_switch_confirm_frames:
+            self.class_name = observed_class
+            self.class_group = observed_group
+            self.pending_class_name = None
+            self.pending_class_group = None
+            self.pending_class_count = 0
+
+    def apply_camera_warp(self, warp):
+        """Move the predicted image box into the current camera frame.
+
+        ``warp`` maps pixels from the previous frame to the current frame.  It is
+        deliberately applied before the Kalman prediction so ByteTrack associates
+        target motion after removing the dominant camera motion.
+        """
+        if warp is None:
+            return
+        matrix = np.asarray(warp, dtype=np.float64)
+        if matrix.shape != (3, 3) or not np.isfinite(matrix).all():
+            return
+        x1, y1, x2, y2 = self.tlbr
+        corners = np.asarray(
+            [[x1, y1, 1.0], [x2, y1, 1.0], [x2, y2, 1.0], [x1, y2, 1.0]],
+            dtype=np.float64,
+        )
+        projected = (matrix @ corners.T).T
+        valid = np.abs(projected[:, 2]) > 1e-9
+        if not valid.all():
+            return
+        xy = projected[:, :2] / projected[:, 2:3]
+        min_xy = xy.min(axis=0)
+        max_xy = xy.max(axis=0)
+        warped_tlwh = np.asarray(
+            [min_xy[0], min_xy[1], max_xy[0] - min_xy[0], max_xy[1] - min_xy[1]],
+            dtype=np.float64,
+        )
+        if warped_tlwh[2] <= 0 or warped_tlwh[3] <= 0:
+            return
+        if self.mean is None:
+            self._tlwh = warped_tlwh
+            return
+        self.mean[:4] = self.tlwh_to_xyah(warped_tlwh)
 
     def predict(self):
         mean_state = self.mean.copy()
@@ -43,10 +115,10 @@ class STrack(BaseTrack):
                 stracks[i].mean = mean
                 stracks[i].covariance = cov
 
-    def activate(self, kalman_filter, frame_id):
+    def activate(self, kalman_filter, frame_id, timestamp=None, track_id=None):
         """Start a new tracklet"""
         self.kalman_filter = kalman_filter
-        self.track_id = self.next_id()
+        self.track_id = self.next_id() if track_id is None else int(track_id)
         self.mean, self.covariance = self.kalman_filter.initiate(self.tlwh_to_xyah(self._tlwh))
 
         self.tracklet_len = 0
@@ -56,8 +128,9 @@ class STrack(BaseTrack):
         # self.is_activated = True
         self.frame_id = frame_id
         self.start_frame = frame_id
+        self.last_seen_timestamp = timestamp
 
-    def re_activate(self, new_track, frame_id, new_id=False):
+    def re_activate(self, new_track, frame_id, new_id=False, timestamp=None):
         self.mean, self.covariance = self.kalman_filter.update(
             self.mean, self.covariance, self.tlwh_to_xyah(new_track.tlwh)
         )
@@ -68,9 +141,10 @@ class STrack(BaseTrack):
         if new_id:
             self.track_id = self.next_id()
         self.score = new_track.score
-        self.class_name = new_track.class_name
+        self.update_class(new_track)
+        self.last_seen_timestamp = timestamp
 
-    def update(self, new_track, frame_id):
+    def update(self, new_track, frame_id, timestamp=None):
         """
         Update a matched track
         :type new_track: STrack
@@ -88,7 +162,8 @@ class STrack(BaseTrack):
         self.is_activated = True
 
         self.score = new_track.score
-        self.class_name = new_track.class_name
+        self.update_class(new_track)
+        self.last_seen_timestamp = timestamp
 
     @property
     # @jit(nopython=True)
@@ -146,7 +221,20 @@ class STrack(BaseTrack):
 
 
 class BYTETracker(object):
-    def __init__(self, fps, first_track_thresh, second_track_thresh, match_thresh, track_buffer, resize_width_height, mot20=False):
+    def __init__(
+        self,
+        fps,
+        first_track_thresh,
+        second_track_thresh,
+        match_thresh,
+        track_buffer,
+        resize_width_height,
+        mot20=False,
+        max_lost_sec=None,
+        track_id_allocator=None,
+        class_group_resolver=None,
+        class_switch_confirm_frames=1,
+    ):
         self.tracked_stracks = []  # type: list[STrack]
         self.lost_stracks = []  # type: list[STrack]
         self.removed_stracks = []  # type: list[STrack]
@@ -157,6 +245,10 @@ class BYTETracker(object):
         self.det_thresh = first_track_thresh + second_track_thresh
         self.buffer_size = int(fps / 30.0 * track_buffer)
         self.max_time_lost = self.buffer_size
+        self.max_lost_sec = max_lost_sec
+        self.track_id_allocator = track_id_allocator
+        self.class_group_resolver = class_group_resolver
+        self.class_switch_confirm_frames = max(int(class_switch_confirm_frames), 1)
         self.kalman_filter = KalmanFilter()
         
         # Thr
@@ -167,7 +259,33 @@ class BYTETracker(object):
         # Use mot20 or not
         self.mot20 = mot20
         
-    def update(self, output_results, xyxy=True):
+    def _association_distance(self, tracks, detections):
+        dists = matching.iou_distance(tracks, detections)
+        if not len(tracks) or not len(detections):
+            return dists
+        detection_classes = np.asarray(
+            [int(detection.class_name) for detection in detections], dtype=np.int64
+        )
+        detection_groups = [detection.class_group for detection in detections]
+
+        for row, track in enumerate(tracks):
+            class_penalty = np.where(
+                np.asarray(
+                    [
+                        track.class_group is not None
+                        and group is not None
+                        and track.class_group != group
+                        for group in detection_groups
+                    ],
+                    dtype=bool,
+                ),
+                0.16,
+                np.where(detection_classes != int(track.class_name), 0.08, 0.0),
+            )
+            dists[row] = np.minimum(1.0, dists[row] + class_penalty)
+        return dists
+
+    def update(self, output_results, xyxy=True, camera_warp=None, timestamp=None):
         
         self.frame_id += 1
         activated_starcks = []
@@ -176,9 +294,18 @@ class BYTETracker(object):
         removed_stracks = []
         
         # output_results: absolute_scale(x, y, x, y), score, class
-        scores = np.array([o[4].cpu().numpy() for o in output_results])
-        classes = np.array([o[5].cpu().numpy() for o in output_results])
-        bboxes = np.array([o[:4].cpu().numpy() for o in output_results])
+        def _numpy(value):
+            if hasattr(value, "detach"):
+                return value.detach().cpu().numpy()
+            return np.asarray(value)
+
+        rows = _numpy(output_results)
+        if rows.size == 0:
+            rows = np.empty((0, 6), dtype=np.float32)
+        rows = np.asarray(rows, dtype=np.float64).reshape((-1, 6))
+        scores = rows[:, 4]
+        classes = rows[:, 5]
+        bboxes = rows[:, :4]
         
         '''
         if output_results.shape[1] == 5:
@@ -205,10 +332,28 @@ class BYTETracker(object):
         scores_second = scores[inds_second]
         classes_second = classes[inds_second]
         
+        def _tracklet(tlbr, score, class_name):
+            class_group = (
+                self.class_group_resolver(int(class_name))
+                if callable(self.class_group_resolver)
+                else None
+            )
+            return STrack(
+                STrack.tlbr_to_tlwh(tlbr),
+                score,
+                class_name,
+                class_group=class_group,
+                class_switch_confirm_frames=self.class_switch_confirm_frames,
+            )
+
         if len(dets) > 0:
             '''Detections'''
-            detections = [STrack(STrack.tlbr_to_tlwh(tlbr), s, c) for
-                          (tlbr, s, c) in zip(dets, scores_keep, classes_keep)]
+            detections = [
+                _tracklet(tlbr, score, class_name)
+                for tlbr, score, class_name in zip(
+                    dets, scores_keep, classes_keep
+                )
+            ]
         else:
             detections = []
 
@@ -223,9 +368,11 @@ class BYTETracker(object):
 
         ''' Step 2: First association, with high score detection boxes'''
         strack_pool = joint_stracks(tracked_stracks, self.lost_stracks)
+        for track in strack_pool:
+            track.apply_camera_warp(camera_warp)
         # Predict the current location with KF
         STrack.multi_predict(strack_pool)
-        dists = matching.iou_distance(strack_pool, detections)
+        dists = self._association_distance(strack_pool, detections)
         if not self.mot20:
             dists = matching.fuse_score(dists, detections)
         matches, u_track, u_detection = matching.linear_assignment(dists, thresh=self.match_thresh)
@@ -234,31 +381,35 @@ class BYTETracker(object):
             track = strack_pool[itracked]
             det = detections[idet]
             if track.state == TrackState.Tracked:
-                track.update(detections[idet], self.frame_id)
+                track.update(detections[idet], self.frame_id, timestamp=timestamp)
                 activated_starcks.append(track)
             else:
-                track.re_activate(det, self.frame_id, new_id=False)
+                track.re_activate(det, self.frame_id, new_id=False, timestamp=timestamp)
                 refind_stracks.append(track)
 
         ''' Step 3: Second association, with low score detection boxes'''
         # association the untrack to the low score detections
         if len(dets_second) > 0:
             '''Detections'''
-            detections_second = [STrack(STrack.tlbr_to_tlwh(tlbr), s, c) for
-                          (tlbr, s, c) in zip(dets_second, scores_second, classes_second)]
+            detections_second = [
+                _tracklet(tlbr, score, class_name)
+                for tlbr, score, class_name in zip(
+                    dets_second, scores_second, classes_second
+                )
+            ]
         else:
             detections_second = []
         r_tracked_stracks = [strack_pool[i] for i in u_track if strack_pool[i].state == TrackState.Tracked]
-        dists = matching.iou_distance(r_tracked_stracks, detections_second)
+        dists = self._association_distance(r_tracked_stracks, detections_second)
         matches, u_track, u_detection_second = matching.linear_assignment(dists, thresh=0.5)
         for itracked, idet in matches:
             track = r_tracked_stracks[itracked]
             det = detections_second[idet]
             if track.state == TrackState.Tracked:
-                track.update(det, self.frame_id)
+                track.update(det, self.frame_id, timestamp=timestamp)
                 activated_starcks.append(track)
             else:
-                track.re_activate(det, self.frame_id, new_id=False)
+                track.re_activate(det, self.frame_id, new_id=False, timestamp=timestamp)
                 refind_stracks.append(track)
 
         for it in u_track:
@@ -269,12 +420,12 @@ class BYTETracker(object):
 
         '''Deal with unconfirmed tracks, usually tracks with only one beginning frame'''
         detections = [detections[i] for i in u_detection]
-        dists = matching.iou_distance(unconfirmed, detections)
+        dists = self._association_distance(unconfirmed, detections)
         if not self.mot20:
             dists = matching.fuse_score(dists, detections)
         matches, u_unconfirmed, u_detection = matching.linear_assignment(dists, thresh=0.7)
         for itracked, idet in matches:
-            unconfirmed[itracked].update(detections[idet], self.frame_id)
+            unconfirmed[itracked].update(detections[idet], self.frame_id, timestamp=timestamp)
             activated_starcks.append(unconfirmed[itracked])
         for it in u_unconfirmed:
             track = unconfirmed[it]
@@ -286,11 +437,28 @@ class BYTETracker(object):
             track = detections[inew]
             if track.score < self.det_thresh:
                 continue
-            track.activate(self.kalman_filter, self.frame_id)
+            assigned_track_id = (
+                self.track_id_allocator()
+                if callable(self.track_id_allocator)
+                else None
+            )
+            track.activate(
+                self.kalman_filter,
+                self.frame_id,
+                timestamp=timestamp,
+                track_id=assigned_track_id,
+            )
             activated_starcks.append(track)
         """ Step 5: Update state"""
         for track in self.lost_stracks:
-            if self.frame_id - track.end_frame > self.max_time_lost:
+            timed_out = (
+                self.max_lost_sec is not None
+                and timestamp is not None
+                and track.last_seen_timestamp is not None
+                and timestamp - track.last_seen_timestamp > self.max_lost_sec
+            )
+            frame_timed_out = self.frame_id - track.end_frame > self.max_time_lost
+            if timed_out or (self.max_lost_sec is None and frame_timed_out):
                 track.mark_removed()
                 removed_stracks.append(track)
 
@@ -344,6 +512,6 @@ def remove_duplicate_stracks(stracksa, stracksb):
             dupb.append(q)
         else:
             dupa.append(p)
-    resa = [t for i, t in enumerate(stracksa) if not i in dupa]
-    resb = [t for i, t in enumerate(stracksb) if not i in dupb]
+    resa = [t for i, t in enumerate(stracksa) if i not in dupa]
+    resb = [t for i, t in enumerate(stracksb) if i not in dupb]
     return resa, resb

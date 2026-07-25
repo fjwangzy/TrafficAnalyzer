@@ -13,6 +13,7 @@ class FrameElement:
         frame_result: np.ndarray | None = None,
         detected_conf: list | None = None,
         detected_cls: list | None = None,
+        detected_cls_ids: list[int] | None = None,
         detected_xyxy: list[list] | None = None,
         tracked_conf: list | None = None,
         tracked_cls: list | None = None,
@@ -31,7 +32,9 @@ class FrameElement:
         # YOLO的输出结果：
         self.detected_conf = detected_conf  # 检测到的对象的置信度列表
         self.detected_cls = detected_cls  # 检测到的对象的类列表
+        self.detected_cls_ids = detected_cls_ids  # YOLO 原始类别 ID，供独立跟踪模块使用
         self.detected_xyxy = detected_xyxy  # 带xyxy框坐标的列表
+        self.detection_diagnostics: dict | None = None  # 检测框几何质量与丢弃原因
         # 跟踪算法修正结果：
         self.tracked_conf = tracked_conf  # 检测到的对象的置信度列表
         self.tracked_cls = tracked_cls  # 检测到的对象的类列表
@@ -62,6 +65,25 @@ class FrameElement:
         self.gimbal_yaw_initial: float | None = None  # 首帧云台偏航角(度)
         self.is_hovering: bool = False  # 是否悬停
 
+        # ── 巡航/悬停融合地理参考 ──
+        self.flight_phase: str = "telemetry_unavailable"
+        self.flight_segment_id: str | None = None
+        self.pixel_to_map_enu: np.ndarray | None = None
+        # Canonical association warp: background image motion only.  Geographic
+        # pose motion is kept separately so H/telemetry noise cannot affect IDs.
+        self.camera_motion_warp: np.ndarray | None = None
+        self.pose_motion_warp: np.ndarray | None = None
+        self.visual_motion_quality: dict | None = None
+        self.geo_reference_quality: dict | None = None
+        self.tracking_diagnostics: dict | None = None
+        self.formal_analytics_eligible: bool = False
+        self.association_id_list: list[int] | None = None
+        self.formal_track_ids: list[int] | None = None
+        self.formal_track_id_by_association: dict[int, int] | None = None
+        self.previous_formal_track_id_by_association: dict[int, int] | None = None
+        self.association_trajectories: list[dict] | None = None
+        self.candidate_trajectories: list[dict] | None = None
+
         # ── 新增：交通态势统计 ──
         self.direction_stats: dict | None = None  # 方向流量统计（DirectionFlowNode始终输出）
         self.lane_stats: dict | None = None  # 车道级统计（LaneAnalysisNode，仅点位命中时输出）
@@ -75,6 +97,10 @@ class FrameElement:
 
         # ── 新增：性能指标 ──
         self.inference_ms: float = 0.0  # YOLO推理耗时（毫秒）
+        self.source_capture_time: float | None = None
+        self.source_is_realtime: bool = False
+        self.source_drop_count: int = 0
+        self.source_drop_reason: str | None = None
 
         # ── 新增：Kafka发送控制 ──
         self.send_to_kafka: bool = False  # 本帧是否已发送到Kafka

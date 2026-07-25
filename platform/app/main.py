@@ -111,6 +111,7 @@ async def lifespan(app: FastAPI):
         kafka_bootstrap=settings.kafka_bootstrap,
         pipeline_python=settings.pipeline_python,
         frame_stride=settings.pipeline_frame_stride,
+        camera_id_start=settings.pipeline_camera_id_start,
     )
     mission_orchestrator = None
     road_context = None

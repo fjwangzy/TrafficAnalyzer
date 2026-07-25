@@ -5,16 +5,15 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-from datetime import datetime, timedelta, timezone
 import json
-from pathlib import Path
 import sys
 import time
-from urllib.parse import quote, urlsplit, urlunsplit
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 import websockets
-
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
@@ -28,6 +27,14 @@ def _ws_url(base_url: str) -> str:
     return urlunsplit(("wss" if parsed.scheme == "https" else "ws", parsed.netloc, "/ws/realtime", "", ""))
 
 
+def _cookie_header(cookies: httpx.Cookies) -> str:
+    """Render the login cookie jar for the standalone WebSocket client."""
+    header = "; ".join(f"{name}={value}" for name, value in cookies.items())
+    if not header:
+        raise RuntimeError("login did not establish the HttpOnly media session cookie")
+    return header
+
+
 def _source_catalog() -> dict[str, dict]:
     result: dict[str, dict] = {}
     for intersection in LOCAL_REPLAY_CATALOG:
@@ -37,18 +44,21 @@ def _source_catalog() -> dict[str, dict]:
 
 
 async def _wait_messages(
-    base_url: str, token: str, inter_id: str, drone_id: str, timeout_sec: float
+    base_url: str, cookie_header: str, inter_id: str, drone_id: str, timeout_sec: float
 ) -> dict:
     channels = [f"uav_intersection:{inter_id}", f"uav_telemetry:{drone_id}"]
     found = {"uav_stats": False, "uav_telemetry": False}
-    url = f"{_ws_url(base_url)}?access_token={quote(token)}"
-    async with websockets.connect(url, max_size=8 * 1024 * 1024) as websocket:
+    async with websockets.connect(
+        _ws_url(base_url),
+        additional_headers={"Cookie": cookie_header},
+        max_size=8 * 1024 * 1024,
+    ) as websocket:
         await websocket.send(json.dumps({"action": "subscribe", "channels": channels}))
         deadline = time.monotonic() + timeout_sec
         while time.monotonic() < deadline and not all(found.values()):
             try:
                 raw = await asyncio.wait_for(websocket.recv(), timeout=min(5, deadline - time.monotonic()))
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 continue
             payload = json.loads(raw)
             message_type = payload.get("type")
@@ -90,7 +100,7 @@ async def _wait_mjpeg(
                         }
                     if len(payload) > 12 * 1024 * 1024:
                         payload = payload[-6 * 1024 * 1024 :]
-        except (httpx.HTTPError, asyncio.TimeoutError) as exc:
+        except (TimeoutError, httpx.HTTPError) as exc:
             last_error = type(exc).__name__
         await asyncio.sleep(2)
     return {"ok": False, "error": last_error}
@@ -110,7 +120,7 @@ async def _stop(client: httpx.AsyncClient, mission_id: str) -> dict:
 async def _validate_source(
     client: httpx.AsyncClient,
     base_url: str,
-    token: str,
+    cookie_header: str,
     source: dict,
     timeout_sec: float,
     check_duplicate: bool,
@@ -123,7 +133,7 @@ async def _validate_source(
         "source_profile_id": source["profile_id"],
         "inter_id": source["inter_id"],
         "road_data_version": source["road_data_version"],
-        "scheduled_end_at": (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat(),
+        "scheduled_end_at": (datetime.now(UTC) + timedelta(hours=1)).isoformat(),
     }
     started = time.monotonic()
     response = await client.post("/api/v1/missions", json=body)
@@ -162,7 +172,13 @@ async def _validate_source(
             return result
 
         websocket_task = asyncio.create_task(
-            _wait_messages(base_url, token, source["inter_id"], source["drone_id"], timeout_sec)
+            _wait_messages(
+                base_url,
+                cookie_header,
+                source["inter_id"],
+                source["drone_id"],
+                timeout_sec,
+            )
         )
         result["mjpeg"] = await _wait_mjpeg(client, camera_id, mission_id, timeout_sec)
         result["websocket"] = await websocket_task
@@ -216,6 +232,7 @@ async def main_async(args: argparse.Namespace) -> int:
         login.raise_for_status()
         token = login.json()["access_token"]
         client.headers["Authorization"] = f"Bearer {token}"
+        cookie_header = _cookie_header(client.cookies)
 
         if args.stop_active:
             missions = await client.get("/api/v1/missions")
@@ -244,7 +261,7 @@ async def main_async(args: argparse.Namespace) -> int:
             return await _validate_source(
                 client,
                 args.base_url,
-                token,
+                cookie_header,
                 catalog[profile_id],
                 args.timeout,
                 check_duplicate=index == 0,
@@ -267,7 +284,7 @@ async def main_async(args: argparse.Namespace) -> int:
         active.raise_for_status()
         report = {
             "schema_version": "uav.local-replay-runtime-validation/v1",
-            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "generated_at": datetime.now(UTC).isoformat(),
             "base_url": args.base_url,
             "results": results,
             "active_missions_after_validation": len(active.json()),

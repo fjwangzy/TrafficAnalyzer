@@ -1,8 +1,8 @@
 # 端到端测试报告：inter_xqh 视频 + SRT 遥测
 
-> **当前范围说明（2026-07-16）**：`56 PASS / 0 FAIL / 0 WARN` 是算法/管道防回退证据；正式本机 `road9`、`uav_*`、TimescaleDB 与旧链路退役另由 ADR-019 严格审计及[六组本机全流程报告](test_report_local_replay_full_flow.md)证明。两者都不代表生产验收。
+> **当前范围说明（2026-07-25）**：`56 PASS / 0 FAIL / 0 WARN` 是算法/管道防回退证据；xqh 840s–自然 EOF 的 `24/24` 是原生 MPS 工程验收；本机 `road9`、`uav_*`、TimescaleDB 与旧链路退役由 ADR-019 strict `10/10` 证明。项目不建设人工轨迹标注工作包，因此当前口径是 `local_engineering_acceptance_passed / production_accuracy_not_claimed`。
 
-**最近复跑日期**: 2026-07-22
+**最近复跑日期**: 2026-07-25
 **测试资产**: `test_videos/inter_xqh/`  
 - 视频: `DJI_20260403142902_0001_V小清河北路与水屯路路口.mp4` (5.4GB, 4K, 16.5min)  
 - 遥测: `telemetry.srt` (29,741 条记录, 逐帧@30fps)
@@ -11,7 +11,7 @@
 
 ## 测试结果：56 PASS / 0 FAIL / 0 WARN ✅
 
-2026-07-22 最终工作树复跑 `python test/test_pipeline_inter_xqh.py` 通过：`56 PASS / 0 FAIL / 0 WARN`。前 100 帧真实 YOLO+SRT 管道耗时 106.7s（CPU），检测目标帧率 100/100、累计 8051 个目标、遥测注入 100/100、H 矩阵 100/100、运动补偿 90/100、机非冲突事件数 0。
+2026-07-25 当前工作树复跑 `python test/test_pipeline_inter_xqh.py` 通过：`56 PASS / 0 FAIL / 0 WARN`。前100帧真实 YOLO+SRT 管道耗时20.1s（CPU），检测目标帧率100/100、累计8005个目标、遥测注入100/100、H矩阵100/100、运动补偿90/100、机非冲突事件数0。历史各轮检测数量受模型运行确定性影响，不能解释为ID精度变化。
 
 ## 路口项目、视频发现与渠化发布验收（2026-07-22）
 
@@ -22,7 +22,7 @@
 - 配准 `VRG-3351d2719cf74f1798ef0fc0` 已验证；4 个控制点重投影 P95 为 `7.105427357601002e-15m`，拓扑问题 0，方向、停止线、自交和重叠检查均通过。
 - Console2 项目工作台由 `admin` 真实执行“提交检查 → 六项检查通过 → 发布 lane_verified”；审计记录 `CRV-3ea5a0e3073d4c97bed3a9ea` 保存六项全真清单、意见和 actor 1。空清单调用返回 `422 calibration_review_incomplete`。
 - 发布后 V2 为唯一 `lane_verified`，V1 `CMV-1d3dedffa32145dca68c148d` 自动变为 `retired`；Runtime Bundle 返回 V2、GCJ02、转换版本 `wgs84-gcj02-local-enu/v1` 和 32 条车道。浏览器运行应用页命中新 V2，console error/warning 均为 0。
-- 自动化门禁：Platform `201 passed / 5 skipped / 10 subtests passed`；Console2 `17 files / 125 tests` 且 production build 成功；XQH `56 PASS / 0 FAIL / 0 WARN`。新增异常覆盖包括 GPS 有效率不足、非正拍/移动段、WGS84/GCJ-02 混用、相邻路口歧义、错误期望项目、无遥测和重复绑定。ADR-019 strict 除既有 `local_runtime_evidence` 外部证据门禁外全部通过。
+- 当时自动化门禁为 Platform `201 passed / 5 skipped / 10 subtests passed`、Console2 `17 files / 125 tests` 和 XQH `56 PASS / 0 FAIL / 0 WARN`；本段保留2026-07-22路口发布历史。当前总基线已提升为根 `139 passed`、Platform `207 passed / 5 skipped / 10 subtests`、Console2 `139 passed`，ADR-019 strict 本机审计 `10/10`。
 
 ### Phase 1: SRT 遥测解析 (7/7)
 | 检查项 | 结果 | 详情 |
@@ -240,6 +240,198 @@ SRT文件 → SrtTelemetryParser → VideoReader(telemetry注入)
 - `python -m pytest test/test_kafka_active_trajectories.py test/test_utils_local.py test/test_byte_tracker_core.py test/test_main_optimized_batch.py test/test_main_optimized_eof.py -q`：12 passed。
 - `python test/test_pipeline_inter_xqh.py`：56 PASS / 0 FAIL / 0 WARN；真实 4K 视频前 100 帧检测、遥测、H 矩阵均为 100/100，运动补偿为 90/100。
 - `python scripts/audit_adr019_retirement.py --scope local --strict`、`docker compose config --quiet`、`git diff --check`：全部通过。
+
+## 2026-07-25 xqh 尾部离场巡航全链路复验
+
+按当前 ByteTrack 前置纯图像关联、ID 后单一世界投影代码，重新执行 xqh 840s–自然 EOF。该运行不复用旧报告，使用真实 4K MP4、逐帧 SRT、`yolo11s-visdrone.pt`、原生 arm64 MPS 和生产 ShowNode，并保留不影响业务结果的 legacy shadow。
+
+| 证据 | 结果 |
+|---|---:|
+| 工程门禁 | `24/24` |
+| 处理帧 / 检测覆盖 | `1142 / 100%` |
+| 合法检测 / 非法框 | `107603 / 0` |
+| 图像关联 / 唯一观测 ID | `60940 / 757` |
+| 观测寿命中位 / P95 | `5.472s / 61.501s` |
+| 正式 / 候选观测 / 完成正式轨迹 | `17545 / 43395 / 201` |
+| active/completed/candidate 对齐失败 | `0 / 0 / 0` |
+| 降级业务泄漏 | `0` |
+| 正式帧视觉有效率 | `100%` |
+| 候选末点/bbox接地点残差 P95 / 最大值 | `1.146 / 1.4px` |
+| 源采样频率 | `7.4925Hz` |
+| YOLO 稳态 P50 / P95 | `72.4 / 175.51ms` |
+| 完整单进程帧 P50 / P95 | `176.205 / 270.401ms` |
+| 自然 EOF / 代表截图完整 | 通过 |
+
+飞行阶段观测为 `hover_candidate=124`、`hover_verified=345`、`unsupported_pose=241`、`cruise_nadir=432`。正式研判仅出现在悬停可靠窗口；离场画面继续检测并显示候选轨迹，但姿态、视觉变换和/或地图覆盖不满足门禁时不会进入速度、车道、统计或 TCC。质量断点结束正式轨迹 1 次，离开地图覆盖结束 264 次；三类轨迹均未发生点列错位。
+
+四组生产 ShowNode 截图已人工核查：正式悬停轨迹和琥珀候选尾迹均可见，候选图例明确标注 `NO STATS-TCC`。坐标数据核验不是仅凭观感判断，而是同时要求候选末点与当前 bbox 接地点残差 P95 不超过 5px；本次为 1.146px。
+
+仓库回归同时通过：根 `139 passed`；Platform `207 passed, 5 skipped, 1 warning, 10 subtests passed`；Console2 `139 passed` 且 production build 成功；xqh 固定基线 `56 PASS / 0 FAIL / 0 WARN`；改动 Python ruff 和 `git diff --check` 通过，后者只有既存 FrameElement CRLF 提示。Platform 首次从 `platform/` 子目录误执行导致根模块不在路径的9个收集错误，已按规范从仓库根目录重跑并全部通过，不计作代码失败。
+
+机器报告和长期截图已刷新为 `docs/generated/xqh-hover-departure-acceptance.json` 与 `docs/test-screenshots/xqh-hover-departure-*-show-node.jpg`。严格精度证据审计仍为 `production_evidence_blocked`：只有1路口/1 Mission，缺完整三阶段、配置与 Runtime Bundle 哈希、场景覆盖以及身份/位置/速度独立真值，共9项缺口；它只用于约束“不宣称精度”，不再产生人工标注项目待办。ADR-019 strict 本机审计已补齐实时证据并达到10/10。
+
+结论：xqh 尾部离场已经证明当前链路的检测、图像身份、后置世界投影、质量隔离、显示和 EOF 没有回退，状态为 `local_engineering_acceptance_passed`。它仍是姿态/地图越界的负向样本，不能产生 IDF1/HOTA/世界位置 RMSE/速度 MAE，也不能据此把生产签字从 `blocked` 改为通过。
+
+## 2026-07-24 ByteTrack 前置纯图像关联最终回归
+
+### 根因与架构修正
+
+确定性两帧红测保持图像、检测框、类别、置信度和背景视觉 warp 完全相同，只把第二帧
+pixel→ENU H 平移6m；旧 `pose_aware_world_v1` 会改变匹配结果。由此确认世界坐标误差已经越过
+质量边界污染图像身份。ADR-023 将主链改为：
+
+```text
+ImageMotionEstimation → GroundTrajectoryTracker(ByteTrack image association)
+  → Homography/MotionCompensation/FlightGeoReference
+  → PostTrackingWorldProjection → TrackerInfoUpdate/traffic analytics
+```
+
+ByteTrack 现已删除 `world_positions`、ENU Kalman 与 Mahalanobis 代价，且公共接口不接受 H/ENU。
+`association_id` 只表示图像身份；正式 `track_id` 是 ID 后通过地理参考和地图覆盖门禁的业务分段。
+质量中断保留图像 ID、结束正式 ID，恢复后创建新正式 ID。ShowNode 只读取视觉 warp 递推的
+`trajectory_display_px`，不再用当前 H 反投影历史。
+
+### 测试与真实视频证据
+
+首轮真实 MPS 重跑暴露“短时漏检后图像历史被清除、世界历史仍保留”的候选对齐失败
+（6319次）。新增漏检一帧后同 ID 恢复红测，将图像历史生命周期改为跟随 ByteTrack
+`tracked + lost` 状态；第二次全尾段重跑候选对齐失败归零。
+
+| 证据 | 结果 |
+|---|---:|
+| 根 `test/` | `139 passed` |
+| H 抖动/节点边界/双 ID/漏检恢复专项 | `18 passed` |
+| 单一世界投影所有者/去畸变覆盖/ENU全精度/速度坐标契约 | `12 passed` |
+| xqh 840s–自然EOF原生MPS | `24/24` 工程门禁 |
+| 处理帧 / 原始检测 / 非法框 | `1142 / 107603 / 0` |
+| 图像 association / 唯一观测ID | `60940 / 757` |
+| 观测轨迹寿命中位 / P95 | `5.472s / 61.501s` |
+| 正式 / 候选观测 / 完成正式轨迹 | `17545 / 43395 / 201` |
+| active/completed/candidate 对齐失败 | `0 / 0 / 0` |
+| 降级业务泄漏 | `0` |
+| 稳态YOLO P95 / 单进程帧P95 | `164.21 / 264.439ms` |
+| 自然EOF / 四张生产ShowNode证据 | 通过 |
+| Platform | `207 passed, 5 skipped, 1 warning, 10 subtests passed` |
+| Console2 / production build | `139 passed / 通过` |
+| xqh 基线 | `56 PASS / 0 FAIL / 0 WARN` |
+| ruff / `git diff --check` | 通过（FrameElement 仅有既存 CRLF 提示） |
+| ADR-019 strict | 本机实时证据10/10通过；schema `uav.adr019-local-retirement/v2` |
+
+在用户复核“世界坐标应位于 ByteTrack 之后”后又执行了一轮所有权审计：发现主顺序虽已正确，
+`TrackerInfoUpdateNode` 仍会二次投影当前接地点，`SpeedEstimationNode` 仍保留当前 H 重算历史像素的
+新版可达路径。新增公共节点红测证明后续 H 平移100m会把同一已投影点从 `(30,40)` 改写为
+`(130,40)`，随后将去畸变、ENU/GCJ-02、地图覆盖统一收进 `PostTrackingWorldProjectionNode`；
+TrackerInfo 只消费结果，内部 ENU 在速度回归前不做厘米量化，`hover_cruise_v1` 世界点不足3个时不输出正式速度。聚焦组合为
+`47 passed`，当前根测试为 `139 passed`，xqh 前100帧仍为 `56 PASS / 0 FAIL / 0 WARN`；legacy
+速度回退有独立测试保留。随后用当前代码重跑840s–EOF原生MPS：24/24工程门禁、三类点对齐失败0、
+降级业务泄漏0、自然EOF通过；上表和仓库机器报告已经替换为该次结果。
+
+生产证据审计另以完整 MP4 SHA-256 `342dea78…fcbc` 和 SRT SHA-256 `12ea683b…0ac`
+固化 `xqh-current-cruise-evidence-package.json`。资产校验没有失败，但审计仍列出9个 blocker：
+仅1路口/1 Mission、缺完整三阶段、Runtime Bundle/配置哈希、全部场景覆盖及身份/位置/速度独立真值。
+这把“文件确实存在”和“可用于生产准确率签字”分开；机器报告为
+`docs/generated/xqh-current-cruise-evidence-audit.json`。
+
+历史同输入 world-aware-v1/image-v2 对比记录仍为唯一观测 ID `984→747`（-24.1%）、总关联
+`73406→61908`；它用于说明废止世界关联时的方向性变化。当前单一投影所有者重跑为757个唯一ID、
+60940次关联、中位寿命5.472秒，因MPS检测输出总数不同，不能把两轮差值解释为新的算法优劣。
+这些都只是 churn 代理，不是 IDF1/HOTA 或 ID switch 真值。
+机器对比见 `docs/generated/xqh-world-aware-v1-vs-image-v2.json`，同帧可视对比见
+`docs/test-screenshots/xqh-hover-world-aware-v1-vs-image-v2-880.jpg`。
+
+工程结论：`local_engineering_acceptance_passed / production_accuracy_not_claimed`。xqh 离场仍是
+姿态/地图质量负样本，没有正式巡航帧。项目不建设人工标注工作包，因此 IDF1/HOTA、位置RMSE、
+速度MAE和12m/s生产精度均记为不评估、不宣称，而不是后续项目待办。
+
+## 2026-07-23 巡航/悬停融合实现回归（ADR-021 历史基线）
+
+本轮将 ByteTrack 从进程 1 的组合检测节点移到进程 2 的 `FlightGeoReferenceNode → GroundTrajectoryTrackerNode` 边界；现有 `inter_xqh` 继续使用 `hover_only_legacy` 行为基线验证悬停回归，新模块使用独立行为测试验证。结果如下：
+
+| 门禁 | 结果 |
+|---|---:|
+| 新增飞行状态、动态地理参考、位姿感知跟踪、离线 shadow、类别跨组确认、遥测时间/GPS/偏航边界、RTSP最新帧、Kafka候选隔离、评测器及 EOF 完成测试 | `45 passed` |
+| 根 `test/` pytest | `79 passed` |
+| Platform 全套 | `207 passed, 5 skipped, 10 subtests passed` |
+| Console2 全套 | `139 passed` |
+| Console2 production build | 通过 |
+| `test/test_refactor_unit.py` | `52 PASS / 0 FAIL` |
+| `test/test_pipeline_inter_xqh.py` | `56 PASS / 0 FAIL / 0 WARN` |
+| Alembic head | `20260723_0019` |
+| Alembic `20260722_0018 → 20260723_0019` 离线 SQL | 通过 |
+| xqh registration lineage 重复 dry-run | `changed=false, would_change=false` |
+
+`inter_xqh` 前 100 帧仍为 CPU 回放：100/100 帧有检测、100/100 遥测、100/100 H 有效、90/100 运动补偿有效；该素材移动尾段是姿态越界负样本，不能替代稳定近正射巡航生产正样本。新增自然 EOF 测试确认最后活跃正式轨迹以 `natural_eof` 完成，且像素、ENU、时间和质量谱系点数对齐。
+
+ADR-019 strict local 审计已以当前 native macOS Platform + Docker road9/Kafka 运行证据达到10/10。巡航当前只作自动化工程验收；项目不创建人工标注工作包，缺少独立真值意味着精度指标保持 `not_evaluated`，不影响已通过的质量隔离、坐标对齐、吞吐和EOF结论，也不能据此宣称12m/s生产精度。
+
+## 2026-07-24 MPS 检测几何与双坐标轨迹最终复验
+
+用户反馈的异常线条包含两层问题：候选尾迹第一阶段确有漏画，但恢复显示后仍存在真实轨迹数据异常。880.046秒同帧诊断中，大部分候选显示/ENU反投影残差低于2px，但最大达到322.825px；57条候选中20条为静止/慢速目标的往返抖动线。继续下钻到YOLO输出，MPS FP16和FP32均出现9个 `[x1=2160,x2=2160]` 零宽框，CPU为0；把Ultralytics裁剪切换为非原地赋值后MPS也为0。根因是旧PyTorch MPS sliced `clamp_` 的静默错误，不是FP16精度或ShowNode颜色样式。
+
+该历史阶段修复同时覆盖数据和展示：DetectionNode与legacy节点共用安全MPS裁剪/非法框过滤；非法框以 `invalid_detector_geometry` 阻断正式帧。正式/候选轨迹的canonical `trajectory_px`统一为源帧车辆接地点，与ENU、GCJ-02、时间、帧号和质量谱系一一对齐；bbox中心另存 `trajectory_bbox_center_px`。当时 ShowNode 曾使用世界轨迹反投影生成当前帧坐标；该显示方案后来已被 ADR-023 的背景视觉 `trajectory_display_px` 完全取代，当前代码禁止 ShowNode 读取 H。小幅往返抖动只在绘制副本中简化，事实数据不变。长轨迹降采样也按同一索引处理全部坐标与lineage。
+
+最终验证：
+
+| 证据 | 结果 |
+|---|---:|
+| 根 `test/` | `99 passed` |
+| xqh 基线 | `56 PASS / 0 FAIL / 0 WARN` |
+| 840s–自然EOF原生MPS | `24/24` 工程门禁 |
+| 处理帧 / 检测覆盖 | `1142 / 100%` |
+| 原始/合法检测 / 非法框 | `109899 / 109899 / 0` |
+| active/completed/candidate 对齐失败 | `0 / 0 / 0` |
+| display/world残差 P95 / max | `0.006 / 0.007px` |
+| 末点/bbox接地点残差 P95 / max | `1.163 / 1.513px` |
+| 降级业务泄漏 / 自然EOF | `0 / 通过` |
+| YOLO稳态P95 / 单进程帧P95 | `284.61 / 750.59ms` |
+
+机器报告见 `docs/generated/xqh-hover-departure-acceptance.json`；同一xqh约880秒修复前后图见 `docs/test-screenshots/xqh-hover-trajectory-before-after-880.jpg`。修复前面板来自用户指出异常的旧生产ShowNode输出，修复后面板来自最终完整验收；图上标注的322.825px与0.006/0.007px均来自坐标诊断/机器报告。工程结论为 `local_engineering_acceptance_passed / production_accuracy_not_claimed`，仍不声明无人工真值的IDF1/HOTA或12m/s生产支持。
+
+## 2026-07-24 候选轨迹尾迹显示第一阶段复验（历史）
+
+问题被压缩为经过真实 `ShowNode.process` 和 supervision 渲染器的确定性用例：同一候选 ID 已具有 3 个像素历史点，改动前候选框正常但历史点之间没有任何琥珀尾迹像素；正式轨迹在同条件下有尾迹。根因是候选分支在构建正式 `sv.Detections` 前 `continue`，之后只调用候选框绘制。
+
+本节记录第一阶段“恢复候选尾迹可见性”的历史结论；其 `camera_motion_warp` 递推和正式 `sv.TraceAnnotator` 方案已被上一节双坐标最终实现替代。候选琥珀样式、紧凑 `#ID class C` 和统一图例保留，显示缓存仍不会进入Kafka、`buffer_tracks` 或任何正式质量门禁。
+
+| 验证 | 结果 |
+|---|---:|
+| `test/test_show_node_class_colors.py` | `8 passed` |
+| Show + GroundTracker + Kafka + EOF + xqh验收渲染组合 | `30 passed` |
+| 当时根 `test/` | `87 passed` |
+| `test/test_pipeline_inter_xqh.py` | `56 PASS / 0 FAIL / 0 WARN` |
+
+新增公开接口可读性测试在真实 `ShowNode.process` 上渲染3840×2160画面，再缩放到1280×720交付视口；门禁要求候选标签可见高度至少12px、单段虚线至少7px、强琥珀尾迹像素不少于80且统一图例强琥珀像素不少于1000。该测试依次捕获了“标签仅4px”“尾迹强像素为0”和“无统一图例”三个红态，再在最终实现中转绿。
+
+另以真实 xqh 901–905 秒、stride=4、原生 MPS 执行30帧短窗复验：检测覆盖100%，总检测3395，候选关联2022，正式关联0，降级业务泄漏0，active/completed点对齐失败0。验收器通过生产 `ShowNode.process` 分别开启/关闭尾迹，在901.134秒代表帧测得8188个候选尾迹差异像素；相机补偿和跳变/总长度截断后，截图不再出现跨画面蜘蛛网。短窗报告与截图为 `/private/tmp/ta-candidate-replay-final/acceptance.json` 和 `/private/tmp/ta-candidate-replay-final/screenshots/*-show-node.jpg`；该窗口只验证离场候选链和隔离，因不包含完整悬停窗口而按设计不能通过完整工程门禁。
+
+同一30帧、同一检测输入的 shadow 诊断用于把“尾迹没画”与“ID真的重置”分开：pose-aware / legacy 的观测ID数为108/156，首帧后新增ID为7/55，中位活跃帧为19/1，中位多帧跨度为3.871/2.269秒，中位活跃轨迹为66/39.5，匹配框中位IoU为0.724。它没有显示新版关联更差的代理信号，但没有人工真值，因此这些数字不是IDF1、HOTA或正式ID switch结论。
+
+另对840–901秒的457个稳定悬停采样帧使用同一批检测输入比较 pose-aware 与 legacy shadow：总检测71589、pose-aware关联52794；双方观测ID数401/439，中位活跃帧34/18，首帧后新增ID221/306，中位活跃轨迹101.5/96，匹配框中位IoU为0.998075。880.046秒代表帧为102/93条活跃轨迹，其中80对框的中位IoU为0.9976。该无真值代理表明悬停正拍的新版关联没有出现相对于旧ByteTrack的大面积退化，用户看到的“标签和轨迹线消失”主要来自候选渲染分支；它仍不能替代人工标注的IDF1/HOTA。
+
+## 2026-07-23 xqh 后半程悬停 + 离场 MPS 工程验收
+
+执行 `scripts/accept_xqh_hover_departure.py`，输入真实 4K MP4、逐帧 SRT、SourceProfile `SRC-INTER-XQH-0403-PM`、map `CMV-b83a25740598430bb996f75d`，窗口 840s–自然 EOF，stride=4（源采样 7.4925Hz）。运行使用原生 arm64 `.venv-mps`、生产 `yolo11s-visdrone.pt@9679a16c7c2b`、imgsz 960、FP16，并旁路运行 legacy ByteTrack shadow。
+
+| 证据 | 结果 |
+|---|---:|
+| 处理帧 / 检测覆盖 | 1142 / 100% |
+| 总检测 / 平均每帧 | 109899 / 96.234 |
+| 稳态 YOLO p50 / p95 / max | 113.4 / 284.61 / 618.6ms |
+| 完整单进程帧 p50 / p95 | 330.197 / 750.59ms |
+| 遥测覆盖 | 100% |
+| 正式帧 / 正式帧视觉有效率 | 344 / 100% |
+| 正式 / 候选轨迹观测 | 13169 / 60237 |
+| 降级轨迹进入正式统计或 TCC | 0 |
+| active/completed/candidate 点对齐失败 | 0 / 0 / 0 |
+| 非法检测框 | 0 |
+| display/world残差 P95 / max | 0.006 / 0.007px |
+| 完成轨迹 / 自然 EOF | 134 / 通过 |
+| 质量断点终止 | `mode_transition_quality_break=2` |
+| 生产ShowNode轨迹尾迹 | 悬停/质量断点/离场/降级四帧均非零（62439/14187/30029/14767像素） |
+
+正式研判窗口为 855.088–900.867s；901.0s 起到源视频自然结束 992.358s 全部关闭。离场仍检出并关联候选目标，但因速度、视觉变换和/或地图覆盖不满足门禁，不产生正式业务结果。`transition` 标签未出现：901.134s 先进入 `unsupported_pose`，验收按安全质量断点与正式轨迹终止判断通过，不将越界姿态平滑成巡航。
+
+工程门禁 24/24 通过，其中检测几何、三类轨迹点对齐、两项坐标残差和 `candidate_output_trail_rendered` 均直接经过生产链。报告见 `docs/generated/xqh-hover-departure-acceptance.json`，生产渲染证据见 `docs/test-screenshots/xqh-hover-departure-*-show-node.jpg`。结论统一为 `local_engineering_acceptance_passed / production_accuracy_not_claimed`（机器报告字段为 `production_release_gate=engineering_only_accuracy_not_claimed`）；没有人工真值，未声明 IDF1、HOTA、世界位置 RMSE、速度 MAE 或正式 12m/s 巡航支持。
 
 ---
 

@@ -1,5 +1,7 @@
 # mp4new 多路口实时检测测试报告
 
+> **当前复验（2026-07-25）**：五个 canonical SourceProfile 已用原生 MPS、stride 10 完整回放到自然 EOF，并完成 Kafka/road9、严格 TCC 三图证据、Mission/WebSocket/MJPEG 与 Console2 浏览器复验；详见[五路口视频整体回归报告](test_report_five_source_regression_20260725.md)。经典五源的正式业务回归显式使用 `hover_only_legacy`；缺失巡航注册谱系时 `hover_cruise_v1` 正确保持候选隔离，不作巡航精度声明。
+
 > 测试日期：2026-07-15  
 > 测试范围：`test_videos/mp4new` 五组 MP4+DJI Cloud JSON、road9 持久化、Mission/Pipeline 启停、Kafka/WebSocket、MJPEG 代理和 console2 多路口控制页。
 > 结论：检测与控制 **5/5 PASS**；遥测连续性 **4/5 PASS + 1 DEGRADED**。礼士路 0624 的约 34 秒空洞作为素材质量问题保留，不插值、不伪造。道路/车道尚未标定，本报告不验收道路归属、车道流量或权威 GIS 坐标。

@@ -1,0 +1,169 @@
+import numpy as np
+
+from elements.FrameElement import FrameElement
+from nodes.FlightGeoReferenceNode import FlightGeoReferenceNode
+from utils_local.coordinates import enu_to_gcj02
+from utils_local.homography import compute_homography_from_telemetry
+
+
+ANCHOR = (117.0, 36.0)
+
+
+def _frame(timestamp: float, drone_east_m: float, *, runtime_map: bool = True):
+    lon, lat = enu_to_gcj02(drone_east_m, 0.0, ANCHOR)
+    frame = FrameElement(
+        "video.mp4", np.zeros((100, 100, 3), dtype=np.uint8), timestamp, timestamp, {}
+    )
+    frame.telemetry = {
+        "timestamp": timestamp,
+        "position_gcj02": {"longitude": lon, "latitude": lat},
+        "coordinate_system": "GCJ02",
+        "altitude_agl": 100.0,
+        "gimbal_pitch": -90.0,
+        "gimbal_roll": 0.0,
+        "gimbal_yaw": 0.0,
+        "zoom_factor": 1.0,
+    }
+    frame.homography_matrix = np.eye(3)
+    frame.drone_displacement_m = np.array([drone_east_m, 0.0])
+    frame.calibration_mode = "runtime_map" if runtime_map else "telemetry"
+    frame.map_version_id = "CMV-1" if runtime_map else None
+    frame.anchor_gcj02 = ANCHOR
+    frame.detected_xyxy = []
+    return frame
+
+
+def test_geo_reference_does_not_replace_image_motion_with_pose_warp():
+    node = FlightGeoReferenceNode({
+        "tracking_profile": "hover_only_legacy",
+        "geo_reference": {"require_visual_validation": False},
+    })
+    first = _frame(0.0, 0.0)
+    first.telemetry["horizontal_speed"] = 2.0
+    first.visual_motion_quality = {"status": "bootstrap", "feature_count": 0}
+    node.process(first)
+
+    visual_warp = np.array(
+        [[1.0, 0.0, 4.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
+    )
+    current_frame = _frame(1.0, 10.0)
+    current_frame.camera_motion_warp = visual_warp.copy()
+    current_frame.visual_motion_quality = {
+        "status": "verified",
+        "feature_count": 50,
+        "inlier_ratio": 0.9,
+        "reprojection_p95_px": 0.5,
+    }
+    current = node.process(current_frame)
+    previous_point = np.array([20.0, 30.0, 1.0])
+    projected = current.pose_motion_warp @ previous_point
+    projected = projected[:2] / projected[2]
+
+    assert np.allclose(projected, [10.0, 30.0], atol=0.01)
+    np.testing.assert_allclose(current.camera_motion_warp, visual_warp)
+    assert current.flight_phase == "cruise_nadir"
+    assert current.formal_analytics_eligible is True
+
+
+def test_geo_reference_consumes_precomputed_image_motion_quality():
+    node = FlightGeoReferenceNode({
+        "tracking_profile": "hover_only_legacy",
+        "geo_reference": {"require_visual_validation": True},
+    })
+    first = _frame(0.0, 0.0)
+    first.telemetry["horizontal_speed"] = 2.0
+    first.visual_motion_quality = {"status": "bootstrap", "feature_count": 0}
+    node.process(first)
+
+    second = _frame(0.1, 0.0)
+    second.telemetry["horizontal_speed"] = 2.0
+    second.camera_motion_warp = np.eye(3)
+    second.visual_motion_quality = {
+        "status": "verified",
+        "feature_count": 80,
+        "inlier_ratio": 0.95,
+        "reprojection_p95_px": 0.4,
+        "source": "background_lk_ransac",
+    }
+
+    result = node.process(second)
+
+    assert result.geo_reference_quality["visual_warp"]["status"] == "verified"
+    assert result.formal_analytics_eligible is True
+
+
+def test_telemetry_only_projection_never_becomes_formal_map_truth():
+    node = FlightGeoReferenceNode({
+        "tracking_profile": "hover_only_legacy",
+        "geo_reference": {"require_visual_validation": False},
+    })
+
+    result = node.process(_frame(0.0, 0.0, runtime_map=False))
+
+    assert result.pixel_to_map_enu is not None
+    assert result.formal_analytics_eligible is False
+    assert result.geo_reference_quality["status"] == "degraded"
+    assert "lane_verified_map_required" in result.geo_reference_quality["reasons"]
+
+
+def test_invalid_detector_geometry_blocks_formal_frame_but_keeps_preview_data():
+    node = FlightGeoReferenceNode({
+        "tracking_profile": "hover_only_legacy",
+        "geo_reference": {"require_visual_validation": False},
+    })
+    frame = _frame(0.0, 0.0)
+    frame.detected_xyxy = [[10.0, 10.0, 20.0, 20.0]]
+    frame.detection_diagnostics = {
+        "raw_detection_count": 2,
+        "valid_detection_count": 1,
+        "invalid_geometry_count": 1,
+        "invalid_geometry_reasons": {"non_positive_extent": 1},
+    }
+
+    result = node.process(frame)
+
+    assert result.detected_xyxy == [[10.0, 10.0, 20.0, 20.0]]
+    assert result.formal_analytics_eligible is False
+    assert "invalid_detector_geometry" in result.geo_reference_quality["reasons"]
+
+
+def test_hover_cruise_profile_requires_and_uses_registration_pose_lineage():
+    frame = _frame(0.0, 0.0)
+    intrinsics = {
+        "focal_length_mm": 4.5,
+        "sensor_width_mm": 6.4,
+        "sensor_height_mm": 4.8,
+    }
+    reference_local = compute_homography_from_telemetry(
+        frame.telemetry, intrinsics, (100, 100)
+    )
+    frame.runtime_visual_registration = {
+        "registration_pose": {
+            "altitude_agl": 100.0,
+            "gimbal_yaw": 0.0,
+            "gimbal_pitch": -90.0,
+            "gimbal_roll": 0.0,
+            "zoom_factor": 1.0,
+            "telemetry_homography_pixel_to_local_enu": reference_local.tolist(),
+        },
+        "camera_calibration": {
+            "camera_intrinsics": intrinsics,
+            "version": "camera/v1",
+            "sha256": "fixture",
+        },
+        "map_coverage_enu_m": {
+            "type": "Polygon",
+            "coordinates": [[[-1000, -1000], [1000, -1000], [1000, 1000], [-1000, 1000], [-1000, -1000]]],
+        },
+    }
+    frame.telemetry["horizontal_speed"] = 2.0
+    node = FlightGeoReferenceNode({
+        "tracking_profile": "hover_cruise_v1",
+        "geo_reference": {"require_visual_validation": False},
+    })
+
+    result = node.process(frame)
+
+    assert result.formal_analytics_eligible is True
+    assert result.geo_reference_quality["registration_pose_lineage"]["status"] == "verified"
+    assert result.geo_reference_quality["map_coverage"]["status"] == "verified"

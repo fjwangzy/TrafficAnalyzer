@@ -25,20 +25,19 @@
 
 ### 1. 车辆检测
 
-**实现文件**：`nodes/DetectionTrackingNodes.py`
+**实现文件**：`nodes/DetectionNode.py`
 
 **流程**：
 1. 从 FrameElement 取出原始帧（BGR numpy 数组）
 2. 调用 `YOLO.predict(frame, imgsz=1280, conf=0.05, classes=[0,1,2,3,4,5,6,7,8,9])`
-3. 提取检测框：`detected_conf`、`detected_cls`、`detected_xyxy`
-4. 将检测结果转换为 ByteTracker 格式 `[x1, y1, x2, y2, conf, class_id]`
-5. 调用 `BYTETracker.update(detections)` 进行多目标跟踪
-6. 提取跟踪结果：`tracked_xyxy`、`tracked_cls`、`tracked_conf`、`id_list`
+3. 提取 `detected_conf`、`detected_cls`、`detected_xyxy` 与模型 identity 后送入进程 2
+4. 本节点不分配 Track ID；`hover_cruise_v1` 先做背景图像运动估计和 ByteTrack，再做逐帧地理参考
 
 **关键细节**：
-- VisDrone 全类别进入检测与跟踪，原始 `class_id` 保留到下游用于 motor/non_motor 分类。
+- VisDrone 全类别进入检测，原始 `class_id` 保留到下游跟踪与 motor/non_motor 分类。
 - 航拍小目标非机动车置信度较低，默认使用 `imgsz=1280`、`confidence=0.05` 保留电动车/三轮车候选；代价是 CPU 推理变慢且误检增多。
 - NMS IOU 阈值 0.7 较高，允许更多重叠框通过
+- MPS 推理在初始化时强制 Ultralytics 使用非原地 bbox 裁剪；检测输出通过共享几何边界按行裁剪/校验。NaN/Inf、零/负宽高和字段错位不会进入 ByteTrack，并记录 `detection_diagnostics`；任一非法框会令该帧正式业务降级为 `invalid_detector_geometry`。
 
 **模型**：
 - `weights/uav_best.pt` — 自定义无人机视角 YOLO11 模型，检测交通工具类别。
@@ -53,7 +52,12 @@
 
 ### 2. 多目标跟踪（ByteTrack）
 
-**实现文件**：`byte_tracker/byte_tracker_model.py`
+**实现文件**：`utils_local/image_motion.py`、`nodes/ImageMotionEstimationNode.py`、`nodes/GroundTrajectoryTrackerNode.py`、`nodes/PostTrackingWorldProjectionNode.py`、`byte_tracker/byte_tracker_model.py`
+
+ByteTrack 的当前正式节点位于进程 2：`ImageMotionEstimationNode → GroundTrajectoryTrackerNode`，
+严格早于 Homography、ENU 和地图质量处理；世界投影由 `PostTrackingWorldProjectionNode` 在 ID 确定后完成。
+旧 `DetectionTrackingNodes` 仅由 `hover_only_legacy` 回滚 profile 使用。跟踪节点输出兼容的
+`tracked_xyxy/tracked_cls/tracked_conf/id_list`，因此下游统计节点不需要维护第二套接口。
 
 **算法流程**（每帧执行）：
 ```
@@ -62,14 +66,15 @@
 Step 1: 按分数分为高分组（> first_track_thresh=0.05）和低分组（> second_track_thresh=0.01）
 
 Step 2: 第一轮关联（高分框）
-  - 卡尔曼滤波预测已有轨迹新位置
-  - 计算轨迹池与高分检测框的 IOU 距离矩阵
-  - fuse_score 融合检测置信度
+  - 按真实源时间差预测像素框状态
+  - 用排除检测框后的背景 LK/RANSAC camera_motion_warp 把旧框投影到当前相机帧
+  - 组合补偿后 IoU、类别软约束和检测置信度
+  - ByteTrack 接口不接受 H、世界位置、ENU 协方差或地图质量
   - 线性分配（lap.lapjv 算法）
 
 Step 3: 第二轮关联（低分框）
   - 未匹配的高分轨迹 + 低分检测框
-  - IOU 距离矩阵 + 线性分配（阈值 0.5）
+  - 复用位姿补偿后的关联代价 + 线性分配
   - 这一步恢复了被遮挡或模糊的目标
 
 Step 4: 处理未确认轨迹
@@ -81,7 +86,14 @@ Step 5: 初始化新轨迹
   - 当前实现还要求 `score >= first_track_thresh + second_track_thresh`，因此小目标阈值需联合调低，否则低分电动车/三轮车会有检测框但无法进入最终 tracked 输出。
 
 Step 6: 清理超时轨迹
-  - lost 状态超过 max_time_lost 帧的轨迹标记为 Removed
+  - lost 状态默认超过 2 秒的轨迹标记为 Removed，不依赖处理 FPS
+  - 源时间间隔超过 0.5 秒或时间倒退时重置图像关联
+  - 位姿、地图或遥测质量断点只结束正式业务 ID，不重置仍连续的图像关联 ID
+
+Step 7: ID 后世界投影与正式分段
+  - `PostTrackingWorldProjectionNode` 用当前源帧 H 投影已关联目标的底部接地点
+  - `association_id` 是图像身份；正式 `track_id` 是通过地理参考和地图覆盖门禁的业务分段身份
+  - 质量恢复时同一 `association_id` 创建新正式 `track_id`，并用 `track_family_id/previous_track_id` 串联
 
 输出：当前帧的活跃轨迹列表 [STrack]
 ```
@@ -91,6 +103,7 @@ Step 6: 清理超时轨迹
 - 恒速运动模型：`x(t+1) = x(t) + vx`
 - 不确定性权重相对于 bbox 高度动态缩放（DeepSORT 风格）
 - `shared_kalman` 类变量实现所有轨迹共享同一滤波器实例
+- ByteTrack 不维护 ENU 状态。世界位置和速度只由 ID 后的逐点世界事实计算；无有效地理参考时可继续图像 ID 和候选显示，但禁止正式 ENU、速度、车道或 TCC。
 
 ### 3. 道路分配
 
@@ -364,7 +377,7 @@ PostgreSQL/TimescaleDB 读取。分区粒度、压缩、保留期、连续聚合
 **渲染内容**：
 1. 检测框或跟踪框（取决于 `show_only_yolo_detections` 配置）— 使用 `sv.BoxAnnotator` / `sv.RoundBoxAnnotator`
 2. 跟踪 ID 标签 + 车速（km/h）— 使用 `sv.LabelAnnotator`（带圆角彩色背景）
-3. 轨迹尾迹 — 使用 `sv.TraceAnnotator`（可通过 `show_trace_trails` 配置）
+3. 轨迹尾迹 — 正式轨迹与候选轨迹都使用显式的当前帧图像坐标；正式为类别色实线，候选为琥珀色细虚线。`trajectory_px` 与 ENU 世界事实保留，`trajectory_display_px` 只供渲染（均受 `show_trace_trails` 控制）
 4. 道路多边形轮廓 + 可选透明遮罩（`sv.MaskAnnotator`）
 5. 道路编号（在区域中心）
 6. FPS 计数器
@@ -379,6 +392,9 @@ PostgreSQL/TimescaleDB 读取。分区粒度、压缩、保留期、连续聚合
 
 **轨迹可视化过滤**：
 - `ShowNode` 在绘制前会裁剪 bbox 到画面范围，并过滤 NaN/Inf、完全越界、面积过小的框，避免异常 Kalman 预测框被画到左上角。
+- `trajectory_px` 保存每个源帧中的车辆地面接触点，`trajectory_enu_m/trajectory_gcj02` 保存 ByteTrack 后由同一源帧 H 得到的世界事实；`trajectory_bbox_center_px` 单独保留旧 bbox 中心。ShowNode 不直接连接不同相机帧的原始像素，也不使用当前 H 反投影历史；`trajectory_display_px` 始终由背景视觉 `camera_motion_warp` 将旧显示点递推到当前帧。
+- 正式和候选尾迹最多绘制最近30点；空值、NaN/Inf、越界点和不足两点的历史不产生连线。小于 `max(4px, 画面对角线×0.1%)` 的往返抖动只在绘制副本中简化；单段跳变超过 `max(60px, 画面对角线×4%)` 或当前尾迹累计超过 `max(80px, 画面对角线×8%)` 时截断。原始图像/世界坐标不被平滑或改写。
+- 候选框和尾迹固定为琥珀虚线；每目标使用深色半透明底、琥珀描边的紧凑 `#ID class C` 标签，画面右上角统一解释 `AMBER DASHED = CANDIDATE / NO STATS-TCC`。标签字号、边框、尾迹线宽和虚线节距按4K源到1280×720交付视口比例缩放，既避免缩小后消失，也避免给每个目标重复长免责声明遮挡路口。`trajectory_display_px` 只存在于进程内渲染事实，Kafka发布前会剔除；候选数据禁止据此创建 `buffer_tracks` 或参与速度、车道、流量、TCC 和事件投递。
 - 跟踪模式只显示已分配道路或 bbox 中心落在道路 ROI 内的轨迹；低置信度小目标检测开启后，屋顶/树木/施工区域的误检轨迹不会继续堆积在画面边缘。
 - 当未配置道路标注文件时，`roads_info={}`，可视化保留有效跟踪框，但道路分配、道路流量统计和人工道路 ROI 过滤不可用；自动推断车道仍可绘制中心线/箭头，但不绘制左上角车道统计黑底面板，避免无道路模式下的 overlay 堆积。
 10. 统计面板（独立黑色窗口，拼接在主帧右侧）
@@ -456,7 +472,7 @@ Console2 的事件证据展示按业务语义标注三图：`conflict_original_f
 5. 提交复核至少需要一项带 metric geometry 的当前量算；复核可通过或带原因退回“补拍/修订量算”。技术复核通过不等于法定事故认定。
 6. 报告生成前重新计算全部引用材料的 SHA-256 和大小；按量算关联帧生成带几何与逐边长度的标注 JPEG，将其作为派生证据嵌入 PDF，并随 canonical JSON、GeoJSON 与 manifest hash 输出。历史任务优先展示固化标注图；旧报告可由不可变 BEV 和版本化量算记录只读重绘，不回写旧版本。重复请求用 `Idempotency-Key` 返回同一业务结果。
 7. 报告只有在 `survey_quality` 规则已批准且配置主平台 URL 后才创建 `survey_result` 事件和 outbox；worker 记录每次 HTTP 尝试，超过上限进入 dead letter。当前未冻结阈值保持 `unverified`，不得伪造“质量通过”或成功回执。
-8. 场景标注只能关联已持久化关键帧，车辆、痕迹、散落物和其他对象的创建/修改/删除保留 revision 与统一审计；渠化车道标注从真实关键帧显式创建任务，发布后形成不可变 `lane_verified` 地图。Pipeline 有已验收地图时固定对应 Runtime Road Map Bundle；未绑定路网仍可启动目标检测、像素跟踪和 MJPEG，但不得把缺少地图匹配的结果作为正式车道、世界坐标轨迹或车道级研判事实。
+8. 场景标注只能关联已持久化关键帧，车辆、痕迹、散落物和其他对象的创建/修改/删除保留 revision 与统一审计；渠化车道标注从真实关键帧显式创建任务，发布后形成不可变 `lane_verified` 地图。手动 Mission 按当前路口与 SourceProfile 选择具备完整配准谱系的 Runtime Road Map Bundle，并把精确地图与配准冻结到任务快照；不得用无人机档案的原始道路版本替代源级绑定。未绑定路网仍可启动目标检测、像素跟踪和 MJPEG，但不得把缺少地图匹配的结果作为正式车道、世界坐标轨迹或车道级研判事实。
 9. 冲突节点实际产出事件时才保存研判关键帧并附到统一证据包；当前素材没有真实事件时应保存“未检出事件”事实，禁止为了验收制造冲突。
 
 ## 统计数据的完整生命周期
@@ -466,8 +482,12 @@ Console2 的事件证据展示按业务语义标注三图：`conflict_original_f
 ```
 帧 N 进入 VideoReader
   → 原始帧 + 道路坐标
-帧 N 进入 DetectionTrackingNodes
-  → YOLO 检测到 15 辆车 → ByteTrack 分配 ID [1,2,3,...,15]
+帧 N 进入 DetectionNode
+  → YOLO 检测到 15 辆车，只写 detected_* 字段
+帧 N 进入 ImageMotionEstimationNode → GroundTrajectoryTrackerNode
+  → 背景视觉运动补偿 → ByteTrack 分配图像 association ID [1,2,3,...,15]
+帧 N 进入 Homography/MotionCompensation → FlightGeoReference → PostTrackingWorldProjection
+  → ID 后逐点世界投影与质量门禁 → 分配正式业务 track ID
 帧 N 进入 TrackerInfoUpdateNode
   → buffer_tracks 新增 ID 16,17
   → ID 3 首次进入道路 2 的多边形 → start_road=2
@@ -510,9 +530,28 @@ Console2 的事件证据展示按业务语义标注三图：`conflict_original_f
   → Console2 展示实时状态，并通过 REST 查询 TimescaleDB 历史与聚合数据
 ```
 
+Console2 实时监测的 BEV 采用“最近 5 分钟或至少 150 条”的混合展示窗口，不改变 Kafka 或
+`road9` 的完整轨迹事实。当前活动轨迹和质量门禁下的候选轨迹始终保留；本次 Pipeline 会话中
+最近 5 分钟到达浏览器的完成轨迹全部保留，即使总数超过 150 条。如果以上轨迹不足 150 条，
+再由更早的最新完成轨迹补足。该窗口用于同时观察高流量实时目标和近期尾迹，不得解释为视频
+同帧同步，也不得用于替代持久化历史查询。
+
 业务失败语义：
 
 - 重复消息以业务幂等键去重，不重复累计流量、不重复生成告警或交付记录。
+- `uav_stats` 的排队长度、拥堵指数、车道匹配率和平均速度允许为 `null`，表示当前帧无正式
+  测量；告警规则必须跳过该指标，不得把空值强制解释为零或触发比较异常。
+- 实时统计完成持久化并广播后，告警评估属于旁路副作用。单条规则异常必须记录 warning 并
+  继续完成 inbox dispatch 与 Kafka offset 提交，禁止反复 seek 同一记录而阻断后续实时轨迹。
+- 已绑定 `complete` Runtime Road Map Bundle 的 Pipeline 已具备发布态 `lane_verified` 地图，
+  `uav_stats` 不得在每个悬停采样中重复携带 base64 车道标注图。该约束避免实时统计随轨迹增长
+  超过 Kafka 请求大小；活动/候选目标仍全部投递，完成轨迹继续通过独立 Topic 保存完整事实。
+- Platform 管理的动态检测器使用“本次 Platform 启动 epoch 秒 + 进程内递增量”作为运行时
+  `camera_id`，从而为恢复后的 Mission 分配新 canonical Topic。视频端口仍独立从 8101 递增；
+  SourceProfile、Mission、Pipeline 和路口 ID 才是业务谱系，运行时相机号不得被解释为物理档案 ID。
+- 候选实时投放使用显式预览契约：全部候选目标均保留，像素、ENU、GCJ-02、时间和帧号只携带
+  对齐的最近 30 点；逐点质量谱系等内部历史不进入周期 `uav_stats`。完整正式事实仍由完成轨迹
+  Topic 保存，候选预览字段不得升级为正式统计或 TCC 输入。
 - 数据库暂时不可用时，由 Consumer 重试或进入失败处理队列；恢复后按原事件时间补写，
   不得以接收恢复时间替代业务观测时间。
 - 路网映射缺失时保留原始本地标识并标记 `unmapped`，不得伪造 `inter_id`、`link_id`、
@@ -593,6 +632,35 @@ GCJ-02/ENU 最大往返误差为 0.0068m。该口径不得写成 100 条人工�
 运行时的地图投影、车道匹配、速度、方向和完成轨迹必须共用同一个 SourceProfile verified
 配准。轨迹 ENU 点按车辆底部接地点逐帧累积，速度和方向直接对带时间戳的 ENU 历史回归；禁止
 用结束帧 H 统一重算历史像素，也禁止对已经是地图绝对 ENU 的速度再次扣除无人机速度。
+## 2026-07-23 巡航/悬停轨迹正式口径
+
+飞行阶段由共享 `FlightMotionClassifier.observe()` 判定，离线视频发现和实时检测不能各自实现悬停逻辑。状态为 `hover_candidate`、`hover_verified`、`cruise_nadir`、`transition`、`unsupported_pose`、`telemetry_unavailable`。默认进入悬停要求连续 15 秒、GPS 覆盖率不低于 90%、派生速度 P95 不高于 1m/s、位置半径 P95 不高于 5m、云台俯角不高于 -80°；退出使用速度 1.5m/s、半径 8m、俯角 -78°和 2 秒迟滞。
+
+巡航正式包线为地速 1–12m/s、AGL 60–150m、云台俯角不高于 -80°、滚转绝对值不高于 5°、垂直速度不高于 2m/s、偏航角速度不高于 15°/s、变焦漂移不高于 2%。SRT/JSON 缷失速度时使用约 1 秒 GCJ-02 位置窗口派生；报告速度与派生速度持续相差超过 3m/s时标记不一致。所有文件与 MQTT 遥测超过同步容忍窗口都返回空，不复用超窗最近值。
+
+遥测短缺首帧立即终止正式业务轨迹并停止 ENU/速度/车道/TCC 输出；只要源时间和背景图像关联仍连续，ByteTrack 图像 ID 可继续用于候选预览。恢复正式质量时创建新正式 ID。只有源时间倒退或相邻处理帧超过0.5秒才重置图像关联；遥测/H 误差不得成为图像 ID 重置条件。
+
+正式业务门禁按以下边界执行：
+
+- `GroundTrajectoryTrackerNode` 对所有检测目标维护图像 `association_id` 和 `trajectory_display_px`；`PostTrackingWorldProjectionNode` 将地图外或质量降级目标标记为 `candidate_trajectories`。
+- `PostTrackingWorldProjectionNode` 是新版唯一世界事实所有者：先对当前接地点去畸变，再使用该源帧 `pixel_to_map_enu` 生成 ENU/GCJ-02；地图覆盖使用同一个投影点。`TrackerInfoUpdateNode` 只累积该结果，后续 H 或 GCJ-02 锚点变化不得触发二次计算。
+- 原始类别变化只增加关联代价；同业务组类别可更新，机动车/非机动车跨组变化默认连续 3 帧确认后才改写轨迹业务类别。
+- `TrackerInfoUpdateNode` 只允许 `formal_track_ids` 进入业务 `buffer_tracks`，并逐点保存同帧接地点像素、ENU、GCJ-02、源时间、源帧号和质量谱系；这些数组必须一一对齐。
+- `SpeedEstimationNode` 在 `hover_cruise_v1` 中只消费逐帧 ENU 历史，至少3点后按真实源时间回归；没有世界历史时不使用当前 H 重投影像素，也不输出正式速度。当前 H 回退只属于 `hover_only_legacy`。`DirectionFlowNode`、`RoadMapMatchingNode`、`LaneAnalysisNode`、`ConflictDetectionNode` 与 `CalcStatisticsNode` 同样拒绝降级帧。
+- active/completed trajectory 的 canonical `trajectory_px` 使用与世界坐标相同的接地点锚点，旧 bbox 中心放在 `trajectory_bbox_center_px`；active world 轨迹直接读取逐帧保存的 `trajectory_enu_m`，禁止用当前帧 H 重投影历史像素。
+- 模式切换且质量连续时保留 track ID；地理参考、时间或地图覆盖断裂时终止，原因使用 `mode_transition_quality_break`、`source_time_gap`、`telemetry_gap` 或 `target_left_map_coverage`。候选重发现可形成新 ID，不视为同一正式轨迹。
+- `degraded/unverified` 进入正式统计、车道、TCC 或事件中心的允许数量为 0。
+- 离线 shadow 比较只生成 `tracking_diagnostics.shadow_comparison` 与 `uav.tracking-shadow/v2` JSONL 证据；legacy 轨迹 ID 和关联结果不得替换或修正正式输出。
+- 自然 EOF 必须以 `termination_reason=natural_eof` 完成仍在缓冲区的正式轨迹，并在关闭 Kafka publisher 前发布；像素、ENU、GCJ-02、时间和质量点数仍须一一对齐。
+
+悬停关键帧仍是车道标注、视觉配准和发布 `lane_verified` 地图的唯一来源。巡航只消费固定 SourceProfile 与不可变 Runtime Road Map Bundle。
+
+`inter_xqh` 真实尾段的验收事实为：840.006–854.954s 是 `hover_candidate`，855.088–900.867s 同时满足悬停、视觉与地图门禁并允许正式研判，901.0–992.291s 关闭正式研判。901.134s 先进入 `unsupported_pose` 而未出现普通 `transition`，正式轨迹仍以 `mode_transition_quality_break` 结束；这是安全质量断点，不是把越界姿态平滑成合格巡航。离场仍显示检测框和候选 ID，但正式 track、统计和 TCC 数量必须为 0。
+
+该素材的离场速度在 12m/s 边界附近导致 `cruise_nadir/unsupported_pose` 交替，且逐渐离开已发布车道覆盖；它可验证高速相机运动下的检测、候选关联和质量隔离，不能作为稳定正射 12m/s 正样本。几何修复后报告中的984个观测ID、shadow IoU对应和轨迹生命期仅是诊断代理，没有人工标注时不得解释为IDF1、HOTA或ID switch门禁。完整回放的109899个MPS检测均通过几何校验，候选显示/世界残差P95为0.006px、最大0.007px，降级业务泄漏为0；这证明坐标链与安全隔离，不证明生产跟踪准确率。
+
+轨迹人工真值不属于本项目工作流：不创建预标注、不分派人工ID复核任务，也不把缺少真值登记为待开发功能。工程验收通过条件是自动化门禁全绿；IDF1/HOTA、正式ID switch、位置RMSE和速度MAE在无外部批准真值时统一输出或记录为`not_evaluated`。观测ID数、轨迹寿命、bbox IoU和尾迹观感只用于回归诊断，不得升级为精度结论。悬停关键帧的地图/车道人工复核仍是既有业务步骤，与轨迹真值标注包无关。
+
 # 路口项目与视频归属
 
 路口渠化支持视频优先和路口优先，两条路径执行同一套悬停定位与候选匹配。路口优先并不构成跳过校验的授权：检测到其他正式路口或最近候选距离超过 80m 时必须阻止 `bind_expected_project`，由管理员转绑、建新项目或取消。多悬停段分别保存视频起止偏移；中心相距超过 250m 的片段不得合并。无有效遥测可保存为 `manual_unverified`，但发布仍需已验证 RoadContext、视觉配准、检查通过及既有几何质量门禁。

@@ -35,8 +35,22 @@ class CalcStatisticsNode:
             frame_element, FrameElement
         ), f"CalcStatisticsNode | 输入元素格式错误 {type(frame_element)}"
 
+        if (
+            getattr(frame_element, "geo_reference_quality", None) is not None
+            and not getattr(frame_element, "formal_analytics_eligible", False)
+        ):
+            frame_element.info = {
+                "cars_amount": None,
+                "roads_activity": {},
+                "formal_analytics_eligible": False,
+                "quality_reasons": (
+                    frame_element.geo_reference_quality.get("reasons", [])
+                ),
+            }
+            return frame_element
+
         buffer_tracks = frame_element.buffer_tracks
-        self.cars_buffer.append(len(frame_element.id_list))
+        self.cars_buffer.append(len(frame_element.buffer_tracks or {}))
 
         info_dictionary = {}
         info_dictionary["cars_amount"] = round(np.mean(self.cars_buffer))

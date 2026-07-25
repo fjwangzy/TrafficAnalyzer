@@ -1,7 +1,7 @@
 # ARCHITECTURE.md — TrafficAnalyzer 系统架构
 
 > 2026-07-16 本机开发环境已按 ADR-019 完成纯净切换。本文中的旧链路段落仅是历史设计记录；
-> 当前实现以根 `docker-compose.yaml`、Alembic `20260721_0017` 和 canonical `uav_*` 契约为准。
+> 当前实现以根 `docker-compose.yaml`、Alembic `20260723_0019` 和 canonical `uav_*` 契约为准。
 
 ## 系统总览
 
@@ -32,22 +32,31 @@ TrafficAnalyzer 是智慧交通大项目下的无人机 AI 交通分析子系统
                       │ FrameElement
                       ▼
 ┌─────────────────────────────────────────────────────────┐
-│             DetectionTrackingNodes                       │
-│  YOLO11 检测 → detected_* + tracked_cls_ids              │
-│  ByteTrack 跟踪 → tracked_* + id_list 字段               │
+│                    DetectionNode                          │
+│  YOLO11 检测 → detected_xyxy/conf/cls/model lineage      │
 └─────────────────────┬───────────────────────────────────┘
                       │ FrameElement（带检测结果）
                       ▼
 ┌─────────────────────────────────────────────────────────┐
-│             HomographyCalibrationNode                    │
-│  按 SourceProfile verified 配准锁定 pixel→ENU 单应矩阵    │
+│             ImageMotionEstimationNode                    │
+│  排除目标框的背景 LK/RANSAC previous→current 图像 warp     │
 └─────────────────────┬───────────────────────────────────┘
                       ▼
 ┌─────────────────────────────────────────────────────────┐
-│             MotionCompensationNode                       │
-│  以配准时 GCJ-02 位置为零点，逐帧补偿无人机位移与航向       │
+│             GroundTrajectoryTrackerNode                  │
+│  纯图像 ByteTrack：视觉补偿后 IoU + 类别软约束 + 真实时间   │
+│  此边界禁止读取 H / ENU / 遥测 / 地图覆盖                  │
 └─────────────────────┬───────────────────────────────────┘
-                      │ FrameElement（带运动补偿字段）
+                      ▼
+┌─────────────────────────────────────────────────────────┐
+│ HomographyCalibration + MotionCompensation               │
+│  按 SourceProfile 配准与当前遥测生成逐帧 pixel→map ENU      │
+└─────────────────────┬───────────────────────────────────┘
+                      ▼
+┌─────────────────────────────────────────────────────────┐
+│ FlightGeoReference + PostTrackingWorldProjection         │
+│  ByteTrack 后世界投影、质量门禁、地图覆盖与正式业务分段       │
+└─────────────────────┬───────────────────────────────────┘
                       ▼
 ┌─────────────────────────────────────────────────────────┐
 │             TrackerInfoUpdateNode                        │
@@ -132,8 +141,8 @@ TrafficAnalyzer 是智慧交通大项目下的无人机 AI 交通分析子系统
 
 ### main_optimized.py — 三进程并行模式（唯一生产入口）
 
-- **进程 1**：VideoReader + DetectionTrackingNodes（CPU 读取 + GPU 推理）
-- **进程 2**：Homography + MotionCompensation + TrackerInfoUpdate + Speed + Direction + LaneDetection + LaneAnalysis + Trajectory + AutoLaneInference + Conflict + CalcStatistics + KafkaProducer（CPU 密集）
+- **进程 1**：VideoReader + DetectionNode（CPU 读取 + GPU/MPS YOLO 推理，仅输出检测）
+- **进程 2**：ImageMotion + GroundTrajectoryTracker(ByteTrack image-only) + Homography + MotionCompensation + FlightGeoReference + PostTrackingWorldProjection + TrackerInfoUpdate + Speed + Direction + Lane/Map + Conflict + CalcStatistics + KafkaProducer（CPU 密集）
 - **进程 3**：ShowNode + VideoSaver + FlaskServer（渲染 + IO）
 - **队列**：`FRAME_QUEUE_MAXSIZE` 默认 8，进程间通过 `multiprocessing.Queue` 传递 FrameElement；可按目标环境容量显式调整
 - **健康检查**：下游进程通过 `get(timeout=10)` + `is_alive()` 检测上游崩溃并自动退出
@@ -548,8 +557,9 @@ Console2 /
 - 根 `docker-compose.yaml` 是唯一完整拓扑，包含 `road9`/TimescaleDB、Apache Kafka KRaft、Platform、Console2、Nginx，以及可选 Kafka UI/GPU 检测器；隔离验证使用环境变量覆盖 project、端口和卷名。
 - Platform 镜像复制 `alembic.ini` 与全部 forward migration，`/ready` 同时确认 database、Kafka、TimescaleDB 和 PipelineManager；`/health` 仅表示进程存活。
 - 新 `road9` 最初由 `20260715_0010` 从空库创建并确认 5 张 hypertable，随后以前向迁移到
-  `20260721_0017`；`0013` 增加 Kafka inbox 可恢复派发，`0014/0015` 增加轨迹研判维度与索引，
-  `0016/0017` 建立 GCJ-02 渠化地图及按 SourceProfile 配准。当前数据只来自清理后的本机重建，
+  `20260723_0019`；`0013` 增加 Kafka inbox 可恢复派发，`0014/0015` 增加轨迹研判维度与索引，
+  `0016/0017` 建立 GCJ-02 渠化地图及按 SourceProfile 配准，`0018` 增加路口项目化接入，
+  `0019` 增加飞行分段、跟踪 profile 与运行质量谱系。当前数据只来自清理后的本机重建，
   不得存在旧 `traffic_platform` database 或迁移隔离表。
 - 正式本机切换执行 30 分钟 readiness/认证/Dashboard/System 连续探测；它只证明本机开发稳定性，不定义生产 SLO。
 - 旧卷和绑定目录保留 7 天且不挂载，到期后仅允许 `scripts/purge_adr019_legacy_storage.py` 固定 allowlist 人工删除。
@@ -632,6 +642,8 @@ Console2 /enforcement/**
 
 ### 3. ByteTrack 而非 DeepSORT
 
+> 历史基线：以下是原始 `hover_only_legacy` 取舍。`hover_cruise_v1` 已由 ADR-023 改为背景视觉运动补偿后的纯图像 ByteTrack，并把世界投影放到 ID 之后；当前定义见本文“2026-07-23 巡航与悬停正拍融合架构”。
+
 **决策**：使用 ByteTrack 作为多目标跟踪算法。
 **原因**：ByteTrack 利用低置信度检测框进行第二轮关联，在车辆密集场景（环形路口）中跟踪精度更高。不需要外观特征提取网络，推理更快。
 **代价**：跟踪完全基于 IOU，当车辆被遮挡超过 track_buffer 帧后会丢失 ID。
@@ -643,6 +655,8 @@ Console2 /enforcement/**
 **代价**：增加或减少道路数量需要修改多个文件和 Grafana 仪表盘。这是最大的技术债之一。
 
 ### 5. 无人机运动补偿（2026-05-30）
+
+> 历史基线：当前 H 重投影历史像素和无人机速度矢量减法只保留给 `hover_only_legacy`。`hover_cruise_v1` 使用每个点所属源帧的绝对 ENU 事实，当前实现见 ADR-023。
 
 **决策**：采用混合方案——GPS锚定世界坐标系 + 帧间遥测速度积分 + 悬停自动跳过。
 **原因**：
@@ -837,3 +851,44 @@ road9 完成轨迹/冲突
 返回受 `track_limit` 控制的证据轨迹。轨迹按 SourceProfile、Mission、Pipeline 与 Track ID 的
 可用组合去重，抽样优先保留端点、转折点和安全归因冲突附近点；这些边界只控制读模型和渲染，
 不修改 canonical 事实。
+
+## 2026-07-23 巡航与悬停正拍融合架构
+
+`hover_cruise_v1` 将同一 Mission 的进场巡航、路口悬停和离场巡航放入同一条三进程管道；`hover_only_legacy` 是只恢复既有悬停能力的回滚 profile。既有 FlightPlan 在 migration `20260723_0019` 中回填为 `hover_only_legacy`，新 FlightPlan 默认使用 `hover_cruise_v1`。
+
+```text
+进程 1：VideoReader/MQTT/SRT/JSON → DetectionNode(YOLO only)
+进程 2：ImageMotionEstimation → GroundTrajectoryTracker(ByteTrack image association)
+       → HomographyCalibration → MotionCompensation → FlightGeoReference
+       → PostTrackingWorldProjection
+       → TrackerInfoUpdate → Speed/Direction/Map/Lane/TCC/Statistics/Kafka
+进程 3：ShowNode → VideoSaver/MJPEG
+```
+
+ByteTrack 的明确节点位置是进程 2 的 `GroundTrajectoryTrackerNode`，位于所有 H/ENU/地图处理之前。`ImageMotionEstimationNode` 只从排除目标框的背景图像估计 `camera_motion_warp`；ByteTrack 保留高/低置信度两轮关联，以该视觉 warp 补偿旧框，并使用补偿后 IoU、类别软约束、置信度和真实源时间。其公共 `update` 接口不接受世界位置或 H。同业务组原始类别可即时修正，机动车/非机动车跨组变化默认需连续 3 帧确认。旧 `DetectionTrackingNodes` 只在 `hover_only_legacy` 回滚路径中保留，待巡航生产门禁通过和稳定观察后删除。
+
+迁移验证可设置 `TRACKING_SHADOW_ENABLED=true`，在离线源旁路运行不使用视觉 warp 的 legacy ByteTrack，并把逐帧双方轨迹数、bbox IoU 对应和未匹配 ID 写入 `uav.tracking-shadow/v2` JSONL。主/影子跟踪器使用隔离的 ID 分配器；shadow 结果不写入 `FrameElement` 业务字段、不进入 Kafka/road9/统计/TCC，并在 `offline_only` 下拒绝 RTSP/HTTP/摄像头源。
+
+`DetectionNode` 与 legacy `DetectionTrackingNodes` 共用 `utils_local/detection_geometry.py`。Apple MPS 在推理前强制 Ultralytics 选择非原地 bbox 裁剪，避免旧 PyTorch MPS 的 sliced `clamp_` 静默破坏边界框；输出再按同一行同时校验 bbox、置信度和类别，非有限值、零/负宽高或数组错位均被丢弃并写入 `detection_diagnostics`。任何 `invalid_geometry_count>0` 都由 `FlightGeoReferenceNode` 以 `invalid_detector_geometry` 阻断当帧正式研判，剩余合法框仅可预览。
+
+`FlightGeoReferenceNode` 与 `PostTrackingWorldProjectionNode` 共同构成图像 ID 之后的正式业务边界：前者逐帧生成 `pixel_to_map_enu`，并用已经独立计算的背景视觉变换校验遥测位姿；后者投影已分配 ID 的目标接地点、检查目标地图覆盖并分配正式业务 ID。只有 `hover_verified` 或 `cruise_nadir`、`lane_verified` Runtime Bundle、配准位姿谱系、地图覆盖、遥测、视觉变换和检测几何全部通过时，轨迹才进入 `buffer_tracks`。质量失败只能结束正式业务分段，不能重置图像关联 ID。
+
+`PostTrackingWorldProjectionNode` 是 `hover_cruise_v1` 唯一的像素→ENU→GCJ-02 事实所有者：镜头去畸变、目标接地点投影和地图覆盖判断复用同一个逐帧计算结果。`TrackerInfoUpdateNode` 只能消费已经生成的当前点，禁止再次读取 H 投影；后续 H 或锚点变化不能改写该帧事实。`SpeedEstimationNode` 在该 profile 下只对至少3个逐帧 `position_history_enu_m` 点做真实时间回归，世界历史不足时不产生正式速度；“用当前 H 重投影全部历史像素”的逻辑仅保留给 `hover_only_legacy` 回滚。
+
+轨迹坐标分为三层且不得混用：`trajectory_px` 是每个源帧中的车辆地面接触点；`trajectory_display_px` 是用相邻背景视觉 `camera_motion_warp` 逐帧递推到当前画面的显示缓存；`trajectory_enu_m/trajectory_gcj02` 是 ByteTrack 分配 ID 后，用每个点所属源帧的绝对矩阵生成的世界事实。源像素、世界坐标、`trajectory_timestamps_sec/trajectory_frame_nums/point_quality_lineage` 按同一索引保留；旧 bbox 中心显式保留为 `trajectory_bbox_center_px`。ShowNode 禁止用当前 H 反投影整段历史，世界坐标也禁止反馈关联或修正显示 ID。
+
+进程 3 的 `ShowNode` 不再使用 `sv.TraceAnnotator` 的隐式跨帧 bbox-center 缓存。正式和候选尾迹都消费显式的当前帧图像坐标并使用同一个接地点锚点：正式轨迹绘制类别色实线，候选轨迹绘制最多30点的琥珀虚线；亚像素 bbox 往返抖动只在绘制副本中简化，不改写图像或世界轨迹事实。每车使用紧凑 `#ID class C` 标签，右上角只绘制一次 `AMBER DASHED = CANDIDATE / NO STATS-TCC` 图例。候选框、标签、尾迹的字号、线宽和虚线节距按源画面到1280×720交付视口的比例缩放，同时截断不连续跳变和过长尾迹。`trajectory_display_px` 在 Kafka 发布前剔除，不创建或补写 `buffer_tracks`，也不改变任何正式质量门禁。
+
+Runtime Bundle 中 verified visual registration 新增 `registration_pose`、`camera_calibration` 与 `map_coverage_enu_m`。悬停矩阵在稳定姿态下退化为既有固定配准；巡航帧在同一不可变地图上动态投影。巡航帧不能创建、修改或发布地图。
+
+RTSP 由单后台解码线程持续排空到一个“最新帧”槽位，记录 `source_drop_count/source_drop_reason/source_capture_time`；MP4 仍采用完整帧反压。自然 EOF 到达进程 2 时，`GroundTrajectoryTracker.flush(natural_eof)` 先终止关联，`TrackerInfoUpdateNode.flush()` 再把剩余正式轨迹序列化并在 publisher 关闭前发送；随后继续透传唯一 EOF sentinel。三段队列和共享内存责任不变。
+
+Mission 取得 Runtime Bundle 时，`Road9RoadContextAdapter` 与校准 API 共用同一 registration 输出边界，必须携带位姿、相机和地图覆盖三类谱系。衍生 V2 地图缺少直接 checksum 时只沿显式 `quality.source_map_version_id` 追溯父地图的上游 snapshot；不存在谱系就拒绝解析，不能选“最新”快照。
+
+手动 Mission 的地图解析以 `inter_id + source_profile_id` 为边界：显式 `map_version_id` 是严格约束，未显式指定时优先已就绪的请求道路版本，再按不可变地图版本倒序选择最新的完整 SourceProfile 配准。解析结果把精确 map/version/registration/checksum 和选择策略冻结到 Mission 快照，`_runtime_params` 再按该 map id 取同一 Bundle，避免无人机档案中的原始道路版本误选无配准快照。没有合格地图时仍保留检测器降级启动，但世界投影及正式业务消费者保持关闭。
+
+Console2 监控态分为历史 REST 与实时 WebSocket 两个状态层，展示标量时实时层覆盖历史层；只有 WebSocket 层可更新实时活动/候选轨迹和新鲜度时钟。实时业务消息必须同时匹配当前 SourceProfile 与运行 `pipeline_id`，Pipeline id 变化会重置旧会话的统计、轨迹与冲突，避免 Kafka backlog 或同源旧任务覆盖当前 Runtime 质量。BEV 地图只消费服务端提供的 GCJ-02 点列，降级候选以虚线投放；仅有像素轨迹时展示明确空态，不在浏览器中重建坐标。
+
+ADR-023 已废止世界 Mahalanobis 关联：H 抖动不再能改变匹配结果，`pose_motion_warp` 只用于视觉/遥测一致性诊断。2026-07-24 同一真实 xqh 840s–EOF 原生 MPS 的 image-v2 复验结果记录在 `docs/generated/xqh-hover-departure-acceptance.json`；该证据只证明本机吞吐、双坐标对齐、显示和业务隔离，不替代 IDF1/HOTA/位置与速度真值验收。
+
+本项目不包含人工轨迹标注、AI预标注、标注任务分派或复核工作包。自动化验收只验证运行链、图像关联代理、坐标对齐、质量隔离、性能和EOF；没有外部已批准真值时，IDF1/HOTA、正式ID switch、位置RMSE和速度MAE不评估、不宣称。该边界不影响悬停关键帧上的车道/地图人工复核流程。

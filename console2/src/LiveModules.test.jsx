@@ -76,7 +76,7 @@ vi.mock('./components/CityMap', () => ({
 }))
 
 vi.mock('./components/MonitoringBevMap', () => ({
-  MonitoringBevMap: ({ compact, label, trajectories = [] }) => <div role='img' aria-label={label} data-compact={compact ? 'true' : 'false'} data-trajectory-count={trajectories.length}>高德 GCJ-02 轨迹地图</div>,
+  MonitoringBevMap: ({ compact, emptyMessage, label, trajectories = [] }) => <div role='img' aria-label={label} data-compact={compact ? 'true' : 'false'} data-trajectory-count={trajectories.length} data-track-ids={trajectories.map((item) => item.track_id).join(',')}>高德 GCJ-02 轨迹地图{!trajectories.length && emptyMessage ? <span>{emptyMessage}</span> : null}</div>,
 }))
 
 import { RouterApp } from './RouterApp'
@@ -192,6 +192,7 @@ describe('Console2 live module migration', () => {
     act(() => liveMocks.wsCallback({
       type: 'uav_stats',
       data: {
+        pipeline_id: 'P-1',
         congestion_index: 6.3,
         cars: 842,
         avg_speed_kmh: 27.4,
@@ -222,6 +223,161 @@ describe('Console2 live module migration', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /历史路径交点事件/ }))
     expect(screen.queryByText('AI 事件研判')).not.toBeInTheDocument()
+  })
+
+  it('shows cruise quality gates and keeps degraded trajectories candidate-only', async () => {
+    open('/monitoring?intersection_id=INT-1&source_profile_id=SRC-1')
+    expect(await screen.findByText('历史路径交点事件')).toBeInTheDocument()
+
+    act(() => liveMocks.wsCallback({
+      type: 'uav_stats',
+      data: {
+        pipeline_id: 'P-1',
+        cars: null,
+        active_trajectories: [],
+        candidate_trajectories: [{
+          track_id: 44,
+          tracking_method: 'pose_aware_world_v1',
+          tracking_quality: 'degraded',
+          quality_reasons: ['telemetry_gap'],
+          trajectory_gcj02: [[117, 36.7], [117.0001, 36.7001]],
+        }],
+        flight_phase: 'cruise_nadir',
+        formal_analytics_eligible: false,
+        geo_reference_quality: {
+          status: 'degraded',
+          telemetry: { status: 'degraded' },
+          visual_warp: { status: 'verified' },
+          map_coverage: { status: 'verified' },
+          reasons: ['telemetry_gap'],
+        },
+        tracking_diagnostics: {
+          tracking_method: 'pose_aware_world_v1',
+          tracking_quality: 'degraded',
+          termination_reason: 'mode_transition_quality_break',
+        },
+      },
+    }))
+
+    expect(screen.getByText('近正射巡航')).toBeInTheDocument()
+    expect(screen.getByText('正式研判关闭')).toBeInTheDocument()
+    expect(screen.getByText('仅候选，不进入统计/TCC')).toBeInTheDocument()
+    expect(screen.getByText(/遥测短缺或超出同步窗口/)).toBeInTheDocument()
+    expect(screen.getByRole('img', { name: 'BEV 地图轨迹投放图' })).toHaveAttribute('data-trajectory-count', '1')
+  })
+
+  it('keeps realtime map trajectories when a historical REST snapshot refreshes', async () => {
+    const { queryClient } = open('/monitoring?intersection_id=INT-1&source_profile_id=SRC-1')
+    expect(await screen.findByText('历史路径交点事件')).toBeInTheDocument()
+
+    act(() => liveMocks.wsCallback({
+      type: 'uav_stats',
+      data: {
+        pipeline_id: 'P-1',
+        cars: 9,
+        active_trajectories: [],
+        candidate_trajectories: [{
+          track_id: 51,
+          tracking_quality: 'degraded',
+          trajectory_gcj02: [[117, 36.7], [117.0001, 36.7001]],
+        }],
+      },
+    }))
+    expect(screen.getByRole('img', { name: 'BEV 地图轨迹投放图' })).toHaveAttribute('data-trajectory-count', '1')
+
+    liveMocks.api.intersectionStats.mockResolvedValueOnce([{ time: '2026-07-14T10:05:00Z', cars: 30 }])
+    await act(async () => queryClient.refetchQueries({ queryKey: ['monitoring-trend', 'INT-1', 'SRC-1'] }))
+
+    expect(screen.getByRole('img', { name: 'BEV 地图轨迹投放图' })).toHaveAttribute('data-trajectory-count', '1')
+    expect(screen.getByText('实时轨迹数量').closest('.congestion-card')).toHaveTextContent('0')
+  })
+
+  it('rejects stale realtime stats from an older pipeline on the same source', async () => {
+    open('/monitoring?intersection_id=INT-1&source_profile_id=SRC-1')
+    expect(await screen.findByText('历史路径交点事件')).toBeInTheDocument()
+
+    act(() => liveMocks.wsCallback({
+      type: 'uav_stats',
+      data: {
+        pipeline_id: 'P-1',
+        active_trajectories: [],
+        candidate_trajectories: [{
+          track_id: 61,
+          tracking_quality: 'degraded',
+          trajectory_gcj02: [[117, 36.7], [117.0001, 36.7001]],
+        }],
+        geo_reference_quality: {
+          status: 'degraded',
+          map_coverage: { status: 'verified' },
+          reasons: ['flight_phase_not_verified'],
+        },
+      },
+    }))
+    expect(screen.getByRole('img', { name: 'BEV 地图轨迹投放图' })).toHaveAttribute('data-trajectory-count', '1')
+
+    act(() => liveMocks.wsCallback({
+      type: 'uav_stats',
+      data: {
+        pipeline_id: 'P-OLD',
+        active_trajectories: [],
+        candidate_trajectories: [{ track_id: 99, trajectory_px: [[1, 2], [3, 4]] }],
+        geo_reference_quality: {
+          status: 'degraded',
+          map_coverage: { status: 'unavailable' },
+          reasons: ['lane_verified_map_required'],
+        },
+      },
+    }))
+
+    expect(screen.getByRole('img', { name: 'BEV 地图轨迹投放图' })).toHaveAttribute('data-trajectory-count', '1')
+    expect(screen.queryByText(/缺少 lane_verified 运行时地图/)).not.toBeInTheDocument()
+  })
+
+  it('clears same-source realtime session state when the running pipeline changes', async () => {
+    const { queryClient } = open('/monitoring?intersection_id=INT-1&source_profile_id=SRC-1')
+    expect(await screen.findByText('历史路径交点事件')).toBeInTheDocument()
+    act(() => liveMocks.wsCallback({
+      type: 'uav_stats',
+      data: {
+        pipeline_id: 'P-1',
+        active_trajectories: [],
+        candidate_trajectories: [{
+          track_id: 71,
+          tracking_quality: 'degraded',
+          trajectory_gcj02: [[117, 36.7], [117.0001, 36.7001]],
+        }],
+      },
+    }))
+    expect(screen.getByRole('img', { name: 'BEV 地图轨迹投放图' })).toHaveAttribute('data-trajectory-count', '1')
+
+    liveMocks.api.pipelines.mockResolvedValueOnce([{ pipeline_id: 'P-2', intersection_id: 'INT-1', source_profile_id: 'SRC-1', drone_id: 'UAV-1', camera_id: 12, video_stream_url: 'http://127.0.0.1:8102/video', status: 'running' }])
+    await act(async () => queryClient.refetchQueries({ queryKey: ['monitoring-pipelines'] }))
+
+    await waitFor(() => expect(screen.getByRole('img', { name: 'BEV 地图轨迹投放图' })).toHaveAttribute('data-trajectory-count', '0'))
+    expect(screen.getByRole('img', { name: 'BEV 地图轨迹投放图' })).toHaveTextContent('等待 GCJ-02 实时轨迹')
+  })
+
+  it('reports unprojected candidates instead of presenting an unexplained empty map', async () => {
+    open('/monitoring?intersection_id=INT-1&source_profile_id=SRC-1')
+    expect(await screen.findByText('历史路径交点事件')).toBeInTheDocument()
+
+    act(() => liveMocks.wsCallback({
+      type: 'uav_stats',
+      data: {
+        pipeline_id: 'P-1',
+        active_trajectories: [],
+        candidate_trajectories: [{
+          track_id: 52,
+          tracking_quality: 'degraded',
+          trajectory_px: [[10, 20], [12, 24]],
+        }],
+      },
+    }))
+
+    const map = screen.getByRole('img', { name: 'BEV 地图轨迹投放图' })
+    expect(map).toHaveAttribute('data-trajectory-count', '0')
+    expect(map).toHaveTextContent('候选目标 1 · 地理投影不可用')
+    expect(screen.getByText('实时轨迹数量').closest('.congestion-card')).toHaveTextContent('0')
   })
 
   it('rejects realtime alerts without current SourceProfile lineage', async () => {
@@ -256,7 +412,7 @@ describe('Console2 live module migration', () => {
     act(() => liveMocks.wsCallback({
       type: 'uav_conflict',
       occurredAt: '2026-07-14T09:59:58Z',
-      data: { message_id: 'C-1', source_profile_id: 'SRC-1', prediction_type: 'path_intersection', distance_m: 0.0, motor_id: 96, non_motor_id: 88, severity: 'critical', title: '历史路径交点事件', ttc_sec: 1.1, pet_sec: 0.3 },
+      data: { message_id: 'C-1', pipeline_id: 'P-1', source_profile_id: 'SRC-1', prediction_type: 'path_intersection', distance_m: 0.0, motor_id: 96, non_motor_id: 88, severity: 'critical', title: '历史路径交点事件', ttc_sec: 1.1, pet_sec: 0.3 },
     }))
 
     expect(screen.getAllByText('历史路径交点事件')).toHaveLength(1)
@@ -346,9 +502,9 @@ describe('Console2 live module migration', () => {
       drone_id: 'UAV-1',
       source_profile_id: 'SRC-1',
       inter_id: 'INT-1',
-      road_data_version: 'ROAD-1',
       scheduled_end_at: expect.any(String),
     })))
+    expect(liveMocks.api.createMission.mock.calls[0][0]).not.toHaveProperty('road_data_version')
   })
 
   it('allows demo detection without a bound road context', async () => {
@@ -394,7 +550,7 @@ describe('Console2 live module migration', () => {
     fireEvent.click(screen.getByRole('button', { name: '暂停实时数据' }))
     const frozenClock = document.querySelector('.timeline-controls span').textContent
 
-    act(() => liveMocks.wsCallback({ type: 'uav_stats', data: { cars: 842, congestion_index: 6.3 } }))
+    act(() => liveMocks.wsCallback({ type: 'uav_stats', data: { pipeline_id: 'P-1', cars: 842, congestion_index: 6.3 } }))
     liveMocks.api.intersectionStats.mockResolvedValueOnce([{ time: '2026-07-14T10:05:00Z', congestion_index: 5.1, cars: 30 }])
     await act(async () => queryClient.refetchQueries({ queryKey: ['monitoring-trend', 'INT-1'] }))
     await act(async () => new Promise((resolve) => window.setTimeout(resolve, 1_100)))
@@ -469,12 +625,94 @@ describe('Console2 live module migration', () => {
     open('/monitoring?intersection_id=INT-1&view=detector')
     expect(await screen.findByAltText('检测器输出视频流')).toBeInTheDocument()
 
-    act(() => liveMocks.wsCallback({ type: 'uav_track_complete', data: { track_id: 101, trajectory_gcj02: [[117, 36.7], [117.0001, 36.7001], [117.0002, 36.7002]] } }))
-    act(() => liveMocks.wsCallback({ type: 'uav_track_complete', data: { track_id: 102, trajectory_gcj02: [[117.0001, 36.7], [117.0002, 36.7001], [117.0003, 36.7002]] } }))
+    act(() => liveMocks.wsCallback({ type: 'uav_track_complete', data: { pipeline_id: 'P-1', track_id: 101, trajectory_gcj02: [[117, 36.7], [117.0001, 36.7001], [117.0002, 36.7002]] } }))
+    act(() => liveMocks.wsCallback({ type: 'uav_track_complete', data: { pipeline_id: 'P-1', track_id: 102, trajectory_gcj02: [[117.0001, 36.7], [117.0002, 36.7001], [117.0003, 36.7002]] } }))
 
     expect(screen.queryByLabelText('车辆轨迹图层')).not.toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: /切为主视图/ }))
     expect(await screen.findByRole('img', { name: 'BEV 地图轨迹主视图' })).toHaveAttribute('data-trajectory-count', '2')
+  })
+
+  it('keeps every BEV trajectory from the latest five minutes even when the total exceeds 150', async () => {
+    open('/monitoring?intersection_id=INT-1&source_profile_id=SRC-1&view=bev')
+    expect(await screen.findByText('历史路径交点事件')).toBeInTheDocument()
+    const map = await screen.findByRole('img', { name: 'BEV 地图轨迹主视图' })
+    const recentOccurredAt = new Date().toISOString()
+
+    act(() => liveMocks.wsCallback({
+      type: 'uav_stats',
+      data: {
+        pipeline_id: 'P-1',
+        active_trajectories: [{
+          track_id: 9001,
+          trajectory_gcj02: [[117, 36.7], [117.0001, 36.7001]],
+        }],
+        candidate_trajectories: [{
+          track_id: 9002,
+          tracking_quality: 'degraded',
+          trajectory_gcj02: [[117.0001, 36.7], [117.0002, 36.7001]],
+        }],
+      },
+    }))
+    act(() => {
+      for (let trackId = 1; trackId <= 160; trackId += 1) {
+        liveMocks.wsCallback({
+          type: 'uav_track_complete',
+          occurredAt: recentOccurredAt,
+          data: {
+            pipeline_id: 'P-1',
+            track_id: trackId,
+            trajectory_gcj02: [[117, 36.7], [117.0001, 36.7001]],
+          },
+        })
+      }
+    })
+
+    expect(map).toHaveAttribute('data-trajectory-count', '162')
+    expect(map.getAttribute('data-track-ids').split(',')).toEqual(expect.arrayContaining(['9001', '9002', '1', '160']))
+  })
+
+  it('backfills older BEV trajectories to 150 when the five-minute window has fewer tracks', async () => {
+    open('/monitoring?intersection_id=INT-1&source_profile_id=SRC-1&view=bev')
+    expect(await screen.findByText('历史路径交点事件')).toBeInTheDocument()
+    const map = await screen.findByRole('img', { name: 'BEV 地图轨迹主视图' })
+    const oldReceiptTime = Date.now() - (6 * 60 * 1000)
+    const dateNow = vi.spyOn(Date, 'now').mockReturnValue(oldReceiptTime)
+    try {
+      act(() => {
+        for (let trackId = 1; trackId <= 160; trackId += 1) {
+          liveMocks.wsCallback({
+            type: 'uav_track_complete',
+            data: {
+              pipeline_id: 'P-1',
+              track_id: trackId,
+              trajectory_gcj02: [[117, 36.7], [117.0001, 36.7001]],
+            },
+          })
+        }
+      })
+    } finally {
+      dateNow.mockRestore()
+    }
+    act(() => liveMocks.wsCallback({
+      type: 'uav_stats',
+      data: {
+        pipeline_id: 'P-1',
+        active_trajectories: [{
+          track_id: 9001,
+          trajectory_gcj02: [[117, 36.7], [117.0001, 36.7001]],
+        }],
+        candidate_trajectories: [{
+          track_id: 9002,
+          tracking_quality: 'degraded',
+          trajectory_gcj02: [[117.0001, 36.7], [117.0002, 36.7001]],
+        }],
+      },
+    }))
+
+    expect(map).toHaveAttribute('data-trajectory-count', '150')
+    expect(map.getAttribute('data-track-ids').split(',')).toEqual(expect.arrayContaining(['9001', '9002', '13', '160']))
+    expect(map.getAttribute('data-track-ids').split(',')).not.toContain('12')
   })
 
   it('retries a failed MJPEG stream on the fixed three-second interval', async () => {

@@ -74,6 +74,7 @@ class PipelineManagerTest(unittest.IsolatedAsyncioTestCase):
             kafka_bootstrap="kafka:29092",
             pipeline_python="/opt/pipeline/bin/python",
             frame_stride=12,
+            camera_id_start=1_700_000_000,
         )
 
         with patch(
@@ -119,8 +120,8 @@ class PipelineManagerTest(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(captured["env"]["VIDEO_SRC"], str(video_path.resolve()))
         self.assertEqual(captured["env"]["RUNTIME_MAP_BUNDLE_JSON"], '{"schema_version":"uav.runtime-road-map/v1","map_version_id":"CMV-TEST","map_status":"lane_verified","coordinate_system":"GCJ02","anchor_gcj02":[117.0,36.7],"geometry_enu_m":{"lanes":{}}}')
-        self.assertEqual(captured["env"]["TOPIC_NAME"], "uav_statistics_10")
-        self.assertEqual(captured["env"]["CAMERA_ID"], "10")
+        self.assertEqual(captured["env"]["TOPIC_NAME"], "uav_statistics_1700000000")
+        self.assertEqual(captured["env"]["CAMERA_ID"], "1700000000")
         self.assertEqual(captured["env"]["DRONE_ID"], "drone_1")
         self.assertEqual(captured["env"]["INTERSECTION_ID"], "INT_camera_1")
         self.assertEqual(captured["env"]["INTER_ID"], "INT_camera_1")

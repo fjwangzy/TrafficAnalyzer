@@ -278,6 +278,7 @@ class PlatformClient:
         camera_id: int,
         video_port: int,
         runtime_bundle: dict,
+        tracking_profile: str = "hover_cruise_v1",
     ) -> dict:
         return self.request(
             "POST",
@@ -292,6 +293,7 @@ class PlatformClient:
                 "video_port": video_port,
                 "video_stream_url": f"http://127.0.0.1:{video_port}/video",
                 "topic_name": f"uav_statistics_{camera_id}",
+                "tracking_profile": tracking_profile,
             },
         )
 
@@ -380,11 +382,18 @@ def run_source(
     sample_fps: float,
     imgsz: int,
     drain_seconds: float,
+    tracking_profile: str,
 ) -> dict:
     camera_id = 5700 + index
     video_port = 15700 + index
     runtime_bundle = client.runtime_bundle(source)
-    registered = client.register(source, camera_id, video_port, runtime_bundle)
+    registered = client.register(
+        source,
+        camera_id,
+        video_port,
+        runtime_bundle,
+        tracking_profile=tracking_profile,
+    )
     pipeline_id = registered["pipeline_id"]
     run_id = f"native-mps-{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}-{source['profile_id']}"
     topics = [
@@ -432,6 +441,7 @@ def run_source(
             "ROAD_DATA_VERSION": source["road_data_version"],
             "ROAD_CONTEXT_STATUS": "lane_verified",
             "QUALITY_STATUS": "verified",
+            "TRACKING_PROFILE": tracking_profile,
             "FRAME_STRIDE": str(frame_stride),
             "KAFKA_SPOOL_DIR": str(source_dir / "kafka-spool"),
             "PYTORCH_ENABLE_MPS_FALLBACK": "1",
@@ -447,6 +457,7 @@ def run_source(
         "kafka_producer_node.hover_annotation_snapshot_enabled=false",
         "detection_node.device=mps",
         f"detection_node.imgsz={imgsz}",
+        f"tracking_profile={tracking_profile}",
         "telemetry.enabled=true",
         f"telemetry.source={source.get('telemetry_type', 'file')}",
         f"telemetry.file_path={hydra_string(source['telemetry'])}",
@@ -513,6 +524,7 @@ def run_source(
         "input_fps": round(input_fps, 3),
         "sample_fps": round(sample_fps, 3),
         "imgsz": imgsz,
+        "tracking_profile": tracking_profile,
         "return_code": return_code,
         "elapsed_sec": round(time.monotonic() - started, 3),
         "stats_count": len(buckets["stats"]),
@@ -538,6 +550,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--frame-stride", type=int, help="fixed override; otherwise derived from --sample-fps")
     parser.add_argument("--sample-fps", type=float, default=3.0)
     parser.add_argument("--imgsz", type=int, default=640)
+    parser.add_argument(
+        "--tracking-profile",
+        choices=("hover_cruise_v1", "hover_only_legacy"),
+        default="hover_cruise_v1",
+        help="explicit Mission tracking profile recorded by Platform and the detector",
+    )
     parser.add_argument("--drain-seconds", type=float, default=5.0)
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--resume", action="store_true", help="reuse completed source artifacts")
@@ -608,6 +626,7 @@ def main() -> int:
             sample_fps=input_fps / frame_stride,
             imgsz=args.imgsz,
             drain_seconds=args.drain_seconds,
+            tracking_profile=args.tracking_profile,
         )
         results.append(result)
         print(json.dumps(result, ensure_ascii=False), flush=True)
@@ -619,6 +638,7 @@ def main() -> int:
         "device": device,
         "selected_sources": selected,
         "completed_sources": len(results),
+        "tracking_profile": args.tracking_profile,
         "trajectory_count": sum(item["trajectory_count"] for item in results),
         "tcc_event_count": sum(item["tcc_event_count"] for item in results),
         "results": results,

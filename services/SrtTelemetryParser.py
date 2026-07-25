@@ -148,8 +148,10 @@ class SrtTelemetryParser:
             "gimbal_yaw": gb_yaw,
             "gimbal_roll": gb_roll,
             "zoom_factor": 1.0 / dzoom_ratio if dzoom_ratio > 0 else 1.0,
-            "horizontal_speed": 0,
-            "vertical_speed": 0,
+            # SRT normally has no aircraft velocity.  Preserve absence so the
+            # shared flight classifier derives it from the 1-second GPS window.
+            "horizontal_speed": None,
+            "vertical_speed": None,
             "focal_len": focal_len,
             "dzoom_ratio": dzoom_ratio,
         }

@@ -20,6 +20,7 @@ from app.models.drone_store import (
 )
 from app.models.metrics import ConflictEvent, TrackEvent, TrafficMetric
 from app.models.mission import (
+    FlightSegmentRecord,
     LaneAnnotationTaskRecord,
     MissionRecord,
     TelemetrySourceRecord,
@@ -166,6 +167,13 @@ async def get_source_results(profile_id: str, request: Request, db: AsyncSession
             .order_by(LaneAnnotationTaskRecord.created_at.desc())
         )
     ).scalars().all() if inter_id else []
+    flight_segments = (
+        await db.execute(
+            select(FlightSegmentRecord)
+            .where(FlightSegmentRecord.source_profile_id == profile_id)
+            .order_by(FlightSegmentRecord.start_offset_sec.asc())
+        )
+    ).scalars().all()
     return {
         "profile_id": profile_id,
         "drone_id": video.drone_id,
@@ -203,6 +211,21 @@ async def get_source_results(profile_id: str, request: Request, db: AsyncSession
             "lane_annotations": len(lane_tasks),
         },
         "lane_tasks": [{"id": row.id, "status": row.status, "revision": row.revision} for row in lane_tasks],
+        "flight_segments": [
+            {
+                "id": row.id,
+                "mission_id": row.mission_id,
+                "start_offset_sec": row.start_offset_sec,
+                "end_offset_sec": row.end_offset_sec,
+                "phase": row.phase,
+                "quality_status": row.quality_status,
+                "classifier_version": row.classifier_version,
+                "motion_statistics": row.motion_statistics,
+                "map_version_id": row.map_version_id,
+                "created_at": row.created_at,
+            }
+            for row in flight_segments
+        ],
         "links": {
             "situation": f"/gis?intersection_id={inter_id}&period=24h" if inter_id else "/gis?period=24h",
             "monitoring": "/drones?tab=fleet",

@@ -469,7 +469,8 @@ class MissionOrchestrator:
                 id=_id("PLAN"), name=body.name, drone_id=body.drone_id,
                 video_source_id=pair[0].id, telemetry_source_id=pair[1].id,
                 inter_id=body.inter_id, road_data_version=body.road_data_version,
-                ai_mode=body.ai_mode, schedule_type=body.schedule.type,
+                ai_mode=body.ai_mode, tracking_profile=body.tracking_profile,
+                schedule_type=body.schedule.type,
                 schedule=_schedule_payload(body.schedule), timezone=body.timezone,
                 state="draft", created_by=actor_id,
             )
@@ -563,7 +564,10 @@ class MissionOrchestrator:
                     409,
                     "drone_mission_active",
                 )
-            snapshot: dict = {"quality_status": "unverified"}
+            snapshot: dict = {
+                "quality_status": "unverified",
+                "tracking_profile": "hover_cruise_v1",
+            }
             video_id = telemetry_id = None
             pair = await self._pair(session, body.source_profile_id)
             if pair is None or pair[0].drone_id != body.drone_id:
@@ -572,10 +576,33 @@ class MissionOrchestrator:
                 raise MissionError("source profile is invalid", code="source_profile_invalid")
             video_id, telemetry_id = pair[0].id, pair[1].id
             snapshot["source_profile_id"] = body.source_profile_id
+            try:
+                runtime_context = await self._road_context.select_runtime(
+                    body.inter_id,
+                    body.source_profile_id,
+                    road_data_version=body.road_data_version,
+                    map_version_id=body.map_version_id,
+                )
+            except LookupError as exc:
+                raise MissionError(
+                    str(exc),
+                    422,
+                    "runtime_map_not_ready",
+                ) from exc
+            resolved_road_data_version = body.road_data_version or "unverified"
+            if runtime_context is not None:
+                resolved_road_data_version = runtime_context.road_data_version
+                snapshot["road_context_selection"] = {
+                    "map_version_id": runtime_context.map_version_id,
+                    "road_data_version": runtime_context.road_data_version,
+                    "registration_id": runtime_context.selected_registration_id,
+                    "checksum": runtime_context.checksum,
+                    "strategy": runtime_context.selection_strategy,
+                }
             mission = MissionRecord(
                 id=_id("MSN"), name=body.name or "手动 Mission", trigger_type="manual",
                 drone_id=body.drone_id, video_source_id=video_id, telemetry_source_id=telemetry_id,
-                inter_id=body.inter_id or "", road_data_version=body.road_data_version or "unverified",
+                inter_id=body.inter_id or "", road_data_version=resolved_road_data_version,
                 scheduled_start_at=now, scheduled_end_at=end_at, status="starting",
                 context_snapshot=snapshot, created_by=actor_id,
             )
@@ -833,8 +860,11 @@ class MissionOrchestrator:
         context = None
         if mission.road_data_version and mission.road_data_version != "unverified":
             try:
+                selection = mission.context_snapshot.get("road_context_selection") or {}
                 context = await self._road_context.get(
-                    mission.inter_id, mission.road_data_version
+                    mission.inter_id,
+                    mission.road_data_version,
+                    selection.get("map_version_id"),
                 )
             except LookupError:
                 context = None
@@ -879,6 +909,9 @@ class MissionOrchestrator:
             "road_context_status": "complete" if runtime_map_bundle else "missing",
             "quality_status": context.quality_status if runtime_map_bundle else "unverified",
             "runtime_map_bundle": runtime_map_bundle,
+            "tracking_profile": mission.context_snapshot.get(
+                "tracking_profile", "hover_cruise_v1"
+            ),
         }
 
     async def _validate_plan(self, session: AsyncSession, plan: FlightPlanRecord) -> None:
@@ -969,7 +1002,11 @@ class MissionOrchestrator:
             telemetry_source_id=plan.telemetry_source_id, inter_id=plan.inter_id,
             road_data_version=plan.road_data_version, scheduled_start_at=occurrence.start_at,
             scheduled_end_at=occurrence.end_at, status=status, reason_code=reason,
-            context_snapshot={"flight_plan_revision": plan.revision, "ai_mode": plan.ai_mode},
+            context_snapshot={
+                "flight_plan_revision": plan.revision,
+                "ai_mode": plan.ai_mode,
+                "tracking_profile": plan.tracking_profile,
+            },
         )
 
     async def _sync_pipeline_stop(
@@ -1039,6 +1076,7 @@ class MissionOrchestrator:
             "source_profile": {"video_source_id": row.video_source_id, "telemetry_source_id": row.telemetry_source_id},
             "inter_id": row.inter_id, "road_data_version": row.road_data_version,
             "ai_mode": row.ai_mode, "schedule": row.schedule, "timezone": row.timezone,
+            "tracking_profile": row.tracking_profile,
             "state": row.state, "revision": row.revision,
             "created_at": row.created_at, "updated_at": row.updated_at,
         }
@@ -1064,6 +1102,10 @@ class MissionOrchestrator:
                 "camera_id": pipeline.camera_id, "video_port": pipeline.video_port,
                 "video_stream_url": video_stream_url,
                 "error_message": pipeline.error_message,
+                "flight_phase": pipeline.flight_phase,
+                "tracking_quality": pipeline.tracking_quality,
+                "formal_analytics_eligible": pipeline.formal_analytics_eligible,
+                "runtime_quality": pipeline.runtime_quality,
             } if pipeline else None,
             "context_snapshot": row.context_snapshot,
             "created_at": row.created_at, "updated_at": row.updated_at,

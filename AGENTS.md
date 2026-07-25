@@ -74,23 +74,32 @@ git diff --check
 
 ## 检测管道
 
-生产入口只有 `main_optimized.py`，三进程结构为 reader+detection、tracker+stats+kafka、show+save+flask，队列 `maxsize=50` 并带进程健康检查。
+生产入口只有 `main_optimized.py`，三进程结构为 reader+detection、tracker+stats+kafka、show+save+flask，队列默认 `maxsize=8`（可用 `FRAME_QUEUE_MAXSIZE` 显式调整）并带进程健康检查。
 
 ```text
-VideoReader → DetectionTrackingNodes → HomographyCalibrationNode → MotionCompensationNode
-  → TrackerInfoUpdateNode → SpeedEstimationNode → DirectionFlowNode → LaneDetectionNode
+VideoReader → DetectionNode → ImageMotionEstimationNode → GroundTrajectoryTrackerNode
+  → HomographyCalibrationNode → MotionCompensationNode → FlightGeoReferenceNode
+  → PostTrackingWorldProjectionNode → TrackerInfoUpdateNode
+  → SpeedEstimationNode → DirectionFlowNode → LaneDetectionNode
   → LaneAnalysisNode → TrajectoryNode → RoadMapMatchingNode → AutoLaneInferenceNode → ConflictDetectionNode
   → CalcStatisticsNode → KafkaProducerNode → ShowNode → VideoSaverNode/FlaskServerVideoNode
 ```
 
 `FrameElement` 是逐节点富化的数据载体，`TrackElement` 保存单车状态，`VideoEndBreakElement` 是 EOF sentinel；所有节点都必须透传 EOF。
 
+巡航跟踪只执行自动化工程验收，不建设人工轨迹标注、AI 预标注或标注复核工作包。无外部批准
+真值时，IDF1/HOTA、正式 ID switch、位置 RMSE 和速度 MAE 必须记录为 `not_evaluated`，不能用
+观测 ID、寿命、IoU 或尾迹观感替代。该边界不改变悬停关键帧上的车道/地图人工复核。
+
 关键实现：
 
 | 模块 | 文件 | 责任 |
 |---|---|---|
 | 视频读取 | `nodes/VideoReader.py` | MP4/RTSP、遥测和固定 Runtime Road Map Bundle 注入 |
-| 检测跟踪 | `nodes/DetectionTrackingNodes.py` | YOLO11 + ByteTrack |
+| 检测 | `nodes/DetectionNode.py` | `hover_cruise_v1` 的 YOLO11-only 检测；输出 `detected_*` |
+| 图像跟踪 | `nodes/ImageMotionEstimationNode.py`、`nodes/GroundTrajectoryTrackerNode.py` | 背景视觉运动估计及纯图像 ByteTrack；禁止读取 H/ENU/地图质量 |
+| 地理参考/世界投影 | `nodes/FlightGeoReferenceNode.py`、`nodes/PostTrackingWorldProjectionNode.py` | ByteTrack 后生成逐帧绝对地图投影、质量门禁和正式业务分段 |
+| 旧回滚 | `nodes/DetectionTrackingNodes.py` | 仅 `hover_only_legacy` 使用的 YOLO11 + ByteTrack 组合路径 |
 | 世界坐标 | `nodes/HomographyCalibrationNode.py`、`nodes/MotionCompensationNode.py` | pixel→ENU 矩阵、GCJ-02 展示坐标和无人机运动补偿 |
 | 轨迹/速度/方向 | `TrackerInfoUpdateNode.py`、`SpeedEstimationNode.py`、`DirectionFlowNode.py`、`TrajectoryNode.py` | 车辆状态、世界轨迹和转向分类 |
 | 车道 | `RoadMapMatchingNode.py`、`LaneDetectionNode.py`、`LaneAnalysisNode.py`、`AutoLaneInferenceNode.py` | `lane_verified` 地图正式匹配；模型/自动结果仅作候选 |

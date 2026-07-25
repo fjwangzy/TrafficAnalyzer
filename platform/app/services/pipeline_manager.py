@@ -116,6 +116,7 @@ class PipelineInstance:
     road_data_version: str | None = None
     road_context_status: str = "missing"
     quality_status: str = "unverified"
+    tracking_profile: str = "hover_cruise_v1"
     map_version_id: str | None = None
     status: PipelineStatus = PipelineStatus.PENDING
     process: Any = field(default=None, repr=False)
@@ -142,6 +143,7 @@ class PipelineInstance:
             "road_data_version": self.road_data_version,
             "road_context_status": self.road_context_status,
             "quality_status": self.quality_status,
+            "tracking_profile": self.tracking_profile,
             "map_version_id": self.map_version_id,
             "status": self.status.value,
             "started_at": self.started_at,
@@ -178,6 +180,7 @@ class PipelineManager:
         frame_stride: int | None = None,
         executor: PipelineExecutor | None = None,
         video_public_base: str | None = None,
+        camera_id_start: int = 10,
     ):
         # Priority: explicit arg > PIPELINE_PROJECT_ROOT env var > fallback
         env_root = os.environ.get("PIPELINE_PROJECT_ROOT")
@@ -204,7 +207,9 @@ class PipelineManager:
             ),
         )
         self._pipelines: dict[str, PipelineInstance] = {}
-        self._next_camera_id = 10  # start from 10 to avoid collision with static cameras
+        if camera_id_start < 1:
+            raise ValueError("camera_id_start must be positive")
+        self._next_camera_id = camera_id_start
         self._next_video_port = 8101  # 8100 reserved for manually-started pipelines
         self._monitor_task: asyncio.Task | None = None
 
@@ -258,6 +263,7 @@ class PipelineManager:
         video_port: int | None = None,
         topic_name: str | None = None,
         video_stream_url: str | None = None,
+        tracking_profile: str = "hover_cruise_v1",
     ) -> PipelineInstance:
         """Register an externally-running pipeline (e.g. started locally).
 
@@ -266,6 +272,8 @@ class PipelineManager:
         not be available).
         """
         self._ensure_capacity()
+        if tracking_profile not in {"hover_cruise_v1", "hover_only_legacy"}:
+            raise ValueError("unsupported tracking_profile")
         video_src = self._validate_video_source(video_src)
         if not map_version_id:
             raise ValueError("lane_verified map_version_id is required")
@@ -307,6 +315,7 @@ class PipelineManager:
             video_stream_url=registered_stream_url,
             status=PipelineStatus.RUNNING,
             map_version_id=map_version_id,
+            tracking_profile=tracking_profile,
             started_at=time.time(),
         )
         self._pipelines[pipeline_id] = pipeline
@@ -335,6 +344,7 @@ class PipelineManager:
         road_data_version: str | None = None,
         road_context_status: str = "missing",
         quality_status: str = "unverified",
+        tracking_profile: str = "hover_cruise_v1",
     ) -> PipelineInstance:
         """Start a new detection pipeline process.
 
@@ -351,6 +361,8 @@ class PipelineManager:
             The created PipelineInstance.
         """
         self._ensure_capacity()
+        if tracking_profile not in {"hover_cruise_v1", "hover_only_legacy"}:
+            raise ValueError("unsupported tracking_profile")
         video_src = self._validate_video_source(video_src)
         if runtime_map_bundle is not None and runtime_map_bundle.get("map_status") != "lane_verified":
             raise ValueError("runtime_map_bundle must be lane_verified when provided")
@@ -382,6 +394,7 @@ class PipelineManager:
             road_data_version=road_data_version,
             road_context_status=road_context_status,
             quality_status=quality_status,
+            tracking_profile=tracking_profile,
             map_version_id=(
                 runtime_map_bundle.get("map_version_id") if runtime_map_bundle else None
             ),
@@ -401,6 +414,7 @@ class PipelineManager:
             road_data_version=road_data_version or "",
             road_context_status=road_context_status,
             quality_status=quality_status,
+            tracking_profile=tracking_profile,
             runtime_map_bundle=runtime_map_bundle,
             frame_stride=self._frame_stride,
             kafka_bootstrap=kafka_bootstrap or self._kafka_bootstrap,

@@ -4,6 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from app.models.mission import TelemetrySourceRecord, VideoSourceRecord
+from app.schemas.mission import MissionCreate
 from app.services.mission_orchestrator import (
     MissionOrchestrator,
     SourceValidator,
@@ -59,6 +60,19 @@ def test_recent_pipeline_runtime_miss_is_not_terminal_until_grace_expires():
         started_at + timedelta(seconds=15),
         grace_sec=15,
     )
+
+
+def test_manual_mission_accepts_an_explicit_runtime_map_version():
+    body = MissionCreate(
+        name="runtime map mission",
+        drone_id="drone-1",
+        source_profile_id="source-1",
+        inter_id="INT-1",
+        map_version_id="CMV-READY",
+        scheduled_end_at=datetime(2026, 7, 25, 12, tzinfo=UTC),
+    )
+
+    assert body.map_version_id == "CMV-READY"
 
 
 def test_local_source_validation_enforces_allowlist_and_pair_types(tmp_path):

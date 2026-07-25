@@ -9,6 +9,10 @@ from utils_local.utils import profile_time
 from elements.FrameElement import FrameElement
 from elements.VideoEndBreakElement import VideoEndBreakElement
 from byte_tracker.byte_tracker_model import BYTETracker as ByteTracker
+from utils_local.detection_geometry import (
+    configure_safe_mps_box_clipping,
+    extract_valid_detections,
+)
 
 
 def build_yolo_model_id(weight_path: str | Path) -> str:
@@ -43,6 +47,7 @@ class DetectionTrackingNodes:
 
         weight_path = config_yolo["weight_pth"]
         self.model = YOLO(weight_path, task='detect')
+        self.safe_mps_box_clipping = configure_safe_mps_box_clipping(self.device)
         self.yolo_model_id = build_yolo_model_id(weight_path)
         self.classes = self.model.names
         self.conf = config_yolo["confidence"]
@@ -84,13 +89,33 @@ class DetectionTrackingNodes:
         # 记录推理耗时（毫秒），供Kafka发送到前端展示
         frame_element.inference_ms = round((t_detect_end - t_detect_start) * 1000, 1)
 
-        frame_element.detected_conf = outputs[0].boxes.conf.cpu().tolist()
-        detected_cls = outputs[0].boxes.cls.cpu().int().tolist()
-        frame_element.detected_cls = [self.classes[i] for i in detected_cls]
-        frame_element.detected_xyxy = outputs[0].boxes.xyxy.cpu().int().tolist()
+        detections = extract_valid_detections(
+            outputs[0].boxes,
+            class_names=self.classes,
+            frame_shape=frame.shape,
+        )
+        frame_element.detected_conf = detections.confidences
+        frame_element.detected_cls_ids = detections.class_ids
+        frame_element.detected_cls = detections.class_names
+        frame_element.detected_xyxy = detections.xyxy
+        frame_element.detection_diagnostics = {
+            **detections.diagnostics,
+            "safe_mps_box_clipping": self.safe_mps_box_clipping,
+        }
 
         # 准备输入到跟踪器的数据
-        detections_list = self._get_results_dor_tracker(outputs)
+        detections_list = np.asarray(
+            [
+                [*box, confidence, class_id]
+                for box, confidence, class_id in zip(
+                    detections.xyxy,
+                    detections.confidences,
+                    detections.class_ids,
+                    strict=True,
+                )
+            ],
+            dtype=np.float32,
+        ).reshape((-1, 6))
 
         # 如果没有检测结果，则发送空数组
         if len(detections_list) == 0:

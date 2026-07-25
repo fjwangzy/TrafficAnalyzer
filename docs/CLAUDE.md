@@ -97,7 +97,7 @@ TrafficAnalyzer 是智慧交通大项目下的无人机交通 AI 子系统，使
 ```
 elements/     ← 只被 nodes/ 和 main*.py 引用
 nodes/        ← 只引用 elements/、utils_local/、byte_tracker/
-byte_tracker/ ← 自包含模块，只被 nodes/DetectionTrackingNodes.py 引用
+byte_tracker/ ← 自包含模块；当前由 GroundTrajectoryTrackerNode 引用，旧组合节点仅供 legacy 回滚
 utils_local/  ← 被 nodes/ 和 main*.py 引用
 configs/      ← 只被 Hydra 框架和 VideoReader 读取
 services/     ← 只被 Docker Compose 使用，Python 代码不直接引用

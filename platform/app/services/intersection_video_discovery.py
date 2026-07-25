@@ -8,11 +8,12 @@ computed only after canonical GCJ-02 conversion.
 from __future__ import annotations
 
 import math
+from collections.abc import Iterable, Sequence
 from statistics import median
-from typing import Any, Iterable, Sequence
+from typing import Any
 
 from utils_local.coordinates import TRANSFORM_VERSION, wgs84_to_gcj02
-
+from utils_local.flight_motion import FlightMotionClassifier
 
 EARTH_RADIUS_M = 6_378_137.0
 
@@ -71,11 +72,13 @@ class HoverIntersectionDiscovery:
                 "status": "awaiting_confirmation",
                 "coordinate_evidence": evidence,
                 "hover_segments": [],
+                "flight_segments": [],
                 "binding_quality": "manual_unverified",
                 "reason_code": "telemetry_unavailable",
             }
 
         samples = self._resample(records)
+        flight_segments = self._flight_segments(samples)
         valid_count = sum(self._has_gps(item) for item in samples)
         evidence["gps_coverage"] = round(valid_count / len(samples), 6) if samples else 0.0
         segments = [
@@ -88,6 +91,7 @@ class HoverIntersectionDiscovery:
                 "status": "awaiting_confirmation",
                 "coordinate_evidence": evidence,
                 "hover_segments": [],
+                "flight_segments": flight_segments,
                 "binding_quality": "manual_unverified",
                 "reason_code": "hover_not_detected",
             }
@@ -95,9 +99,58 @@ class HoverIntersectionDiscovery:
             "status": "candidates_ready",
             "coordinate_evidence": evidence,
             "hover_segments": segments,
+            "flight_segments": flight_segments,
             "binding_quality": segments[0]["confidence"],
             "reason_code": None,
         }
+
+    @staticmethod
+    def _flight_segments(samples: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Classify ingestion and runtime with the same state machine."""
+        classifier = FlightMotionClassifier()
+        runs: list[dict[str, Any]] = []
+        for sample in samples:
+            snapshot = classifier.observe(sample if HoverIntersectionDiscovery._has_gps(sample) else None)
+            speed = snapshot.horizontal_speed_mps
+            if not runs or runs[-1]["phase"] != snapshot.phase:
+                runs.append(
+                    {
+                        "flight_segment_id": f"flight-{len(runs) + 1:04d}",
+                        "start_offset_sec": float(sample.get("timestamp", 0.0)),
+                        "end_offset_sec": float(sample.get("timestamp", 0.0)),
+                        "phase": snapshot.phase,
+                        "quality_status": (
+                            "verified" if snapshot.formal_pose_eligible else "degraded"
+                        ),
+                        "classifier_version": "flight-motion/v1",
+                        "motion_statistics": {
+                            "horizontal_speed_samples_mps": [] if speed is None else [speed],
+                            "speed_sources": [] if snapshot.speed_source is None else [snapshot.speed_source],
+                        },
+                    }
+                )
+            else:
+                run = runs[-1]
+                run["end_offset_sec"] = float(sample.get("timestamp", 0.0))
+                if not snapshot.formal_pose_eligible:
+                    run["quality_status"] = "degraded"
+                if speed is not None:
+                    run["motion_statistics"]["horizontal_speed_samples_mps"].append(speed)
+                if snapshot.speed_source is not None:
+                    run["motion_statistics"]["speed_sources"].append(snapshot.speed_source)
+
+        for run in runs:
+            speeds = run["motion_statistics"].pop("horizontal_speed_samples_mps")
+            sources = run["motion_statistics"].pop("speed_sources")
+            run["motion_statistics"].update(
+                {
+                    "speed_p95_mps": round(_percentile(speeds, 0.95), 3) if speeds else None,
+                    "speed_source": (
+                        sources[0] if sources and len(set(sources)) == 1 else "mixed"
+                    ) if sources else None,
+                }
+            )
+        return runs
 
     @staticmethod
     def _has_gps(record: dict[str, Any]) -> bool:

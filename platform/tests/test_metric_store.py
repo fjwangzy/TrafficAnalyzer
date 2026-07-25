@@ -82,6 +82,33 @@ class MetricStoreContractTest(unittest.IsolatedAsyncioTestCase):
     def test_all_period_includes_offline_replay_business_time(self):
         self.assertEqual(_period_start("all"), datetime.min.replace(tzinfo=UTC))
 
+    def test_stats_runtime_quality_maps_to_pipeline_status_fields(self):
+        values = self.adapter._pipeline_runtime_values({
+            "flight_phase": "cruise_nadir",
+            "flight_segment_id": "runtime-flight-0004",
+            "formal_analytics_eligible": False,
+            "geo_reference_quality": {
+                "status": "degraded",
+                "reasons": ["telemetry_gap"],
+            },
+            "tracking_diagnostics": {
+                "tracking_method": "pose_aware_world_v1",
+                "tracking_quality": "degraded",
+            },
+        })
+
+        self.assertEqual(values["flight_phase"], "cruise_nadir")
+        self.assertEqual(values["tracking_quality"], "degraded")
+        self.assertFalse(values["formal_analytics_eligible"])
+        self.assertEqual(
+            values["runtime_quality"]["flight_segment_id"],
+            "runtime-flight-0004",
+        )
+        self.assertEqual(
+            values["runtime_quality"]["geo_reference_quality"]["reasons"],
+            ["telemetry_gap"],
+        )
+
     def test_snapshot_evidence_links_package_for_foreign_key_ordering(self):
         payload = self._stats_payload("stats-evidence-1", 3)
         payload["data"].update({

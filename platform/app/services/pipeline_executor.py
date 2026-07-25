@@ -15,7 +15,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
 
-
 VIDEO_READY_MARKER = "MJPEG_READY"
 
 
@@ -40,6 +39,7 @@ class PipelineLaunchSpec:
     road_data_version: str = ""
     road_context_status: str = "missing"
     quality_status: str = "unverified"
+    tracking_profile: str = "hover_cruise_v1"
     runtime_map_bundle: dict | None = None
     frame_stride: int | None = None
     kafka_bootstrap: str = "kafka:9092"
@@ -144,6 +144,7 @@ class LocalPipelineExecutor:
             "ROAD_DATA_VERSION": spec.road_data_version,
             "ROAD_CONTEXT_STATUS": spec.road_context_status,
             "QUALITY_STATUS": spec.quality_status,
+            "TRACKING_PROFILE": spec.tracking_profile,
             "VIDEO_PORT": str(spec.video_port),
             "KAFKA_BOOTSTRAP": spec.kafka_bootstrap,
         }

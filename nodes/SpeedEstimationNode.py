@@ -20,13 +20,17 @@ logger = logging.getLogger(__name__)
 class SpeedEstimationNode:
     """基于单应性矩阵和帧间位移计算车辆速度（km/h）。
 
-    使用EMA平滑消除bbox抖动噪声。无标定时回退到像素/秒。
+    ``hover_cruise_v1`` 只回归 ID 后逐帧保存的 ENU 世界事实；世界点
+    不足时不把当前 H 套到历史像素。当前 H/像素回退只服务 legacy profile。
     position_history由TrackerInfoUpdateNode填充（含时间戳），本节点裁剪到history_frames窗口。
     """
 
     def __init__(self, config: dict) -> None:
         cfg = config.get("speed_estimation", {})
         self.enabled = cfg.get("enabled", True)
+        self._requires_per_frame_world_facts = (
+            config.get("tracking_profile") == "hover_cruise_v1"
+        )
         self.history_frames = cfg.get("history_frames", 15)
         self.smoothing_window = cfg.get("smoothing_window", 5)
         self.min_displacement_px = cfg.get("min_displacement_px", 2.0)
@@ -67,6 +71,9 @@ class SpeedEstimationNode:
             if len(world_history) > self.history_frames:
                 track.position_history_enu_m = world_history[-self.history_frames:]
                 world_history = track.position_history_enu_m
+
+            if self._requires_per_frame_world_facts and len(world_history) < 3:
+                continue
 
             if len(track.position_history) < 3 and len(world_history) < 3:
                 continue

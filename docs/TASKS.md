@@ -1,5 +1,22 @@
 # TASKS.md — TrafficAnalyzer 任务追踪
 
+## 2026-07-27 TCC 告警与轨迹显示回归修复
+
+- [x] T-499：检测器 `ShowNode` 将 warning TCC 的虚线、端点标记和 TTC 徽章从琥珀橙改为高对比红色；critical 继续使用红色，候选轨迹的琥珀虚线和 `NO STATS-TCC` 语义保持不变。
+- [x] 新增 warning TCC 实际渲染像素回归，锁定纯红端点且告警区域不再出现橙色；历史内容寻址事件证据不重绘，仅后续新生成的检测器关键帧采用新配色。
+- [x] T-500：定位轨迹锚点由旧 `TraceAnnotator` 默认 bbox 中心退化为固定底边中心的根因；`GroundTrajectoryTrackerNode` 继续以底边接地点生成 `trajectory_px/ENU/GCJ-02`，但以 bbox 中心生成运动补偿后的 `trajectory_display_px`，`ShowNode` legacy 回退也恢复中心轨迹，不改业务事实。
+- [x] 生产节点链视觉验收确认横向车辆业务接地点 `y=390`、显示中心 `y=360`，红色 warning TCC 与中心轨迹同时可见；证据为 `output/visual-qa/tcc-track-center-restored.png`。门禁为根 `153 passed`、Platform `215 passed / 5 skipped / 10 subtests`、XQH `56 PASS / 0 FAIL / 0 WARN`、Console2 单 worker 全量 `147 passed` 与 production build、ruff、ADR-019 local strict、`git diff --check` 通过。
+
+## 2026-07-25 TCC 检测器两图本地证据闭环
+
+- [x] 复用检测器原有 TCC 关键帧能力：`KafkaProducerNode` 只冻结待发布事件，`ShowNode` 产生真实检测器 `frame_result` 后，`TccEvidencePublisherNode` 才保存 `conflict_original_frame` 与 `conflict_detector_frame` 并发布；证据侧不允许重绘或缩放。
+- [x] 两图以 SHA-256 内容寻址写入 `SURVEY_STORAGE_DIR/objects/<前两位>/<sha256>`；事件只携带 `storage_backend=managed`、相对 `storage_key`、hash、大小、媒体类型与尺寸，不保存绝对路径或 Base64，为后续 MinIO 后端保留可移植描述符边界。
+- [x] Platform 在同一共享本地根目录内校验相对路径、类型、hash 与大小后直接登记 EvidencePackage/EvidenceItem，不重复复制文件；写盘或校验失败仍保存 TCC 事实，并显式标记 `evidence_status=incomplete`。
+- [x] `VideoSaverNode` 保留原有 `conflict_*.jpg` 输出；managed `conflict_detector_frame` 使用同一 `frame_result` 内容寻址，不替代检测器原输出。历史三图事件保持原样可读，不迁移、不删除。
+- [x] 自动化门禁：根 `150 passed`；Platform `214 passed, 5 skipped, 1 warning, 10 subtests passed`；Console2 `147 passed` 且 production build 通过；ruff 与 `git diff --check` 通过。
+- [x] 原生 macOS arm64/MPS 将 `SRC-MP4NEW-CH-0625-AM` 回放至自然 EOF：798 条 stats、4,005 条完成轨迹、10 条 TCC、`invalid_tcc_events=[]`、返回码 0；20/20 张本地 JPEG 哈希与尺寸复算通过，均为原尺寸 `3840×2160`。
+- [x] road9 持久化本次 Pipeline 的 10 条新 TCC；真实 Chromium 打开最新事件 `742e05c850094b00627e9b333e60c476bd4f7143`，两图均 `complete=true / naturalWidth×naturalHeight=3840×2160`，全屏检测图可见真实 FPS/目标框/轨迹/冲突 ID/TTC，Console `0 error / 0 warning`；截图见 `output/playwright/tcc-exact-show-event-742e05c8-fullscreen.png`。
+
 ## 2026-07-25 五路口视频整体回归
 
 - [x] 对 `mp4new` 五个 canonical SourceProfile 以原生 macOS arm64/MPS、`frame_stride=10`、`imgsz=640`、独立 `run_id/pipeline_id` 串行回放至自然 EOF；显式使用 `hover_only_legacy` 验证经典五源既有业务链，5/5 返回码 0。
@@ -380,6 +397,7 @@
 | T-495 | SourceProfile 抽帧 500 修复 | ✅ | 修复 `SurveyService.import_capture_batch()` 中服务器素材路径解析被错误缩进到参数缺失异常分支，导致合法本地 SourceProfile 抽帧在引用 `video_path` 时触发 `UnboundLocalError` 的问题；新增真实 `server_asset` 路径解析回归。崇华路与新泺大街项目浏览器复验由 500 恢复为 `201 Created`，批次 `BATCH-EA6BCB93577A` 进入 `ready`、生成 6 个关键帧，并成功载入 `FRM-C4DF19FD1CF8` 进入渠化画布。 |
 | T-496 | Link 组车道编辑与拆分合并 | ✅ | 渠化画布单击车道默认按 `link_id` 选择并拖拽整组，双击切换为单车道顶点/平移编辑；工具栏新增“删除所选、拆分车道、合并车道”，拆分按多边形主轴中点生成同 Link 的两个合法多边形，合并以所选同 Link 车道的凸包生成可继续编辑的包络，衍生车道清空不再唯一对应的 `source_lane_id`。崇华路真实关键帧 `FRM-C4DF19FD1CF8` 浏览器实测 Link 组 3 条车道：整组选中与按钮门禁正确，单车道拆分 3→4、删除 4→3、合并 3→1；733px 中栏工具栏自动换行至 72px 且无横向溢出。Console2 18 文件 137 项与生产构建通过。 |
 | T-497 | 实时 BEV SourceProfile 地图绑定与状态隔离 | ✅ | 根因是监控快速启动把无人机档案原始 `road_data_version=20260501` 写入 Mission，未命中 XQH 已发布 V2 SourceProfile 配准；同时旧 Platform 进程与 5 分钟历史 REST 快照覆盖实时轨迹状态，使右侧 BEV 始终显示 0。手动 Mission 现按 `inter_id + source_profile_id` 自动选择完整 `lane_verified` 地图，显式 map id 严格校验并冻结 map/version/registration/checksum/策略；无图仍允许检测器降级启动。Console2 分离历史/实时状态，历史刷新不再清空 WebSocket 轨迹；`uav_stats/uav_track_complete/uav_conflict` 必须匹配当前 `pipeline_id`，同源 Pipeline 切换会清空旧会话，解决旧 Pipeline backlog 再次把质量卡覆盖成 missing 的终验问题。候选 GCJ-02 路径以虚线投放，仅像素候选显示“地理投影不可用”。road9 和 Mission `MSN-DE5382C1C405` 均命中 `CMV-b83a25740598430bb996f75d / VRG-3351d2719cf74f1798ef0fc0`，Runtime 为 complete；原生 MPS Pipeline `pipe-30642be2` 运行中。真实浏览器右侧 BEV 从 3/11 条增长到 67 条，跨完整 REST 刷新周期未归零；加入 Pipeline lineage 门禁并热更新后仅保留当前质量，地图覆盖恢复为可信且仍有 125 条 GCJ-02 轨迹，Console 0 error/warn。候选轨迹始终隔离于正式统计/TCC。Console2 全量、production build、本次后端针对性回归与 `git diff --check` 通过；Platform 全量另有 2 个既有 ADR-019 脚本/测试合同漂移失败，未纳入本修复。 |
+| T-498 | xqh TCC 检测器两图全链路实跑 | ✅ | 原生 MPS 用 `SRC-INTER-XQH-0403-PM`、真实 4K MP4/SRT 和 V2 `lane_verified` 地图完成当前 `hover_cruise_v1` 自然 EOF：730 stats、2,645 完成轨迹、正式 TCC 0，漏斗为 619 无合格候选/111 质量门禁阻断。运行器改为按 SourceProfile verified registration 选择最新不可变 Runtime Bundle，不再锁死 retired V1。显式 legacy 兼容回归 `pipe-6bf46bdb` 在 Docker 空间耗尽前由真实 Show 输出产生 2 条严格 TCC；释放 9.379GB 可重建 build cache 后 Kafka 恢复，road9 对账 2/2，4 个 managed JPEG 的大小/SHA/3840×2160 全通过。最新事件 `69971837e302c2074d6cce34ae803d49e27ad1db` 页面两图完成加载、检测图可全屏、Console 0 error/warn；legacy 批次因 KafkaConsumer fd 错误提前终止且页面质量明确 degraded，不冒充正式巡航 TCC。根 150、Platform 215/5 skipped/10 subtests、Console2 147、production build、ruff 与 diff check 通过。证据见 `docs/test_report_inter_xqh.md`。 |
 | T-492 | BEV 轨迹覆盖物 SDK 引用修复 | ✅ | `MonitoringBevMap` 不再假设高德 Loader 会写入 `window.AMap`；地图初始化时保存 `loadAmap()` 实际返回的 SDK，并由轨迹覆盖物 effect 复用同一实例。回归测试精确覆盖“Loader 返回 SDK、全局变量缺失”时仍执行 `map.add`。用户停止检测器后保持停止；只读核对截图对应的 `pipe-a9d58965 / INT_camera_1 / SRC-E2BA6A8F6D0F` 为 `stopped` 且 `map_version_id=null`。最近统计中的 143 条活动轨迹具有 3,067 个有效 GCJ-02 点，但 `road_context_status=missing`、`quality_status=unverified`、0 条匹配车道，排除启用 `lane_verified` 路网参数。真实 XQH 历史切片 60 条轨迹已在高德底图可见。 |
 | T-493 | 轨迹研判质量提示下沉 | ✅ | `/gis` 的限量、空间覆盖、降级证据、未归因冲突和去重提示整体移动到研判内容最底部；顶部统计卡、地图/流向侧栏和轨迹证据保持原顺序。DOM 回归锁定 `trajectory-quality-notices` 为分析页最后一个子区块；真实页面确认顺序为统计卡 → 工作区 → 证据 → 质量提示。Console2 `17 files / 125 tests`、production build 与 `git diff --check` 通过。 |
 | T-438 | GIS 历史轨迹与冲突复盘 | ✅ | `traffic-fly-console/src/features/gis/index.tsx` — 选中路口后调用 `/api/v1/trajectories/{intersection_id}?period=1h&limit=200` 和 `/api/v1/trajectories/{intersection_id}/conflicts?period=1h&limit=200`，显示历史轨迹数量、Track ID、转向、车辆类型、均速、时长、轨迹点数，以及历史冲突 pair、TTC/PET、场景、证据和风险分；`traffic-fly-console/src/features/gis/index.test.tsx` 覆盖 `INT_camera_1` 历史轨迹与冲突证据复盘详情 |

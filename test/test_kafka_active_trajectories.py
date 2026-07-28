@@ -1,5 +1,3 @@
-import base64
-import cv2
 import numpy as np
 import unittest
 
@@ -76,7 +74,7 @@ class KafkaActiveTrajectoriesTest(unittest.TestCase):
         self.assertIs(out, frame_element)
         self.assertEqual(
             topics,
-            ["uav_statistics_7", "uav_track_complete_7", "uav_conflicts_7", "uav_telemetry_7"],
+            ["uav_statistics_7", "uav_track_complete_7", "uav_telemetry_7"],
         )
         stats = sent[0][1]
         self.assertEqual(stats["msg_type"], "uav_stats")
@@ -92,33 +90,18 @@ class KafkaActiveTrajectoriesTest(unittest.TestCase):
 
         self.assertEqual(sent[1][1]["msg_type"], "uav_track_complete")
         self.assertEqual(sent[1][1]["data"]["track_id"], 101)
-        self.assertEqual(sent[2][1]["msg_type"], "uav_conflict")
-        self.assertEqual(sent[2][1]["quality_status"], "unverified")
-        self.assertEqual(sent[2][1]["data"]["conflict_scene"], "suspected_right_turn_mv_nmv")
-        evidence_images = sent[2][1]["data"]["evidence_images"]
+        self.assertEqual(sent[2][1]["msg_type"], "uav_telemetry")
+        self.assertEqual(sent[2][1]["drone_id"], "drone_7")
+        self.assertEqual(sent[2][1]["data"]["height"], 120.0)
+        self.assertEqual(len(frame_element.pending_tcc_envelopes), 1)
+        pending_conflict = frame_element.pending_tcc_envelopes[0]
+        self.assertEqual(pending_conflict["msg_type"], "uav_conflict")
+        self.assertEqual(pending_conflict["quality_status"], "unverified")
         self.assertEqual(
-            [item["kind"] for item in evidence_images],
-            [
-                "conflict_original_frame",
-                "conflict_detector_frame",
-                "conflict_trajectory_reconstruction",
-            ],
+            pending_conflict["data"]["conflict_scene"],
+            "suspected_right_turn_mv_nmv",
         )
-        self.assertTrue(all(item["width"] == 20 for item in evidence_images))
-        self.assertTrue(all(item["height"] == 20 for item in evidence_images))
-        decoded = [
-            cv2.imdecode(
-                np.frombuffer(base64.b64decode(item["jpeg_base64"]), dtype=np.uint8),
-                cv2.IMREAD_COLOR,
-            )
-            for item in evidence_images
-        ]
-        self.assertTrue(all(image is not None for image in decoded))
-        self.assertFalse(np.array_equal(decoded[0], decoded[1]))
-        self.assertFalse(np.array_equal(decoded[0], decoded[2]))
-        self.assertEqual(sent[3][1]["msg_type"], "uav_telemetry")
-        self.assertEqual(sent[3][1]["drone_id"], "drone_7")
-        self.assertEqual(sent[3][1]["data"]["height"], 120.0)
+        self.assertNotIn("evidence_files", pending_conflict["data"])
 
     def test_topic_builder_rejects_unsafe_camera_id(self):
         self.assertEqual(
@@ -127,6 +110,36 @@ class KafkaActiveTrajectoriesTest(unittest.TestCase):
         )
         with self.assertRaises(ValueError):
             KafkaProducerNode._canonical_topics("../10")
+
+    def test_conflict_publication_waits_for_actual_show_output(self):
+        frame_element = FrameElement(
+            "test",
+            np.zeros((20, 20, 3), dtype=np.uint8),
+            2.0,
+            1,
+            {},
+        )
+        frame_element.info = {"cars_amount": 0, "roads_activity": {}}
+        frame_element.buffer_tracks = {}
+        frame_element.conflict_events = [{
+            "motor_id": 101,
+            "non_motor_id": 202,
+            "prediction_type": "path_intersection",
+            "distance_m": 0.0,
+            "ttc_sec": 1.2,
+            "severity": "critical",
+        }]
+        producer = self._producer_without_kafka()
+        sent = []
+        producer._enqueue = lambda topic, data, **_kwargs: sent.append((topic, data))
+
+        producer.process(frame_element)
+
+        assert all(message["msg_type"] != "uav_conflict" for _, message in sent)
+        assert len(frame_element.pending_tcc_envelopes) == 1
+        pending = frame_element.pending_tcc_envelopes[0]
+        assert pending["msg_type"] == "uav_conflict"
+        assert "evidence_files" not in pending["data"]
 
     def test_degraded_frame_sets_dynamic_quality_and_does_not_emit_formal_counts(self):
         frame = np.zeros((20, 20, 3), dtype=np.uint8)

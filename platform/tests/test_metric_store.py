@@ -1,11 +1,12 @@
 import base64
+import tempfile
 import unittest
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from app.kafka.consumer import KafkaConsumerService
-from app.models.metrics import TrackEvent
+from app.models.metrics import ConflictEvent, TrackEvent
 from app.models.survey import EvidenceItem, EvidencePackage
 from app.services.alert_engine import AlertEngine
 from app.services.metric_store import (
@@ -15,6 +16,7 @@ from app.services.metric_store import (
     PostgresMetricStoreAdapter,
     _period_start,
 )
+from app.services.survey_storage import ContentAddressedStore
 
 
 class _RecordingWS:
@@ -135,65 +137,81 @@ class MetricStoreContractTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(evidence.package_id, evidence.package.id)
         self.assertIn(evidence, evidence.package.items)
 
-    def test_conflict_evidence_bundle_persists_three_synchronized_images(self):
+    def test_conflict_event_registers_two_detector_saved_files_without_copying(self):
         now = datetime.now(UTC).isoformat()
         kinds = [
             "conflict_original_frame",
             "conflict_detector_frame",
-            "conflict_trajectory_reconstruction",
         ]
-        payload = {
-            "message_id": "conflict-evidence-1",
-            "msg_type": "uav_conflict",
-            "schema_version": "uav_conflict/v1",
-            "occurred_at": now,
-            "produced_at": now,
-            "source_system": "uav_traffic_analyzer_ai",
-            "intersection_id": "INT_camera_1",
-            "data": {
-                "motor_id": 101,
-                "non_motor_id": 202,
-                "evidence_images": [
-                    {
-                        "kind": kind,
-                        "jpeg_base64": base64.b64encode(f"jpeg-{index}".encode()).decode(),
-                        "width": 960,
-                        "height": 540,
-                    }
-                    for index, kind in enumerate(kinds)
-                ],
-            },
-        }
-        envelope = MessageEnvelope(payload, "uav_conflicts_1", 0, 7)
-        normalized = self.adapter._normalize(envelope)
-        session = _RecordingSession()
-        stored = [
-            SimpleNamespace(
-                storage_key=f"objects/{index}/key",
-                sha256=str(index) * 64,
-                size_bytes=6,
-            )
-            for index in range(3)
-        ]
+        with tempfile.TemporaryDirectory() as evidence_root:
+            storage = ContentAddressedStore(evidence_root)
+            stored = [
+                storage.ingest_bytes(f"jpeg-{index}".encode())
+                for index in range(len(kinds))
+            ]
+            payload = {
+                "message_id": "conflict-evidence-1",
+                "msg_type": "uav_conflict",
+                "schema_version": "uav_conflict/v1",
+                "occurred_at": now,
+                "produced_at": now,
+                "source_system": "uav_traffic_analyzer_ai",
+                "intersection_id": "INT_camera_1",
+                "data": {
+                    "motor_id": 101,
+                    "non_motor_id": 202,
+                    "evidence_status": "complete",
+                    "evidence_files": [
+                        {
+                            "kind": kind,
+                            "storage_backend": "managed",
+                            "storage_key": item.storage_key,
+                            "sha256": item.sha256,
+                            "size_bytes": item.size_bytes,
+                            "media_type": "image/jpeg",
+                            "width": 960,
+                            "height": 540,
+                        }
+                        for kind, item in zip(kinds, stored)
+                    ],
+                },
+            }
+            envelope = MessageEnvelope(payload, "uav_conflicts_1", 0, 7)
+            normalized = self.adapter._normalize(envelope)
+            session = _RecordingSession()
 
-        with patch(
-            "app.services.metric_store.ContentAddressedStore.ingest_bytes",
-            side_effect=stored,
-        ):
-            self.adapter._add_conflict(session, envelope, normalized)
+            with (
+                patch("app.services.metric_store.settings.survey_storage_dir", evidence_root),
+                patch(
+                    "app.services.metric_store.ContentAddressedStore.ingest_bytes",
+                    side_effect=AssertionError("Platform must not copy detector evidence"),
+                ),
+            ):
+                self.adapter._add_conflict(session, envelope, normalized)
 
         package = next(row for row in session.rows if isinstance(row, EvidencePackage))
         evidence = [row for row in session.rows if isinstance(row, EvidenceItem)]
+        conflict = next(row for row in session.rows if isinstance(row, ConflictEvent))
         self.assertEqual([item.kind for item in evidence], kinds)
-        self.assertEqual(len(package.items), 3)
+        self.assertEqual(len(package.items), 2)
         self.assertIsNone(evidence[0].derived_from_id)
         self.assertEqual(evidence[1].derived_from_id, evidence[0].id)
-        self.assertEqual(evidence[2].derived_from_id, evidence[0].id)
         self.assertEqual(
             [ref["kind"] for ref in normalized["data"]["evidence_refs"]],
             kinds,
         )
-        self.assertNotIn("evidence_images", normalized["data"])
+        self.assertEqual(
+            [ref["storage_key"] for ref in normalized["data"]["evidence_refs"]],
+            [item.storage_key for item in stored],
+        )
+        self.assertTrue(
+            all(ref["storage_backend"] == "managed" for ref in normalized["data"]["evidence_refs"])
+        )
+        self.assertEqual(
+            conflict.payload["data"]["evidence_refs"],
+            normalized["data"]["evidence_refs"],
+        )
+        self.assertNotIn("evidence_files", normalized["data"])
 
     def test_track_fact_persists_raw_yolo_and_local_movement_dimensions(self):
         now = datetime.now(UTC).isoformat()
@@ -230,6 +248,52 @@ class MetricStoreContractTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(track.class_mapping_version, "visdrone-business/v1")
         self.assertEqual(track.start_road_id, "3")
         self.assertEqual(track.exit_road_id, "2")
+
+    def test_invalid_detector_evidence_path_keeps_conflict_fact_as_incomplete(self):
+        now = datetime.now(UTC).isoformat()
+        payload = {
+            "message_id": "conflict-evidence-invalid-path",
+            "msg_type": "uav_conflict",
+            "schema_version": "uav_conflict/v1",
+            "occurred_at": now,
+            "produced_at": now,
+            "source_system": "uav_traffic_analyzer_ai",
+            "intersection_id": "INT_camera_1",
+            "data": {
+                "motor_id": 101,
+                "non_motor_id": 202,
+                "evidence_status": "complete",
+                "evidence_files": [
+                    {
+                        "kind": kind,
+                        "storage_backend": "managed",
+                        "storage_key": "../outside.jpg",
+                        "sha256": "a" * 64,
+                        "size_bytes": 10,
+                        "media_type": "image/jpeg",
+                        "width": 20,
+                        "height": 20,
+                    }
+                    for kind in ("conflict_original_frame", "conflict_detector_frame")
+                ],
+            },
+        }
+        envelope = MessageEnvelope(payload, "uav_conflicts_1", 0, 9)
+        normalized = self.adapter._normalize(envelope)
+        session = _RecordingSession()
+
+        with tempfile.TemporaryDirectory() as evidence_root, patch(
+            "app.services.metric_store.settings.survey_storage_dir", evidence_root
+        ):
+            self.adapter._add_conflict(session, envelope, normalized)
+
+        conflict = next(row for row in session.rows if isinstance(row, ConflictEvent))
+        self.assertFalse(any(isinstance(row, EvidenceItem) for row in session.rows))
+        self.assertEqual(normalized["data"]["evidence_status"], "incomplete")
+        self.assertEqual(normalized["data"]["evidence_error"], "invalid_storage_key")
+        self.assertEqual(normalized["data"]["evidence_refs"], [])
+        self.assertEqual(conflict.payload["data"]["evidence_status"], "incomplete")
+        self.assertEqual(conflict.payload["data"]["evidence_refs"], [])
 
     def test_historical_traffic_snapshot_retains_tcc_diagnostics_and_lineage(self):
         diagnostics = {"enabled": True, "status": "no_prediction_candidates"}

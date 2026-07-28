@@ -1,11 +1,96 @@
 # 端到端测试报告：inter_xqh 视频 + SRT 遥测
 
-> **当前范围说明（2026-07-25）**：`56 PASS / 0 FAIL / 0 WARN` 是算法/管道防回退证据；xqh 840s–自然 EOF 的 `24/24` 是原生 MPS 工程验收；本机 `road9`、`uav_*`、TimescaleDB 与旧链路退役由 ADR-019 strict `10/10` 证明。项目不建设人工轨迹标注工作包，因此当前口径是 `local_engineering_acceptance_passed / production_accuracy_not_claimed`。
+> **当前范围说明（2026-07-27）**：`56 PASS / 0 FAIL / 0 WARN` 是算法/管道防回退证据；xqh 840s–自然 EOF 的 `24/24` 是原生 MPS 工程验收；本机 `road9`、`uav_*`、TimescaleDB 与旧链路退役由 ADR-019 strict `10/10` 证明。项目不建设人工轨迹标注工作包，因此当前口径是 `local_engineering_acceptance_passed / production_accuracy_not_claimed`。
 
-**最近复跑日期**: 2026-07-25
+**最近复跑日期**: 2026-07-27
 **测试资产**: `test_videos/inter_xqh/`  
 - 视频: `DJI_20260403142902_0001_V小清河北路与水屯路路口.mp4` (5.4GB, 4K, 16.5min)  
 - 遥测: `telemetry.srt` (29,741 条记录, 逐帧@30fps)
+
+---
+
+## 2026-07-27 TCC 告警与检测画面轨迹锚点回归验收
+
+对比 7 月 13 日前后截图与 Git 历史后确认是两个独立变化。TCC 红/橙分级自提交
+`04b5ff14`（2026-07-06）已存在：旧图的 `TTC 1.1s/0.8s` 为 critical 红色，新图的
+`TTC 3.1s` 为 warning 琥珀色；提交 `2e9ca71b`（2026-07-13）只改变了标签透明度、
+冲突目标之外的标签显示以及 TTC 徽章偏移方式。当前 `ShowNode` 已将正式 warning TCC 的连线、
+端点与徽章统一改为红色，candidate 的琥珀虚线语义不变。
+
+轨迹从车辆中部移到侧边的直接根因是提交 `40b73e8d`（2026-07-25）：旧
+`supervision.TraceAnnotator` 默认使用 bbox `CENTER`，新图像历史把
+`trajectory_px` 与 `trajectory_display_px` 都写成 `(bbox_center_x, bbox_bottom_y)`；该固定底边点在
+横向或斜向目标上视觉上位于车身侧边。修复后 `trajectory_px/trajectory_enu_m/trajectory_gcj02`
+继续使用底边接地点，只有渲染专用 `trajectory_display_px` 使用 bbox 中心并接受
+`camera_motion_warp` 递推；无 association display history 的 legacy ShowNode 回退也使用
+`TrackElement.trajectory_points` 中心。该修复不把显示坐标写入 Kafka 正式轨迹，不改变速度、车道、
+TCC 或质量门禁。
+
+TDD 最小复现先证明 bbox `[20,10,40,50]` 的业务点和显示点均错误为 `[30,50]`，修复后业务点
+保持 `[30,50]`、显示点恢复 `[30,30]`。生产节点链
+`GroundTrajectoryTrackerNode → PostTrackingWorldProjectionNode → TrackerInfoUpdateNode → ShowNode`
+视觉验收进一步得到横向车辆业务接地点 `y=390`、显示中心 `y=360`，并在同帧看到红色
+`TTC 3.1s` warning 告警；证据为 `output/visual-qa/tcc-track-center-restored.png`。
+
+最终门禁：轨迹/ShowNode 聚焦 `29 passed`，根 `153 passed`，Platform
+`215 passed, 5 skipped, 1 warning, 10 subtests passed`，真实 XQH 前 100 帧
+`56 PASS / 0 FAIL / 0 WARN`，Console2 单 worker 全量 `147 passed` 且 production build 成功。
+Console2 默认并行全量曾两次在未修改的 `LiveModules.test.jsx` 同一 5 秒用例超时；该用例聚焦复跑
+1.14 秒通过，单 worker 全量 26.03 秒通过，因此记录为测试并发时序波动，不修改前端测试超时。
+历史内容寻址关键帧保持字节不变，运行中的检测 Pipeline 需重启后才加载新渲染代码。
+
+---
+
+## 2026-07-25 xqh TCC 两图全链路实跑
+
+本轮只使用 canonical SourceProfile `SRC-INTER-XQH-0403-PM`、真实 4K MP4、逐帧 SRT、发布地图
+`CMV-b83a25740598430bb996f75d` 和原生 macOS arm64/MPS；未注入历史 Kafka 消息、未复用旧事件、
+未降低 TCC 阈值。运行器原先按目录中的旧 `road_data_version` 精确找图，因 V1 已 retired 而被
+Stage-1 正确拒绝；现改为从最新 `lane_verified` 地图开始，验证其是否包含当前 SourceProfile 的
+verified visual registration，Pipeline 环境中的 road version 也以实际 Runtime Bundle 为准。
+聚焦回归 `platform/tests/test_native_mps_replay_runner.py` 为 `15 passed`。
+
+当前正式 `hover_cruise_v1` 运行 `native-mps-20260725T124558Z-SRC-INTER-XQH-0403-PM` 自然 EOF，
+返回码 0，使用 `frame_stride=10 / imgsz=640`，产生 730 条 stats、2,645 条完成轨迹和 0 条 TCC；
+730 份漏斗诊断为 `no_eligible_candidates=619 / quality_gate_blocked=111`，候选 pair、预测候选和
+业务事件均为 0。该结果是正式巡航质量门禁下的合法零检出，不允许用 legacy 事件替代或称作正式 TCC。
+机器输出位于 `output/native-mps/xqh-tcc-exact-show-20260725/summary.json`。
+
+为验证用户指定的旧检测器关键帧兼容链，另以显式 `hover_only_legacy` 运行同一真实素材和 V2 地图。
+Pipeline `pipe-6bf46bdb` 在 Kafka 故障前自然产生 2 条严格 `path_intersection` 事件；验收直采为
+`tcc_event_count=2 / invalid_tcc_events=[]`。随后 Docker 内部磁盘满导致 Kafka 重启、验收 Consumer
+报 `Invalid file descriptor`，因此该批次在约 494 个 stats 后提前终止，不能标为自然 EOF 通过。
+删除 9.379GB 可重建 Docker build cache 后 Kafka 恢复 healthy；未删除任何卷、road9、Kafka 日志
+或事件证据。Platform 恢复消费后，road9 对账出该 Pipeline 的 2/2 新事件。
+
+最新事件 `69971837e302c2074d6cce34ae803d49e27ad1db` 为 TTC 3.11s、PET 0.08s、
+`evidence_status=complete`，证据严格只有 `conflict_original_frame` 与 `conflict_detector_frame`。
+两条事件共 4 个 managed JPEG，逐对象复算大小和 SHA-256 全部匹配，声明与解码尺寸均为
+`3840×2160`。真实 Chromium 页面显示 `SRC-INTER-XQH-0403-PM / pipe-6bf46bdb / V2`，两图均
+`complete=true / naturalWidth×naturalHeight=3840×2160`；检测图全屏可见实际检测框、轨迹、冲突
+连线和 `TTC 3.1s`，Console 为 `0 error / 0 warning`。页面证据位于
+`output/playwright/xqh-tcc-event-69971837-detector-fullscreen.png`。该 legacy 事件质量在页面明确为
+`degraded`，仅证明“检测器实际 Show 输出 → 本地 managed 对象 → Kafka → road9 → Console2”证据链，
+不升级为正式巡航业务结论。
+
+本轮最终自动化门禁为：根 `150 passed`；Platform `215 passed, 5 skipped, 1 warning,
+10 subtests passed`；Console2 `18 files / 147 tests` 且 production build 成功；系统 ruff 与
+`git diff --check` 通过。`.venv-mps` 未安装 ruff，因此 lint 使用当前仓库环境可用的系统 ruff；
+Kafka 与 road9 最终均恢复 `healthy`。
+
+---
+
+## 2026-07-25 TCC 检测器两图本地证据全流程复验
+
+用户对比检测器原输出 `test_videos/videos_out/conflict_20260722_161459_critical_ttc0.2s_m82_nm3289.jpg` 后发现，上一轮页面的“检测器帧”实际是 `KafkaProducerNode` 在 `ShowNode` 之前另行重绘的图片，与检测器 `conflict_*.jpg` 不一致。因此原有 `960×540` 页面加载检查只证明结构可读，其“检测器真实输出”语义验收结论作废。
+
+修复后 `KafkaProducerNode` 只冻结待发布 TCC 信封；显示进程复制绘制前原帧，再让 `ShowNode` 产生实际 `frame_result`，`TccEvidencePublisherNode` 按原尺寸/JPEG 95 固化两图后才可靠发布。`utils_local/event_evidence.py` 已删除所有目标框、标签、轨迹和冲突重绘逻辑；`VideoSaverNode` 保留原有 `conflict_*.jpg` 输出。精确像素回归证明 managed 检测图等于实际 `ShowNode.frame_result` 经同参数 JPEG 编码的结果，不存在证据侧重绘。
+
+真实链路使用原生 macOS arm64/MPS、`hover_only_legacy`、`frame_stride=10`、`imgsz=640` 将 `SRC-MP4NEW-CH-0625-AM` 回放至自然 EOF。运行 `native-mps-20260725T115908Z-SRC-MP4NEW-CH-0625-AM` 返回码 0，耗时 1058.428 秒，产生 798 条 stats、4,005 条完成轨迹和 10 条 TCC；`invalid_tcc_events=[]`。10/10 事件共 20 个 managed JPEG，逐文件重算 SHA-256 与描述符全部一致，声明尺寸与解码尺寸全部一致，且全部为 `3840×2160`。机器输出位于 `output/native-mps/tcc-exact-show-20260725T115852Z/summary.json`。
+
+本机 road9 已持久化该 Pipeline 的 10 条新事件。最新事件 `742e05c850094b00627e9b333e60c476bd4f7143` 为 `complete / 2 evidence_refs`；真实 Chromium 页面仅渲染“原始画面”和“检测器输出的 TCC 画面帧”，两图都是 `complete=true / naturalWidth×naturalHeight=3840×2160`。检测图全屏可见 FPS、真实目标框、轨迹、冲突 ID 和 TTC，与检测器原有 `conflict_*.jpg` 样式一致；浏览器 Console 为 `0 error / 0 warning`。页面证据位于 `output/playwright/tcc-exact-show-event-742e05c8-fullscreen.png`。
+
+本轮自动化门禁为：根 `150 passed`；Platform `214 passed, 5 skipped, 1 warning, 10 subtests passed`；Console2 `18 files / 147 tests` 且 production build成功；Python ruff 与 `git diff --check` 通过。该验收证明本机开发闭环，不替代生产 MinIO、对象存储凭证、保留策略、HA、容量和灾备验收。
 
 ---
 

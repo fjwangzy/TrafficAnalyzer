@@ -234,6 +234,8 @@ class BYTETracker(object):
         track_id_allocator=None,
         class_group_resolver=None,
         class_switch_confirm_frames=1,
+        large_object_area_px2=None,
+        large_object_init_thresh=None,
     ):
         self.tracked_stracks = []  # type: list[STrack]
         self.lost_stracks = []  # type: list[STrack]
@@ -258,6 +260,8 @@ class BYTETracker(object):
         
         # Use mot20 or not
         self.mot20 = mot20
+        self.large_object_area_px2 = large_object_area_px2
+        self.large_object_init_thresh = large_object_init_thresh
         
     def _association_distance(self, tracks, detections):
         dists = matching.iou_distance(tracks, detections)
@@ -375,6 +379,9 @@ class BYTETracker(object):
         dists = self._association_distance(strack_pool, detections)
         if not self.mot20:
             dists = matching.fuse_score(dists, detections)
+        dists = matching.gate_cost_matrix(
+            self.kalman_filter, dists, strack_pool, detections, only_position=True
+        )
         matches, u_track, u_detection = matching.linear_assignment(dists, thresh=self.match_thresh)
 
         for itracked, idet in matches:
@@ -437,6 +444,15 @@ class BYTETracker(object):
             track = detections[inew]
             if track.score < self.det_thresh:
                 continue
+            # 大面积目标使用更高初始化阈值，减少背景误检
+            if (
+                self.large_object_area_px2 is not None
+                and self.large_object_init_thresh is not None
+            ):
+                tlwh = track.tlwh
+                area = tlwh[2] * tlwh[3]
+                if area > self.large_object_area_px2 and track.score < self.large_object_init_thresh:
+                    continue
             assigned_track_id = (
                 self.track_id_allocator()
                 if callable(self.track_id_allocator)

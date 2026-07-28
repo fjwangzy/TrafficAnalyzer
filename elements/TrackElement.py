@@ -62,6 +62,7 @@ class TrackElement:
         self.yolo_class_name: str | None = None  # 推理时模型字典中的原始类别名
         self.yolo_model_id: str | None = None  # 权重文件名 + 内容摘要
         self.class_mapping_version: str | None = None  # 原始类别到业务类别的映射版本
+        self.class_id_history: list[int] = []  # 逐帧累积的YOLO类别ID，用于多帧投票
 
         # ── 新增：冲突 ──
         self.in_conflict: bool = False

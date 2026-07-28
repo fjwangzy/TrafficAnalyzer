@@ -96,8 +96,9 @@ Topic 的单复数按上表固定。`msg_type` 必须与 Topic 映射一致；�
 
 - `uav_stats`：保留车辆数、活跃轨迹、速度、排队、方向流量、动态 `roads[]`、`lane_stats[]`、路网和质量字段。旧 `road_1`～`road_N` 不进入 canonical 主结构，也没有运行时迁移适配器。
 - `uav_track_complete`：保留轨迹 ID、车辆类别、转向、起止时间、速度、ENU/像素轨迹、入口/出口 Link/车道、地图匹配与质量字段。
-- `uav_conflict`：保留双方轨迹 ID、TTC/PET、最小距离、冲突角、场景、风险分、证据和预测位置；当前 near-miss 判定口径不因消息改名而变化。事件产生时必须从同一源帧同步生成 `evidence_images`，固定按 `conflict_original_frame`、`conflict_detector_frame`、`conflict_trajectory_reconstruction` 排序，每项携带 `jpeg_base64/width/height`。Platform 在同一事务中登记一个 `uav_evidence_packages` 和三条 `uav_evidence_items`，入库后的事件 payload 仅保留三项 `evidence_refs`，不得继续保存 Base64 大字段。
-- `evidence_refs[].url`：通过鉴权的 `GET /api/v1/survey-evidence/{id}/content` 返回不可变内容；数据库引用存在但内容寻址对象缺失时返回 `409`，不得以占位图伪装成功。本机原生 Platform 使用仓库忽略的持久目录 `.runtime/survey`，不得使用 `/tmp` 作为 managed 证据的默认长期存储。
+- `uav_conflict`：保留双方轨迹 ID、TTC/PET、最小距离、冲突角、场景、风险分、证据和预测位置；当前 near-miss 判定口径不因消息改名而变化。事件产生时，`KafkaProducerNode` 只冻结待发布信封；必须等 `ShowNode` 生成检测器实际 `frame_result` 后，才保存并发布固定排序的 `conflict_original_frame`、`conflict_detector_frame`。不得在证据模块重绘或缩放检测图。`evidence_files[]` 只携带 `kind/storage_backend/storage_key/sha256/size_bytes/media_type/width/height`，禁止携带 Base64 或本机绝对路径。
+- Platform 对 `evidence_files[]` 执行存储根约束、相对键格式、大小和 SHA-256 校验，通过后在冲突事实事务内登记一个 `uav_evidence_packages` 和两条 `uav_evidence_items`，不复制检测器已保存的文件；事件 payload 将私有 `evidence_files` 替换为持久化 `evidence_refs`。保存或校验失败不得丢弃真实冲突事实，必须写 `evidence_status=incomplete`、稳定错误码和空 `evidence_refs`。
+- `evidence_refs[]`：包含 `id/kind/url/storage_backend/storage_key/sha256`；`url` 通过鉴权的 `GET /api/v1/survey-evidence/{id}/content` 返回不可变内容。数据库引用存在但对象缺失时返回 `409`，不得以占位图伪装成功。本机原生 Platform 使用仓库忽略的持久目录 `.runtime/survey`，不得使用 `/tmp` 作为 managed 证据的默认长期存储。
 - `uav_telemetry`：保留无人机定位、姿态、云台、速度、悬停、任务/管道和定位质量。
 - `uav_system_metrics`：使用指标名、值、单位、实例和 labels，禁止继续按摄像头创建独立 measurement。
 - `uav_ai_event`：使用本节信封，并在 `data` 中携带 `source_event_id`、`idempotency_key`、业务事件、证据和投递所需字段。S1～S4 的路口态势、`lane_change`、`conflict`、`risk_hotspot`、`survey_result`、`enforcement_clue` 统一通过 `event_type` 区分，不为每个场景再建立无统一治理的独立 Topic。

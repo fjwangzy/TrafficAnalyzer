@@ -54,7 +54,6 @@ CANONICAL_TOPIC_PATTERNS = {
 CONFLICT_EVIDENCE_KINDS = (
     "conflict_original_frame",
     "conflict_detector_frame",
-    "conflict_trajectory_reconstruction",
 )
 
 
@@ -645,93 +644,55 @@ class PostgresMetricStoreAdapter:
         data = value["data"]
         occurred_at = value["occurred_at"]
         fact_id = hashlib.sha256(f"conflict:{value['message_id']}".encode()).hexdigest()[:40]
-        evidence_bundle = data.pop("evidence_images", None)
-        snapshot_encoded = data.pop("evidence_snapshot_jpeg", None)
-        snapshot_width = data.pop("evidence_snapshot_width", None)
-        snapshot_height = data.pop("evidence_snapshot_height", None)
+        evidence_files = data.pop("evidence_files", None)
+        data.pop("evidence_images", None)
+        data.pop("evidence_snapshot_jpeg", None)
+        data.pop("evidence_snapshot_width", None)
+        data.pop("evidence_snapshot_height", None)
         references: list[str] = []
-        if evidence_bundle is not None:
-            if not isinstance(evidence_bundle, list) or len(evidence_bundle) != len(CONFLICT_EVIDENCE_KINDS):
-                raise MetricContractError("conflict evidence bundle must contain exactly three images")
-            if tuple(item.get("kind") for item in evidence_bundle if isinstance(item, dict)) != CONFLICT_EVIDENCE_KINDS:
-                raise MetricContractError("conflict evidence bundle kinds or ordering are invalid")
+        if evidence_files is not None:
             try:
-                decoded_bundle = [
-                    (
-                        item,
-                        base64.b64decode(item["jpeg_base64"], validate=True),
-                    )
-                    for item in evidence_bundle
-                ]
-            except (KeyError, ValueError, TypeError) as exc:
-                raise MetricContractError("conflict evidence bundle contains invalid JPEG data") from exc
-            if any(not content for _, content in decoded_bundle):
-                raise MetricContractError("conflict evidence bundle contains an empty image")
+                if not isinstance(evidence_files, list) or len(evidence_files) != len(CONFLICT_EVIDENCE_KINDS):
+                    raise ValueError("wrong_item_count")
+                if tuple(
+                    item.get("kind") for item in evidence_files if isinstance(item, dict)
+                ) != CONFLICT_EVIDENCE_KINDS:
+                    raise ValueError("invalid_kind_order")
+                storage = ContentAddressedStore(settings.survey_storage_dir)
+                verified_files = []
+                for item in evidence_files:
+                    storage_key = str(item.get("storage_key") or "")
+                    sha256 = str(item.get("sha256") or "")
+                    size_bytes = _int(item.get("size_bytes"))
+                    if item.get("storage_backend") != "managed":
+                        raise ValueError("unsupported_storage_backend")
+                    if item.get("media_type") != "image/jpeg":
+                        raise ValueError("invalid_media_type")
+                    if not re.fullmatch(r"objects/[0-9a-f]{2}/[0-9a-f]{64}", storage_key):
+                        raise ValueError("invalid_storage_key")
+                    if not re.fullmatch(r"[0-9a-f]{64}", sha256) or not storage_key.endswith(sha256):
+                        raise ValueError("invalid_sha256")
+                    if size_bytes is None or size_bytes <= 0:
+                        raise ValueError("invalid_size")
+                    if not storage.verify(storage_key, sha256, size_bytes):
+                        raise ValueError("content_verification_failed")
+                    verified_files.append({
+                        **item,
+                        "storage_key": storage_key,
+                        "sha256": sha256,
+                        "size_bytes": size_bytes,
+                    })
 
-            storage = ContentAddressedStore(settings.survey_storage_dir)
-            stored_bundle = [storage.ingest_bytes(content) for _, content in decoded_bundle]
-            package_id = hashlib.sha256(f"conflict-package:{fact_id}".encode()).hexdigest()[:40]
-            manifest_hash = hashlib.sha256(
-                json.dumps(
-                    [
-                        {"kind": item["kind"], "sha256": stored.sha256}
-                        for (item, _), stored in zip(decoded_bundle, stored_bundle)
-                    ],
-                    separators=(",", ":"),
-                ).encode()
-            ).hexdigest()
-            package = EvidencePackage(
-                id=package_id,
-                task_id=None,
-                owner_type="conflict_event",
-                owner_id=fact_id,
-                source_event_id=value["message_id"],
-                integrity_status="hash_verified",
-                manifest_hash=manifest_hash,
-            )
-            session.add(package)
-            evidence_refs = []
-            original_id = hashlib.sha256(
-                f"conflict-frame:{CONFLICT_EVIDENCE_KINDS[0]}:{fact_id}".encode()
-            ).hexdigest()[:40]
-            for (item, _), stored in zip(decoded_bundle, stored_bundle):
-                kind = item["kind"]
-                evidence_id = hashlib.sha256(
-                    f"conflict-frame:{kind}:{fact_id}".encode()
-                ).hexdigest()[:40]
-                session.add(EvidenceItem(
-                    id=evidence_id,
-                    package_id=package_id,
-                    package=package,
-                    task_id=None,
-                    kind=kind,
-                    storage_backend="managed",
-                    storage_key=stored.storage_key,
-                    sha256=stored.sha256,
-                    media_type="image/jpeg",
-                    size_bytes=stored.size_bytes,
-                    derived_from_id=None if kind == CONFLICT_EVIDENCE_KINDS[0] else original_id,
-                    item_metadata={
-                        "width": item.get("width"),
-                        "height": item.get("height"),
-                        "frame_timestamp_sec": (value.get("source_time_raw") or {}).get("frame_timestamp_sec"),
-                    },
-                ))
-                evidence_refs.append({
-                    "id": evidence_id,
-                    "kind": kind,
-                    "url": f"/api/v1/survey-evidence/{evidence_id}/content",
-                    "sha256": stored.sha256,
-                })
-                references.append(f"uav_evidence_items:{evidence_id}")
-            data["evidence_refs"] = evidence_refs
-            data["evidence_status"] = "complete"
-        elif snapshot_encoded:
-            try:
-                snapshot = base64.b64decode(snapshot_encoded, validate=True)
-                stored = ContentAddressedStore(settings.survey_storage_dir).ingest_bytes(snapshot)
                 package_id = hashlib.sha256(f"conflict-package:{fact_id}".encode()).hexdigest()[:40]
-                evidence_id = hashlib.sha256(f"conflict-frame:{fact_id}".encode()).hexdigest()[:40]
+                manifest_hash = hashlib.sha256(
+                    json.dumps(
+                        [
+                            {"kind": item["kind"], "sha256": item["sha256"]}
+                            for item in verified_files
+                        ],
+                        separators=(",", ":"),
+                    ).encode()
+                ).hexdigest()
                 package = EvidencePackage(
                     id=package_id,
                     task_id=None,
@@ -739,30 +700,56 @@ class PostgresMetricStoreAdapter:
                     owner_id=fact_id,
                     source_event_id=value["message_id"],
                     integrity_status="hash_verified",
-                    manifest_hash=stored.sha256,
+                    manifest_hash=manifest_hash,
                 )
-                session.add(EvidenceItem(
-                    id=evidence_id,
-                    package_id=package_id,
-                    package=package,
-                    task_id=None,
-                    kind="conflict_keyframe",
-                    storage_backend="managed",
-                    storage_key=stored.storage_key,
-                    sha256=stored.sha256,
-                    media_type="image/jpeg",
-                    size_bytes=stored.size_bytes,
-                    item_metadata={"width": snapshot_width, "height": snapshot_height},
-                ))
-                data["evidence_refs"] = [{
-                    "id": evidence_id,
-                    "kind": "conflict_keyframe",
-                    "url": f"/api/v1/survey-evidence/{evidence_id}/content",
-                    "sha256": stored.sha256,
-                }]
-                references.append(f"uav_evidence_items:{evidence_id}")
-            except (ValueError, TypeError):
-                data["evidence_status"] = "snapshot_decode_failed"
+                session.add(package)
+                evidence_refs = []
+                original_id = hashlib.sha256(
+                    f"conflict-frame:{CONFLICT_EVIDENCE_KINDS[0]}:{fact_id}".encode()
+                ).hexdigest()[:40]
+                for item in verified_files:
+                    kind = item["kind"]
+                    evidence_id = hashlib.sha256(
+                        f"conflict-frame:{kind}:{fact_id}".encode()
+                    ).hexdigest()[:40]
+                    session.add(EvidenceItem(
+                        id=evidence_id,
+                        package_id=package_id,
+                        package=package,
+                        task_id=None,
+                        kind=kind,
+                        storage_backend=item["storage_backend"],
+                        storage_key=item["storage_key"],
+                        sha256=item["sha256"],
+                        media_type=item["media_type"],
+                        size_bytes=item["size_bytes"],
+                        derived_from_id=None if kind == CONFLICT_EVIDENCE_KINDS[0] else original_id,
+                        item_metadata={
+                            "width": item.get("width"),
+                            "height": item.get("height"),
+                            "frame_timestamp_sec": (value.get("source_time_raw") or {}).get("frame_timestamp_sec"),
+                        },
+                    ))
+                    evidence_refs.append({
+                        "id": evidence_id,
+                        "kind": kind,
+                        "url": f"/api/v1/survey-evidence/{evidence_id}/content",
+                        "storage_backend": item["storage_backend"],
+                        "storage_key": item["storage_key"],
+                        "sha256": item["sha256"],
+                    })
+                    references.append(f"uav_evidence_items:{evidence_id}")
+                data["evidence_refs"] = evidence_refs
+                data["evidence_status"] = "complete"
+                data.pop("evidence_error", None)
+            except (OSError, TypeError, ValueError) as exc:
+                data["evidence_status"] = "incomplete"
+                data["evidence_error"] = str(exc)
+                data["evidence_refs"] = []
+        else:
+            data["evidence_status"] = "incomplete"
+            data.setdefault("evidence_error", "evidence_files_missing")
+            data["evidence_refs"] = []
         common = self._common(envelope, value)
         lineage = self._lineage(data)
         session.add(ConflictEvent(

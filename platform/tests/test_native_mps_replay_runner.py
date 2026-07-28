@@ -46,10 +46,22 @@ def test_strict_tcc_validation_accepts_zero_events_and_path_intersections():
                 "data": {
                     "prediction_type": "path_intersection",
                     "distance_m": 0.0,
-                    "evidence_images": [
-                        {"kind": "conflict_original_frame", "jpeg_base64": "a"},
-                        {"kind": "conflict_detector_frame", "jpeg_base64": "b"},
-                        {"kind": "conflict_trajectory_reconstruction", "jpeg_base64": "c"},
+                    "evidence_status": "complete",
+                    "evidence_files": [
+                        {
+                            "kind": "conflict_original_frame",
+                            "storage_backend": "managed",
+                            "storage_key": f"objects/aa/{'a' * 64}",
+                            "sha256": "a" * 64,
+                            "size_bytes": 10,
+                        },
+                        {
+                            "kind": "conflict_detector_frame",
+                            "storage_backend": "managed",
+                            "storage_key": f"objects/bb/{'b' * 64}",
+                            "sha256": "b" * 64,
+                            "size_bytes": 20,
+                        },
                     ],
                 },
             }
@@ -57,7 +69,7 @@ def test_strict_tcc_validation_accepts_zero_events_and_path_intersections():
     ) == []
 
 
-def test_strict_tcc_validation_rejects_event_without_synchronized_three_image_evidence():
+def test_strict_tcc_validation_rejects_event_without_synchronized_two_file_evidence():
     invalid = validate_tcc_events(
         [
             {
@@ -164,6 +176,74 @@ def test_native_runner_requires_immutable_lane_verified_runtime_bundle():
     assert '"RUNTIME_MAP_BUNDLE_JSON"' in runner
     assert "stage-1 gate blocked: no lane_verified map" in runner
     assert "ROADS_JSON" not in runner
+
+
+def test_runtime_bundle_selects_latest_lane_verified_map_registered_to_source_profile():
+    client = object.__new__(PlatformClient)
+    requested_paths = []
+
+    def request(method, path):
+        requested_paths.append(path)
+        if path.startswith("/api/v1/calibration/channelized-maps?"):
+            return [
+                {
+                    "id": "CMV-OLD",
+                    "status": "retired",
+                    "version_no": 1,
+                    "road_data_version": "OLD",
+                },
+                {
+                    "id": "CMV-UNBOUND",
+                    "status": "lane_verified",
+                    "version_no": 3,
+                    "road_data_version": "V3",
+                },
+                {
+                    "id": "CMV-XQH",
+                    "status": "lane_verified",
+                    "version_no": 2,
+                    "road_data_version": "V2",
+                },
+            ]
+        if path.endswith("/CMV-UNBOUND/runtime-bundle"):
+            return {
+                "map_version_id": "CMV-UNBOUND",
+                "road_data_version": "V3",
+                "visual_registrations": [],
+            }
+        if path.endswith("/CMV-XQH/runtime-bundle"):
+            return {
+                "map_version_id": "CMV-XQH",
+                "road_data_version": "V2",
+                "visual_registrations": [
+                    {
+                        "source_profile_id": "SRC-INTER-XQH-0403-PM",
+                        "status": "verified",
+                        "homography_pixel_to_enu": [
+                            [1.0, 0.0, 0.0],
+                            [0.0, 1.0, 0.0],
+                            [0.0, 0.0, 1.0],
+                        ],
+                    }
+                ],
+            }
+        raise AssertionError(path)
+
+    client.request = request
+    bundle = client.runtime_bundle(
+        {
+            "inter_id": "011wwe0z19700001",
+            "profile_id": "SRC-INTER-XQH-0403-PM",
+            "road_data_version": "OLD",
+        }
+    )
+
+    assert bundle["map_version_id"] == "CMV-XQH"
+    assert bundle["road_data_version"] == "V2"
+    assert requested_paths[-2:] == [
+        "/api/v1/calibration/channelized-maps/CMV-UNBOUND/runtime-bundle",
+        "/api/v1/calibration/channelized-maps/CMV-XQH/runtime-bundle",
+    ]
 
 
 def test_native_runner_registers_browser_reachable_detector_stream_address():

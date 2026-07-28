@@ -392,9 +392,10 @@ PostgreSQL/TimescaleDB 读取。分区粒度、压缩、保留期、连续聚合
 
 **轨迹可视化过滤**：
 - `ShowNode` 在绘制前会裁剪 bbox 到画面范围，并过滤 NaN/Inf、完全越界、面积过小的框，避免异常 Kalman 预测框被画到左上角。
-- `trajectory_px` 保存每个源帧中的车辆地面接触点，`trajectory_enu_m/trajectory_gcj02` 保存 ByteTrack 后由同一源帧 H 得到的世界事实；`trajectory_bbox_center_px` 单独保留旧 bbox 中心。ShowNode 不直接连接不同相机帧的原始像素，也不使用当前 H 反投影历史；`trajectory_display_px` 始终由背景视觉 `camera_motion_warp` 将旧显示点递推到当前帧。
+- `trajectory_px` 保存每个源帧中的车辆底边接触点，`trajectory_enu_m/trajectory_gcj02` 保存 ByteTrack 后由同一源帧 H 得到的世界事实；`trajectory_bbox_center_px` 单独保留 bbox 中心。检测画面的 `trajectory_display_px` 使用 bbox 中心并由背景视觉 `camera_motion_warp` 将旧显示点递推到当前帧，避免固定底边在横向/斜向车辆上表现为车身侧边；ShowNode 的 legacy 回退同样使用 `TrackElement.trajectory_points` 中心点。显示锚点与业务投影接地点必须保持分离，ShowNode 不使用当前 H 反投影历史。
 - 正式和候选尾迹最多绘制最近30点；空值、NaN/Inf、越界点和不足两点的历史不产生连线。小于 `max(4px, 画面对角线×0.1%)` 的往返抖动只在绘制副本中简化；单段跳变超过 `max(60px, 画面对角线×4%)` 或当前尾迹累计超过 `max(80px, 画面对角线×8%)` 时截断。原始图像/世界坐标不被平滑或改写。
 - 候选框和尾迹固定为琥珀虚线；每目标使用深色半透明底、琥珀描边的紧凑 `#ID class C` 标签，画面右上角统一解释 `AMBER DASHED = CANDIDATE / NO STATS-TCC`。标签字号、边框、尾迹线宽和虚线节距按4K源到1280×720交付视口比例缩放，既避免缩小后消失，也避免给每个目标重复长免责声明遮挡路口。`trajectory_display_px` 只存在于进程内渲染事实，Kafka发布前会剔除；候选数据禁止据此创建 `buffer_tracks` 或参与速度、车道、流量、TCC 和事件投递。
+- 正式 TCC 告警的参与目标端点、连接线和 TTC 徽章统一使用红色系；warning 使用高对比纯红，critical 使用深红/亮红组合，不再以橙色表达正式告警。该规则只影响 `ShowNode` 后续生成的检测器画面，已按内容寻址保存的历史证据保持字节不变。
 - 跟踪模式只显示已分配道路或 bbox 中心落在道路 ROI 内的轨迹；低置信度小目标检测开启后，屋顶/树木/施工区域的误检轨迹不会继续堆积在画面边缘。
 - 当未配置道路标注文件时，`roads_info={}`，可视化保留有效跟踪框，但道路分配、道路流量统计和人工道路 ROI 过滤不可用；自动推断车道仍可绘制中心线/箭头，但不绘制左上角车道统计黑底面板，避免无道路模式下的 overlay 堆积。
 10. 统计面板（独立黑色窗口，拼接在主帧右侧）
@@ -457,9 +458,9 @@ near-miss 证据：
 
 `ttc_sec` 表示预测冲突时间；`pet_sec` 表示双方到达冲突点的时间差近似值；路径交叉点场景下同时输出 `motor_arrival_ttc_sec` / `non_motor_arrival_ttc_sec` 和 `arrival_time_delta_sec`。事件附加输出 `conflict_scene`、`conflict_angle_deg`、`evidence`、`risk_score`。`motor_id` / `non_motor_id` 轨迹对同级别事件不重复上报，但允许从 `warning` 升级为 `critical` 再次上报；直到任一轨迹从 `buffer_tracks` 清理后释放状态。
 
-冲突事件在 `KafkaProducerNode` 阶段、进入 `ShowNode` 之前调用 `utils_local/event_evidence.py`。该深模块只读取同一个 `FrameElement`，分别复制生成原始画面、带目标框/类别/轨迹 ID 的检测器输出画面，以及叠加同期 `buffer_tracks.trajectory_points`、高亮冲突 pair 的轨迹还原画面；它不修改共享内存原帧。三图以一个有序证据包可靠发布，Platform 必须完整校验三项后再登记内容地址和 SHA-256，检测图与轨迹图通过 `derived_from_id` 回指原图。旧事件若只存在 `conflict_keyframe` 仍可查询展示，但不会凭空补造缺失画面。
+冲突事件不在 `KafkaProducerNode` 阶段生成图片。该节点只冻结待发布信封；显示进程保留 `ShowNode` 就地绘制前的原始帧，再以 `ShowNode.frame_result` 作为唯一检测器 TCC 画面，交给 `TccEvidencePublisherNode` 写盘后发布。`utils_local/event_evidence.py` 严禁重绘目标框、类别、轨迹 ID 或冲突标记，也不缩放新证据；`conflict_detector_frame` 必须与检测器原有 `conflict_*.jpg` 使用同一个真实 `frame_result`。两图以 SHA-256 内容地址原子写入检测任务继承的 `SURVEY_STORAGE_DIR`，事件只发布相对存储键、哈希、大小和尺寸。Platform 完整校验两项后登记证据包并由检测图回指原图；写入或校验失败时冲突事实仍入库，但必须标记 `evidence_status=incomplete` 且不伪造引用。
 
-Console2 的事件证据展示按业务语义标注三图：`conflict_original_frame` 为“原始画面”，`conflict_detector_frame` 为“检测器输出的 TCC 画面帧”，`conflict_trajectory_reconstruction` 为“轨迹投放 BEV 视图”。显示名称不改变底层 kind、派生关系、内容哈希或证据访问契约。
+Console2 对新事件展示 `conflict_original_frame`“原始画面”和 `conflict_detector_frame`“检测器输出的 TCC 画面帧”，两项均通过鉴权内容接口读取并支持全屏。历史事件已有的 `conflict_trajectory_reconstruction` 或单项 `conflict_keyframe` 保持可读，不迁移、不删除，也不会为新事件继续生成。
 
 节点每帧同时写入 `FrameElement.tcc_diagnostics`，记录检测开关、单应性有效性、motor/non_motor 输入数、双方合格轨迹数、候选配对、预测候选、证据通过、去重、正式路径交点事件和实验事件数量。诊断状态区分 `disabled`、`missing_calibration`、`no_eligible_candidates`、`no_prediction_candidates`、`no_evidence`、`deduplicated` 与 `events_emitted`。该漏斗随 `uav_stats.data.tcc_diagnostics` 发布，用于解释合法零检出；它只描述检测过程，不替代事件事实或召回率真值。
 
@@ -503,12 +504,12 @@ Console2 的事件证据展示按业务语义标注三图：`conflict_original_f
 帧 N 进入 AutoLaneInferenceNode
   → lane_source="model" → 跳过（模型检测优先于轨迹推断）
 帧 N 进入 KafkaProducerNode
-  → 距离上次发送 > 1 秒 → 发送 canonical JSON 到 uav_statistics_1 topic
+  → 统计/轨迹直接发布；TCC 只冻结待发布 canonical 信封
 帧 N 进入 ShowNode
   → 绘制所有框 + 多边形 + 统计面板
   → frame_result 写入 FrameElement
-帧 N 进入 VideoSaverNode / FlaskServerVideoNode
-  → 写入文件或推流
+帧 N 进入 VideoSaverNode / TccEvidencePublisherNode / FlaskServerVideoNode
+  → 保留原有 conflict_*.jpg，原图 + 实际 frame_result 内容寻址后发布 TCC，再推流
 ```
 
 当前生命周期直接进入 canonical Kafka 与 `road9`；Telegraf、InfluxDB、Grafana 已从运行态

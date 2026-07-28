@@ -45,6 +45,7 @@ from nodes.TrackerInfoUpdateNode import TrackerInfoUpdateNode
 from nodes.CalcStatisticsNode import CalcStatisticsNode
 from nodes.FlaskServerVideoNode import VideoServer
 from nodes.KafkaProducerNode import KafkaProducerNode
+from nodes.TccEvidencePublisherNode import TccEvidencePublisherNode
 from nodes.HomographyCalibrationNode import HomographyCalibrationNode
 from nodes.ImageMotionEstimationNode import ImageMotionEstimationNode
 from nodes.SpeedEstimationNode import SpeedEstimationNode
@@ -354,7 +355,7 @@ def _requires_render_output(config: dict) -> bool:
 
 
 def proc_show_node(queue_in: Queue, config: dict, tracker_pid: int):
-    """进程 3: 可视化渲染 + 视频保存 + MJPEG 串流
+    """进程 3: 可视化渲染 + TCC 证据发布 + 视频保存 + MJPEG 串流
 
     健康检查：通过 get(timeout) + _is_pid_alive(tracker_pid) 检测追踪进程崩溃。
     """
@@ -362,11 +363,14 @@ def proc_show_node(queue_in: Queue, config: dict, tracker_pid: int):
     save_video = config["pipeline"]["save_video"]
     save_conflict_clips = config["video_saver_node"].get("save_conflict_clips", False)
     show_in_web = config["pipeline"]["show_in_web"]
+    send_info_kafka = config["pipeline"]["send_info_kafka"]
     render_output = _requires_render_output(config)
-    if render_output:
+    if render_output or send_info_kafka:
         show_node = ShowNode(config)
     if save_video or save_conflict_clips:
         video_saver_node = VideoSaverNode(config["video_saver_node"])
+    if send_info_kafka:
+        tcc_evidence_publisher_node = TccEvidencePublisherNode(config)
     if show_in_web:
         video_server_node = VideoServer(config)
     while True:
@@ -379,6 +383,13 @@ def proc_show_node(queue_in: Queue, config: dict, tracker_pid: int):
                 break
             continue
         ts1 = time()
+
+        pending_tcc = bool(
+            not isinstance(frame_element, VideoEndBreakElement)
+            and getattr(frame_element, "pending_tcc_envelopes", None)
+        )
+        needs_render = render_output or pending_tcc
+        original_tcc_frame = None
         
         # 只有确实需要预览/保存时才渲染 4K 标注。批量数据回放仍消费并释放
         # shared memory，但跳过成本很高的框、标签和轨迹绘制。
@@ -386,7 +397,7 @@ def proc_show_node(queue_in: Queue, config: dict, tracker_pid: int):
         if hasattr(frame_element, "shm_name") and frame_element.shm_name:
             try:
                 _shm_show = shared_memory.SharedMemory(name=frame_element.shm_name)
-                if render_output:
+                if needs_render:
                     # 直接使用原图进行渲染（就地修改），从而节约内存和拷贝
                     frame_element.frame = np.ndarray(
                         frame_element.shm_shape,
@@ -396,10 +407,18 @@ def proc_show_node(queue_in: Queue, config: dict, tracker_pid: int):
             except Exception as e:
                 print(f"[proc_show] Failed to attach shm: {e}")
                 frame_element.frame = None
-        if render_output:
+        if pending_tcc and frame_element.frame is not None:
+            # ShowNode renders in place. Preserve the exact unannotated source before
+            # rendering so the evidence pair is raw input + the real detector output.
+            original_tcc_frame = frame_element.frame.copy()
+        if needs_render:
             frame_element = show_node.process(frame_element)
         if save_video or save_conflict_clips:
             video_saver_node.process(frame_element, save_video=save_video)
+        if send_info_kafka:
+            if pending_tcc and original_tcc_frame is not None:
+                frame_element.frame = original_tcc_frame
+            frame_element = tcc_evidence_publisher_node.process(frame_element)
         if show_in_web:
             video_server_node.process(frame_element)
         ts2 = time()

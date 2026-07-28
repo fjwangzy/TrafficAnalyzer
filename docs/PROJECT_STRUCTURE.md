@@ -17,7 +17,7 @@ TrafficAnalyzer/
 ├── elements/                      # FrameElement、TrackElement、EOF sentinel
 ├── nodes/                         # 检测、跟踪、标定、统计、冲突、Kafka 与展示节点
 ├── services/                      # 遥测源与 canonical Nginx/Kafka 辅助配置
-├── utils_local/                   # 几何、轨迹、车道、单应性、运动补偿与冲突三图证据渲染工具
+├── utils_local/                   # 几何、轨迹、车道、单应性、运动补偿与冲突两图内容寻址保存工具
 ├── byte_tracker/                  # ByteTrack 实现
 ├── platform/                      # FastAPI 单体、Alembic、road9/TimescaleDB 访问与测试
 ├── console2/                      # React/Vite 正式前端
@@ -57,7 +57,7 @@ VideoReader
   → CalcStatisticsNode
   → KafkaProducerNode
   → ShowNode
-  → VideoSaverNode / FlaskServerVideoNode
+  → VideoSaverNode / TccEvidencePublisherNode / FlaskServerVideoNode
 ```
 
 关键目录：
@@ -78,6 +78,7 @@ VideoReader
 | `nodes/Lane*`、`nodes/AutoLaneInferenceNode.py` | 视觉/自动候选，仅辅助质量检查，不覆盖已发布地图 |
 | `nodes/ConflictDetectionNode.py` | 路径交点 TTC/PET、同一时空占用与证据评分 |
 | `nodes/KafkaProducerNode.py` | 只生成 canonical `uav_*` Topic 与 `msg_type` |
+| `nodes/TccEvidencePublisherNode.py` | 等待真实 `ShowNode.frame_result`，固化原图/检测器输出后可靠发布 TCC；证据侧禁止重绘 |
 | `scripts/accept_xqh_hover_departure.py` | xqh MPS全尾段、检测几何、三类轨迹对齐、坐标残差、显示和EOF工程门禁 |
 | `scripts/build_xqh_trajectory_comparison.py` | 从历史异常帧与最终生产ShowNode帧生成确定性前后对比图 |
 | `services/TelemetrySubscriber.py` | DJI Cloud API MQTT 实时遥测 |

@@ -60,6 +60,8 @@ tracking_node:
   max_frame_gap_sec: 0.5  # 超过此真实源时间间隔禁止续接同一轨迹
   class_switch_confirm_frames: 3  # 机动车/非机动车跨组需连续确认，避免单帧类别抖动
   candidate_trajectory_tail_points: 30  # 候选态只读预览尾迹上限
+  large_object_area_px2: 5000  # 面积大于此值的检测框使用更高初始化阈值，减少大面积背景误检
+  large_object_init_thresh: 0.15  # 大面积目标的初始化置信度阈值
 
 # 离线迁移验证：旁路运行旧式纯像素 ByteTrack，只生成逐帧差异证据，
 # 不参与任何业务输出。实时 profile 默认禁止，避免增加在线延迟。

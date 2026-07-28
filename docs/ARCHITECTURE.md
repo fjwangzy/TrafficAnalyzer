@@ -363,6 +363,9 @@ agent、token、路径翻译或 `host.docker.internal`。`status|logs|stop|resta
 需要逐帧精度评估时可显式降低，但不得把高 stride 结果作为模型精度证明。
 批量入口默认 `imgsz=640`，用于 Apple Silicon 长时间回放的速度优先配置；生产检测配置
 仍保持 `imgsz=960` 的小目标精度优先口径。两者结果不得直接作为同一精度基线比较。
+运行器不得把 SourceProfile 目录中的历史 `road_data_version` 当作当前地图选择器；它按版本倒序
+检查 `lane_verified` Runtime Bundle，并且只有包含当前 SourceProfile verified visual registration
+的 bundle 才可登记 Pipeline，子进程 `ROAD_DATA_VERSION` 必须取自被选中的不可变 bundle。
 
 默认目录包含 `inter_xqh` 1 源、`mp4new` 5 源和 `mp4new2` 3 源，共 9 个 SourceProfile；三组
 `mp4new2` 复用既有海右路、礼士路、崇华路渠化地图，不创建假路口。TCC 验收只接受
@@ -376,7 +379,7 @@ agent、token、路径翻译或 `host.docker.internal`。`status|logs|stop|resta
 
 批量验收的每个 SourceProfile 必须同时满足：检测进程返回码为 0、Stats 与完成轨迹均非空、
 每条 Stats 都携带 TCC 漏斗诊断、且不存在不符合严格业务口径的 TCC 事件。若批量抽帧未产生
-正样本，必须再通过正常 Mission 验证 `path_intersection + distance_m≈0` 及固定三图证据包，
+正样本，必须再通过正常 Mission 验证 `path_intersection + distance_m≈0` 及固定两图文件证据包，
 不能把“0 事件”误报为链路未执行，也不能通过降低门槛制造事件。
 
 Console2 Monitoring 在存在运行中 Pipeline 时只投放当前会话 active/completed 世界轨迹；离线时按
@@ -774,7 +777,7 @@ Platform 的历史 API 直接查询 PostgreSQL/TimescaleDB；仓库不保留旧�
 
 I3 的 `MetricStore` 是 Kafka 与存储之间的深模块边界：消费者只提交 canonical 信封，模块内部完成 schema/业务时间校验、payload hash、`uav_message_inbox` 判重、事实展开和同事务提交。旧信封直接拒绝并进入 dead letter。数据库成功后才手动提交 Kafka offset；瞬态失败 seek 回原 offset，成功重放由 inbox 返回既有事实引用且不重复广播。可变冲突复核单独进入 `uav_conflict_reviews`，不修改 `uav_conflict_events` 追加事实。
 
-冲突视觉证据的生成 seam 位于 `KafkaProducerNode → utils_local.event_evidence`，早于 `ShowNode` 且不改变三进程拓扑。每个冲突用同一帧生成“原图 / 检测器输出 / 同期轨迹还原”三项有序证据；`MetricStore` 将三项作为一个 `EvidencePackage` 在冲突事实事务内登记，两个派生项回指原图。Console2 只消费 `evidence_refs` 并通过鉴权证据接口读取，不在浏览器重新推断检测或轨迹画面。
+冲突视觉证据跨越两个进程边界：`KafkaProducerNode` 只冻结 canonical TCC 信封并随 `FrameElement` 传给显示进程，`ShowNode` 在真实原帧上产生实际 `frame_result`，随后 `TccEvidencePublisherNode → utils_local.event_evidence` 才写盘并发布 Kafka。证据模块不允许重绘框、标签、轨迹或冲突标记；它仅保存 `ShowNode` 就地绘制前的原帧副本和绘制后的原尺寸 `frame_result`。`VideoSaverNode` 依旧保留原有 `conflict_*.jpg` 输出，managed `conflict_detector_frame` 是同一输出的内容寻址副本。两项 JPEG 按 SHA-256 写入 `SURVEY_STORAGE_DIR`，事件只携带相对 `storage_key`、哈希、大小和尺寸，不携带 Base64 或本机绝对路径。`MetricStore` 只校验并登记一个 `EvidencePackage` 与两项 `EvidenceItem`，不复制文件；Console2 通过鉴权证据接口读取。
 
 ### 关键设计决策
 

@@ -216,6 +216,20 @@ def test_candidate_tail_keeps_image_history_across_geo_quality_break():
     np.testing.assert_allclose(trajectory[1], [30.87, 40.0], atol=0.02)
 
 
+def test_display_trace_uses_box_center_while_business_geometry_uses_ground_contact():
+    BaseTrack._count = 0
+    tracker = _TrackingPipeline(_config())
+    frame = _frame(0.0, [20, 10, 40, 50])
+    frame.formal_analytics_eligible = False
+    frame.geo_reference_quality = {"status": "degraded"}
+
+    result = tracker.process(frame)
+
+    candidate = result.candidate_trajectories[0]
+    assert candidate["trajectory_px"] == [[30.0, 50.0]]
+    assert candidate["trajectory_display_px"] == [[30.0, 30.0]]
+
+
 def test_target_outside_published_map_coverage_never_enters_formal_buffer():
     BaseTrack._count = 0
     tracker = _TrackingPipeline(_config())
@@ -250,7 +264,7 @@ def test_target_outside_published_map_coverage_never_enters_formal_buffer():
         "flight_phase": "telemetry_unavailable",
         "flight_segment_id": None,
         "trajectory_px": [[30.0, 40.0]],
-        "trajectory_display_px": [[30.0, 40.0]],
+        "trajectory_display_px": [[30.0, 30.0]],
         "trajectory_enu_m": [[30.0, 40.0]],
         "trajectory_timestamps_sec": [0.0],
         "trajectory_frame_nums": [0],
@@ -314,7 +328,7 @@ def test_candidate_display_history_warps_old_points_into_current_frame():
     assert np.allclose(candidate["trajectory_px"][0], [30.0, 40.0])
     assert np.allclose(
         candidate["trajectory_display_px"],
-        [[10.0, 40.0], candidate["trajectory_px"][1]],
+        [[10.0, 30.0], [candidate["trajectory_px"][1][0], 30.0]],
     )
 
 
@@ -343,7 +357,7 @@ def test_candidate_keeps_source_pixels_and_reprojects_world_history_for_display(
 
     assert candidate["trajectory_px"] == [[30.0, 40.0], [10.0, 40.0]]
     assert candidate["trajectory_enu_m"] == [[30.0, 40.0], [30.0, 40.0]]
-    assert candidate["trajectory_display_px"] == [[10.0, 40.0], [10.0, 40.0]]
+    assert candidate["trajectory_display_px"] == [[10.0, 30.0], [10.0, 30.0]]
     assert candidate["trajectory_timestamps_sec"] == [0.0, 0.1]
     assert candidate["trajectory_frame_nums"] == [0, 1]
     assert len(candidate["point_quality_lineage"]) == 2

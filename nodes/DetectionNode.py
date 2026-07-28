@@ -77,6 +77,7 @@ class DetectionNode:
             classes=self.classes_to_detect,
             device=self.device,
             half=self.half,
+            agnostic_nms=False,
         )
         frame_element.inference_ms = round((time.time() - started_at) * 1000, 1)
         detections = extract_valid_detections(

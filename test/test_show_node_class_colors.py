@@ -74,6 +74,39 @@ class ShowNodeClassColorsTest(unittest.TestCase):
         self.assertTrue(np.array_equal(frame[20, 10], np.array([0, 191, 255])))
         self.assertGreater(np.count_nonzero(frame), 100)
 
+    def test_warning_tcc_prompt_uses_red_instead_of_amber(self):
+        node = self._make_node()
+        motor = TrackElement(id=82, timestamp_first=0.0)
+        motor.trajectory_points = [(80.0, 100.0)]
+        non_motor = TrackElement(id=3289, timestamp_first=0.0)
+        non_motor.trajectory_points = [(220.0, 100.0)]
+        frame_element = FrameElement(
+            source="tcc-warning",
+            frame=np.zeros((240, 320, 3), dtype=np.uint8),
+            timestamp=1.0,
+            frame_num=1,
+            roads_info={},
+            id_list=[82, 3289],
+            buffer_tracks={82: motor, 3289: non_motor},
+        )
+        frame_element.conflict_events = [{
+            "motor_id": 82,
+            "non_motor_id": 3289,
+            "severity": "warning",
+            "ttc_sec": 2.4,
+        }]
+
+        rendered = node.process(frame_element).frame_result
+
+        self.assertTrue(np.array_equal(rendered[100, 80], np.array([0, 0, 255])))
+        rendered_int = rendered.astype(np.int16)
+        orange_pixels = (
+            (rendered_int[:, :, 2] > 180)
+            & (rendered_int[:, :, 1] > 100)
+            & (rendered_int[:, :, 1] > rendered_int[:, :, 0] * 2)
+        )
+        self.assertFalse(np.any(orange_pixels))
+
     def test_process_renders_candidate_trajectory_as_amber_trail(self):
         node = self._make_node()
         frame_element = FrameElement(
@@ -194,6 +227,34 @@ class ShowNodeClassColorsTest(unittest.TestCase):
             (30.0, 70.0),
             (60.0, 70.0),
         ]
+
+    def test_formal_trace_without_display_history_uses_bbox_centers(self):
+        node = self._make_node()
+        track = TrackElement(id=1, timestamp_first=0.0)
+        track.trajectory_points = [(20.0, 70.0), (60.0, 70.0), (110.0, 70.0)]
+        track.ground_contact_points_px = [
+            (20.0, 80.0),
+            (60.0, 80.0),
+            (110.0, 80.0),
+        ]
+        frame = FrameElement(
+            source="legacy-display-anchor",
+            frame=np.zeros((120, 140, 3), dtype=np.uint8),
+            timestamp=1.0,
+            frame_num=1,
+            roads_info={},
+            tracked_conf=[0.9],
+            tracked_cls=["car"],
+            tracked_xyxy=[[100, 60, 120, 80]],
+            id_list=[1],
+            buffer_tracks={1: track},
+        )
+        frame.formal_track_ids = [1]
+
+        rendered = node.process(frame).frame_result
+
+        assert np.count_nonzero(rendered[67:74, 20:81]) > 0
+        assert np.count_nonzero(rendered[77:84, 20:81]) == 0
 
     def test_stationary_candidate_bbox_jitter_does_not_draw_scribble(self):
         node = self._make_node()

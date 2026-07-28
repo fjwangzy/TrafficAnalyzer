@@ -221,3 +221,73 @@ def test_tracker_process_associates_image_ids_before_world_projection(monkeypatc
         "flight_georeference",
         "post_id_world_projection",
     ]
+
+
+def test_show_process_renders_pending_tcc_before_evidence_publication(monkeypatch):
+    frame = FrameElement(
+        "fixture.mp4",
+        np.full((8, 8, 3), 7, dtype=np.uint8),
+        1.0,
+        1,
+        {},
+    )
+    frame.pending_tcc_envelopes = [{"msg_type": "uav_conflict", "data": {}}]
+    sentinel = VideoEndBreakElement("fixture.mp4", 1.0)
+    events = []
+
+    class InputQueue:
+        def __init__(self):
+            self.items = [frame, sentinel]
+
+        def get(self, timeout):
+            assert timeout > 0
+            return self.items.pop(0)
+
+    class FakeShowNode:
+        def __init__(self, _config):
+            pass
+
+        def process(self, frame_element):
+            events.append("show")
+            assert np.all(frame_element.frame == 7)
+            frame_element.frame[:, :] = 19
+            frame_element.frame_result = frame_element.frame
+            return frame_element
+
+    class FakeTccEvidencePublisher:
+        def __init__(self, _config):
+            pass
+
+        def process(self, frame_element):
+            if isinstance(frame_element, VideoEndBreakElement):
+                events.append("tcc_eof")
+                return frame_element
+            events.append("tcc")
+            assert np.all(frame_element.frame == 7)
+            assert np.all(frame_element.frame_result == 19)
+            return frame_element
+
+    monkeypatch.setattr(main_optimized, "ShowNode", FakeShowNode)
+    monkeypatch.setattr(
+        main_optimized,
+        "TccEvidencePublisherNode",
+        FakeTccEvidencePublisher,
+        raising=False,
+    )
+    monkeypatch.setattr(main_optimized, "_setup_logging_in_subprocess", lambda: None)
+
+    main_optimized.proc_show_node(
+        InputQueue(),
+        {
+            "pipeline": {
+                "save_video": False,
+                "show_in_web": False,
+                "send_info_kafka": True,
+            },
+            "video_saver_node": {"save_conflict_clips": False},
+            "show_node": {"imshow": False},
+        },
+        tracker_pid=123,
+    )
+
+    assert events == ["show", "tcc", "tcc_eof"]

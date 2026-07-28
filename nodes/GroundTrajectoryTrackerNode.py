@@ -80,6 +80,16 @@ class GroundTrajectoryTrackerNode:
             class_switch_confirm_frames=int(
                 cfg.get("class_switch_confirm_frames", 3)
             ),
+            large_object_area_px2=(
+                float(cfg["large_object_area_px2"])
+                if cfg.get("large_object_area_px2") is not None
+                else None
+            ),
+            large_object_init_thresh=(
+                float(cfg["large_object_init_thresh"])
+                if cfg.get("large_object_init_thresh") is not None
+                else None
+            ),
         )
         self._image_history: dict[int, dict[str, list]] = {}
 
@@ -226,9 +236,13 @@ class GroundTrajectoryTrackerNode:
         for track in tracks:
             track_id = int(track.track_id)
             bbox = track.tlbr
-            pixel_point = [
+            ground_contact_point = [
                 round(float((bbox[0] + bbox[2]) / 2.0), 2),
                 round(float(bbox[3]), 2),
+            ]
+            display_point = [
+                round(float((bbox[0] + bbox[2]) / 2.0), 2),
+                round(float((bbox[1] + bbox[3]) / 2.0), 2),
             ]
             history = self._image_history.setdefault(
                 track_id,
@@ -239,7 +253,7 @@ class GroundTrajectoryTrackerNode:
                     "trajectory_frame_nums": [],
                 },
             )
-            history["trajectory_px"].append(pixel_point)
+            history["trajectory_px"].append(ground_contact_point)
             display = history["trajectory_display_px"]
             warped = self._warp_display_points(
                 display, getattr(frame_element, "camera_motion_warp", None)
@@ -248,7 +262,7 @@ class GroundTrajectoryTrackerNode:
                 display[:] = warped
             elif display:
                 display.clear()
-            display.append(pixel_point.copy())
+            display.append(display_point)
             history["trajectory_timestamps_sec"].append(float(frame_element.timestamp))
             history["trajectory_frame_nums"].append(int(frame_element.frame_num))
             tail = max(self._candidate_tail_points, 1)

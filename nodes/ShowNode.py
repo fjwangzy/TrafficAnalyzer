@@ -840,7 +840,7 @@ class ShowNode:
                     association_trajectory.get("trajectory_display_px")
                     if association_trajectory
                     else None
-                ) or (getattr(track, "ground_contact_points_px", None) or [])
+                ) or (getattr(track, "trajectory_points", None) or [])
                 class_name = (
                     frame_element.tracked_cls[index]
                     if frame_element.tracked_cls
@@ -1220,11 +1220,11 @@ class ShowNode:
                 marker_color = (0, 0, 255)
                 ttc_label = f"TTC {ttc:.1f}s"
             else:
-                line_color = (30, 160, 230)      # 深琥珀
-                badge_bg = (20, 120, 180)        # 暗琥珀背景
-                badge_border = (50, 190, 255)    # 亮琥珀边框
+                line_color = (0, 0, 255)         # 高对比红
+                badge_bg = (0, 0, 190)           # 暗红背景
+                badge_border = (0, 0, 255)       # 亮红边框
                 text_color = (255, 255, 255)
-                marker_color = (0, 180, 255)
+                marker_color = (0, 0, 255)
                 ttc_label = f"TTC {ttc:.1f}s"
 
             # ── 虚线连接 ──

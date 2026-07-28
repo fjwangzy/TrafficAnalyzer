@@ -37,6 +37,7 @@ if str(PLATFORM_DIR) not in sys.path:
 
 from scripts.bootstrap_mp4new_sources import LOCAL_REPLAY_CATALOG  # noqa: E402
 from utils_local.event_evidence import CONFLICT_EVIDENCE_KINDS  # noqa: E402
+from utils_local.runtime_map import select_runtime_visual_registration  # noqa: E402
 
 
 def source_catalog() -> dict[str, dict]:
@@ -93,14 +94,23 @@ def validate_tcc_events(messages: list[dict]) -> list[dict]:
             distance = abs(float(data.get("distance_m")))
         except (TypeError, ValueError):
             distance = float("inf")
-        evidence = data.get("evidence_images")
+        evidence = data.get("evidence_files")
         evidence_kinds = tuple(
             item.get("kind") for item in evidence if isinstance(item, dict)
         ) if isinstance(evidence, list) else ()
         evidence_complete = (
-            evidence_kinds == CONFLICT_EVIDENCE_KINDS
+            data.get("evidence_status") == "complete"
+            and evidence_kinds == CONFLICT_EVIDENCE_KINDS
             and all(
-                isinstance(item.get("jpeg_base64"), str) and item["jpeg_base64"]
+                item.get("storage_backend") == "managed"
+                and isinstance(item.get("storage_key"), str)
+                and item["storage_key"].startswith("objects/")
+                and not Path(item["storage_key"]).is_absolute()
+                and isinstance(item.get("sha256"), str)
+                and len(item["sha256"]) == 64
+                and item["storage_key"].endswith(item["sha256"])
+                and isinstance(item.get("size_bytes"), int)
+                and item["size_bytes"] > 0
                 for item in evidence
             )
         )
@@ -256,20 +266,24 @@ class PlatformClient:
         maps = self.request(
             "GET", f"/api/v1/calibration/channelized-maps?inter_id={source['inter_id']}"
         )
-        eligible = [
-            item for item in maps
-            if item.get("status") == "lane_verified"
-            and item.get("road_data_version") == source["road_data_version"]
-        ]
-        if not eligible:
-            raise RuntimeError(
-                f"stage-1 gate blocked: no lane_verified map for "
-                f"{source['inter_id']}@{source['road_data_version']}"
+        eligible = sorted(
+            (item for item in maps if item.get("status") == "lane_verified"),
+            key=lambda item: int(item.get("version_no") or 0),
+            reverse=True,
+        )
+        for selected in eligible:
+            bundle = self.request(
+                "GET",
+                f"/api/v1/calibration/channelized-maps/{selected['id']}/runtime-bundle",
             )
-        selected = max(eligible, key=lambda item: int(item.get("version_no") or 0))
-        return self.request(
-            "GET",
-            f"/api/v1/calibration/channelized-maps/{selected['id']}/runtime-bundle",
+            try:
+                select_runtime_visual_registration(bundle, source["profile_id"])
+            except ValueError:
+                continue
+            return bundle
+        raise RuntimeError(
+            "stage-1 gate blocked: no lane_verified map with a verified "
+            f"registration for {source['inter_id']}@{source['profile_id']}"
         )
 
     def register(
@@ -438,7 +452,7 @@ def run_source(
             "PIPELINE_ID": pipeline_id,
             "RUN_ID": run_id,
             "SOURCE_PROFILE_ID": source["profile_id"],
-            "ROAD_DATA_VERSION": source["road_data_version"],
+            "ROAD_DATA_VERSION": runtime_bundle["road_data_version"],
             "ROAD_CONTEXT_STATUS": "lane_verified",
             "QUALITY_STATUS": "verified",
             "TRACKING_PROFILE": tracking_profile,

@@ -205,9 +205,13 @@ class TrackerInfoUpdateNode:
                         class_name,
                         self.vehicle_classification_cfg,
                     )
+                    self.buffer_tracks[id].class_id_history.append(tracked_cls_ids[i])
             else:
                 # 更新最后检测时间
                 self.buffer_tracks[id].update(frame_element.timestamp)
+                # 累积分类历史用于多帧投票
+                if tracked_cls_ids and i < len(tracked_cls_ids):
+                    self.buffer_tracks[id].class_id_history.append(tracked_cls_ids[i])
 
             track = self.buffer_tracks[id]
             track.tracking_method = tracking_diagnostics.get(
@@ -395,6 +399,16 @@ class TrackerInfoUpdateNode:
             track = self.buffer_tracks[key]
             duration = track.timestamp_last - track.timestamp_first
             if duration >= self.min_track_duration and len(track.trajectory_points) >= self.min_trajectory_points:
+                # 多帧分类投票：用轨迹生命周期内积累的类别历史重新判定最终分类
+                if track.class_id_history:
+                    from collections import Counter
+                    voted_class_id = Counter(track.class_id_history).most_common(1)[0][0]
+                    track.yolo_class_id = voted_class_id
+                    track.vehicle_class = classify_vehicle(
+                        voted_class_id,
+                        track.yolo_class_name,
+                        self.vehicle_classification_cfg,
+                    )
                 completed_track_data = {
                     "track_id": track.id,
                     "start_road": track.start_road,

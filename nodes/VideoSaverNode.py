@@ -71,6 +71,9 @@ class VideoSaverNode:
                             best_event = event
 
                     if best_event is not None:
+                        # Keep the detector's long-standing conflict_*.jpg output.
+                        # Managed event evidence is an additional content-addressed
+                        # copy of this exact ShowNode result, not a replacement.
                         self._save_conflict_snapshot(frame, best_event)
                         self._last_snapshot_time = now
 

@@ -23,7 +23,6 @@ from utils_local.coordinates import enu_to_gcj02, normalize_telemetry_position
 from elements.VideoEndBreakElement import VideoEndBreakElement
 from elements.FrameElement import FrameElement
 from nodes.ReliableKafkaPublisher import ReliableKafkaPublisher
-from utils_local.event_evidence import build_conflict_evidence_images
 
 logger = logging.getLogger(__name__)
 
@@ -690,22 +689,16 @@ class KafkaProducerNode:
         # 发布完成轨迹到独立topic（T-101: 异步发送）
         self.publish_completed_tracks(frame_element)
 
-        # 发布冲突事件到独立topic（T-101: 异步发送）
+        # 冲突事件必须等待进程 3 的真实 ShowNode 输出。这里只冻结 canonical
+        # 信封并随 FrameElement 传递；禁止在 Kafka 进程内重绘证据帧。
         conflict_events = getattr(frame_element, "conflict_events", None)
+        pending_tcc_envelopes = []
         if conflict_events:
             for event in conflict_events:
                 event_msg = {"intersection_id": self.intersection_id, **event}
-                evidence_images = build_conflict_evidence_images(
-                    frame_element,
-                    event,
-                    max_width=int(getattr(self, "_snapshot_width", 960)),
-                    jpeg_quality=int(getattr(self, "_snapshot_jpeg_quality", 75)),
-                )
-                if evidence_images:
-                    event_msg["evidence_images"] = evidence_images
                 event_msg = self._canonical_envelope("uav_conflict", event_msg, frame_element)
-                self._enqueue(self.conflicts_topic, event_msg, durable=True)
-                logger.info(f"KAFKA enqueued conflict: {event.get('severity')} topic={self.conflicts_topic}")
+                pending_tcc_envelopes.append(event_msg)
+        frame_element.pending_tcc_envelopes = pending_tcc_envelopes
 
         # ── T-103: 遥测发布（5Hz 节流） ──
         telemetry = normalize_telemetry_position(getattr(frame_element, "telemetry", None))

@@ -12,6 +12,9 @@
 - 不回退用户已有改动：工作树可能包含并行修改，除非用户明确要求，不还原不相关文件。
 - 遵守 ADR-019：本机唯一数据库为 database=`road9` + TimescaleDB，UAV Topic、`msg_type`、WebSocket channel 和自建表使用 `uav_` 前缀；旧库与旧观测链路已退役，历史数据不迁移，不得恢复兼容或挂载旧存储。
 - 遵守 ADR-020：Apple Silicon 开发态 Platform 必须原生运行于 macOS arm64，并以本地子进程直接使用 MPS；Docker Compose 仅用于生产发布，不得作为 Mac 开发启动入口，也不得静默回退 CPU。
+- 遵守 ADR-025：成熟图像轨迹不受地理或路网质量门禁抑制；SourceGeoRegistration 独立负责
+  ENU/GCJ-02，Runtime Road Map Bundle 只影响 Lane ID、Link ID 与匹配质量。任何地图缺失、
+  版本不兼容或匹配失败都不得结束、丢弃或拆分 `track_id`，也不得创建或覆盖世界坐标。
 
 ## 模块边界
 
@@ -48,7 +51,8 @@ python scripts/audit_adr019_retirement.py --scope local --strict
 - Kafka/WebSocket/API 契约：更新 `docs/API_CONTRACTS.md`。
 - PostgreSQL/TimescaleDB schema、表、历史迁移或 Topic：更新 `docs/DATABASE_SCHEMA.md`。
 - 管道节点、数据流或进程模型：更新 `docs/ARCHITECTURE.md` 和 `docs/BUSINESS_LOGIC.md`。
-- 验证结果、TCC 交付状态：更新 `docs/test_report_inter_xqh.md` 和 `docs/TASKS.md`。
+- 验证结果、TCC 交付状态：更新对应真实素材报告（当前 mp4728 为
+  `docs/test_report_mp4728_20260728.md`）、`docs/test_report_inter_xqh.md` 和 `docs/TASKS.md`。
 
 ## 禁止事项
 

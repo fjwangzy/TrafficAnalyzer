@@ -27,7 +27,7 @@
 ### 1.1 本地开发库实况（2026-07-16 纯净切换）
 
 - 当前连接 database 为 `road9`，应用对象位于 `public`；这只是本地开发现状，不代表生产目标 schema 已冻结。
-- migration head 为 `20260723_0019`，版本表为 `uav_alembic_version`；`0012` 增加检测事实 lineage，`0013` 增加 inbox 可恢复派发，`0014/0015` 增加轨迹研判维度/索引，`0016/0017` 建立 GCJ-02 渠化地图与多视频源视觉配准，`0018` 增加路口项目、视频接入、分段素材绑定和标定检查审计，`0019` 增加飞行分段、跟踪 profile 与运行质量字段。
+- migration head 为 `20260728_0020`，版本表为 `uav_alembic_version`；`0012` 增加检测事实 lineage，`0013` 增加 inbox 可恢复派发，`0014/0015` 增加轨迹研判维度/索引，`0016/0017` 建立 GCJ-02 渠化地图与多视频源视觉配准，`0018` 增加路口项目、视频接入、分段素材绑定和标定检查审计，`0019` 增加飞行分段、跟踪 profile 与运行质量字段，`0020` 将 SourceGeoRegistration 和轨迹质量事实从路网匹配中解耦，并幂等回填既有 verified 逐源配准。
 - 正式本机端口 `5432` 由根 Compose 的 TimescaleDB 提供，使用稳定新卷 `traffic_road9_data`；不挂载旧 PostgreSQL、实验 TimescaleDB 或旧目标卷。
 - migration 自动启用 TimescaleDB 并创建 5 张 `uav_*` hypertable。初始化数据仅允许管理员账号，业务、指标、轨迹、任务和告警表为空。
 - `uav_traffic_metrics`、`uav_track_points`、`uav_conflict_events`、`uav_telemetry_metrics`、`uav_system_metrics`、普通表 `uav_track_events` 及长期 `uav_message_inbox` 已实现。永久性输入错误进入独立的 `uav_message_dead_letters`；可变技术复核状态位于普通表 `uav_conflict_reviews`，两者都不更新追加型冲突事实。
@@ -348,7 +348,7 @@ CREATE EXTENSION IF NOT EXISTS timescaledb;
 
 ### 5.2 `uav_track_events` 与 `uav_track_points`
 
-`uav_track_events` 是普通业务表，至少包含 `track_id`、车辆类别、转向行为、起止时间、持续时长、均速/最高速、入口/出口 Link/车道、世界锚点和地图匹配质量。`uav_track_points` 是按 `observed_at` 分区的 hypertable，逐点保存 `track_event_id`、`point_seq`、ENU/像素坐标和点质量；同一轨迹内 `point_seq` 单调递增。像素坐标使用车辆地面接触点并与ENU、业务时间按 `point_seq` 同索引；bbox中心、源帧号和完整质量谱系保留在 `uav_track_events.payload` 的可选 `trajectory_bbox_center_px/trajectory_frame_nums/point_quality_lineage` 中，不新增第二套类型化事实表。`trajectory_display_px` 是进程内当前帧渲染缓存，不持久化。批量写入、抽稀和长期保留规则仍为 `【待确认】`。
+`uav_track_events` 是普通业务表，地图和世界坐标列全部可空；类型化保存 `track_id`、`association_id`、跟踪方法/质量、地理质量、路网质量、质量原因和可空 `geo_registration_id`。`uav_track_points` 是按 `observed_at` 分区的 hypertable，逐点保存 `track_event_id`、`point_seq`、像素坐标及可空 ENU/GCJ-02；同一轨迹内 `point_seq` 单调递增。像素、源时间、源帧号、ENU 和 GCJ-02 按同一索引；缺失地理能力写空值而不丢点。完整 Kafka payload 继续保留时间/帧号与逐点谱系，不新增第二套轨迹事实表。
 
 ### 5.3 `uav_conflict_events`
 
@@ -578,11 +578,19 @@ Alembic revision `20260723_0019` 增加：
 
 本机开发库已于 2026-07-23 从 `20260722_0018` 前向迁移到 `20260723_0019`。现有 xqh verified registration `VRG-3351d2719cf74f1798ef0fc0` 仅回填可从 selected capture frame `FRM-4221C85DCB81@49.616233s` 和 32 条 `lane_verified` 车道证明的谱系：配准位姿、相机参数哈希与车道覆盖 MultiPolygon；未修改 homography、车道几何或发布状态。`platform/scripts/backfill_cruise_registration_lineage.py` 默认 dry-run，目标 ID 必填，遇到非空且不同的既有谱系时拒绝覆盖；回填后重复 dry-run 为 `changed=false / would_change=false`。浮点比较仅容忍 `1e-12` 级数据库序列化舍入，ID、字符串、结构或超容差数值变化仍拒绝覆盖。
 
-### 10.6 图像关联 ID 与正式业务 ID（2026-07-24）
+### 10.6 图像关联 ID 与业务轨迹 ID（2026-07-24，2026-07-28 修订）
 
-ADR-023 将 ByteTrack 前移到所有 H/ENU 处理之前，但不增加数据库迁移。`uav_track_events.track_id`
-继续表示正式业务轨迹分段 ID；可选 `association_id`、`tracking_method=motion_compensated_image_v2`、
-`track_family_id` 和 `previous_track_id` 保存在既有 canonical payload JSON，用于解释同一图像身份在
-地理参考质量中断前后的多个正式分段。候选 `association_id` 不写入正式轨迹事实表，也不得作为
-统计、车道或冲突外键。若后续实际查询证明需要按 association family 检索，再以独立 Alembic
-迁移增加类型化列；当前不得为显示缓存复制第二套轨迹表。
+ByteTrack 仍前置于 H/ENU，但 `uav_track_events.track_id` 现在表示独立于地图质量的图像业务轨迹；
+`association_id` 保留原始图像关联身份。地理或地图质量变化不拆分记录。候选关联只在未满足成熟
+时长/点数时存在，不写完成事实。
+
+### 10.7 独立地理配准与分层轨迹质量（2026-07-28）
+
+Alembic `20260728_0020` 新增 `uav_source_geo_registrations`，按 SourceProfile 保存版本、状态、
+GCJ-02 锚点、坐标转换版本、pixel→ENU、配准姿态、相机参数、覆盖、残差、provenance 与 canonical
+SHA-256。Mission 固定 verified 记录 ID/校验和；`uav_visual_registrations` 以可空外键保留原地图关联。
+迁移幂等提升历史 verified VisualRegistration，不修改历史地图或业务事实。
+
+同一迁移为 `uav_track_events` 增加可查询的 `association_id/tracking_method/tracking_quality/
+geo_reference_quality/road_match_quality/quality_reasons/geo_registration_id`。原坐标、地图和车道列继续
+可空，原始 Kafka payload 完整保留。该不可逆迁移不删除或回写旧运行结果。

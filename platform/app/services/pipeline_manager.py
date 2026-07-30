@@ -118,6 +118,9 @@ class PipelineInstance:
     quality_status: str = "unverified"
     tracking_profile: str = "hover_cruise_v1"
     map_version_id: str | None = None
+    geo_registration_id: str | None = None
+    geo_registration_checksum: str | None = None
+    candidate_only: bool = False
     status: PipelineStatus = PipelineStatus.PENDING
     process: Any = field(default=None, repr=False)
     started_at: float = 0.0
@@ -145,6 +148,9 @@ class PipelineInstance:
             "quality_status": self.quality_status,
             "tracking_profile": self.tracking_profile,
             "map_version_id": self.map_version_id,
+            "geo_registration_id": self.geo_registration_id,
+            "geo_registration_checksum": self.geo_registration_checksum,
+            "candidate_only": self.candidate_only,
             "status": self.status.value,
             "started_at": self.started_at,
             "stopped_at": self.stopped_at,
@@ -263,7 +269,14 @@ class PipelineManager:
         video_port: int | None = None,
         topic_name: str | None = None,
         video_stream_url: str | None = None,
+        source_profile_id: str | None = None,
+        inter_id: str | None = None,
         tracking_profile: str = "hover_cruise_v1",
+        candidate_only: bool = False,
+        road_context_status: str | None = None,
+        quality_status: str | None = None,
+        geo_registration_id: str | None = None,
+        geo_registration_checksum: str | None = None,
     ) -> PipelineInstance:
         """Register an externally-running pipeline (e.g. started locally).
 
@@ -275,8 +288,8 @@ class PipelineManager:
         if tracking_profile not in {"hover_cruise_v1", "hover_only_legacy"}:
             raise ValueError("unsupported tracking_profile")
         video_src = self._validate_video_source(video_src)
-        if not map_version_id:
-            raise ValueError("lane_verified map_version_id is required")
+        if candidate_only and tracking_profile != "hover_cruise_v1":
+            raise ValueError("candidate-only registration requires hover_cruise_v1")
         if camera_id is not None and not 1 <= camera_id <= 65535:
             raise ValueError("camera_id must be between 1 and 65535")
         if video_port is not None and not 1024 <= video_port <= 65535:
@@ -313,10 +326,22 @@ class PipelineManager:
             camera_id=cid,
             video_port=port,
             video_stream_url=registered_stream_url,
+            source_profile_id=source_profile_id,
+            inter_id=inter_id or intersection_id,
             status=PipelineStatus.RUNNING,
             map_version_id=map_version_id,
             tracking_profile=tracking_profile,
             started_at=time.time(),
+            candidate_only=candidate_only,
+            road_context_status=(
+                road_context_status or ("complete" if map_version_id else "missing")
+            ),
+            quality_status=(
+                quality_status
+                or ("verified" if map_version_id else "unverified" if candidate_only else "degraded")
+            ),
+            geo_registration_id=geo_registration_id,
+            geo_registration_checksum=geo_registration_checksum,
         )
         self._pipelines[pipeline_id] = pipeline
         assign_drone_to_intersection(drone_id, intersection_id)
@@ -332,6 +357,7 @@ class PipelineManager:
         intersection_id: str,
         video_src: str,
         runtime_map_bundle: dict | None = None,
+        runtime_geo_registration: dict | None = None,
         telemetry_source: str | None = None,
         telemetry_file_path: str | None = None,
         telemetry_time_offset_sec: float | None = None,
@@ -353,6 +379,7 @@ class PipelineManager:
             intersection_id: The intersection to monitor.
             video_src: Video source — RTSP URL, file path, or camera index.
             runtime_map_bundle: Optional immutable lane-verified channelized map bundle.
+            runtime_geo_registration: Optional immutable verified source projection.
             telemetry_source: Optional telemetry source override.
             telemetry_file_path: Optional telemetry file path override.
             kafka_bootstrap: Override Kafka bootstrap servers.
@@ -366,6 +393,14 @@ class PipelineManager:
         video_src = self._validate_video_source(video_src)
         if runtime_map_bundle is not None and runtime_map_bundle.get("map_status") != "lane_verified":
             raise ValueError("runtime_map_bundle must be lane_verified when provided")
+        if runtime_geo_registration is not None:
+            if runtime_geo_registration.get("status") != "verified":
+                raise ValueError("runtime_geo_registration must be verified when provided")
+            registration_source = runtime_geo_registration.get("source_profile_id")
+            if source_profile_id and registration_source != source_profile_id:
+                raise ValueError("runtime_geo_registration source_profile_id mismatch")
+            if not runtime_geo_registration.get("homography_pixel_to_enu"):
+                raise ValueError("runtime_geo_registration requires homography_pixel_to_enu")
         telemetry_file_path = self._validate_support_file(
             telemetry_file_path,
             (".srt", ".json", ".txt"),
@@ -398,6 +433,14 @@ class PipelineManager:
             map_version_id=(
                 runtime_map_bundle.get("map_version_id") if runtime_map_bundle else None
             ),
+            geo_registration_id=(
+                runtime_geo_registration.get("id") if runtime_geo_registration else None
+            ),
+            geo_registration_checksum=(
+                runtime_geo_registration.get("checksum")
+                if runtime_geo_registration
+                else None
+            ),
         )
 
         launch = PipelineLaunchSpec(
@@ -416,6 +459,7 @@ class PipelineManager:
             quality_status=quality_status,
             tracking_profile=tracking_profile,
             runtime_map_bundle=runtime_map_bundle,
+            runtime_geo_registration=runtime_geo_registration,
             frame_stride=self._frame_stride,
             kafka_bootstrap=kafka_bootstrap or self._kafka_bootstrap,
             telemetry_source=telemetry_source,

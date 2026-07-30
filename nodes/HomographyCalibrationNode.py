@@ -1,21 +1,23 @@
-import numpy as np
 import logging
-import os
+
+import numpy as np
 
 from elements.FrameElement import FrameElement
 from elements.VideoEndBreakElement import VideoEndBreakElement
-from utils_local.utils import profile_time
+from utils_local.gcp_refinement import GCPRefinement
 from utils_local.homography import (
-    compute_homography_from_telemetry,
     compute_homography_from_reference_points,
+    compute_homography_from_telemetry,
     is_valid_homography,
 )
-from utils_local.gcp_refinement import GCPRefinement
+from utils_local.runtime_geo import (
+    load_runtime_geo_registration,
+    runtime_geo_matches_map,
+)
 from utils_local.runtime_map import (
     load_runtime_map_bundle,
-    runtime_registration_homography,
-    select_runtime_visual_registration,
 )
+from utils_local.utils import profile_time
 
 logger = logging.getLogger(__name__)
 
@@ -41,19 +43,27 @@ class HomographyCalibrationNode:
         self._static_H: np.ndarray | None = None
         self._logged_no_calibration = False
         self._runtime_bundle = load_runtime_map_bundle(config)
-        self._runtime_registration = None
+        self._runtime_registration = load_runtime_geo_registration(
+            config, runtime_map_bundle=self._runtime_bundle
+        )
         self._runtime_H: np.ndarray | None = None
-        if self._runtime_bundle is not None:
-            self._runtime_registration = select_runtime_visual_registration(
-                self._runtime_bundle, os.environ.get("SOURCE_PROFILE_ID")
-            )
-            self._runtime_H = runtime_registration_homography(
-                self._runtime_registration
+        self._runtime_map_compatible = runtime_geo_matches_map(
+            self._runtime_registration, self._runtime_bundle
+        )
+        if self._runtime_registration is not None:
+            self._runtime_H = np.asarray(
+                self._runtime_registration["homography_pixel_to_enu"],
+                dtype=np.float64,
             )
             logger.info(
-                "HomographyCalibrationNode: locked lane_verified map=%s source=%s",
-                self._runtime_bundle.get("map_version_id"),
+                "HomographyCalibrationNode: locked geo registration=%s source=%s map=%s",
+                self._runtime_registration.get("id"),
                 self._runtime_registration.get("source_profile_id"),
+                (
+                    self._runtime_bundle.get("map_version_id")
+                    if self._runtime_map_compatible
+                    else None
+                ),
             )
 
         # ── 镜头畸变系数 [k1, k2, p1, p2, k3]（可选）──
@@ -135,16 +145,29 @@ class HomographyCalibrationNode:
 
         telemetry = getattr(frame_element, "telemetry", None)
 
-        # A formal replay is locked to the exact source-image registration of one
-        # immutable lane_verified map.  It must never fall back to a telemetry or
-        # reference-point coordinate frame later in the pipeline.
-        if self._runtime_bundle is not None:
+        # World coordinates are locked to the exact source-image registration.
+        # A lane_verified map is optional enrichment and cannot own or replace
+        # this coordinate frame later in the pipeline.
+        if self._runtime_registration is not None:
             frame_element.homography_matrix = self._runtime_H.copy()
-            frame_element.calibration_mode = "runtime_map"
-            frame_element.anchor_gcj02 = tuple(self._runtime_bundle["anchor_gcj02"])
-            frame_element.map_version_id = self._runtime_bundle["map_version_id"]
-            frame_element.runtime_map_bundle = self._runtime_bundle
+            frame_element.calibration_mode = (
+                "runtime_map" if self._runtime_map_compatible else "runtime_geo"
+            )
+            frame_element.anchor_gcj02 = tuple(
+                self._runtime_registration["anchor_gcj02"]
+            )
+            frame_element.runtime_geo_registration = self._runtime_registration
             frame_element.runtime_visual_registration = self._runtime_registration
+            frame_element.geo_registration_id = self._runtime_registration.get("id")
+            frame_element.geo_registration_checksum = self._runtime_registration.get(
+                "checksum"
+            )
+            if self._runtime_map_compatible:
+                frame_element.map_version_id = self._runtime_bundle["map_version_id"]
+                frame_element.runtime_map_bundle = self._runtime_bundle
+                frame_element.road_context_status = "complete"
+            elif self._runtime_bundle is not None:
+                frame_element.road_context_status = "version_mismatch"
             if self.dist_coeffs:
                 frame_element.dist_coeffs = self.dist_coeffs
                 frame_element.camera_intrinsics = self.camera_intrinsics

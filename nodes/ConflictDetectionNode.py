@@ -1,11 +1,12 @@
 import logging
+
 import numpy as np
 
 from elements.FrameElement import FrameElement
 from elements.VideoEndBreakElement import VideoEndBreakElement
-from utils_local.utils import profile_time
-from utils_local.homography import pixel_to_world, is_valid_homography
 from utils_local.coordinates import enu_to_gcj02
+from utils_local.homography import is_valid_homography, pixel_to_world
+from utils_local.utils import profile_time
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +66,15 @@ class ConflictDetectionNode:
             "eligible_motor_tracks": 0,
             "eligible_non_motor_tracks": 0,
             "candidate_pairs": 0,
+            "speed_missing": 0,
+            "speed_below_min": 0,
+            "history_insufficient": 0,
+            "displacement_insufficient": 0,
+            "distance_filtered": 0,
+            "prediction_failed": 0,
+            "scene_filtered": 0,
+            "evidence_failed": 0,
+            "severity_filtered": 0,
             "prediction_candidates": 0,
             "evidence_passed": 0,
             "deduplicated": 0,
@@ -81,7 +91,7 @@ class ConflictDetectionNode:
 
         if (
             getattr(frame_element, "geo_reference_quality", None) is not None
-            and not getattr(frame_element, "formal_analytics_eligible", False)
+            and not getattr(frame_element, "tcc_analytics_eligible", False)
         ):
             frame_element.conflict_events = []
             diagnostics["status"] = "quality_gate_blocked"
@@ -110,6 +120,8 @@ class ConflictDetectionNode:
             cx = (bbox[0] + bbox[2]) / 2.0
             cy = (bbox[1] + bbox[3]) / 2.0
             motion_profile = self._motion_profile(track, H)
+            if motion_profile is None:
+                diagnostics["history_insufficient"] += 1
             velocity_ms = self._prediction_velocity_ms(
                 self._velocity_ms(track),
                 motion_profile,
@@ -121,7 +133,11 @@ class ConflictDetectionNode:
 
             # 过滤从未真正移动过的车辆（纯 bbox 抖动噪声）
             # 用 max_speed_kmh 而非 avg_speed_kmh：急停过的车依然保留
+            if track.max_speed_kmh is None:
+                diagnostics["speed_missing"] += 1
+                continue
             if track.max_speed_kmh < 5.0:
+                diagnostics["speed_below_min"] += 1
                 continue
             # 过滤轨迹长度不足的目标（路边停靠车辆等），要求世界坐标累计位移 >= 阈值
             world_history = getattr(track, "position_history_enu_m", None) or []
@@ -139,8 +155,10 @@ class ConflictDetectionNode:
                 current_position = pixel_to_world(np.asarray([[cx, cy]]), H)[0]
                 position_is_absolute = False
             else:
+                diagnostics["history_insufficient"] += 1
                 continue  # 位置点不足，无法判断轨迹
             if traj_length < self.min_trajectory_length_m:
+                diagnostics["displacement_insufficient"] += 1
                 continue
             entry = {
                 "track_id": track_id,
@@ -188,6 +206,7 @@ class ConflictDetectionNode:
                 # 距离预过滤：两车世界坐标距离 > 阈值，直接跳过
                 pair_dist = float(np.linalg.norm(pts[0] - pts[1]))
                 if pair_dist > self.max_pair_distance_m:
+                    diagnostics["distance_filtered"] += 1
                     continue
 
                 prediction = self._predict_collision(
@@ -197,6 +216,7 @@ class ConflictDetectionNode:
                     non_motor["velocity_ms"],
                 )
                 if prediction is None:
+                    diagnostics["prediction_failed"] += 1
                     continue
                 diagnostics["prediction_candidates"] += 1
 
@@ -206,6 +226,7 @@ class ConflictDetectionNode:
                     prediction,
                 )
                 if scene is None:
+                    diagnostics["scene_filtered"] += 1
                     continue
 
                 evidence = self._collect_evidence(
@@ -215,10 +236,13 @@ class ConflictDetectionNode:
                     scene,
                 )
                 if not evidence:
+                    diagnostics["evidence_failed"] += 1
                     continue
                 diagnostics["evidence_passed"] += 1
 
                 severity = self._classify_severity(prediction, evidence, scene)
+                if not severity:
+                    diagnostics["severity_filtered"] += 1
                 if severity and self._should_emit_pair(pair_key, severity, now):
                     event = {
                         "motor_id": int(motor["track_id"]),
@@ -832,6 +856,4 @@ class ConflictDetectionNode:
         if self._severity_rank.get(severity, 0) > self._severity_rank.get(prev_severity, 0):
             return True
         # 同级别 → 冷却期后允许重发
-        if now - prev_time >= self.emit_cooldown_sec:
-            return True
-        return False
+        return now - prev_time >= self.emit_cooldown_sec

@@ -38,6 +38,22 @@ class _FailingKafkaConsumer:
         self.stopped = True
 
 
+class _StartingKafkaConsumer:
+    def __init__(self):
+        self.started = False
+        self.stopped = False
+        self.subscribed_pattern = None
+
+    def subscribe(self, pattern=None, topics=None):
+        self.subscribed_pattern = pattern
+
+    async def start(self):
+        self.started = True
+
+    async def stop(self):
+        self.stopped = True
+
+
 class KafkaConsumerStatsTest(unittest.IsolatedAsyncioTestCase):
     def test_extract_intersection_rejects_legacy_topic(self):
         service = KafkaConsumerService(
@@ -68,6 +84,27 @@ class KafkaConsumerStatsTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(fake_consumer.stopped)
         self.assertIsNone(service._consumer)
         self.assertFalse(service._running)
+
+    async def test_consumer_allows_one_slow_durable_message_without_rebalance(self):
+        fake_consumer = _StartingKafkaConsumer()
+        service = KafkaConsumerService(
+            bootstrap_servers="localhost:9092",
+            group_id="test",
+            topics_pattern="uav_statistics_.*",
+            ws_manager=_RecordingWS(),
+        )
+
+        with patch(
+            "app.kafka.consumer.AIOKafkaConsumer",
+            return_value=fake_consumer,
+        ) as constructor:
+            created = await service._create_consumer()
+
+        self.assertIs(created, fake_consumer)
+        self.assertTrue(fake_consumer.started)
+        kwargs = constructor.call_args.kwargs
+        self.assertEqual(kwargs["max_poll_records"], 1)
+        self.assertGreaterEqual(kwargs["max_poll_interval_ms"], 1_800_000)
 
     async def test_stats_broadcast_continues_when_lane_annotation_store_fails(self):
         ws = _RecordingWS()

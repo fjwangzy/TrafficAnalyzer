@@ -97,7 +97,7 @@ vi.mock('./lib/api', async (importOriginal) => {
         { id: 'FP-20260713-03', name: '夜间货车限行验证', drone_id: 'UAV-M300-03', state: 'draft', revision: 1, timezone: 'Asia/Shanghai', schedule: { type: 'once', start_at: '2026-07-15T22:30:00+08:00', end_at: '2026-07-16T00:30:00+08:00' } },
       ]),
       missions: vi.fn().mockResolvedValue([
-        { id: 'MSN-0713-1050', name: '早高峰巡检', drone_id: 'UAV-M300-03', trigger_type: 'manual', status: 'running', scheduled_start_at: '2026-07-15T10:50:00+08:00', actual_start_at: '2026-07-15T10:50:06+08:00', pipeline: { id: 'pipe-1', observed_status: 'running', camera_id: 17, video_stream_url: 'http://127.0.0.1:8127/video' } },
+        { id: 'MSN-0713-1050', name: '早高峰巡检', drone_id: 'UAV-M300-03', trigger_type: 'manual', status: 'running', scheduled_start_at: '2026-07-15T10:50:00+08:00', actual_start_at: '2026-07-15T10:50:06+08:00', pipeline: { id: 'pipe-1', observed_status: 'running', camera_id: 17, video_stream_url: 'http://127.0.0.1:8127/video', tracking_profile: 'hover_only_legacy' } },
       ]),
       flightPlanAction: vi.fn().mockRejectedValue({ response: { data: { detail: { code: 'flight_plan_overlap', message: '发现同无人机时间冲突，计划保持草稿' } } } }),
       stopMission: vi.fn().mockResolvedValue({ id: 'MSN-0713-1050', status: 'cancelled', pipeline: { observed_status: 'stopped' } }),
@@ -378,6 +378,7 @@ describe('Console2 full prototype', () => {
     const feed = stream.closest('.replay-camera-feed')
     const sourcePicker = screen.getByRole('combobox', { name: '小清河北路 × 水屯路回放源' })
     const stopButton = screen.getByRole('button', { name: '停止' })
+    expect(screen.getByText(/悬停兼容分析/)).toBeInTheDocument()
     expect(sourcePicker).toBeDisabled()
     expect(sourcePicker.closest('.replay-camera-feed')).toBe(feed)
     expect(stopButton.closest('.replay-camera-feed')).toBe(feed)
@@ -399,6 +400,28 @@ describe('Console2 full prototype', () => {
       inter_id: 'INT_camera_1',
       road_data_version: 'ROAD-LOCAL-INTER-XQH',
     })))
+  })
+
+  it('starts detection without a RoadContext binding and keeps road analytics degraded', async () => {
+    platformApi.createMission.mockClear()
+    platformApi.drones.mockResolvedValueOnce([
+      { id: 'UAV-M300-03', name: 'M300 test', enabled: true, status: 'offline', telemetry_status: 'stale', battery_pct: null, revision: 1, default_inter_id: 'INT_MP4728_JINGSHI_CORRIDOR', intersection_name: '回放无人机 · 经十路巡航', default_video_source_id: 'VID-1' },
+    ])
+    platformApi.missions.mockResolvedValueOnce([])
+
+    open('/drones?tab=fleet')
+
+    const startButton = await screen.findByRole('button', { name: '启动检测' })
+    expect(screen.getByText('道路未标定 · 仅检测/跟踪/遥测')).toBeInTheDocument()
+    expect(startButton).toBeEnabled()
+
+    fireEvent.click(startButton)
+    await waitFor(() => expect(platformApi.createMission).toHaveBeenCalledWith(expect.objectContaining({
+      drone_id: 'UAV-M300-03',
+      source_profile_id: 'SRC-LOCAL-XQH',
+      inter_id: 'INT_MP4728_JINGSHI_CORRIDOR',
+    })))
+    expect(platformApi.createMission.mock.calls[0][0]).not.toHaveProperty('road_data_version')
   })
 
   it('shows the starting state while Mission polling waits for MJPEG readiness', async () => {

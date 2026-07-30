@@ -262,6 +262,12 @@ class BYTETracker(object):
         self.mot20 = mot20
         self.large_object_area_px2 = large_object_area_px2
         self.large_object_init_thresh = large_object_init_thresh
+        self.last_association_diagnostics = {
+            "mahalanobis_gate_mode": "shadow",
+            "eligible_pair_count": 0,
+            "would_reject_eligible_pair_count": 0,
+            "would_strand_track_count": 0,
+        }
         
     def _association_distance(self, tracks, detections):
         dists = matching.iou_distance(tracks, detections)
@@ -379,9 +385,36 @@ class BYTETracker(object):
         dists = self._association_distance(strack_pool, detections)
         if not self.mot20:
             dists = matching.fuse_score(dists, detections)
-        dists = matching.gate_cost_matrix(
-            self.kalman_filter, dists, strack_pool, detections, only_position=True
+        # The stock Kalman filter advances with a fixed dt=1.  Production can
+        # process every fifth source frame, so using its 95% Mahalanobis gate as
+        # a hard eligibility filter rejects legitimate small, fast targets.
+        # Keep the calculation as an observable shadow diagnostic, while the
+        # production association remains image-first (IoU + score + class).
+        shadow_gated_dists = matching.gate_cost_matrix(
+            self.kalman_filter,
+            dists.copy(),
+            strack_pool,
+            detections,
+            only_position=True,
         )
+        eligible_pairs = np.isfinite(dists) & (dists <= self.match_thresh)
+        shadow_eligible_pairs = np.isfinite(shadow_gated_dists) & (
+            shadow_gated_dists <= self.match_thresh
+        )
+        would_reject_pairs = eligible_pairs & ~shadow_eligible_pairs
+        self.last_association_diagnostics = {
+            "mahalanobis_gate_mode": "shadow",
+            "eligible_pair_count": int(np.count_nonzero(eligible_pairs)),
+            "would_reject_eligible_pair_count": int(
+                np.count_nonzero(would_reject_pairs)
+            ),
+            "would_strand_track_count": int(
+                np.count_nonzero(
+                    np.any(eligible_pairs, axis=1)
+                    & ~np.any(shadow_eligible_pairs, axis=1)
+                )
+            ),
+        }
         matches, u_track, u_detection = matching.linear_assignment(dists, thresh=self.match_thresh)
 
         for itracked, idet in matches:

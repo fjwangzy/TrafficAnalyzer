@@ -55,6 +55,9 @@ def _frame(timestamp, bbox, warp=None):
     )
     frame.camera_motion_warp = np.eye(3) if warp is None else warp
     frame.geo_reference_quality = {"status": "verified"}
+    frame.geo_analytics_eligible = True
+    frame.road_analytics_eligible = True
+    frame.tcc_analytics_eligible = True
     frame.formal_analytics_eligible = True
     return frame
 
@@ -74,6 +77,9 @@ def _multi_frame(timestamp, boxes, projection):
     frame.camera_motion_warp = np.eye(3)
     frame.pixel_to_map_enu = projection
     frame.geo_reference_quality = {"status": "verified"}
+    frame.geo_analytics_eligible = True
+    frame.road_analytics_eligible = True
+    frame.tcc_analytics_eligible = True
     frame.formal_analytics_eligible = True
     return frame
 
@@ -140,6 +146,69 @@ def test_camera_motion_warp_keeps_id_when_raw_boxes_do_not_overlap():
     assert second.tracking_diagnostics["tracking_method"] == "motion_compensated_image_v2"
 
 
+def test_small_stride_motion_reports_mahalanobis_shadow_without_splitting_id():
+    BaseTrack._count = 0
+    node = GroundTrajectoryTrackerNode(_config())
+
+    first = node.process(_frame(0.0, [20, 20, 30, 30]))
+    moved = node.process(_frame(1 / 6, [24, 20, 34, 30]))
+
+    assert first.id_list == [1]
+    assert moved.id_list == [1]
+    gate = moved.tracking_diagnostics["mahalanobis_gate"]
+    assert gate["mahalanobis_gate_mode"] == "shadow"
+    assert gate["eligible_pair_count"] == 1
+    assert gate["would_reject_eligible_pair_count"] == 1
+    assert gate["would_strand_track_count"] == 1
+
+
+def test_no_road_or_geo_still_emits_one_aligned_pixel_trajectory_at_eof():
+    BaseTrack._count = 0
+    tracker = _TrackingPipeline(_config())
+    accumulator = TrackerInfoUpdateNode(_config())
+
+    for index in range(5):
+        frame = _frame(index * 0.1, [20 + index, 20, 40 + index, 40])
+        frame.formal_analytics_eligible = False
+        frame.geo_analytics_eligible = False
+        frame.road_analytics_eligible = False
+        frame.tcc_analytics_eligible = False
+        frame.geo_reference_quality = {
+            "status": "degraded",
+            "reasons": ["lane_verified_map_required", "pixel_to_map_projection_unavailable"],
+        }
+        accumulated = accumulator.process(tracker.process(frame))
+
+    assert list(accumulated.buffer_tracks) == [1]
+    assert accumulated.trajectory_output_eligible is True
+    assert accumulated.geo_analytics_eligible is False
+    assert accumulated.road_analytics_eligible is False
+
+    termination = tracker.flush("natural_eof")
+    completed_frame = accumulator.flush(
+        timestamp=0.4,
+        reason=termination["termination_reason"],
+        terminated_track_ids=termination["terminated_track_ids"],
+    )
+
+    assert completed_frame is not None
+    assert len(completed_frame.completed_tracks) == 1
+    completed = completed_frame.completed_tracks[0]
+    assert completed["track_id"] == 1
+    assert completed["association_id"] == 1
+    assert completed["trajectory_output_eligible"] is True
+    assert completed["geo_analytics_eligible"] is False
+    assert completed["road_analytics_eligible"] is False
+    assert completed["road_context_status"] == "missing"
+    assert completed["quality_status"] == "degraded"
+    assert completed["formal_analytics_eligible"] is False
+    assert completed["trajectory_enu_m"] == [None] * 5
+    assert completed["trajectory_gcj02"] == [None] * 5
+    assert len(completed["trajectory_px"]) == 5
+    assert len(completed["trajectory_timestamps_sec"]) == 5
+    assert len(completed["trajectory_frame_nums"]) == 5
+
+
 def test_source_time_gap_ends_association_instead_of_forcing_same_id():
     BaseTrack._count = 0
     node = _TrackingPipeline(_config())
@@ -165,20 +234,24 @@ def test_source_time_reversal_ends_association_instead_of_forcing_same_id():
     assert second.tracking_diagnostics["terminated_track_ids"] == [1]
 
 
-def test_geo_reference_quality_break_keeps_candidate_out_of_business_buffer():
+def test_geo_reference_quality_break_keeps_same_output_track_in_business_buffer():
     BaseTrack._count = 0
     tracker = _TrackingPipeline(_config())
     accumulator = TrackerInfoUpdateNode(_config())
 
-    formal = tracker.process(_frame(0.0, [20, 20, 40, 40]))
+    formal = _frame(0.0, [20, 20, 40, 40])
     formal.homography_matrix = np.eye(3)
     formal.pixel_to_map_enu = np.eye(3)
     formal.drone_displacement_m = np.zeros(2)
+    formal = tracker.process(formal)
     accumulated = accumulator.process(formal)
     assert list(accumulated.buffer_tracks) == [1]
 
     degraded = _frame(0.1, [20, 20, 40, 40])
     degraded.formal_analytics_eligible = False
+    degraded.geo_analytics_eligible = False
+    degraded.road_analytics_eligible = False
+    degraded.tcc_analytics_eligible = False
     degraded.flight_phase = "unsupported_pose"
     degraded.geo_reference_quality = {"status": "degraded"}
     degraded.homography_matrix = np.eye(3)
@@ -189,11 +262,14 @@ def test_geo_reference_quality_break_keeps_candidate_out_of_business_buffer():
 
     assert degraded.id_list == [1]  # image association remains renderable/continuous
     assert degraded.association_id_list == [1]
-    assert degraded.tracking_diagnostics["terminated_track_ids"] == [1]
-    assert accumulated.buffer_tracks == {}
+    assert degraded.track_id_by_association == {1: 1}
+    assert degraded.tracking_diagnostics["terminated_track_ids"] == []
+    assert list(accumulated.buffer_tracks) == [1]
+    assert len(accumulated.buffer_tracks[1].trajectory_points) == 2
+    assert accumulated.buffer_tracks[1].trajectory_enu_m == [(30.0, 40.0), None]
 
 
-def test_candidate_tail_keeps_image_history_across_geo_quality_break():
+def test_active_tail_keeps_image_history_across_geo_quality_break():
     tracker = _TrackingPipeline(_config())
     formal = _frame(0.0, [20, 20, 40, 40])
     formal.pixel_to_map_enu = np.eye(3)
@@ -201,6 +277,9 @@ def test_candidate_tail_keeps_image_history_across_geo_quality_break():
 
     degraded = _frame(0.1, [21, 20, 41, 40])
     degraded.formal_analytics_eligible = False
+    degraded.geo_analytics_eligible = False
+    degraded.road_analytics_eligible = False
+    degraded.tcc_analytics_eligible = False
     degraded.geo_reference_quality = {
         "status": "degraded",
         "reasons": ["visual_warp_not_verified"],
@@ -210,27 +289,31 @@ def test_candidate_tail_keeps_image_history_across_geo_quality_break():
     result = tracker.process(degraded)
 
     assert result.id_list == [1]
-    trajectory = result.candidate_trajectories[0]["trajectory_px"]
+    trajectory = result.association_trajectories[0]["trajectory_px"]
+    assert result.candidate_trajectories == []
     assert len(trajectory) == 2
     np.testing.assert_allclose(trajectory[0], [30.0, 40.0])
     np.testing.assert_allclose(trajectory[1], [30.87, 40.0], atol=0.02)
 
 
-def test_display_trace_uses_box_center_while_business_geometry_uses_ground_contact():
+def test_active_display_trace_uses_box_center_while_business_geometry_uses_ground_contact():
     BaseTrack._count = 0
     tracker = _TrackingPipeline(_config())
     frame = _frame(0.0, [20, 10, 40, 50])
     frame.formal_analytics_eligible = False
+    frame.geo_analytics_eligible = False
+    frame.road_analytics_eligible = False
+    frame.tcc_analytics_eligible = False
     frame.geo_reference_quality = {"status": "degraded"}
 
     result = tracker.process(frame)
 
-    candidate = result.candidate_trajectories[0]
-    assert candidate["trajectory_px"] == [[30.0, 50.0]]
-    assert candidate["trajectory_display_px"] == [[30.0, 30.0]]
+    trajectory = result.association_trajectories[0]
+    assert trajectory["trajectory_px"] == [[30.0, 50.0]]
+    assert trajectory["trajectory_display_px"] == [[30.0, 30.0]]
 
 
-def test_target_outside_published_map_coverage_never_enters_formal_buffer():
+def test_target_outside_map_coverage_still_enters_output_buffer_without_road_match():
     BaseTrack._count = 0
     tracker = _TrackingPipeline(_config())
     accumulator = TrackerInfoUpdateNode(_config())
@@ -254,38 +337,26 @@ def test_target_outside_published_map_coverage_never_enters_formal_buffer():
 
     assert frame.id_list == [1]
     assert frame.formal_track_ids == []
-    assert frame.buffer_tracks == {}
-    assert frame.candidate_trajectories == [{
-        "track_id": 1,
-        "association_id": 1,
-        "tracking_method": "motion_compensated_image_v2",
-        "tracking_quality": "degraded",
-        "quality_reasons": ["target_outside_map_coverage"],
-        "flight_phase": "telemetry_unavailable",
-        "flight_segment_id": None,
-        "trajectory_px": [[30.0, 40.0]],
-        "trajectory_display_px": [[30.0, 30.0]],
-        "trajectory_enu_m": [[30.0, 40.0]],
-        "trajectory_timestamps_sec": [0.0],
-        "trajectory_frame_nums": [0],
-        "point_quality_lineage": [{
-            "timestamp_sec": 0.0,
-            "frame_num": 0,
-            "flight_phase": "telemetry_unavailable",
-            "flight_segment_id": None,
-            "geo_reference_quality": "verified",
-            "tracking_quality": "degraded",
-        }],
-    }]
+    assert list(frame.buffer_tracks) == [1]
+    assert len(frame.candidate_trajectories) == 1
+    assert frame.candidate_trajectories[0]["trajectory_output_eligible"] is False
+    trajectory = frame.association_trajectories[0]
+    assert trajectory["track_id"] == 1
+    assert trajectory["trajectory_output_eligible"] is True
+    assert trajectory["road_analytics_eligible"] is False
+    assert trajectory["quality_reasons"] == ["target_outside_map_coverage"]
 
 
-def test_degraded_candidate_history_is_bounded_and_never_marked_formal():
+def test_degraded_active_history_is_bounded_and_never_marked_road_eligible():
     BaseTrack._count = 0
     tracker = _TrackingPipeline(_config())
     frames = []
     for index in range(35):
         frame = _frame(index * 0.1, [20 + index, 20, 40 + index, 40])
         frame.formal_analytics_eligible = False
+        frame.geo_analytics_eligible = False
+        frame.road_analytics_eligible = False
+        frame.tcc_analytics_eligible = False
         frame.flight_phase = "unsupported_pose"
         frame.geo_reference_quality = {
             "status": "degraded",
@@ -294,22 +365,25 @@ def test_degraded_candidate_history_is_bounded_and_never_marked_formal():
         frame.pixel_to_map_enu = np.eye(3)
         frames.append(tracker.process(frame))
 
-    candidate = frames[-1].candidate_trajectories[0]
-    assert candidate["track_id"] == 1
-    assert candidate["tracking_quality"] == "degraded"
-    assert candidate["quality_reasons"] == ["flight_pose_not_eligible"]
-    assert len(candidate["trajectory_px"]) == 30
-    assert len(candidate["trajectory_display_px"]) == 30
-    assert len(candidate["trajectory_enu_m"]) == 30
+    trajectory = frames[-1].association_trajectories[0]
+    assert trajectory["track_id"] == 1
+    assert trajectory["tracking_quality"] == "verified"
+    assert trajectory["quality_reasons"] == ["flight_pose_not_eligible"]
+    assert len(trajectory["trajectory_px"]) == 30
+    assert len(trajectory["trajectory_display_px"]) == 30
+    assert len(trajectory["trajectory_enu_m"]) == 30
     assert frames[-1].formal_track_ids == []
 
 
-def test_candidate_display_history_warps_old_points_into_current_frame():
+def test_degraded_active_display_history_warps_old_points_into_current_frame():
     BaseTrack._count = 0
     tracker = _TrackingPipeline(_config())
 
     first = _frame(0.0, [20, 20, 40, 40])
     first.formal_analytics_eligible = False
+    first.geo_analytics_eligible = False
+    first.road_analytics_eligible = False
+    first.tcc_analytics_eligible = False
     first.geo_reference_quality = {"status": "degraded"}
     tracker.process(first)
 
@@ -320,24 +394,30 @@ def test_candidate_display_history_warps_old_points_into_current_frame():
     ])
     second = _frame(0.1, [5, 20, 25, 40], warp=warp)
     second.formal_analytics_eligible = False
+    second.geo_analytics_eligible = False
+    second.road_analytics_eligible = False
+    second.tcc_analytics_eligible = False
     second.geo_reference_quality = {"status": "degraded"}
 
     result = tracker.process(second)
 
-    candidate = result.candidate_trajectories[0]
-    assert np.allclose(candidate["trajectory_px"][0], [30.0, 40.0])
+    trajectory = result.association_trajectories[0]
+    assert np.allclose(trajectory["trajectory_px"][0], [30.0, 40.0])
     assert np.allclose(
-        candidate["trajectory_display_px"],
-        [[10.0, 30.0], [candidate["trajectory_px"][1][0], 30.0]],
+        trajectory["trajectory_display_px"],
+        [[10.0, 30.0], [trajectory["trajectory_px"][1][0], 30.0]],
     )
 
 
-def test_candidate_keeps_source_pixels_and_reprojects_world_history_for_display():
+def test_degraded_active_keeps_source_pixels_without_world_projection():
     BaseTrack._count = 0
     tracker = _TrackingPipeline(_config())
 
     first = _frame(0.0, [20, 20, 40, 40])
     first.formal_analytics_eligible = False
+    first.geo_analytics_eligible = False
+    first.road_analytics_eligible = False
+    first.tcc_analytics_eligible = False
     first.geo_reference_quality = {"status": "degraded"}
     first.pixel_to_map_enu = np.eye(3)
     tracker.process(first)
@@ -350,26 +430,32 @@ def test_candidate_keeps_source_pixels_and_reprojects_world_history_for_display(
     current_warp = np.linalg.inv(current_h)
     second = _frame(0.1, [0, 20, 20, 40], warp=current_warp)
     second.formal_analytics_eligible = False
+    second.geo_analytics_eligible = False
+    second.road_analytics_eligible = False
+    second.tcc_analytics_eligible = False
     second.geo_reference_quality = {"status": "degraded"}
     second.pixel_to_map_enu = current_h
 
-    candidate = tracker.process(second).candidate_trajectories[0]
+    trajectory = tracker.process(second).association_trajectories[0]
 
-    assert candidate["trajectory_px"] == [[30.0, 40.0], [10.0, 40.0]]
-    assert candidate["trajectory_enu_m"] == [[30.0, 40.0], [30.0, 40.0]]
-    assert candidate["trajectory_display_px"] == [[10.0, 30.0], [10.0, 30.0]]
-    assert candidate["trajectory_timestamps_sec"] == [0.0, 0.1]
-    assert candidate["trajectory_frame_nums"] == [0, 1]
-    assert len(candidate["point_quality_lineage"]) == 2
+    assert trajectory["trajectory_px"] == [[30.0, 40.0], [10.0, 40.0]]
+    assert trajectory["trajectory_enu_m"] == [None, None]
+    assert trajectory["trajectory_display_px"] == [[10.0, 30.0], [10.0, 30.0]]
+    assert trajectory["trajectory_timestamps_sec"] == [0.0, 0.1]
+    assert trajectory["trajectory_frame_nums"] == [0, 1]
+    assert len(trajectory["point_quality_lineage"]) == 2
 
 
-def test_short_telemetry_gap_bridges_candidate_id_but_recovery_gets_new_formal_id():
+def test_short_telemetry_gap_keeps_same_output_track_id_through_recovery():
     BaseTrack._count = 0
     tracker = _TrackingPipeline(_config())
 
     formal = tracker.process(_frame(0.0, [20, 20, 40, 40]))
     missing = _frame(0.1, [20, 20, 40, 40])
     missing.formal_analytics_eligible = False
+    missing.geo_analytics_eligible = False
+    missing.road_analytics_eligible = False
+    missing.tcc_analytics_eligible = False
     missing.flight_phase = "telemetry_unavailable"
     missing.geo_reference_quality = {
         "status": "degraded",
@@ -381,13 +467,14 @@ def test_short_telemetry_gap_bridges_candidate_id_but_recovery_gets_new_formal_i
     assert formal.id_list == [1]
     assert missing.id_list == [1]
     assert missing.formal_track_ids == []
-    assert missing.tracking_diagnostics["termination_reason"] == "telemetry_gap"
+    assert missing.track_id_by_association == {1: 1}
+    assert missing.tracking_diagnostics["termination_reason"] is None
     assert recovered.id_list == [1]
     assert recovered.formal_track_ids == [1]
-    assert recovered.formal_track_id_by_association == {1: 2}
+    assert recovered.track_id_by_association == {1: 1}
 
 
-def test_quality_recovery_creates_new_formal_segment_in_same_image_family():
+def test_quality_recovery_keeps_one_output_track_in_same_image_family():
     tracker = _TrackingPipeline(_config())
     accumulator = TrackerInfoUpdateNode(_config())
 
@@ -399,6 +486,9 @@ def test_quality_recovery_creates_new_formal_segment_in_same_image_family():
 
     degraded = _frame(0.1, [20, 20, 40, 40])
     degraded.formal_analytics_eligible = False
+    degraded.geo_analytics_eligible = False
+    degraded.road_analytics_eligible = False
+    degraded.tcc_analytics_eligible = False
     degraded.flight_phase = "telemetry_unavailable"
     degraded.geo_reference_quality = {
         "status": "degraded",
@@ -416,11 +506,12 @@ def test_quality_recovery_creates_new_formal_segment_in_same_image_family():
     result = accumulator.process(tracker.process(recovered))
 
     assert result.id_list == [1]
-    assert list(result.buffer_tracks) == [2]
-    formal_track = result.buffer_tracks[2]
+    assert list(result.buffer_tracks) == [1]
+    formal_track = result.buffer_tracks[1]
     assert formal_track.association_id == 1
     assert formal_track.track_family_id == "association:1"
-    assert formal_track.previous_track_id == 1
+    assert formal_track.previous_track_id is None
+    assert len(formal_track.trajectory_points) == 3
 
 
 def test_telemetry_gap_never_resets_image_association_tracker():
@@ -432,6 +523,9 @@ def test_telemetry_gap_never_resets_image_association_tracker():
     for timestamp in (0.1, 0.4, 0.61):
         frame = _frame(timestamp, [20, 20, 40, 40])
         frame.formal_analytics_eligible = False
+        frame.geo_analytics_eligible = False
+        frame.road_analytics_eligible = False
+        frame.tcc_analytics_eligible = False
         frame.flight_phase = "telemetry_unavailable"
         frame.geo_reference_quality = {
             "status": "degraded",
@@ -442,6 +536,7 @@ def test_telemetry_gap_never_resets_image_association_tracker():
 
     assert ids == [1, 1, 1]
     assert result.formal_track_ids == []
+    assert result.track_id_by_association == {1: 1}
 
 
 def test_offline_shadow_tracker_writes_comparison_without_changing_primary(tmp_path):

@@ -17,9 +17,9 @@ class TrackElement:
         self.position_history: list[tuple[float, float, float]] = []  # [(cx, cy, timestamp)] 最近N帧
         self.position_history_enu_m: list[tuple[float, float, float]] = []
         self.velocity_ms = None  # np.ndarray[easting,northing]，世界坐标速度向量（m/s）
-        self.speed_kmh: float = 0.0  # 当前瞬时车速
-        self.avg_speed_kmh: float = 0.0  # EMA平滑车速
-        self.max_speed_kmh: float = 0.0  # 轨迹内最大车速
+        self.speed_kmh: float | None = None  # 当前瞬时车速；无可信世界事实时为空
+        self.avg_speed_kmh: float | None = None  # EMA平滑车速
+        self.max_speed_kmh: float | None = None  # 轨迹内最大车速
 
         # ── 新增：车道（可选，仅LaneAnalysisNode使用）──
         self.current_lane: str | None = None  # 当前所在车道ID
@@ -40,8 +40,8 @@ class TrackElement:
         self.turn_behavior: str | None = None  # 转向行为分类
         self.trajectory_points: list[tuple[float, float]] = []  # [(cx, cy)] 像素坐标序列
         self.ground_contact_points_px: list[tuple[float, float]] = []
-        self.trajectory_enu_m: list[tuple[float, float]] = []
-        self.trajectory_gcj02: list[tuple[float, float]] = []
+        self.trajectory_enu_m: list[tuple[float, float] | None] = []
+        self.trajectory_gcj02: list[tuple[float, float] | None] = []
         self.trajectory_timestamps_sec: list[float] = []  # 与 trajectory_points 等长的源视频时间
         self.trajectory_frame_nums: list[int] = []  # 与逐点坐标等长的源帧号
 
@@ -55,6 +55,16 @@ class TrackElement:
         self.previous_track_id: int | None = None
         self.association_id: int | None = None
         self.point_quality_lineage: list[dict] = []
+        self.trajectory_output_eligible: bool = False
+        self.geo_analytics_eligible: bool = False
+        self.road_analytics_eligible: bool = False
+        self.tcc_analytics_eligible: bool = False
+        self.geo_reference_quality: str = "degraded"
+        self.road_match_quality: str = "missing"
+        self.quality_reasons: list[str] = []
+        self.geo_registration_id: str | None = None
+        self.geo_registration_checksum: str | None = None
+        self.road_context_status: str = "missing"
 
         # ── 新增：分类 ──
         self.vehicle_class: str = "unknown"  # "motor"|"non_motor"|"unknown"

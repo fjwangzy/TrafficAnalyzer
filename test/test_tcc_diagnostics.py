@@ -88,6 +88,15 @@ def test_tcc_diagnostics_explain_the_full_positive_funnel():
         "eligible_motor_tracks": 1,
         "eligible_non_motor_tracks": 1,
         "candidate_pairs": 1,
+        "speed_missing": 0,
+        "speed_below_min": 0,
+        "history_insufficient": 0,
+        "displacement_insufficient": 0,
+        "distance_filtered": 0,
+        "prediction_failed": 0,
+        "scene_filtered": 0,
+        "evidence_failed": 0,
+        "severity_filtered": 0,
         "prediction_candidates": 1,
         "evidence_passed": 1,
         "deduplicated": 0,
@@ -96,6 +105,40 @@ def test_tcc_diagnostics_explain_the_full_positive_funnel():
         "experimental_events_emitted": 0,
         "status": "events_emitted",
     }
+
+
+def test_tcc_diagnostics_counts_speed_rejections():
+    motor, non_motor = _right_turn_pair()
+    motor.max_speed_kmh = None
+    non_motor.max_speed_kmh = 4.0
+
+    result = ConflictDetectionNode(_config()).process(_frame(motor, non_motor))
+
+    assert result.conflict_events == []
+    assert result.tcc_diagnostics["speed_missing"] == 1
+    assert result.tcc_diagnostics["speed_below_min"] == 1
+    assert result.tcc_diagnostics["status"] == "no_eligible_candidates"
+
+
+def test_tcc_diagnostics_counts_distance_and_prediction_rejections():
+    motor, non_motor = _right_turn_pair()
+    non_motor.position_history = [
+        (30.0, -6.0, 0.0),
+        (32.0, -6.0, 1.0),
+        (34.0, -6.0, 2.0),
+        (36.0, -6.0, 3.0),
+    ]
+    far = ConflictDetectionNode(_config(max_pair_distance_m=15.0)).process(
+        _frame(motor, non_motor)
+    )
+    assert far.tcc_diagnostics["distance_filtered"] == 1
+
+    motor, non_motor = _right_turn_pair()
+    node = ConflictDetectionNode(_config())
+    node._predict_collision = lambda *args: None
+    diverging = node.process(_frame(motor, non_motor))
+    assert diverging.tcc_diagnostics["prediction_failed"] == 1
+    assert diverging.tcc_diagnostics["status"] == "no_prediction_candidates"
 
 
 def test_tcc_diagnostics_explain_missing_calibration():

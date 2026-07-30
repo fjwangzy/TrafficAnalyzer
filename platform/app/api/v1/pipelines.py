@@ -70,8 +70,8 @@ class PipelineCreateRequest(BaseModel):
         ...,
         description="Video source: RTSP URL, file path, or camera index",
     )
-    road_data_version: str = Field(min_length=1, max_length=100)
-    map_version_id: str = Field(min_length=1, max_length=40)
+    road_data_version: str | None = Field(default=None, min_length=1, max_length=100)
+    map_version_id: str | None = Field(default=None, min_length=1, max_length=40)
     telemetry_source: str | None = Field(
         default=None,
         description="Telemetry source override, e.g. srt or file",
@@ -93,8 +93,13 @@ class PipelineResponse(BaseModel):
     pipeline_id: str
     drone_id: str
     intersection_id: str
+    source_profile_id: str | None = None
+    inter_id: str | None = None
     video_src: str
-    map_version_id: str
+    map_version_id: str | None
+    geo_registration_id: str | None = None
+    geo_registration_checksum: str | None = None
+    candidate_only: bool = False
     topic_name: str
     camera_id: int
     video_port: int
@@ -175,25 +180,40 @@ async def start_pipeline(body: PipelineCreateRequest, request: Request):
         _audit_payload(body),
     )
     try:
-        road_context = getattr(request.app.state, "road_context", None)
-        if road_context is None:
-            raise ValueError("RoadContext is unavailable")
-        context = await road_context.get(body.intersection_id, body.road_data_version)
-        if context.map_version_id != body.map_version_id or not context.runtime_map_bundle:
-            raise ValueError("requested lane_verified map version is unavailable")
+        context = None
+        if body.map_version_id or body.road_data_version:
+            if not body.map_version_id or not body.road_data_version:
+                raise ValueError("map_version_id and road_data_version must be supplied together")
+            road_context = getattr(request.app.state, "road_context", None)
+            if road_context is None:
+                raise ValueError("RoadContext is unavailable")
+            try:
+                selected = await road_context.get(
+                    body.intersection_id, body.road_data_version
+                )
+            except LookupError:
+                selected = None
+            if (
+                selected is not None
+                and selected.map_version_id == body.map_version_id
+                and selected.runtime_map_bundle
+            ):
+                context = selected
         pipeline = await pm.start_pipeline(
             drone_id=body.drone_id,
             intersection_id=body.intersection_id,
             video_src=body.video_src,
-            runtime_map_bundle=context.runtime_map_bundle,
+            runtime_map_bundle=context.runtime_map_bundle if context else None,
             telemetry_source=body.telemetry_source,
             telemetry_file_path=body.telemetry_file_path,
             telemetry_time_offset_sec=body.telemetry_time_offset_sec,
             telemetry_sync_tolerance_sec=body.telemetry_sync_tolerance_sec,
             inter_id=body.intersection_id,
             road_data_version=body.road_data_version,
-            road_context_status="complete",
-            quality_status="verified",
+            road_context_status=(
+                "complete" if context else "version_mismatch" if body.map_version_id else "missing"
+            ),
+            quality_status="verified" if context else "degraded",
             tracking_profile=body.tracking_profile,
         )
     except ValueError as exc:
@@ -206,9 +226,11 @@ class PipelineRegisterRequest(BaseModel):
 
     drone_id: str
     intersection_id: str
+    source_profile_id: str = Field(min_length=1, max_length=100)
+    inter_id: str | None = Field(default=None, min_length=1, max_length=100)
     video_src: str
-    map_version_id: str = Field(min_length=1, max_length=40)
-    road_data_version: str = Field(min_length=1, max_length=100)
+    map_version_id: str | None = Field(default=None, min_length=1, max_length=40)
+    road_data_version: str | None = Field(default=None, min_length=1, max_length=100)
     camera_id: int | None = Field(default=None, ge=1, le=65535)
     video_port: int | None = Field(default=None, ge=1024, le=65535)
     topic_name: str | None = None
@@ -216,6 +238,9 @@ class PipelineRegisterRequest(BaseModel):
     tracking_profile: str = Field(
         default="hover_cruise_v1", pattern="^(hover_cruise_v1|hover_only_legacy)$"
     )
+    candidate_only: bool = False
+    geo_registration_id: str | None = Field(default=None, max_length=40)
+    geo_registration_checksum: str | None = Field(default=None, min_length=64, max_length=64)
 
 
 @router.post("/register", status_code=201, summary="Register an externally-running pipeline")
@@ -236,22 +261,52 @@ async def register_pipeline(body: PipelineRegisterRequest, request: Request):
         _audit_payload(body),
     )
     try:
-        road_context = getattr(request.app.state, "road_context", None)
-        if road_context is None:
-            raise ValueError("RoadContext is unavailable")
-        context = await road_context.get(body.intersection_id, body.road_data_version)
-        if context.map_version_id != body.map_version_id or context.map_status != "lane_verified":
-            raise ValueError("requested lane_verified map version is unavailable")
+        verified_map_version_id = body.map_version_id
+        road_context_status = "missing"
+        quality_status = "degraded"
+        if body.candidate_only:
+            if body.map_version_id is not None or body.road_data_version is not None:
+                raise ValueError("candidate-only registration must not claim road context")
+            if body.tracking_profile != "hover_cruise_v1":
+                raise ValueError("candidate-only registration requires hover_cruise_v1")
+            quality_status = "unverified"
+        elif body.map_version_id or body.road_data_version:
+            if not body.map_version_id or not body.road_data_version:
+                raise ValueError("map_version_id and road_data_version must be supplied together")
+            road_context = getattr(request.app.state, "road_context", None)
+            if road_context is None:
+                raise ValueError("RoadContext is unavailable")
+            try:
+                context = await road_context.get(body.intersection_id, body.road_data_version)
+            except LookupError:
+                context = None
+            if (
+                context is None
+                or context.map_version_id != body.map_version_id
+                or context.map_status != "lane_verified"
+            ):
+                verified_map_version_id = None
+                road_context_status = "version_mismatch"
+            else:
+                road_context_status = "complete"
+                quality_status = "verified"
         pipeline = pm.register_pipeline(
             drone_id=body.drone_id,
             intersection_id=body.intersection_id,
             video_src=body.video_src,
-            map_version_id=body.map_version_id,
+            map_version_id=verified_map_version_id,
             camera_id=body.camera_id,
             video_port=body.video_port,
             topic_name=body.topic_name,
             video_stream_url=body.video_stream_url,
+            source_profile_id=body.source_profile_id,
+            inter_id=body.inter_id or body.intersection_id,
             tracking_profile=body.tracking_profile,
+            candidate_only=body.candidate_only,
+            road_context_status=road_context_status,
+            quality_status=quality_status,
+            geo_registration_id=body.geo_registration_id,
+            geo_registration_checksum=body.geo_registration_checksum,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc

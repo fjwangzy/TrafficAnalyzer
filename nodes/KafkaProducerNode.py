@@ -6,23 +6,23 @@
   T-201: roads_activity 改为动态数组 [{"id": 1, "activity": 4.2}, ...]
   T-203: congestion_index 改为多因子计算 (车辆密度 + 排队 + 低速比例)
 """
+import base64
 import logging
 import os
-import time
-import base64
 import re
+import time
 import uuid
 from datetime import UTC, datetime
+from json import dumps
 
 import cv2
 from kafka import KafkaProducer
-from json import dumps
 
-from utils_local.utils import profile_time
-from utils_local.coordinates import enu_to_gcj02, normalize_telemetry_position
-from elements.VideoEndBreakElement import VideoEndBreakElement
 from elements.FrameElement import FrameElement
+from elements.VideoEndBreakElement import VideoEndBreakElement
 from nodes.ReliableKafkaPublisher import ReliableKafkaPublisher
+from utils_local.coordinates import enu_to_gcj02, normalize_telemetry_position
+from utils_local.utils import profile_time
 
 logger = logging.getLogger(__name__)
 
@@ -122,6 +122,14 @@ class KafkaProducerNode:
         )
         self._active_trajectory_tail_points = int(
             config.get("kafka_producer_node", {}).get("active_trajectory_tail_points", 30)
+        )
+        self._realtime_trajectory_max_tracks = max(
+            1,
+            int(
+                config.get("kafka_producer_node", {}).get(
+                    "realtime_trajectory_max_tracks", 200
+                )
+            ),
         )
         self._event_snapshot_congestion_threshold = float(
             config.get("kafka_producer_node", {}).get("event_snapshot_congestion_threshold", 4.0)
@@ -257,14 +265,12 @@ class KafkaProducerNode:
             for d_key in ("straight", "left_turn", "right_turn", "u_turn"):
                 d = direction_stats.get(d_key, {})
                 q = d.get("queue_length_m", 0)
-                if q > max_queue_m:
-                    max_queue_m = q
+                max_queue_m = max(max_queue_m, q)
         lane_stats = getattr(frame_element, "lane_stats", None)
         if lane_stats:
-            for lid, lv in lane_stats.items():
+            for lv in lane_stats.values():
                 q = lv.get("queue_length_m", 0) if isinstance(lv, dict) else 0
-                if q > max_queue_m:
-                    max_queue_m = q
+                max_queue_m = max(max_queue_m, q)
         queue_score = min(max_queue_m / max(self._queue_threshold_m, 1), 1.0) * 3
 
         # 因子3: 低速比例 (0-3) — 从 buffer_tracks 中统计低速车辆占比
@@ -272,7 +278,7 @@ class KafkaProducerNode:
         total_tracks = 0
         for track in frame_element.buffer_tracks.values():
             total_tracks += 1
-            if track.avg_speed_kmh < 10:
+            if track.avg_speed_kmh is not None and track.avg_speed_kmh < 10:
                 slow_count += 1
         slow_ratio = slow_count / max(total_tracks, 1)
         speed_score = slow_ratio * 3
@@ -345,6 +351,8 @@ class KafkaProducerNode:
 
         active = []
         for track_id, track in sorted(buffer_tracks.items(), key=lambda item: item[0]):
+            if not getattr(track, "trajectory_output_eligible", False):
+                continue
             bbox_center_px = getattr(track, "trajectory_points", None) or []
             ground_contact_px = getattr(track, "ground_contact_points_px", None) or []
             trajectory_px = (
@@ -374,14 +382,49 @@ class KafkaProducerNode:
                 "direction_class": track.direction_class,
                 "turn_behavior": track.turn_behavior,
                 "duration_sec": round(track.timestamp_last - track.timestamp_first, 2),
-                "avg_speed_kmh": round(track.avg_speed_kmh, 1),
-                "max_speed_kmh": round(track.max_speed_kmh, 1),
+                "avg_speed_kmh": (
+                    round(track.avg_speed_kmh, 1)
+                    if track.avg_speed_kmh is not None
+                    else None
+                ),
+                "max_speed_kmh": (
+                    round(track.max_speed_kmh, 1)
+                    if track.max_speed_kmh is not None
+                    else None
+                ),
                 "trajectory_px": px_points,
                 "trajectory_point_count": total_points,
                 "trajectory_tail_start": tail_start,
                 "is_trajectory_tail": tail_start > 0,
                 "timestamp_first": track.timestamp_first,
                 "timestamp_last": track.timestamp_last,
+                "trajectory_output_eligible": True,
+                "geo_analytics_eligible": bool(
+                    getattr(track, "geo_analytics_eligible", False)
+                ),
+                "road_analytics_eligible": bool(
+                    getattr(track, "road_analytics_eligible", False)
+                ),
+                "tcc_analytics_eligible": bool(
+                    getattr(track, "tcc_analytics_eligible", False)
+                ),
+                "formal_analytics_eligible": bool(
+                    getattr(track, "road_analytics_eligible", False)
+                ),
+                "road_context_status": getattr(
+                    track, "road_context_status", "missing"
+                ),
+                "geo_registration_id": getattr(
+                    track, "geo_registration_id", None
+                ),
+                "quality_status": (
+                    "verified"
+                    if getattr(track, "road_analytics_eligible", False)
+                    else "degraded"
+                ),
+                "quality_reasons": list(
+                    getattr(track, "quality_reasons", None) or []
+                ),
             }
             if getattr(track, "association_id", None) is not None:
                 item["association_id"] = int(track.association_id)
@@ -408,11 +451,15 @@ class KafkaProducerNode:
             if len(trajectory_enu) == total_points:
                 pts_world = trajectory_enu[tail_start:]
                 world_points = [
-                    [round(float(x), 2), round(float(y), 2)]
-                    for x, y in pts_world
+                    [round(float(point[0]), 2), round(float(point[1]), 2)]
+                    if point is not None
+                    else None
+                    for point in pts_world
                 ]
                 item["trajectory_enu_m"] = world_points
-                item["current_point_enu_m"] = world_points[-1]
+                valid_world_points = [point for point in world_points if point is not None]
+                if valid_world_points:
+                    item["current_point_enu_m"] = valid_world_points[-1]
                 if anchor_gcj02:
                     item["anchor_gcj02"] = [
                         round(anchor_gcj02[0], 6),
@@ -423,11 +470,18 @@ class KafkaProducerNode:
                         gcj02_tail = stored_gcj02[tail_start:]
                     else:
                         gcj02_tail = [
-                            enu_to_gcj02(point[0], point[1], anchor_gcj02)
+                            (
+                                enu_to_gcj02(point[0], point[1], anchor_gcj02)
+                                if point is not None
+                                else None
+                            )
                             for point in world_points
                         ]
                     item["trajectory_gcj02"] = [
-                        [round(lon, 8), round(lat, 8)] for lon, lat in gcj02_tail
+                        [round(point[0], 8), round(point[1], 8)]
+                        if point is not None
+                        else None
+                        for point in gcj02_tail
                     ]
                 item["map_version_id"] = getattr(track, "map_version_id", None)
                 item["matched_lane_key"] = getattr(track, "matched_lane_key", None)
@@ -441,7 +495,14 @@ class KafkaProducerNode:
 
             active.append(item)
 
-        return active
+        active.sort(
+            key=lambda item: (
+                -float(item.get("timestamp_last") or 0.0),
+                int(item.get("track_id") or 0),
+            )
+        )
+        limit = max(getattr(self, "_realtime_trajectory_max_tracks", 200), 1)
+        return active[:limit]
 
     def _build_candidate_trajectories(self, frame_element: FrameElement) -> list[dict]:
         """Serialize only the bounded candidate preview contract for realtime BEV."""
@@ -466,7 +527,8 @@ class KafkaProducerNode:
                 if isinstance(values, list):
                     item[key] = values[-tail_points:]
             result.append(item)
-        return result
+        limit = max(getattr(self, "_realtime_trajectory_max_tracks", 200), 1)
+        return result[:limit]
 
     def publish_completed_tracks(self, frame_element: FrameElement) -> int:
         """Publish completed tracks before a terminal sentinel closes the publisher."""
@@ -517,12 +579,10 @@ class KafkaProducerNode:
                     "activity": round(val, 2) if timestamp >= self.buffer_analytics_sec else None,
                 })
 
-            congestion_index = (
-                self._compute_congestion_index(
-                    int(cars_amount or 0), roads_activity, frame_element
-                )
-                if formal_eligible
-                else None
+            # Congestion is derived from generic vehicle, direction and speed
+            # facts.  Missing lane/link matching must not suppress it.
+            congestion_index = self._compute_congestion_index(
+                int(cars_amount or 0), roads_activity, frame_element
             )
             tracking_diagnostics = getattr(frame_element, "tracking_diagnostics", None)
             if isinstance(tracking_diagnostics, dict):
@@ -532,7 +592,28 @@ class KafkaProducerNode:
                     if not key.startswith("shadow_")
                 }
             geo_quality = getattr(frame_element, "geo_reference_quality", None)
+            active_trajectories = self._build_active_trajectories(frame_element)
             candidate_trajectories = self._build_candidate_trajectories(frame_element)
+            realtime_limit = max(
+                getattr(self, "_realtime_trajectory_max_tracks", 200), 1
+            )
+            candidate_trajectories = candidate_trajectories[
+                : max(0, realtime_limit - len(active_trajectories))
+            ]
+            eligible_active_track_count = sum(
+                bool(getattr(track, "trajectory_output_eligible", False))
+                for track in (frame_element.buffer_tracks or {}).values()
+            )
+            candidate_source_count = len(
+                getattr(frame_element, "candidate_trajectories", None) or []
+            )
+            inference_context = dict(
+                getattr(frame_element, "inference_context", None) or {}
+            )
+            if inference_context:
+                inference_context["frame_stride"] = int(
+                    getattr(frame_element, "source_frame_stride", 1)
+                )
             data = {
                 "camera_id": f"id_{self.camera_id}",
                 "cars": cars_amount,
@@ -540,13 +621,29 @@ class KafkaProducerNode:
                 # ── 前端所需字段：FPS / 推理 / 跟踪 / 累计 ──
                 "fps": current_fps,
                 "inference_ms": getattr(frame_element, "inference_ms", 0),
+                "pipeline_processing_ms": round(
+                    max(
+                        0.0,
+                        (current_time - float(frame_element.timestamp_date)) * 1000.0,
+                    ),
+                    1,
+                ),
+                "inference_context": inference_context or None,
                 "source_capture_time": getattr(frame_element, "source_capture_time", None),
                 "source_drop_count": getattr(frame_element, "source_drop_count", 0),
                 "source_drop_reason": getattr(frame_element, "source_drop_reason", None),
                 "active_tracks": len(frame_element.buffer_tracks or {}),
-                "candidate_tracks": len(candidate_trajectories),
+                "eligible_active_tracks": eligible_active_track_count,
+                "candidate_tracks": candidate_source_count,
+                "realtime_trajectory_max_tracks": realtime_limit,
+                "active_trajectories_truncated": max(
+                    0, eligible_active_track_count - len(active_trajectories)
+                ),
+                "candidate_trajectories_truncated": max(
+                    0, candidate_source_count - len(candidate_trajectories)
+                ),
                 "total_vehicles": cars_amount,
-                "active_trajectories": self._build_active_trajectories(frame_element),
+                "active_trajectories": active_trajectories,
                 "candidate_trajectories": candidate_trajectories,
                 # T-201: 动态道路数组（替代 road_1..road_5）
                 "roads": roads_array,
@@ -558,6 +655,18 @@ class KafkaProducerNode:
                 "geo_reference_quality": geo_quality,
                 "tracking_diagnostics": tracking_diagnostics,
                 "formal_analytics_eligible": formal_eligible,
+                "trajectory_output_eligible": bool(
+                    getattr(frame_element, "trajectory_output_eligible", False)
+                ),
+                "geo_analytics_eligible": bool(
+                    getattr(frame_element, "geo_analytics_eligible", False)
+                ),
+                "road_analytics_eligible": bool(
+                    getattr(frame_element, "road_analytics_eligible", False)
+                ),
+                "tcc_analytics_eligible": bool(
+                    getattr(frame_element, "tcc_analytics_eligible", False)
+                ),
                 **self._delivery_snapshot(),
             }
             snapshot_threshold = getattr(self, "_event_snapshot_congestion_threshold", 4.0)
@@ -593,9 +702,16 @@ class KafkaProducerNode:
                 # 计算整体平均车速
                 all_speeds = []
                 for d in ["straight", "left_turn", "right_turn", "u_turn"]:
-                    if d in direction_stats and direction_stats[d].get("avg_speed_kmh", 0) > 0:
-                        all_speeds.append(direction_stats[d]["avg_speed_kmh"])
-                data["avg_speed_kmh"] = round(sum(all_speeds) / len(all_speeds), 1) if all_speeds else 0
+                    if d not in direction_stats:
+                        continue
+                    speed = direction_stats[d].get("avg_speed_kmh")
+                    if isinstance(speed, (int, float)):
+                        all_speeds.append(float(speed))
+                data["avg_speed_kmh"] = (
+                    round(sum(all_speeds) / len(all_speeds), 1)
+                    if all_speeds
+                    else None
+                )
 
             # 扩展字段：车道级统计 — 向下兼容统一输出
             # 优先级：人工标注 > 模型检测 > 自动推断

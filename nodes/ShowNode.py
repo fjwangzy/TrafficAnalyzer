@@ -1,10 +1,13 @@
+from itertools import pairwise
+from typing import ClassVar
+
 import cv2
 import numpy as np
 import supervision as sv
 
-from utils_local.utils import profile_time, FPS_Counter
-from elements.VideoEndBreakElement import VideoEndBreakElement
 from elements.FrameElement import FrameElement
+from elements.VideoEndBreakElement import VideoEndBreakElement
+from utils_local.utils import FPS_Counter, profile_time
 
 
 class ShowNode:
@@ -13,7 +16,7 @@ class ShowNode:
     CANDIDATE_COLOR_BGR = (0, 191, 255)
     CANDIDATE_TRACE_MAX_POINTS = 30
 
-    CLASS_COLOR_KEYS = [
+    CLASS_COLOR_KEYS: ClassVar[list[str]] = [
         "pedestrian",
         "bicycle",
         "car",
@@ -25,7 +28,7 @@ class ShowNode:
         "motor",
         "unknown",
     ]
-    CLASS_COLOR_HEX = [
+    CLASS_COLOR_HEX: ClassVar[list[str]] = [
         "#00D4FF",  # pedestrian / people
         "#3B82F6",  # bicycle
         "#22C55E",  # car
@@ -37,7 +40,7 @@ class ShowNode:
         "#F97316",  # motor
         "#94A3B8",  # unknown
     ]
-    CLASS_ALIASES = {
+    CLASS_ALIASES: ClassVar[dict[str, str]] = {
         "person": "pedestrian",
         "people": "pedestrian",
         "pedestrian": "pedestrian",
@@ -191,10 +194,10 @@ class ShowNode:
 
         h, w = frame_shape[:2]
         x1, y1, x2, y2 = coords.tolist()
-        x1 = max(0, min(w - 1, int(round(x1))))
-        y1 = max(0, min(h - 1, int(round(y1))))
-        x2 = max(0, min(w - 1, int(round(x2))))
-        y2 = max(0, min(h - 1, int(round(y2))))
+        x1 = max(0, min(w - 1, round(x1)))
+        y1 = max(0, min(h - 1, round(y1)))
+        x2 = max(0, min(w - 1, round(x2)))
+        y2 = max(0, min(h - 1, round(y2)))
 
         box_w = x2 - x1
         box_h = y2 - y1
@@ -384,7 +387,7 @@ class ShowNode:
             frame.shape,
             max_points=cls.CANDIDATE_TRACE_MAX_POINTS,
         )
-        for start, end in zip(points, points[1:]):
+        for start, end in pairwise(points):
             cls._draw_dashed_line(
                 frame,
                 start,
@@ -423,7 +426,7 @@ class ShowNode:
                 if newest_to_oldest:
                     break
                 continue
-            point = (int(round(coordinates[0])), int(round(coordinates[1])))
+            point = (round(coordinates[0]), round(coordinates[1]))
             if not (0 <= point[0] < width and 0 <= point[1] < height):
                 if newest_to_oldest:
                     break
@@ -517,12 +520,14 @@ class ShowNode:
             n = len(detections)
             color_idx = np.zeros(n, dtype=int)
             buffer_tracks = frame_element.buffer_tracks or {}
-            formal_map = (
-                getattr(frame_element, "formal_track_id_by_association", None) or {}
+            track_map = (
+                getattr(frame_element, "track_id_by_association", None)
+                or getattr(frame_element, "formal_track_id_by_association", None)
+                or {}
             )
             for i in range(n):
                 tid = int(detections.tracker_id[i])
-                track = buffer_tracks.get(int(formal_map.get(tid, tid)))
+                track = buffer_tracks.get(int(track_map.get(tid, tid)))
                 if track and track.start_road is not None:
                     road_id = int(track.start_road)
                     color_idx[i] = self.road_id_to_palette_idx.get(road_id, 0)
@@ -532,15 +537,28 @@ class ShowNode:
         """生成每个跟踪目标的标签字符串列表。"""
         labels = []
         buffer_tracks = frame_element.buffer_tracks or {}
-        formal_map = (
-            getattr(frame_element, "formal_track_id_by_association", None) or {}
+        capability_contract_active = (
+            getattr(frame_element, "trajectory_association_ids", None) is not None
+        )
+        speed_labels_eligible = (
+            not capability_contract_active
+            or bool(getattr(frame_element, "geo_analytics_eligible", False))
+        )
+        track_map = (
+            getattr(frame_element, "track_id_by_association", None)
+            or getattr(frame_element, "formal_track_id_by_association", None)
+            or {}
         )
         for tid, cls_name in zip(frame_element.id_list, frame_element.tracked_cls):
             label = f"#{tid} {cls_name}"
             # 叠加车速标签（km/h）
-            if self.show_speed_labels and buffer_tracks:
-                track = buffer_tracks.get(int(formal_map.get(int(tid), int(tid))))
-                if track and track.avg_speed_kmh > 0:
+            if self.show_speed_labels and speed_labels_eligible and buffer_tracks:
+                track = buffer_tracks.get(int(track_map.get(int(tid), int(tid))))
+                if (
+                    track
+                    and track.avg_speed_kmh is not None
+                    and track.avg_speed_kmh > 0
+                ):
                     label += f" {track.avg_speed_kmh:.0f}km/h"
             labels.append(label)
         return labels
@@ -696,10 +714,11 @@ class ShowNode:
         for candidate in getattr(frame_element, "candidate_trajectories", None) or []:
             if not isinstance(candidate, dict):
                 continue
-            try:
-                candidate_trajectories[int(candidate.get("track_id"))] = candidate
-            except (TypeError, ValueError):
-                continue
+            for key in (candidate.get("association_id"), candidate.get("track_id")):
+                try:
+                    candidate_trajectories[int(key)] = candidate
+                except (TypeError, ValueError):
+                    continue
         association_trajectories = {}
         for trajectory in getattr(frame_element, "association_trajectories", None) or []:
             if not isinstance(trajectory, dict):
@@ -714,45 +733,76 @@ class ShowNode:
         formal_map = (
             getattr(frame_element, "formal_track_id_by_association", None) or {}
         )
+        track_map = (
+            getattr(frame_element, "track_id_by_association", None)
+            or formal_map
+        )
         formal_track_ids_raw = getattr(frame_element, "formal_track_ids", None)
         formal_track_ids = (
             {int(track_id) for track_id in formal_track_ids_raw}
             if formal_track_ids_raw is not None
             else None
         )
+        trajectory_association_ids_raw = getattr(
+            frame_element, "trajectory_association_ids", None
+        )
+        trajectory_contract_active = trajectory_association_ids_raw is not None
+        speed_labels_eligible = (
+            not trajectory_contract_active
+            or bool(getattr(frame_element, "geo_analytics_eligible", False))
+        )
+        mature_trajectory_ids = set()
+        if trajectory_contract_active:
+            for association_id in trajectory_association_ids_raw:
+                association_id = int(association_id)
+                track_id = int(track_map.get(association_id, association_id))
+                track = buffer_tracks.get(track_id)
+                if track is not None and bool(track.trajectory_output_eligible):
+                    mature_trajectory_ids.add(association_id)
+        elif formal_track_ids is not None:
+            # Legacy frames predate the explicit trajectory capability contract.
+            mature_trajectory_ids = set(formal_track_ids)
+        else:
+            mature_trajectory_ids = {
+                int(track_id) for track_id in (frame_element.id_list or [])
+            }
         for i, box in enumerate(frame_element.tracked_xyxy):
             normalized = self._normalize_visible_box(box, frame.shape)
             if normalized is None:
                 continue
 
             track_id = frame_element.id_list[i] if frame_element.id_list and i < len(frame_element.id_list) else None
-            if (
-                formal_track_ids is not None
-                and track_id is not None
-                and int(track_id) not in formal_track_ids
-            ):
+            association_id = int(track_id) if track_id is not None else None
+            if association_id is not None and association_id not in mature_trajectory_ids:
                 class_name = (
                     frame_element.tracked_cls[i]
                     if frame_element.tracked_cls and i < len(frame_element.tracked_cls)
                     else "unknown"
                 )
+                candidate = candidate_trajectories.get(association_id)
+                if candidate is None:
+                    candidate = association_trajectories.get(association_id)
                 candidate_boxes.append(
                     (
                         normalized,
                         track_id,
                         class_name,
-                        candidate_trajectories.get(int(track_id)),
+                        candidate,
                     )
                 )
                 continue
             formal_id = (
-                int(formal_map.get(int(track_id), int(track_id)))
+                int(track_map.get(int(track_id), int(track_id)))
                 if track_id is not None
                 else None
             )
             track = buffer_tracks.get(formal_id) if formal_id is not None else None
             is_assigned_to_road = track is not None and track.start_road is not None
-            if not is_assigned_to_road and not self._box_center_in_roads(normalized, frame_element.roads_info):
+            if (
+                not trajectory_contract_active
+                and not is_assigned_to_road
+                and not self._box_center_in_roads(normalized, frame_element.roads_info)
+            ):
                 continue
 
             valid_idx.append(i)
@@ -797,16 +847,26 @@ class ShowNode:
         labels = []
         for i in valid_idx:
             tid = frame_element.id_list[i]
-            formal_tid = int(formal_map.get(int(tid), int(tid)))
+            formal_tid = int(track_map.get(int(tid), int(tid)))
             # 有冲突时隐藏非冲突目标的标签
             if conflict_ids and str(formal_tid) not in conflict_ids:
                 labels.append("")
                 continue
             cls_name = frame_element.tracked_cls[i] if frame_element.tracked_cls else ""
             label = f"#{tid} {cls_name}"
-            if self.show_speed_labels and buffer_tracks:
+            if (
+                trajectory_contract_active
+                and formal_track_ids is not None
+                and int(tid) not in formal_track_ids
+            ):
+                label += " P"
+            if self.show_speed_labels and speed_labels_eligible and buffer_tracks:
                 track = buffer_tracks.get(formal_tid)
-                if track and track.avg_speed_kmh > 0:
+                if (
+                    track
+                    and track.avg_speed_kmh is not None
+                    and track.avg_speed_kmh > 0
+                ):
                     label += f" {track.avg_speed_kmh:.0f}km/h"
             labels.append(label)
 
@@ -831,7 +891,7 @@ class ShowNode:
         # 轨迹尾迹
         if self.show_trace_trails:
             for index, track_id in zip(valid_idx, valid_ids or []):
-                formal_id = int(formal_map.get(int(track_id), int(track_id)))
+                formal_id = int(track_map.get(int(track_id), int(track_id)))
                 track = buffer_tracks.get(formal_id)
                 if track is None:
                     continue
@@ -1068,7 +1128,7 @@ class ShowNode:
         y_stats = 110  # 统计面板起始Y（方向流量下方）
         lane_idx = 0
 
-        for lane_id, lane in inferred_lanes.items():
+        for lane in inferred_lanes.values():
             color = dir_colors.get(lane.direction_class, (160, 160, 160))
 
             # 1. 绘制中心线
@@ -1285,7 +1345,7 @@ class ShowNode:
             font = cv2.FONT_HERSHEY_SIMPLEX
             font_scale = 0.5 * s
             font_thick = max(1, int(1.5 * s))
-            (tw, th), baseline = cv2.getTextSize(ttc_label, font, font_scale, font_thick)
+            (tw, th), _baseline = cv2.getTextSize(ttc_label, font, font_scale, font_thick)
 
             pad_x = int(10 * s)
             pad_y = int(6 * s)

@@ -376,6 +376,9 @@ class GroundTrajectoryTrackerNode:
             "association_stage": "pre_georeference_image_only",
             "camera_motion_compensated": warp is not None,
             "association_count": len(tracks),
+            "mahalanobis_gate": dict(
+                self.tracker.last_association_diagnostics
+            ),
             "association_state_ids": self._active_track_ids(),
             "terminated_track_ids": [],
             "terminated_association_ids": sorted(set(terminated_association_ids)),

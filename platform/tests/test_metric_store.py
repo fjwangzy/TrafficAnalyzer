@@ -225,6 +225,13 @@ class MetricStoreContractTest(unittest.IsolatedAsyncioTestCase):
             "intersection_id": "INT-1",
             "data": {
                 "track_id": 17,
+                "association_id": 91,
+                "tracking_method": "motion_compensated_image_v2",
+                "tracking_quality": "confirmed",
+                "geo_reference_quality": {"status": "missing"},
+                "road_match_quality": "missing",
+                "quality_reasons": ["geo_registration_missing", "road_context_missing"],
+                "geo_registration_id": None,
                 "vehicle_class": "motor",
                 "yolo_class_id": 3,
                 "yolo_class_name": "car",
@@ -248,6 +255,15 @@ class MetricStoreContractTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(track.class_mapping_version, "visdrone-business/v1")
         self.assertEqual(track.start_road_id, "3")
         self.assertEqual(track.exit_road_id, "2")
+        self.assertEqual(track.association_id, "91")
+        self.assertEqual(track.tracking_method, "motion_compensated_image_v2")
+        self.assertEqual(track.tracking_quality, "confirmed")
+        self.assertEqual(track.geo_reference_quality, "missing")
+        self.assertEqual(track.road_match_quality, "missing")
+        self.assertEqual(
+            track.quality_reasons,
+            ["geo_registration_missing", "road_context_missing"],
+        )
 
     def test_invalid_detector_evidence_path_keeps_conflict_fact_as_incomplete(self):
         now = datetime.now(UTC).isoformat()

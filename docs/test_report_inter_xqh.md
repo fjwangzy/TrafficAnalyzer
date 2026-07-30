@@ -1,8 +1,8 @@
 # 端到端测试报告：inter_xqh 视频 + SRT 遥测
 
-> **当前范围说明（2026-07-27）**：`56 PASS / 0 FAIL / 0 WARN` 是算法/管道防回退证据；xqh 840s–自然 EOF 的 `24/24` 是原生 MPS 工程验收；本机 `road9`、`uav_*`、TimescaleDB 与旧链路退役由 ADR-019 strict `10/10` 证明。项目不建设人工轨迹标注工作包，因此当前口径是 `local_engineering_acceptance_passed / production_accuracy_not_claimed`。
+> **当前范围说明（2026-07-28）**：`56 PASS / 0 FAIL / 0 WARN` 是算法/管道防回退证据；xqh 840s–自然 EOF 的最新 `25/25` 是原生 MPS 工程验收；本机 `road9`、`uav_*`、TimescaleDB 与旧链路退役由 ADR-019 strict 证明。项目不建设人工轨迹标注工作包，因此当前口径是 `local_engineering_acceptance_passed / production_accuracy_not_claimed`。
 
-**最近复跑日期**: 2026-07-27
+**最近复跑日期**: 2026-07-28
 **测试资产**: `test_videos/inter_xqh/`  
 - 视频: `DJI_20260403142902_0001_V小清河北路与水屯路路口.mp4` (5.4GB, 4K, 16.5min)  
 - 遥测: `telemetry.srt` (29,741 条记录, 逐帧@30fps)
@@ -517,6 +517,105 @@ ADR-019 strict local 审计已以当前 native macOS Platform + Docker road9/Kaf
 正式研判窗口为 855.088–900.867s；901.0s 起到源视频自然结束 992.358s 全部关闭。离场仍检出并关联候选目标，但因速度、视觉变换和/或地图覆盖不满足门禁，不产生正式业务结果。`transition` 标签未出现：901.134s 先进入 `unsupported_pose`，验收按安全质量断点与正式轨迹终止判断通过，不将越界姿态平滑成巡航。
 
 工程门禁 24/24 通过，其中检测几何、三类轨迹点对齐、两项坐标残差和 `candidate_output_trail_rendered` 均直接经过生产链。报告见 `docs/generated/xqh-hover-departure-acceptance.json`，生产渲染证据见 `docs/test-screenshots/xqh-hover-departure-*-show-node.jpg`。结论统一为 `local_engineering_acceptance_passed / production_accuracy_not_claimed`（机器报告字段为 `production_release_gate=engineering_only_accuracy_not_claimed`）；没有人工真值，未声明 IDF1、HOTA、世界位置 RMSE、速度 MAE 或正式 12m/s 巡航支持。
+
+---
+
+## 2026-07-28 xqh 轨迹显示回归前向修复
+
+相对 7 月 15 日的观感退化未定位到 YOLO 配置：提交 `23252d662b49a9c2c08de24bb98f71d091e41f6c` 与当前仍使用 `yolo11s-visdrone.pt / confidence=0.05 / imgsz=960 / frame_stride=5`。根因是四级能力契约已经把图像轨迹、地理、道路和 TCC 分开，但 `ShowNode` 仍用道路资格 `formal_track_ids` 决定成熟像素尾迹是否可见，导致无道路资格的成熟轨迹被折叠为候选，且在候选显示载荷缺失时不画尾迹。
+
+本次只做前向修复：成熟像素轨迹改由 `trajectory_association_ids + track_id_by_association + TrackElement.trajectory_output_eligible` 驱动；道路资格不再过滤像素框/尾迹；无道路资格的成熟轨迹显示类别色实线和 `P`，真正未成熟预览仍为琥珀 `C`。低地理质量帧不显示历史速度。验收器同步改为检查图像身份跨质量断点保持、road/TCC 各自零越界，不再要求画质中断时终止 ID，也不把通用计数或像素 buffer 误报成泄漏。
+
+最终真实 4K MP4+SRT、840 秒到自然 EOF、stride 4、原生 MPS 验收为 `25/25`：1142 帧检测覆盖 100%，107603 个检测、非法框 0，跨离场保留 41 个稳定 track ID，active/completed/candidate 对齐失败均为 0，candidate 落地点残差 P95/max 为 0/0px，road/TCC 泄漏为 0/0，质量断点生产尾迹差异像素 59572，自然 EOF 通过。聚焦回归 `60 passed`、根 `test/` `171 passed`、xqh 基线 `56 PASS / 0 FAIL / 0 WARN`。
+
+完整根因、同帧前后图、修复边界和精度声明见 `docs/test_report_xqh_trajectory_display_regression_20260728.md`；机器报告见 `docs/generated/xqh-trajectory-display-acceptance-20260728.json`，对比图见 `docs/test-screenshots/xqh-trajectory-display-accepted-20260728/comparison-before-after.jpg`。未回退 7 月 15 日后的图像运动补偿、图像优先 ByteTrack、世界投影、地图匹配或 TCC 能力。没有人工真值，IDF1/HOTA、正式 ID switch、位置 RMSE、速度 MAE 与 12m/s 精度仍为 `not_evaluated`。
+
+---
+
+## 2026-07-29 ByteTrack 固定时间步硬门控回归修复
+
+在 7 月 28 日显示解耦完成后，继续针对用户指出的“路口中心真实轨迹仍明显减少”执行同检测输入
+差分。新增的 Kalman/Mahalanobis 95% 硬门控使用固定 `dt=1`，与生产默认 stride=5 不相容；
+10–15px 高的小目标在一个处理间隔内正常移动 3.36–5.04px 即会越门。最小回归直接复现第二帧
+输出为空，解释了单帧仍有检测框但成熟尾迹大量变短的现象。
+
+修复保持图像运动补偿、类别软约束、大目标初始化、2 秒真实时间和道路解耦，只让生产匹配继续
+使用补偿后 IoU/置信度/类别代价。Mahalanobis 在代价副本上作为 shadow 诊断，逐帧记录本来会
+拒绝的有效候选和会被断掉的轨迹，不影响 ID。
+
+`scripts/compare_xqh_bytetrack.py` 在 400–430s、stride=5、原生 MPS 上让每帧 YOLO 只执行一次，
+再将 19696 个相同检测同时交给基线提交 `23252d6` 与当前 tracker。3/3 门禁通过：当前中心密度
+为基线 95.23%，中心碎片 ID 44，中位观测寿命 52；硬门控 shadow 会拒绝 1080 个有效候选，
+并使 671 条轨迹失去全部候选。
+
+完整 840s–自然 EOF、stride=4 生产链再跑 25/25 通过：1142 帧、109899 个合法检测、61831 个
+关联、448 条完成轨迹、1138 帧视觉 warp、road/TCC 泄漏 0、自然 EOF 与四张生产 ShowNode
+证据完整。报告为 `/private/tmp/TrafficAnalyzer-xqh-hover-departure-bytetrack-fix-20260729.json`；
+这仍是工程回归，无外部真值时 IDF1/HOTA、正式 ID switch、位置 RMSE 和速度 MAE 均为
+`not_evaluated`。
+
+---
+
+## 2026-07-29 AGL 三档推理与能力感知运行档复验
+
+实现新增共享 `AdaptiveImageSizePolicy`，同时接入 `DetectionNode` 与 legacy
+`DetectionTrackingNodes`。策略只消费同步后的正数 `altitude_agl/height`：AGL `<112m` 使用 640、
+`112–157m` 使用 960、`>=157m` 使用 1280；最近 5 点取中位数，5m 滞回、连续 5 个处理帧切档，
+缺失保持 2 秒后回退 960。Mission/FlightPlan 未显式选档时按 verified SourceGeoRegistration
+选择 cruise，否则选择 legacy，并把最终档、原因和注册 checksum 固化到 snapshot。
+
+xqh 840s–自然 EOF 使用原生 arm64/MPS、stride=4、自适应开启。机器报告
+`/private/tmp/TrafficAnalyzer-xqh-adaptive-imgsz-20260729-v2.json` 的既有工程门禁和新增尺寸门禁
+合计 27/27：1142/1142 帧均为 medium/960，`max_switch_count=0`，遥测覆盖 100%，非法检测框、
+road/TCC 能力泄漏和三类点列对齐失败均为 0，自然 EOF 和四张生产 ShowNode 证据通过。
+
+性能计划门禁没有通过，不能沿用页面即时值宣称 `<100ms`：排除前三个冷启动帧后，YOLO 单处理帧
+p50/p95/max 为 165.8/469.24/1756.2ms，单进程整帧 p50/p95 为 435.983/823.003ms。验收器现已
+把 `steady_detector_p50_lte_100ms` 纳入后续工程总门禁；本次报告生成时该项仍作为独立性能门禁
+复核，因此本轮整体状态保持 `engineering_functional_passed / performance_gate_failed / production_accuracy_not_claimed`。
+
+自动化回归：Platform `234 passed / 5 skipped / 10 subtests passed`；跟踪、Kafka、TCC、自适应尺寸
+聚焦回归 `55 passed`；Console2 `149 passed` 且 production build 成功；xqh 基线脚本退出 0。
+ADR-019 strict 的代码审计项均通过，但本机运行证据门仍为外部 blocker。无批准真值，IDF1、HOTA、
+正式 ID switch、位置 RMSE 和速度 MAE 继续为 `not_evaluated`。
+
+崇华路 `SRC-MP4NEW-CH-0625-AM` 首次 legacy + adaptive 隔离回放中，TCC evidence publisher 日志
+已出现 15 次 enqueue，说明漏斗没有全部停在 cruise 质量门；但密集帧 Stats 在约 427 个活跃目标时
+增至 1.20–1.24MB，触发 Kafka `MessageSizeTooLargeError`。因此该批次被主动中止，不把部分事件计为
+验收结果。修复后 Stats 的 active+candidate 实时快照合计限制为 200 条、优先最新成熟轨迹，并新增
+截断计数；400 轨迹序列化回归低于 Kafka 默认 1MB，完整轨迹 Topic 不截断。
+
+2026-07-30 经用户授权，仅以无 `CASCADE` 的固定白名单清空历史 `uav_track_points`、
+`uav_track_events`、`uav_conflict_events`、`uav_conflict_reviews`；`uav_traffic_metrics`、
+`uav_message_inbox`、Kafka topic/offset、证据、审计、测绘和 SourceProfile 均保留。road9 从约 58GB
+降至 33GB，Docker 数据盘恢复约 27.8GB 可用。随后 v3 run
+`native-mps-20260730T010956Z-SRC-MP4NEW-CH-0625-AM / pipe-362cddef` 以原生 MPS、
+legacy + adaptive、stride=10 自然 EOF（return code 0）：捕获 1299 stats、6302 完成轨迹、
+56 条严格 `path_intersection` TCC 和 2407 telemetry；完成轨迹全部 eligible、地理点完整且点列对齐
+失败为 0，`invalid_tcc_events=[]`。TCC 漏斗 1299 帧中 1129 帧有候选对、34 帧有预测，业务事件
+29 帧；88 个唯一受管 JPEG 均为 3840×2160，文件存在且大小/SHA-256 与事件描述一致。
+
+原运行器仅等待 30 秒，初次 road9 对账在 Kafka 已收齐 `1299/6302/56/2407` 时仍为
+`120/5700/56/2407`；这是真实的 Platform 落库积压，不能把初次 `passed=false` 改写为即时通过。
+日志确认单条密集 Stats 的 Timescale 展开超过默认 5 分钟 `max_poll_interval_ms`，引发 consumer
+rebalance。Platform consumer 已改为 `max_poll_records=1`、`max_poll_interval_ms=1800000`，保持手动
+offset 与 inbox 幂等契约，同时允许一次慢持久化完成；重启后积压持续单调下降，最终结果以独立
+`post-drain-result.json` 记录，不覆盖原始 `result.json`。积压归零后 Kafka/road9 均为
+`1299/6302/56/2407`，mismatch 为空，功能验收为 passed；原始 30 秒时点的失败证据仍保留。
+
+高度覆盖也纠正了一项验收假设：遥测文件全部记录确为 104.08–222.35m，但按视频
+`time_offset_sec=247.096` 对齐后的 2422 个有效采样仅为 156.35–178.15m。首帧 178m 初始化 high/1280，
+而 1280→960 必须低于 152m，因此 1299 个处理帧全为 1280、零切档是策略预期，并不能证明三档实景
+切换；640/960/1280 与边界、滞回、稳定帧和缺失回退由合成回归覆盖。1280 档 YOLO 单处理帧
+p50/p95/max 为 371.4/1554.0/3990.6ms，整帧 p50/p95/max 为 965.2/2756.6/9081.8ms；与 xqh
+960 档 p50=165.8ms 一致表明 `<100ms` 门仍失败。功能/TCC 工程链路完成，不宣称生产性能或身份、
+位置、速度精度；IDF1、HOTA、正式 ID switch、位置 RMSE 和速度 MAE保持 `not_evaluated`。
+
+最终自动化门禁：根 `test/` 201 passed；Platform 全量 235 passed、5 skipped、10 subtests passed；
+Kafka consumer + 运行档 + 自适应尺寸聚焦回归 33 passed；Console2 18 文件 149 passed且 production
+build 成功；xqh 基线 `56 PASS / 0 FAIL / 0 WARN`。`git diff --check` 无错误，仅提示既有
+`FrameElement.py` CRLF 将来会归一化；ADR-019 strict 的代码项全部通过，`local_runtime_evidence`
+仍是生产外部门禁，不影响本机功能结论。
 
 ---
 

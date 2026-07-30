@@ -13,6 +13,7 @@ from utils_local.detection_geometry import (
     configure_safe_mps_box_clipping,
     extract_valid_detections,
 )
+from utils_local.adaptive_imgsz import AdaptiveImageSizePolicy
 from utils_local.utils import profile_time
 
 
@@ -56,6 +57,10 @@ class DetectionNode:
         self.conf = cfg["confidence"]
         self.iou = cfg["iou"]
         self.imgsz = cfg["imgsz"]
+        self.imgsz_policy = AdaptiveImageSizePolicy(
+            cfg.get("adaptive_imgsz"),
+            fallback_imgsz=self.imgsz,
+        )
         self.half = bool(cfg.get("half", False)) and self.device.type in {"mps", "cuda"}
         self.classes_to_detect = cfg["classes_to_detect"]
 
@@ -67,10 +72,29 @@ class DetectionNode:
             f"DetectionNode | 输入元素格式错误 {type(frame_element)}"
         )
 
+        policy = getattr(self, "imgsz_policy", None)
+        if policy is not None:
+            size_decision = policy.select(
+                frame_element.telemetry,
+                source_timestamp_sec=float(frame_element.timestamp),
+            )
+            effective_imgsz = size_decision.imgsz
+            adaptive_diagnostics = size_decision.diagnostics
+        else:
+            effective_imgsz = self.imgsz
+            adaptive_diagnostics = {
+                "enabled": False,
+                "effective_imgsz": self.imgsz,
+                "tier": "fixed",
+                "status": "disabled",
+                "switch_reason": "configured_fallback",
+                "switch_count": 0,
+            }
+
         started_at = time.time()
         outputs = self.model.predict(
             frame_element.frame,
-            imgsz=self.imgsz,
+            imgsz=effective_imgsz,
             conf=self.conf,
             verbose=False,
             iou=self.iou,
@@ -92,6 +116,15 @@ class DetectionNode:
         frame_element.detection_diagnostics = {
             **detections.diagnostics,
             "safe_mps_box_clipping": self.safe_mps_box_clipping,
+            "adaptive_imgsz": adaptive_diagnostics,
         }
         frame_element.yolo_model_id = self.yolo_model_id
+        frame_element.inference_context = {
+            "metric_scope": "yolo_predict_single_processed_frame",
+            "device": str(self.device),
+            "precision": "fp16" if self.half else "fp32",
+            "model": self.yolo_model_id,
+            "effective_imgsz": effective_imgsz,
+            "agl_tier": adaptive_diagnostics["tier"],
+        }
         return frame_element

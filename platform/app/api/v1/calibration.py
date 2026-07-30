@@ -28,6 +28,7 @@ from app.models.mission import (
     FlightSegmentRecord,
     IntersectionProject,
     RoadContextSnapshot,
+    SourceGeoRegistration,
     SourceIntersectionBinding,
     TelemetrySourceRecord,
     VideoIngestionJob,
@@ -37,6 +38,16 @@ from app.models.mission import (
 )
 from app.models.survey import SurveyCaptureBatch, SurveyFrame, SurveyTask
 from app.services.intersection_video_discovery import HoverIntersectionDiscovery
+from app.services.source_geo_registration import (
+    backfill_verified_visual_registration,
+    runtime_geo_registration,
+)
+from app.services.source_geo_registration import (
+    create_registration as create_source_geo_registration,
+)
+from app.services.source_geo_registration import (
+    verify_registration as verify_source_geo_registration,
+)
 from app.services.survey_geometry import align_homography_to_map_enu
 from app.services.survey_service import SurveyService
 from app.services.ycx_road_import import YcxRoadImporter
@@ -110,6 +121,18 @@ class PublishChannelizedMapPayload(BaseModel):
 
 class VerifyRegistrationPayload(BaseModel):
     verified: bool = True
+
+
+class SourceGeoRegistrationPayload(BaseModel):
+    coordinate_system: str = Field(default="GCJ02", pattern="^GCJ02$")
+    coordinate_transform_version: str = Field(min_length=1, max_length=80)
+    anchor_gcj02: list[float] = Field(min_length=2, max_length=2)
+    homography_pixel_to_enu: list[list[float]] = Field(min_length=3, max_length=3)
+    registration_pose: dict = Field(default_factory=dict)
+    camera_calibration: dict = Field(default_factory=dict)
+    coverage_enu_m: dict = Field(default_factory=dict)
+    residuals: dict = Field(default_factory=dict)
+    provenance: dict = Field(default_factory=dict)
 
 
 class ImageFittedLanePayload(BaseModel):
@@ -1834,6 +1857,98 @@ async def add_visual_registration(
     }
 
 
+def _source_geo_registration_response(row: SourceGeoRegistration) -> dict:
+    return {
+        "id": row.id,
+        "source_profile_id": row.source_profile_id,
+        "version_no": row.version_no,
+        "status": row.status,
+        "coordinate_system": row.coordinate_system,
+        "coordinate_transform_version": row.coordinate_transform_version,
+        "anchor_gcj02": row.anchor_gcj02,
+        "homography_pixel_to_enu": row.homography_pixel_to_enu,
+        "registration_pose": row.registration_pose,
+        "camera_calibration": row.camera_calibration,
+        "coverage_enu_m": row.coverage_enu_m,
+        "residuals": row.residuals,
+        "checksum": row.checksum,
+        "provenance": row.provenance,
+        "verified_at": row.verified_at,
+        "created_at": row.created_at,
+        "updated_at": row.updated_at,
+    }
+
+
+@router.get("/source-profiles/{source_profile_id}/geo-registrations")
+async def list_source_geo_registrations(
+    source_profile_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    rows = (
+        await db.execute(
+            select(SourceGeoRegistration)
+            .where(SourceGeoRegistration.source_profile_id == source_profile_id)
+            .order_by(SourceGeoRegistration.version_no.desc())
+        )
+    ).scalars().all()
+    return [_source_geo_registration_response(row) for row in rows]
+
+
+@router.post(
+    "/source-profiles/{source_profile_id}/geo-registrations",
+    status_code=201,
+)
+async def add_source_geo_registration(
+    source_profile_id: str,
+    payload: SourceGeoRegistrationPayload,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    _require_admin(request)
+    source_exists = (
+        await db.execute(
+            select(VideoSourceRecord.id)
+            .where(VideoSourceRecord.profile_id == source_profile_id)
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if source_exists is None:
+        raise HTTPException(status_code=404, detail="source profile not found")
+    try:
+        row = await create_source_geo_registration(
+            db,
+            source_profile_id,
+            payload.model_dump(),
+            actor_id=_actor_id(request),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    await db.commit()
+    return _source_geo_registration_response(row)
+
+
+@router.post("/source-geo-registrations/{registration_id}/verify")
+async def verify_independent_source_geo_registration(
+    registration_id: str,
+    payload: VerifyRegistrationPayload,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    _require_admin(request)
+    row = await db.get(SourceGeoRegistration, registration_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="source geo registration not found")
+    try:
+        await verify_source_geo_registration(db, row, verified=payload.verified)
+        await db.flush()
+        if payload.verified:
+            runtime_geo_registration(row)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    await db.commit()
+    return _source_geo_registration_response(row)
+
+
 @router.post("/visual-registrations/{registration_id}/verify")
 async def verify_visual_registration(
     registration_id: str,
@@ -1848,8 +1963,17 @@ async def verify_visual_registration(
     if payload.verified and not registration.homography_pixel_to_enu:
         raise HTTPException(status_code=422, detail="homography is required before verification")
     registration.status = "verified" if payload.verified else "rejected"
+    if payload.verified:
+        channelized_map = await db.get(ChannelizedMapVersion, registration.map_version_id)
+        if channelized_map is None:
+            raise HTTPException(status_code=404, detail="channelized map not found")
+        await backfill_verified_visual_registration(db, registration, channelized_map)
     await db.commit()
-    return {"id": registration.id, "status": registration.status}
+    return {
+        "id": registration.id,
+        "status": registration.status,
+        "source_geo_registration_id": registration.source_geo_registration_id,
+    }
 
 
 @router.get("/visual-registrations/{registration_id}/orthophoto")

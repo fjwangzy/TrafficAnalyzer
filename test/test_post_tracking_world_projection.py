@@ -36,6 +36,9 @@ def _frame(timestamp: float, projection: np.ndarray) -> FrameElement:
     frame.camera_motion_warp = np.eye(3)
     frame.pixel_to_map_enu = projection
     frame.geo_reference_quality = {"status": "verified"}
+    frame.geo_analytics_eligible = True
+    frame.road_analytics_eligible = True
+    frame.tcc_analytics_eligible = True
     frame.formal_analytics_eligible = True
     return frame
 
@@ -54,8 +57,74 @@ def test_world_projection_is_a_separate_post_bytetrack_stage():
 
     enriched = projector.process(associated)
 
+    assert enriched.track_id_by_association == {1: 1}
     assert enriched.formal_track_id_by_association == {1: 1}
     assert enriched.association_trajectories[0]["trajectory_enu_m"] == [[30.0, 40.0]]
+
+
+def test_world_coordinates_remain_verified_when_only_road_context_is_missing():
+    tracker = GroundTrajectoryTrackerNode(_config())
+    projector = PostTrackingWorldProjectionNode(_config())
+    frame = _frame(0.0, np.eye(3))
+    frame.road_analytics_eligible = False
+    frame.formal_analytics_eligible = False
+    frame.geo_reference_quality = {
+        "status": "degraded",
+        "geo_status": "verified",
+        "road_status": "missing",
+        "reasons": ["lane_verified_map_required"],
+    }
+
+    result = projector.process(tracker.process(frame))
+    trajectory = result.association_trajectories[0]
+
+    assert trajectory["trajectory_enu_m"] == [[30.0, 40.0]]
+    assert trajectory["geo_analytics_eligible"] is True
+    assert trajectory["road_analytics_eligible"] is False
+    assert trajectory["geo_reference_quality"] == "verified"
+    assert trajectory["road_match_quality"] == "missing"
+
+
+def test_completed_world_trajectory_is_not_gated_by_road_matching():
+    config = {
+        **_config(),
+        "general": {"buffer_analytics": 1, "min_time_life_track": 0},
+        "trajectory": {"min_track_duration_sec": 0.0},
+    }
+    tracker = GroundTrajectoryTrackerNode(config)
+    projector = PostTrackingWorldProjectionNode(config)
+    accumulator = TrackerInfoUpdateNode(config)
+
+    for index in range(5):
+        frame = _frame(index * 0.1, np.eye(3))
+        frame.road_analytics_eligible = False
+        frame.formal_analytics_eligible = False
+        frame.anchor_gcj02 = (117.0, 36.0)
+        frame.geo_reference_quality = {
+            "status": "degraded",
+            "geo_status": "verified",
+            "road_status": "missing",
+            "reasons": ["lane_verified_map_required"],
+        }
+        accumulator.process(projector.process(tracker.process(frame)))
+
+    termination = projector.flush("natural_eof")
+    completed_frame = accumulator.flush(
+        timestamp=0.4,
+        reason=termination["termination_reason"],
+        terminated_track_ids=termination["terminated_track_ids"],
+    )
+    completed = completed_frame.completed_tracks[0]
+
+    assert completed["geo_analytics_eligible"] is True
+    assert completed["road_analytics_eligible"] is False
+    assert completed["geo_reference_quality"] == "verified"
+    assert completed["road_match_quality"] == "missing"
+    assert completed["matched_lane_key"] is None
+    assert completed["matched_link_id"] is None
+    assert all(point is not None for point in completed["trajectory_enu_m"])
+    assert all(point is not None for point in completed["trajectory_gcj02"])
+    assert len(completed["trajectory_gcj02"]) == len(completed["trajectory_px"])
 
 
 def test_h_jitter_changes_world_fact_but_not_preceding_association_id():
@@ -175,6 +244,9 @@ def test_gcj02_history_stays_aligned_when_projection_recovers():
 
     degraded = _frame(0.0, np.zeros((3, 3)))
     degraded.formal_analytics_eligible = False
+    degraded.geo_analytics_eligible = False
+    degraded.road_analytics_eligible = False
+    degraded.tcc_analytics_eligible = False
     degraded.geo_reference_quality = {
         "status": "degraded",
         "reasons": ["pixel_to_map_projection_unavailable"],

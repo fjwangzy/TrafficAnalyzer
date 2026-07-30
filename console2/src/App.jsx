@@ -34,7 +34,9 @@ const BEV_RECEIVED_AT_FIELD = '__console_received_at_ms'
 
 const latestItems = (items, limit) => limit > 0 ? items.slice(-limit) : []
 const projectableTrajectories = (items) => items.filter(
-  (item) => Array.isArray(item?.trajectory_gcj02) && item.trajectory_gcj02.length >= 2,
+  (item) => Array.isArray(item?.trajectory_gcj02) && item.trajectory_gcj02.filter(
+    (point) => Array.isArray(point) && point.length >= 2,
+  ).length >= 2,
 )
 const splitRecentTrajectories = (items, now) => {
   const cutoff = now - LIVE_BEV_TRAJECTORY_WINDOW_MS
@@ -82,6 +84,8 @@ export function monitoringQualitySummary(stats) {
   const geo = stats?.geo_reference_quality || {}
   const tracking = stats?.tracking_diagnostics || {}
   const formal = stats?.formal_analytics_eligible
+  const trajectoryOutput = stats?.trajectory_output_eligible
+  const roadAnalytics = stats?.road_analytics_eligible ?? formal
   const reasons = [...new Set([
     ...(Array.isArray(geo.reasons) ? geo.reasons : []),
     ...(Array.isArray(tracking.quality_reasons) ? tracking.quality_reasons : []),
@@ -90,8 +94,12 @@ export function monitoringQualitySummary(stats) {
     phase: stats?.flight_phase || geo.flight_phase || 'telemetry_unavailable',
     phaseLabel: FLIGHT_PHASE_LABELS[stats?.flight_phase || geo.flight_phase] || '等待飞行状态',
     formal,
-    formalLabel: formal === true ? '正式研判开启' : formal === false ? '正式研判关闭' : '正式研判待定',
-    tone: formal === true ? 'verified' : formal === false ? 'degraded' : 'unavailable',
+    trajectoryOutput,
+    roadAnalytics,
+    geoAnalytics: stats?.geo_analytics_eligible,
+    tccAnalytics: stats?.tcc_analytics_eligible,
+    formalLabel: roadAnalytics === true ? '道路研判开启' : roadAnalytics === false ? '路网能力降级' : '道路研判待定',
+    tone: roadAnalytics === true ? 'verified' : roadAnalytics === false ? 'degraded' : 'unavailable',
     reasonLabels: reasons.map((reason) => QUALITY_REASON_LABELS[reason] || reason),
     qualities: [
       ['地理参考', geo.status],
@@ -487,7 +495,7 @@ export function App() {
     return [...olderBackfill, ...recentCompleted, ...candidates, ...active]
   }, [activeTrajectories, candidateTrajectories, completedTrajectories, now])
   const historicalTrajectories = useMemo(
-    () => (Array.isArray(trajectoriesQuery.data) ? trajectoriesQuery.data : []).filter((item) => Array.isArray(item?.trajectory_gcj02) && item.trajectory_gcj02.length >= 2),
+    () => projectableTrajectories(Array.isArray(trajectoriesQuery.data) ? trajectoriesQuery.data : []),
     [trajectoriesQuery.data],
   )
   const worldTrajectories = streamActive ? liveWorldTrajectories : historicalTrajectories
@@ -497,6 +505,7 @@ export function App() {
   const longestQueue = laneStats.length ? Math.max(...laneStats.map((lane) => asNumber(lane.queue_length_m) ?? 0)) : null
   const fps = asNumber(latestStats?.fps)
   const inferenceMs = asNumber(latestStats?.inference_ms)
+  const inferenceImgSize = asNumber(latestStats?.inference_context?.effective_imgsz)
   const statsStale = !lastStatsAt || now - lastStatsAt > 45_000
   const realtimeTrajectoryCount = statsStale ? null : activeTrajectories.length
   const telemetryStale = !lastTelemetryAt || now - lastTelemetryAt > 30_000
@@ -509,10 +518,14 @@ export function App() {
   const roll = asNumber(attitude.attitude_roll ?? attitude.roll ?? attitude.gimbal_roll)
   const tccStatus = tccStatusText(latestStats?.tcc_diagnostics, streamActive)
   const flightQuality = monitoringQualitySummary(latestStats)
-  const unprojectedCandidateCount = candidateTrajectories.filter((item) => !Array.isArray(item?.trajectory_gcj02) || item.trajectory_gcj02.length < 2).length
+  const unprojectedTrajectoryCount = [...activeTrajectories, ...completedTrajectories]
+    .filter((item) => !Array.isArray(item?.trajectory_gcj02) || item.trajectory_gcj02.filter(Boolean).length < 2).length
+  const unprojectedCandidateCount = candidateTrajectories.filter((item) => !Array.isArray(item?.trajectory_gcj02) || item.trajectory_gcj02.filter(Boolean).length < 2).length
   const bevEmptyMessage = streamActive
-    ? unprojectedCandidateCount
-      ? `候选目标 ${unprojectedCandidateCount} · 地理投影不可用`
+    ? unprojectedTrajectoryCount
+      ? `像素轨迹 ${unprojectedTrajectoryCount} 条 · 地理投影不可用`
+      : unprojectedCandidateCount
+        ? `候选目标 ${unprojectedCandidateCount} · 地理投影不可用`
       : '等待 GCJ-02 实时轨迹'
     : '暂无可回放的 GCJ-02 历史轨迹'
   const realtimeStatus = wsStatus === 'connected'
@@ -588,7 +601,7 @@ export function App() {
       </div>
       <div className='flight-attitude' aria-label='飞行姿态数据'><div><span>高度</span><strong>{displayNumber(height, 1)}<small>m</small></strong></div><div><span>航向</span><strong>{displayNumber(heading, 1)}<small>°</small></strong></div><div><span>俯仰</span><strong>{displayNumber(pitch, 1)}<small>°</small></strong></div><div><span>横滚</span><strong>{displayNumber(roll, 1)}<small>°</small></strong></div><div><span>云台</span><strong>{telemetryStale ? '过期' : attitude.gimbal_mode || (attitude.is_hovering ? '锁定' : '跟随')}</strong></div></div>
       <div className='view-tabs'>{[['trajectory', '轨迹'], ['lane', '车道'], ['risk', '风险'], ['raw', '原始画面']].map(([id, label]) => <button key={id} className={(id === 'raw' ? primaryView === 'raw' : mapMode === id && primaryView !== 'raw') ? 'active' : ''} onClick={() => id === 'raw' ? selectView('raw') : (setMapMode(id), primaryView === 'raw' && selectView('detector'))}>{label}</button>)}</div>
-      <div className='context-meta'><span>{realtimeStatus}</span><i /><span role='status'>{tccStatus}</span><i /><span>{statsStale ? '数据过期' : `推理 ${inferenceMs ?? '—'}ms`}</span></div>
+      <div className='context-meta'><span>{realtimeStatus}</span><i /><span role='status'>{tccStatus}</span><i /><span>{statsStale ? '数据过期' : `YOLO 单处理帧 ${inferenceMs ?? '—'}ms${inferenceImgSize ? ` · ${inferenceImgSize}` : ''}`}</span></div>
     </section>
 
     <div className={`main-feed-status ${primaryView} ${leftPanelOpen || leftPanelPinned ? '' : 'side-collapsed'}`}>{mainIsVideo ? <VideoCamera size={14} weight='fill' /> : <Crosshair size={14} weight='fill' />}<span>{primaryView === 'bev' ? (streamActive ? 'BEV 鸟瞰轨迹 · ENU / GCJ02' : `BEV 历史轨迹回放 · ${historicalTrajectories.length} TRACKS`) : primaryView === 'raw' ? '原始视频流' : '检测器输出 · YOLO11 → 位姿感知 ByteTrack'}</span><small><i />{streamActive ? ` LIVE · ${displayNumber(fps, 1)} FPS` : ' OFFLINE'}</small></div>
@@ -609,10 +622,11 @@ export function App() {
       <article className={`flight-quality-card ${flightQuality.tone}`} aria-label='巡航与悬停融合质量状态'>
         <header><div><Drone size={15} weight='fill' /><strong>{flightQuality.phaseLabel}</strong></div><span>{flightQuality.formalLabel}</span></header>
         <div className='flight-quality-grid'>{flightQuality.qualities.map((item) => <span key={item.label} className={item.status}><small>{item.label}</small><strong>{item.value}</strong></span>)}</div>
-        {flightQuality.formal === false && <div className='candidate-only-notice'><strong>仅候选，不进入统计/TCC</strong><small>{flightQuality.reasonLabels.join('；') || '等待全部质量门禁通过'}{candidateTrajectories.length ? ` · 候选轨迹 ${candidateTrajectories.length} 条` : ''}</small></div>}
+        {flightQuality.trajectoryOutput === true && flightQuality.roadAnalytics === false && <div className='candidate-only-notice'><strong>轨迹已输出，路网匹配降级</strong><small>Lane ID、Link ID 与匹配质量不可用；世界坐标、速度、方向、统计和 TCC 使用各自独立门禁{flightQuality.reasonLabels.length ? ` · ${flightQuality.reasonLabels.join('；')}` : ''}</small></div>}
+        {flightQuality.trajectoryOutput !== true && flightQuality.formal === false && <div className='candidate-only-notice'><strong>仅候选，不进入统计/TCC</strong><small>{flightQuality.reasonLabels.join('；') || '等待图像轨迹成熟'}{candidateTrajectories.length ? ` · 候选轨迹 ${candidateTrajectories.length} 条` : ''}</small></div>}
         <footer title={`终止原因 ${flightQuality.terminationReason}`}>关联 {flightQuality.method} · 终止 {flightQuality.terminationReason}</footer>
       </article>
-      <article className='congestion-card'><div className='score-ring'><strong>{displayNumber(realtimeTrajectoryCount)}</strong><small>条</small></div><div className='score-copy'><span>实时轨迹数量</span><strong>{realtimeTrajectoryCount == null ? '暂无实时数据' : '活动轨迹'}</strong><small><TrendUp size={13} />{statsStale ? '实时数据已过期' : '实时更新'}</small></div><Crosshair size={24} weight='duotone' /></article>
+      <article className='congestion-card'><div className='score-ring'><strong>{displayNumber(realtimeTrajectoryCount)}</strong><small>条</small></div><div className='score-copy'><span>实时轨迹数量</span><strong>{realtimeTrajectoryCount == null ? '暂无实时数据' : `活动轨迹 · 已完成 ${completedTrajectories.length}`}</strong><small><TrendUp size={13} />{statsStale ? '实时数据已过期' : '实时更新'}</small></div><Crosshair size={24} weight='duotone' /></article>
       <div className='metrics-grid'><MetricCard icon={Target} label='当前目标' value={displayNumber(cars)} unit='辆' delta='' /><MetricCard icon={ListBullets} label='最长排队' value={displayNumber(longestQueue)} unit='m' delta='' tone='amber' /><MetricCard icon={Gauge} label='平均车速' value={displayNumber(avgSpeed, 1)} unit='km/h' delta='' tone='cyan' /><MetricCard icon={ShieldWarning} label='活动风险' value={String(events.length)} unit='起' delta='' tone='red' /></div>
       <article className='glass-card trend-card'><div className='card-title'><div><strong>态势趋势</strong><small>最近 30 分钟</small></div><span className='chip'>REST 5m</span></div><div className='chart-box'>{trendData.length ? <ResponsiveContainer width='100%' height='100%'><AreaChart data={trendData} margin={{ top: 8, right: 4, left: -28, bottom: 0 }}><CartesianGrid vertical={false} stroke='rgba(151,171,206,.12)' /><XAxis dataKey='time' tick={{ fill: '#8290aa', fontSize: 10 }} axisLine={false} tickLine={false} /><YAxis tick={{ fill: '#8290aa', fontSize: 10 }} axisLine={false} tickLine={false} /><Tooltip contentStyle={{ background: '#111a2a', border: '1px solid #33415b', borderRadius: 8, fontSize: 11 }} /><Area type='monotone' dataKey='value' stroke='#62a1ff' fill='#294c7b' fillOpacity={0.36} strokeWidth={2} /></AreaChart></ResponsiveContainer> : <div className='monitor-empty'>{trendQuery.isPending ? '正在加载历史态势…' : trendQuery.error ? '历史态势加载失败' : '暂无历史态势数据'}</div>}</div></article>
       <article className='glass-card flow-card'><div className='card-title'><div><strong>转向流量</strong><small>最近 30 分钟真实统计</small></div><div className='legend'><span className='straight'>直行</span><span className='left'>左转</span><span className='right'>右转</span></div></div><div className='chart-box small'>{flowData.length ? <ResponsiveContainer width='100%' height='100%'><BarChart data={flowData} margin={{ top: 4, right: 0, left: -34, bottom: 0 }}><XAxis dataKey='time' tick={{ fill: '#8290aa', fontSize: 10 }} axisLine={false} tickLine={false} /><YAxis tick={{ fill: '#8290aa', fontSize: 10 }} axisLine={false} tickLine={false} /><Bar dataKey='straight' fill='#6d9eff' radius={[2,2,0,0]} /><Bar dataKey='left' fill='#c98cf4' radius={[2,2,0,0]} /><Bar dataKey='right' fill='#5fd2a5' radius={[2,2,0,0]} /></BarChart></ResponsiveContainer> : <div className='monitor-empty'>{trendQuery.isPending ? '正在加载转向流量…' : trendQuery.error ? '转向流量加载失败' : '暂无转向流量数据'}</div>}</div></article>

@@ -13,6 +13,7 @@ from utils_local.detection_geometry import (
     configure_safe_mps_box_clipping,
     extract_valid_detections,
 )
+from utils_local.adaptive_imgsz import AdaptiveImageSizePolicy
 
 
 def build_yolo_model_id(weight_path: str | Path) -> str:
@@ -53,6 +54,10 @@ class DetectionTrackingNodes:
         self.conf = config_yolo["confidence"]
         self.iou = config_yolo["iou"]
         self.imgsz = config_yolo["imgsz"]
+        self.imgsz_policy = AdaptiveImageSizePolicy(
+            config_yolo.get("adaptive_imgsz"),
+            fallback_imgsz=self.imgsz,
+        )
         self.half = bool(config_yolo.get("half", False)) and self.device.type in {"mps", "cuda"}
         self.classes_to_detect = config_yolo["classes_to_detect"]
 
@@ -80,8 +85,27 @@ class DetectionTrackingNodes:
         # 去掉不必要的 copy，因为检测过程只读
         frame = frame_element.frame
 
+        policy = getattr(self, "imgsz_policy", None)
+        if policy is not None:
+            size_decision = policy.select(
+                frame_element.telemetry,
+                source_timestamp_sec=float(frame_element.timestamp),
+            )
+            effective_imgsz = size_decision.imgsz
+            adaptive_diagnostics = size_decision.diagnostics
+        else:
+            effective_imgsz = self.imgsz
+            adaptive_diagnostics = {
+                "enabled": False,
+                "effective_imgsz": self.imgsz,
+                "tier": "fixed",
+                "status": "disabled",
+                "switch_reason": "configured_fallback",
+                "switch_count": 0,
+            }
+
         t_detect_start = time.time()
-        outputs = self.model.predict(frame, imgsz=self.imgsz, conf=self.conf, verbose=False,
+        outputs = self.model.predict(frame, imgsz=effective_imgsz, conf=self.conf, verbose=False,
                                      iou=self.iou, classes=self.classes_to_detect,
                                      device=self.device, half=self.half)
         t_detect_end = time.time()
@@ -101,6 +125,7 @@ class DetectionTrackingNodes:
         frame_element.detection_diagnostics = {
             **detections.diagnostics,
             "safe_mps_box_clipping": self.safe_mps_box_clipping,
+            "adaptive_imgsz": adaptive_diagnostics,
         }
 
         # 准备输入到跟踪器的数据
@@ -138,6 +163,14 @@ class DetectionTrackingNodes:
         # 获取置信度分数
         frame_element.tracked_conf = [t.score for t in track_list]
         frame_element.yolo_model_id = self.yolo_model_id
+        frame_element.inference_context = {
+            "metric_scope": "yolo_predict_single_processed_frame",
+            "device": str(self.device),
+            "precision": "fp16" if self.half else "fp32",
+            "model": self.yolo_model_id,
+            "effective_imgsz": effective_imgsz,
+            "agl_tier": adaptive_diagnostics["tier"],
+        }
 
         return frame_element
 

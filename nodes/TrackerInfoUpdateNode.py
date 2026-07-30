@@ -1,14 +1,15 @@
 import copy
 import logging
+
 import numpy as np
 
 from elements.FrameElement import FrameElement
 from elements.TrackElement import TrackElement
 from elements.VideoEndBreakElement import VideoEndBreakElement
-from utils_local.utils import profile_time, intersects_central_point
+from utils_local.coordinates import enu_to_gcj02
 from utils_local.homography import is_valid_homography, pixel_to_world, undistort_points
 from utils_local.motion_compensation import pixel_to_world_compensated
-from utils_local.coordinates import enu_to_gcj02
+from utils_local.utils import intersects_central_point, profile_time
 
 logger = logging.getLogger("buffer_tracks")
 
@@ -133,15 +134,21 @@ class TrackerInfoUpdateNode:
         ), f"TrackerInfoUpdateNode | 输入元素格式错误 {type(frame_element)}"
 
         quality_is_explicit = getattr(frame_element, "geo_reference_quality", None) is not None
-        formal_eligible = bool(getattr(frame_element, "formal_analytics_eligible", False))
-        # Candidate tracks remain available in tracked_* for preview, but are not
-        # admitted into the business trajectory buffer used by speed/lane/TCC.
-        formal_track_ids = getattr(frame_element, "formal_track_ids", None)
-        allowed_ids = set(formal_track_ids) if formal_track_ids is not None else None
+        trajectory_eligible = bool(
+            getattr(frame_element, "trajectory_output_eligible", False)
+        )
+        trajectory_association_ids = getattr(
+            frame_element, "trajectory_association_ids", None
+        )
+        allowed_ids = (
+            set(trajectory_association_ids)
+            if trajectory_association_ids is not None
+            else None
+        )
         all_id_list = frame_element.id_list or []
         tracking_entries = (
             list(enumerate(all_id_list))
-            if (formal_eligible or not quality_is_explicit)
+            if (trajectory_eligible or not quality_is_explicit)
             else []
         )
         if allowed_ids is not None:
@@ -152,8 +159,10 @@ class TrackerInfoUpdateNode:
             ]
         tracked_cls_ids = getattr(frame_element, "tracked_cls_ids", None)
         tracked_cls_names = getattr(frame_element, "tracked_cls", None)
-        formal_id_by_association = (
-            getattr(frame_element, "formal_track_id_by_association", None) or {}
+        track_id_by_association = (
+            getattr(frame_element, "track_id_by_association", None)
+            or getattr(frame_element, "formal_track_id_by_association", None)
+            or {}
         )
         previous_formal_id_by_association = (
             getattr(frame_element, "previous_formal_track_id_by_association", None)
@@ -172,7 +181,7 @@ class TrackerInfoUpdateNode:
         }
 
         for i, association_id in tracking_entries:
-            id = int(formal_id_by_association.get(association_id, association_id))
+            id = int(track_id_by_association.get(association_id, association_id))
             # 更新或创建新跟踪
             if id not in self.buffer_tracks:
                 # 创建新键
@@ -220,6 +229,33 @@ class TrackerInfoUpdateNode:
             track.tracking_quality = tracking_diagnostics.get(
                 "tracking_quality", track.tracking_quality
             )
+            track.geo_analytics_eligible = track.geo_analytics_eligible or bool(
+                frame_element.geo_analytics_eligible
+            )
+            track.road_analytics_eligible = track.road_analytics_eligible or bool(
+                frame_element.road_analytics_eligible
+            )
+            track.tcc_analytics_eligible = track.tcc_analytics_eligible or bool(
+                frame_element.tcc_analytics_eligible
+            )
+            track.geo_registration_id = (
+                getattr(frame_element, "geo_registration_id", None)
+                or track.geo_registration_id
+            )
+            track.geo_registration_checksum = (
+                getattr(frame_element, "geo_registration_checksum", None)
+                or track.geo_registration_checksum
+            )
+            track.road_context_status = getattr(
+                frame_element, "road_context_status", track.road_context_status
+            )
+            geo_quality = getattr(frame_element, "geo_reference_quality", None) or {}
+            track.geo_reference_quality = geo_quality.get(
+                "geo_status", geo_quality.get("status", "degraded")
+            )
+            track.quality_reasons = list(
+                dict.fromkeys([*track.quality_reasons, *(geo_quality.get("reasons") or [])])
+            )
             phase = getattr(frame_element, "flight_phase", None)
             if phase and (not track.flight_phases or track.flight_phases[-1] != phase):
                 track.flight_phases.append(phase)
@@ -240,8 +276,8 @@ class TrackerInfoUpdateNode:
                     "frame_num": int(frame_element.frame_num),
                     "flight_phase": phase,
                     "flight_segment_id": segment_id,
-                    "geo_reference_quality": (
-                        (getattr(frame_element, "geo_reference_quality", None) or {}).get("status")
+                    "geo_reference_quality": geo_quality.get(
+                        "geo_status", geo_quality.get("status")
                     ),
                     "tracking_quality": track.tracking_quality,
                 }
@@ -300,6 +336,9 @@ class TrackerInfoUpdateNode:
                         )
                     )
                 track.current_position_enu_m = [point_enu[0], point_enu[1]]
+            elif post_tracking_world_projection:
+                track.trajectory_enu_m.append(None)
+                track.trajectory_gcj02.append(None)
             elif not post_tracking_world_projection and (
                 can_use_absolute or can_use_legacy
             ):
@@ -328,6 +367,14 @@ class TrackerInfoUpdateNode:
                         enu_to_gcj02(point_enu[0], point_enu[1], anchor_gcj02)
                     )
                 track.current_position_enu_m = [point_enu[0], point_enu[1]]
+
+            # One canonical index spans pixel, source time, frame number, ENU
+            # and GCJ-02. Missing enrichment is represented by null rather than
+            # shortening a coordinate array.
+            while len(track.trajectory_enu_m) < len(track.trajectory_points):
+                track.trajectory_enu_m.append(None)
+            while len(track.trajectory_gcj02) < len(track.trajectory_points):
+                track.trajectory_gcj02.append(None)
 
             # 累积position_history（含时间戳，供SpeedEstimationNode和DirectionFlowNode使用）
             self.buffer_tracks[id].position_history.append((cx, cy, frame_element.timestamp))
@@ -362,6 +409,12 @@ class TrackerInfoUpdateNode:
                     # 然后保存该时刻：
                     self.buffer_tracks[id].timestamp_init_road = frame_element.timestamp
 
+        for track in self.buffer_tracks.values():
+            track.trajectory_output_eligible = bool(
+                track.timestamp_last - track.timestamp_first >= self.min_track_duration
+                and len(track.trajectory_points) >= self.min_trajectory_points
+            )
+
         # 如果id的生存时间> size_buffer_analytics，则从字典中删除旧id
         # 修复(TD-008): 不使用break，遍历所有元素，避免高ID新轨迹遮蔽低ID旧轨迹
         keys_to_remove = []
@@ -372,9 +425,6 @@ class TrackerInfoUpdateNode:
         tracking_diagnostics = getattr(frame_element, "tracking_diagnostics", None) or {}
         termination_reason = tracking_diagnostics.get("termination_reason")
         terminated_track_ids = set(tracking_diagnostics.get("terminated_track_ids") or [])
-        if quality_is_explicit and not formal_eligible:
-            terminated_track_ids.update(self.buffer_tracks)
-            termination_reason = termination_reason or "geo_reference_quality_break"
         for key in terminated_track_ids:
             if key in self.buffer_tracks:
                 self.buffer_tracks[key].termination_reason = termination_reason
@@ -420,8 +470,16 @@ class TrackerInfoUpdateNode:
                     "yolo_model_id": track.yolo_model_id,
                     "class_mapping_version": track.class_mapping_version,
                     "duration_sec": round(duration, 2),
-                    "avg_speed_kmh": round(track.avg_speed_kmh, 1),
-                    "max_speed_kmh": round(track.max_speed_kmh, 1),
+                    "avg_speed_kmh": (
+                        round(track.avg_speed_kmh, 1)
+                        if track.avg_speed_kmh is not None
+                        else None
+                    ),
+                    "max_speed_kmh": (
+                        round(track.max_speed_kmh, 1)
+                        if track.max_speed_kmh is not None
+                        else None
+                    ),
                     # Canonical pixel geometry uses the same vehicle ground-contact
                     # anchor as ENU/GCJ-02. Bbox centers remain available explicitly
                     # for legacy visualization and diagnostics.
@@ -450,31 +508,54 @@ class TrackerInfoUpdateNode:
                     "track_family_id": track.track_family_id,
                     "previous_track_id": track.previous_track_id,
                     "point_quality_lineage": track.point_quality_lineage,
+                    "trajectory_output_eligible": True,
+                    "geo_analytics_eligible": track.geo_analytics_eligible,
+                    "road_analytics_eligible": track.road_analytics_eligible,
+                    "tcc_analytics_eligible": track.tcc_analytics_eligible,
+                    "geo_reference_quality": track.geo_reference_quality,
+                    "road_match_quality": track.road_match_quality,
+                    "quality_reasons": track.quality_reasons,
+                    "geo_registration_id": track.geo_registration_id,
+                    "geo_registration_checksum": track.geo_registration_checksum,
+                    "road_context_status": track.road_context_status,
+                    "quality_status": (
+                        "verified" if track.road_analytics_eligible else "degraded"
+                    ),
+                    "formal_analytics_eligible": track.road_analytics_eligible,
                 }
                 if track.association_id is not None:
                     completed_track_data["association_id"] = int(
                         track.association_id
                     )
 
-                if track.trajectory_enu_m:
-                    completed_track_data["trajectory_enu_m"] = [
-                        [round(point[0], 2), round(point[1], 2)]
-                        for point in track.trajectory_enu_m
-                    ]
-                    completed_track_data["entry_point_enu_m"] = completed_track_data[
-                        "trajectory_enu_m"
-                    ][0]
-                    completed_track_data["exit_point_enu_m"] = completed_track_data[
-                        "trajectory_enu_m"
-                    ][-1]
-                if track.trajectory_gcj02:
-                    completed_track_data["trajectory_gcj02"] = [
-                        [round(point[0], 8), round(point[1], 8)]
-                        for point in track.trajectory_gcj02
-                    ]
+                completed_track_data["trajectory_enu_m"] = [
+                    [round(point[0], 2), round(point[1], 2)]
+                    if point is not None
+                    else None
+                    for point in track.trajectory_enu_m
+                ]
+                completed_track_data["trajectory_gcj02"] = [
+                    [round(point[0], 8), round(point[1], 8)]
+                    if point is not None
+                    else None
+                    for point in track.trajectory_gcj02
+                ]
+                valid_enu = [
+                    point
+                    for point in completed_track_data["trajectory_enu_m"]
+                    if point is not None
+                ]
+                if valid_enu:
+                    completed_track_data["entry_point_enu_m"] = valid_enu[0]
+                    completed_track_data["exit_point_enu_m"] = valid_enu[-1]
 
                 # 入口/出口点世界坐标
-                if can_convert_world and track.ground_contact_points_px and not track.trajectory_enu_m:
+                if (
+                    can_convert_world
+                    and track.ground_contact_points_px
+                    and not any(point is not None for point in track.trajectory_enu_m)
+                    and not post_tracking_world_projection
+                ):
                     entry_px = np.array([track.ground_contact_points_px[0]], dtype=np.float64)
                     exit_px = np.array([track.ground_contact_points_px[-1]], dtype=np.float64)
                     # 镜头畸变校正
@@ -500,6 +581,41 @@ class TrackerInfoUpdateNode:
             # Keep the per-track detail available for diagnostics without flooding
             # the mission subprocess tail and hiding the actual failure traceback.
             logger.debug(f"Removed tracker with key {key}")
+
+        candidate_trajectories = [
+            {
+                "track_id": track.id,
+                "association_id": track.association_id,
+                "tracking_method": track.tracking_method,
+                "tracking_quality": track.tracking_quality,
+                "trajectory_output_eligible": False,
+                "trajectory_px": [list(point) for point in track.ground_contact_points_px],
+                "trajectory_enu_m": [
+                    list(point) if point is not None else None
+                    for point in track.trajectory_enu_m
+                ],
+                "trajectory_gcj02": [
+                    list(point) if point is not None else None
+                    for point in track.trajectory_gcj02
+                ],
+                "trajectory_timestamps_sec": list(track.trajectory_timestamps_sec),
+                "trajectory_frame_nums": list(track.trajectory_frame_nums),
+                "quality_reasons": list(track.quality_reasons),
+            }
+            for track in self.buffer_tracks.values()
+            if not track.trajectory_output_eligible
+        ]
+        eligible_active_tracks = sum(
+            track.trajectory_output_eligible for track in self.buffer_tracks.values()
+        )
+        frame_element.trajectory_output_eligible = bool(
+            eligible_active_tracks or completed_tracks
+        )
+        frame_element.candidate_trajectories = candidate_trajectories
+        diagnostics = getattr(frame_element, "tracking_diagnostics", None)
+        if isinstance(diagnostics, dict):
+            diagnostics["trajectory_track_count"] = eligible_active_tracks
+            diagnostics["candidate_track_count"] = len(candidate_trajectories)
 
         # 记录处理结果：
         frame_element.buffer_tracks = self.buffer_tracks

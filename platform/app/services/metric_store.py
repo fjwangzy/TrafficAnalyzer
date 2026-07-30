@@ -16,7 +16,8 @@ from datetime import UTC, datetime, timedelta
 from math import ceil
 from typing import Any, Protocol
 
-from sqlalchemy import func, select, text, update
+from sqlalchemy import cast, func, select, text, update
+from sqlalchemy.dialects.postgresql import JSONB, JSONPATH
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -116,6 +117,14 @@ def _int(value: Any) -> int | None:
         return None if value is None else int(value)
     except (TypeError, ValueError):
         return None
+
+
+def _quality_status(value: Any) -> str | None:
+    if isinstance(value, dict):
+        value = value.get("status") or value.get("quality_status")
+    if value is None:
+        return None
+    return str(value)
 
 
 def _parse_datetime(value: Any) -> datetime | None:
@@ -573,6 +582,19 @@ class PostgresMetricStoreAdapter:
             inter_id=str(value.get("inter_id") or value.get("intersection_id") or "unmatched"),
             road_data_version=value.get("road_data_version"),
             track_id=track_id,
+            association_id=(
+                str(data["association_id"])
+                if data.get("association_id") is not None
+                else None
+            ),
+            tracking_method=data.get("tracking_method"),
+            tracking_quality=_quality_status(data.get("tracking_quality")),
+            geo_reference_quality=_quality_status(
+                data.get("geo_reference_quality") or data.get("geo_quality")
+            ),
+            road_match_quality=_quality_status(data.get("road_match_quality")),
+            quality_reasons=data.get("quality_reasons") or [],
+            geo_registration_id=data.get("geo_registration_id"),
             vehicle_class=data.get("vehicle_class", data.get("class_name")),
             yolo_class_id=_int(data.get("yolo_class_id")),
             yolo_class_name=data.get("yolo_class_name"),
@@ -947,8 +969,12 @@ class PostgresMetricStoreAdapter:
             statement = statement.where(TrackEvent.quality_status == quality_status)
         if spatial_ready:
             statement = statement.where(
-                func.json_array_length(TrackEvent.trajectory_gcj02) >= min_gcj02_points,
-                TrackEvent.anchor_gcj02.is_not(None),
+                func.jsonb_array_length(
+                    func.jsonb_path_query_array(
+                        cast(TrackEvent.trajectory_gcj02, JSONB),
+                        cast('$[*] ? (@ != null)', JSONPATH),
+                    )
+                ) >= min_gcj02_points,
             )
         rows = (await self._execute(statement.order_by(TrackEvent.ended_at.desc()).limit(limit))).scalars().all()
         return [
@@ -961,8 +987,16 @@ class PostgresMetricStoreAdapter:
                 inter_id=row.inter_id,
                 coordinate_system="GCJ02",
                 anchor_gcj02=row.anchor_gcj02,
+                trajectory_px=row.trajectory_px,
                 trajectory_enu_m=row.trajectory_enu_m,
                 trajectory_gcj02=row.trajectory_gcj02,
+                association_id=row.association_id,
+                tracking_method=row.tracking_method,
+                tracking_quality=row.tracking_quality,
+                geo_reference_quality=row.geo_reference_quality,
+                road_match_quality=row.road_match_quality,
+                quality_reasons=row.quality_reasons,
+                geo_registration_id=row.geo_registration_id,
                 map_version_id=row.map_version_id,
                 matched_lane_key=row.matched_lane_key,
                 source_lane_id=row.source_lane_id,

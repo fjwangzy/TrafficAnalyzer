@@ -2,9 +2,9 @@ import logging
 
 from elements.FrameElement import FrameElement
 from elements.VideoEndBreakElement import VideoEndBreakElement
-from utils_local.utils import profile_time
-from utils_local.lane_geometry import assign_vehicle_to_lane, compute_queue_extent
 from utils_local.homography import is_valid_homography
+from utils_local.lane_geometry import assign_vehicle_to_lane, compute_queue_extent
+from utils_local.utils import profile_time
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +38,7 @@ class LaneAnalysisNode:
 
         if (
             getattr(frame_element, "geo_reference_quality", None) is not None
-            and not getattr(frame_element, "formal_analytics_eligible", False)
+            and not getattr(frame_element, "road_analytics_eligible", False)
         ):
             frame_element.lane_stats = None
             frame_element.queue_count = 0
@@ -86,7 +86,11 @@ class LaneAnalysisNode:
                     vehicles_in_lane.append({
                         "track_id": track_id,
                         "bbox_center_px": (cx, cy),
-                        "speed_kmh": track.avg_speed_kmh if track else 0,
+                        "speed_kmh": (
+                            track.avg_speed_kmh
+                            if track and track.avg_speed_kmh is not None
+                            else 0
+                        ),
                     })
 
                     # 记录到TrackElement

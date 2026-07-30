@@ -38,7 +38,7 @@ general:
 video_reader:
   src: ${oc.env:VIDEO_SRC} # 待处理文件的路径，或摄像头编号（int），或 m3u8 / rtsp 流链接
   skip_secs: 0  # 每隔 <skip_secs> 秒读取一帧
-  frame_stride: ${oc.decode:${oc.env:FRAME_STRIDE,5}} # 每 N 帧处理 1 帧；低FPS实时预览可设 10~12 恢复正常行驶速度
+  frame_stride: ${oc.decode:${oc.env:FRAME_STRIDE,3}} # 每 N 帧处理 1 帧；低FPS实时预览可设 10~12 恢复正常行驶速度
   runtime_map_bundle: ${oc.env:RUNTIME_MAP_BUNDLE_JSON,''} # lane_verified GCJ-02/ENU 地图包；正式运行必填
 
 detection_node:
@@ -49,6 +49,17 @@ detection_node:
   imgsz: 960  # 航拍4K小目标推理尺寸；比640更容易保留电动车/三轮车
   device: auto  # 推理设备: "auto" 自动检测 (cuda>mps>cpu) | "cuda" | "mps" | "cpu"
   half: true  # MPS/CUDA 使用 FP16；CPU 由节点强制保持 FP32
+  adaptive_imgsz:
+    enabled: ${oc.decode:${oc.env:ADAPTIVE_IMGSZ_ENABLED,true}}
+    low_imgsz: 640
+    medium_imgsz: 960
+    high_imgsz: 1280
+    low_to_medium_agl_m: 112.0
+    medium_to_high_agl_m: 157.0
+    hysteresis_m: 5.0
+    stable_frames: 5
+    agl_window_size: 5
+    telemetry_hold_sec: 2.0
 
 tracking_node:
   # 使用 ByteTrack (https://github.com/ifzhang/ByteTrack)
@@ -150,6 +161,8 @@ kafka_producer_node: #// 摄像头 id
   annotation_snapshot_width: 960 # 悬停生成标注任务时随stats发送的JPEG快照宽度
   annotation_snapshot_jpeg_quality: 75 # 标注任务快照JPEG质量
   hover_annotation_snapshot_enabled: true # 交互式运行携带悬停快照；纯数据批处理可关闭
+  active_trajectory_tail_points: 30 # Stats 只携带实时尾部；完整轨迹由 uav_track_complete 发布
+  realtime_trajectory_max_tracks: 200 # active+candidate 合计上限，防止超过 Kafka 1MB 请求限制
 
 # ------------------------------------------------- TRAFFIC SITUATION AWARENESS --------------------------------------------------
 

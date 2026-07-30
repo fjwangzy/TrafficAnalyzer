@@ -1,17 +1,63 @@
 # 无人机交通态势分析平台
 
-TrafficAnalyzer 使用无人机视频、遥测和已发布渠化地图完成车辆检测、跟踪、速度/方向/车道分析、轨迹输出与机非冲突识别。管理端由 FastAPI Platform 与 React Console2 组成。
+TrafficAnalyzer 使用无人机视频与遥测完成车辆检测、跟踪、轨迹输出及具备证据时的世界坐标、
+速度/方向和机非冲突识别；可选的已发布渠化地图只富化 Lane ID、Link ID 与匹配质量。
+管理端由 FastAPI Platform 与 React Console2 组成。
 
 ## 本机数据架构
 
 ADR-019 已在本机开发环境完成纯净切换：
 
 - 唯一数据库为 PostgreSQL connection database `road9`，镜像启用 TimescaleDB；
-- 数据库由 Alembic 初始化，当前 head 为 `20260723_0019`；
+- 数据库由 Alembic 初始化，当前 head 为 `20260728_0020`；
 - Kafka 使用 Apache Kafka KRaft；
 - Topic、`msg_type`、WebSocket channel 和自建表统一使用 `uav_` 前缀；
 - 旧观测链路已从代码和 Compose 删除，历史数据不迁移；
 - 生产镜像、密钥、TLS/SASL、HA、容量与 RPO/RTO 仍需独立验收。
+
+## 本机开发：启动前后端
+
+前置条件：使用 Apple Silicon Mac，`road9` 与 Kafka 已分别监听本机开发端口 `5432`、`9092`，
+并已按 `scripts/bootstrap_native_mps.sh` 准备 `.venv-mps`。本机开发不要使用 Docker Platform；
+Platform 必须作为原生 macOS 进程运行，检测器子进程才能使用 Metal/MPS。
+
+终端 1：在仓库根目录启动后端 Platform：
+
+```bash
+cd /Users/yaoyao/ai/TrafficAnalyzer
+scripts/mac_local_platform.sh up
+scripts/mac_local_platform.sh status
+```
+
+`status` 应返回 `"status":"ready"`，并显示 database、Kafka、TimescaleDB 和
+pipeline manager 均为 `healthy`。后端地址为 `http://127.0.0.1:8000`，也可直接检查：
+
+```bash
+curl -fsS http://127.0.0.1:8000/ready
+```
+
+终端 2：启动前端 Console2：
+
+```bash
+cd /Users/yaoyao/ai/TrafficAnalyzer/console2
+# 地图功能需要有效的高德 Web Key；不使用地图时可省略下一行。
+export AMAP_JS_API_KEY='replace-me'
+npm run dev -- --host 127.0.0.1
+```
+
+浏览器访问 `http://127.0.0.1:5173`，开发账号为 `admin / admin123`。Console2 会把
+`/api` 和 `/ws` 代理到 `http://127.0.0.1:8000`。
+
+停止或排查服务：
+
+```bash
+# Platform 日志、重启、停止（在仓库根目录执行）
+scripts/mac_local_platform.sh logs
+scripts/mac_local_platform.sh restart
+scripts/mac_local_platform.sh stop
+
+# Console2 在运行 npm run dev 的终端按 Ctrl+C 停止
+```
 
 ## Docker 全栈
 
@@ -46,15 +92,23 @@ ENU 计算并以 GCJ-02 投放轨迹。当前四路口地图、9 个视频源配
 
 `hover_cruise_v1` 已把同一 Mission 内的进场巡航、悬停正拍和离场巡航接入统一质量链。YOLO
 仍在进程 1；进程 2 先用背景图像运动补偿执行纯图像 ByteTrack，再由
-`PostTrackingWorldProjectionNode` 做逐帧 pixel→ENU/GCJ-02 投影与正式业务分段。H、遥测、ENU 和
-地图覆盖不进入 ByteTrack 关联代价，坐标转换误差只能降级正式业务，不能改变图像 ID。
+`PostTrackingWorldProjectionNode` 为成熟图像关联分配稳定 `track_id`，并按独立
+SourceGeoRegistration 做逐帧 pixel→ENU/GCJ-02 投影。H、遥测、ENU 和地图覆盖不进入 ByteTrack
+关联代价；地理质量变化只能让对应世界点降级为 `null`，不能改变、结束或拆分图像轨迹。
+Runtime Road Map Bundle 是可选富化，只影响 Lane ID、Link ID 与匹配质量，不创建或覆盖世界坐标。
 悬停关键帧仍是发布 `lane_verified` 地图的唯一来源，巡航帧不能创建或修改地图。
 
-2026-07-25 使用真实 `inter_xqh` 后半程在原生 MPS 完成最终工程复验：悬停正式窗口正常，离场
-越界后仅保留候选检测，进入正式统计或 TCC 的降级轨迹为 0。当前结论是
-`local_engineering_acceptance_passed / production_accuracy_not_claimed`。项目不建设人工轨迹标注、
-AI 预标注或标注复核工作包；IDF1/HOTA、世界位置/速度精度和正式 12m/s 巡航能力在无外部批准
-真值时统一为 `not_evaluated`，不得从观测 ID、IoU 或尾迹观感推导。
+2026-07-28 已实施 ADR-025：成熟像素轨迹不再受地理或路网质量门禁抑制。mp4728 的 3/5/7 m/s
+三源以原生 arm64/MPS 串行回放至自然 EOF，共输出 7,881 条完成轨迹，Kafka 与 road9 按
+`source_profile_id + pipeline_id` 精确一致。三源尚无 verified SourceGeoRegistration，因此本轮
+ENU/GCJ-02 与速度诚实为空；这与缺少 `lane_verified` 路网无关。当前结论是
+`local_engineering_passed / source_inputs_complete / road_context_degraded / geo_not_evaluated /
+production_accuracy_not_claimed`。
+
+2026-07-25 的真实 `inter_xqh` 后半程原生 MPS 复验继续作为飞行姿态和道路能力降级样本保留；
+ADR-025 后离场阶段仍输出成熟像素轨迹，只关闭缺乏独立证据的世界、Lane/Link 与 TCC 能力。
+项目不建设人工轨迹标注、AI 预标注或标注复核工作包；IDF1/HOTA、世界位置/速度精度和正式
+12m/s 巡航能力在无外部批准真值时统一为 `not_evaluated`，不得从观测 ID、IoU 或尾迹观感推导。
 
 2026-07-24 完成检测输出轨迹几何修复：Apple MPS 强制使用安全的非原地 bbox 裁剪，非法框在
 检测边界丢弃并阻断该帧正式研判；正式和候选轨迹同时保留源帧图像接地点、ENU/GCJ-02、时间、
@@ -65,9 +119,12 @@ AI 预标注或标注复核工作包；IDF1/HOTA、世界位置/速度精度和�
 [`docs/runbook_hover_cruise_tracking.md`](docs/runbook_hover_cruise_tracking.md)，原始工程证据见
 [`docs/test_report_inter_xqh.md`](docs/test_report_inter_xqh.md) 和
 [`docs/generated/xqh-hover-departure-acceptance.json`](docs/generated/xqh-hover-departure-acceptance.json)。
-当前自动化基线为根测试 `139 passed`、Platform `207 passed / 5 skipped / 10 subtests`、Console2
-`139 passed`、xqh `56 PASS / 0 FAIL / 0 WARN`、全尾段 MPS 工程门禁 `24/24`，ADR-019 strict
-本机审计 `10/10`。
+当前自动化基线为 Python 全量 `397 passed / 5 skipped / 10 subtests`、Console2
+`18 files / 148 tests` 与 production build、xqh `56 PASS / 0 FAIL / 0 WARN`。ADR-019 strict
+有 9 项通过，仍由既有外部 `local_runtime_evidence` 门禁返回非零，未标记为全绿。
+
+mp4728 最终证据见
+[`docs/test_report_mp4728_20260728.md`](docs/test_report_mp4728_20260728.md)。
 
 默认入口：
 
@@ -89,13 +146,8 @@ docker compose -p traffic_analyzer --profile ops up -d kafka-ui
 检测器由 Pipeline API 或 Mission 调度在 Platform 容器内按需拉起，并在任务停止或 Platform
 退出时回收。镜像默认保持 CPU 可启动，NVIDIA GPU 暴露仍属于外部部署门禁。
 
-Apple Silicon 本机开发从仓库根目录启动原生 Platform，以便检测器子进程使用 Metal/MPS：
-
-```bash
-scripts/mac_local_platform.sh up
-export AMAP_JS_API_KEY='replace-me'
-cd console2 && npm run dev
-```
+Apple Silicon 本机开发的前后端命令、访问地址和停止方式见
+[本机开发：启动前后端](#本机开发启动前后端)。
 
 原独立检测器镜像保存在 `Dockerfile.detector`，不进入 canonical Compose。它不会内置模型
 权重和测试视频，单独运行时必须显式挂载：

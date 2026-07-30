@@ -92,15 +92,20 @@ def test_geo_reference_consumes_precomputed_image_motion_quality():
     assert result.formal_analytics_eligible is True
 
 
-def test_telemetry_only_projection_never_becomes_formal_map_truth():
+def test_telemetry_projection_without_road_enables_geo_but_not_road_analytics():
     node = FlightGeoReferenceNode({
         "tracking_profile": "hover_only_legacy",
         "geo_reference": {"require_visual_validation": False},
     })
 
-    result = node.process(_frame(0.0, 0.0, runtime_map=False))
+    frame = _frame(0.0, 0.0, runtime_map=False)
+    frame.telemetry["horizontal_speed"] = 2.0
+    result = node.process(frame)
 
     assert result.pixel_to_map_enu is not None
+    assert result.geo_analytics_eligible is True
+    assert result.road_analytics_eligible is False
+    assert result.tcc_analytics_eligible is True
     assert result.formal_analytics_eligible is False
     assert result.geo_reference_quality["status"] == "degraded"
     assert "lane_verified_map_required" in result.geo_reference_quality["reasons"]
@@ -167,3 +172,21 @@ def test_hover_cruise_profile_requires_and_uses_registration_pose_lineage():
     assert result.formal_analytics_eligible is True
     assert result.geo_reference_quality["registration_pose_lineage"]["status"] == "verified"
     assert result.geo_reference_quality["map_coverage"]["status"] == "verified"
+
+
+def test_forced_hover_cruise_without_registration_blocks_tcc_with_reason():
+    frame = _frame(0.0, 0.0)
+    frame.telemetry["horizontal_speed"] = 2.0
+    node = FlightGeoReferenceNode({
+        "tracking_profile": "hover_cruise_v1",
+        "geo_reference": {"require_visual_validation": False},
+    })
+
+    result = node.process(frame)
+
+    assert result.tcc_analytics_eligible is False
+    assert result.formal_analytics_eligible is False
+    assert result.geo_reference_quality["registration_pose_lineage"] == {
+        "status": "unavailable"
+    }
+    assert "registration_pose_lineage_required" in result.geo_reference_quality["reasons"]

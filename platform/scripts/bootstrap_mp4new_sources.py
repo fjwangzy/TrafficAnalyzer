@@ -148,7 +148,123 @@ INTER_XQH_CATALOG = (
     },
 )
 
+MP4728_CATALOG = (
+    {
+        "inter_id": "INT_MP4728_JINGSHI_CORRIDOR",
+        "road_data_version": None,
+        "intersection_name": "经十路巡航测试走廊",
+        "drone_id": "UAV-MP4728-JS",
+        "drone_name": "回放无人机 · 经十路巡航",
+        "test_coordinate": {
+            "lat": 36.6481757,
+            "lon": 117.0340793,
+            "source": "SRC-MP4728-JS-0728-7MS telemetry_median",
+        },
+        "sources": (
+            {
+                "profile_id": "SRC-MP4728-JS-0728-3MS",
+                "video": "test_videos/mp4728/经十路交通状态拍摄3米每秒.mp4",
+                "telemetry": "test_videos/mp4728/srt0728/经十路3米每秒.txt",
+                "telemetry_enabled": True,
+                "time_offset_sec": 72.778,
+                "sync_tolerance_sec": 2.5,
+                "expected_speed_mps": 3.0,
+                "expected_capture_started_at": "2026-07-28T10:06:20+08:00",
+                "acceptance_mode": "roadless_trajectory",
+                "source_manifest": {
+                    "video_sha256": "1d61ea4b594a82425df4db481a0d0fc07039e60b5abb74ebb7a702ccb1062409",
+                    "video_size_bytes": 2784863729,
+                    "video_duration_sec": 512.078233,
+                    "video_frame_count": 15347,
+                    "video_fps": 29.97003,
+                    "video_codec": "hevc",
+                    "video_resolution": [3840, 2160],
+                    "telemetry_sha256": "9fbb083238d6488ca353ffe2bd1de432aa50c71ff6d487b86ed87d207f3bd1c7",
+                    "telemetry_size_bytes": 1597351,
+                    "telemetry_started_at": "2026-07-28T10:05:07.222+08:00",
+                    "telemetry_ended_at": "2026-07-28T10:18:33.432+08:00",
+                },
+            },
+            {
+                "profile_id": "SRC-MP4728-JS-0728-5MS",
+                "video": "test_videos/mp4728/经十路交通状态拍摄5米每秒.mp4",
+                "telemetry": "test_videos/mp4728/srt0728/经十路5米每秒.txt",
+                "telemetry_enabled": True,
+                "time_offset_sec": 72.438,
+                "sync_tolerance_sec": 2.5,
+                "expected_speed_mps": 5.0,
+                "expected_capture_started_at": "2026-07-28T09:50:19+08:00",
+                "acceptance_mode": "roadless_trajectory",
+                "source_manifest": {
+                    "video_sha256": "87c6522d756517936f44e71004665a212288a632e9fcfcc7b14238db766411ec",
+                    "video_size_bytes": 2022413670,
+                    "video_duration_sec": 371.7714,
+                    "video_frame_count": 11142,
+                    "video_fps": 29.97003,
+                    "video_codec": "hevc",
+                    "video_resolution": [3840, 2160],
+                    "telemetry_sha256": "ba81892e79e64eb8f697048df1e5792b34644fab43742a5492c33923087a3b00",
+                    "telemetry_size_bytes": 1561049,
+                    "telemetry_started_at": "2026-07-28T09:49:06.562+08:00",
+                    "telemetry_ended_at": "2026-07-28T10:01:57.422+08:00",
+                },
+            },
+            {
+                "profile_id": "SRC-MP4728-JS-0728-7MS",
+                "video": "test_videos/mp4728/经十路交通状态拍摄7米每秒.mp4",
+                "telemetry": "test_videos/mp4728/srt0728/经十路7米每秒.txt",
+                "telemetry_enabled": True,
+                "time_offset_sec": 74.373,
+                "sync_tolerance_sec": 2.5,
+                "expected_speed_mps": 7.0,
+                "expected_capture_started_at": "2026-07-28T09:37:09+08:00",
+                "acceptance_mode": "roadless_trajectory",
+                "source_manifest": {
+                    "video_sha256": "ce0c3ec29a0109f26d01e3985fd223700650468d233dc4cfbd7f359778e678de",
+                    "video_size_bytes": 1589755777,
+                    "video_duration_sec": 292.225267,
+                    "video_frame_count": 8758,
+                    "video_fps": 29.97003,
+                    "video_codec": "hevc",
+                    "video_resolution": [3840, 2160],
+                    "telemetry_sha256": "b440df508737954c4eaecb65ff54b82c60d2104fc69d187c060eb2f33ba6b1d2",
+                    "telemetry_size_bytes": 1265494,
+                    "telemetry_started_at": "2026-07-28T09:35:54.627+08:00",
+                    "telemetry_ended_at": "2026-07-28T09:47:01.485+08:00",
+                },
+            },
+            {
+                "profile_id": "SRC-MP4729-JS-0729-3MS",
+                "video": "test_videos/mp4729/729经十路交通状态拍摄3米每秒.mp4",
+                "telemetry": "test_videos/mp4729/srt/经十路3米每秒.txt",
+                "telemetry_enabled": True,
+                "time_offset_sec": 73.779,
+                "sync_tolerance_sec": 2.5,
+                "expected_speed_mps": 3.0,
+                "expected_capture_started_at": "2026-07-29T09:44:03+08:00",
+                "acceptance_mode": "roadless_trajectory",
+                "default": True,
+                "source_manifest": {
+                    "video_sha256": "19fda82a1804ef7e0d507b47741780f0e4212371173b1647207ef2f38e37ac32",
+                    "video_size_bytes": 3148888137,
+                    "video_duration_sec": 579.045133,
+                    "video_frame_count": 17354,
+                    "video_fps": 29.97003,
+                    "video_codec": "hevc",
+                    "video_resolution": [3840, 2160],
+                    "telemetry_sha256": "d045717f5217fc59f93cfc05400b3d16958ebd1d60167e265b942105d52d257b",
+                    "telemetry_size_bytes": 1716920,
+                    "telemetry_started_at": "2026-07-29T09:42:49.221+08:00",
+                    "telemetry_ended_at": "2026-07-29T09:57:32.037+08:00",
+                },
+            },
+        ),
+    },
+)
+
+# Keep the established map-dependent catalog stable for survey/map scripts.
 LOCAL_REPLAY_CATALOG = INTER_XQH_CATALOG + MP4NEW_CATALOG
+ALL_LOCAL_REPLAY_CATALOG = LOCAL_REPLAY_CATALOG + MP4728_CATALOG
 
 
 def _source_id(prefix: str, profile_id: str) -> str:
@@ -163,7 +279,7 @@ async def bootstrap(check_only: bool = False) -> dict:
     changed = 0
     checked = 0
     async with async_session_maker() as session:
-        for item in LOCAL_REPLAY_CATALOG:
+        for item in ALL_LOCAL_REPLAY_CATALOG:
             drone = await session.get(DroneRecord, item["drone_id"])
             if drone is None:
                 if check_only:
@@ -222,11 +338,17 @@ async def bootstrap(check_only: bool = False) -> dict:
                         "format": "dji_srt" if source.get("telemetry_type") == "srt" else "dji_cloud_json",
                         "time_offset_sec": source["time_offset_sec"],
                         "sync_tolerance_sec": source.get("sync_tolerance_sec", 2.5),
+                        "telemetry_enabled": source.get("telemetry_enabled", True),
                         "known_degradation": source.get("known_degradation"),
+                        "acceptance_mode": source.get("acceptance_mode", "formal_world_trajectory"),
+                        "expected_speed_mps": source.get("expected_speed_mps"),
+                        "expected_capture_started_at": source.get("expected_capture_started_at"),
+                        "source_manifest": source.get("source_manifest"),
                     }
-                    video.enabled = telemetry.enabled = True
+                    video.enabled = True
+                    telemetry.enabled = source.get("telemetry_enabled", True)
                     status, code = validator.validate(video, telemetry)
-                    if status == "valid" and source.get("known_degradation"):
+                    if source.get("known_degradation"):
                         status = "degraded"
                         code = source["known_degradation"]
                     video.validation_status = telemetry.validation_status = status
@@ -239,7 +361,7 @@ async def bootstrap(check_only: bool = False) -> dict:
         if not check_only:
             formats = {
                 source["profile_id"]: ("dji_srt" if source.get("telemetry_type") == "srt" else "dji_cloud_json")
-                for item in LOCAL_REPLAY_CATALOG
+                for item in ALL_LOCAL_REPLAY_CATALOG
                 for source in item["sources"]
             }
             evidence_rows = (
@@ -264,7 +386,7 @@ async def bootstrap(check_only: bool = False) -> dict:
     return {
         "schema_version": "uav.mp4new-bootstrap/v1",
         "mode": "check" if check_only else "upsert",
-        "intersections": len(LOCAL_REPLAY_CATALOG),
+        "intersections": len(ALL_LOCAL_REPLAY_CATALOG),
         "sources": checked,
         "changed": changed,
         "passed": True,

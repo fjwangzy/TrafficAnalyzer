@@ -1,6 +1,11 @@
 from pathlib import Path
 
-from scripts.bootstrap_mp4new_sources import LOCAL_REPLAY_CATALOG, MP4NEW_CATALOG
+from scripts.bootstrap_mp4new_sources import (
+    ALL_LOCAL_REPLAY_CATALOG,
+    LOCAL_REPLAY_CATALOG,
+    MP4NEW_CATALOG,
+    MP4728_CATALOG,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -43,8 +48,41 @@ def test_local_replay_catalog_has_four_intersections_and_nine_pairs():
         assert (ROOT / source["telemetry"]).is_file()
 
 
-def test_local_replay_catalog_has_traceable_test_coordinates_for_map_acceptance():
-    for item in LOCAL_REPLAY_CATALOG:
+def test_mp4728_catalog_registers_jingshi_profiles_with_distinct_telemetry():
+    assert len(MP4728_CATALOG) == 1
+    item = MP4728_CATALOG[0]
+    assert item["inter_id"] == "INT_MP4728_JINGSHI_CORRIDOR"
+    sources = {source["profile_id"]: source for source in item["sources"]}
+    assert set(sources) == {
+        "SRC-MP4728-JS-0728-3MS",
+        "SRC-MP4728-JS-0728-5MS",
+        "SRC-MP4728-JS-0728-7MS",
+        "SRC-MP4729-JS-0729-3MS",
+    }
+    assert all(source["telemetry_enabled"] is True for source in sources.values())
+    assert sources["SRC-MP4728-JS-0728-3MS"]["time_offset_sec"] == 72.778
+    assert sources["SRC-MP4728-JS-0728-5MS"]["time_offset_sec"] == 72.438
+    assert sources["SRC-MP4728-JS-0728-7MS"]["time_offset_sec"] == 74.373
+    assert sources["SRC-MP4729-JS-0729-3MS"]["time_offset_sec"] == 73.779
+    telemetry_hashes = {
+        source["source_manifest"]["telemetry_sha256"] for source in sources.values()
+    }
+    assert len(telemetry_hashes) == 4
+    for source in sources.values():
+        assert source["acceptance_mode"] == "roadless_trajectory"
+        assert (ROOT / source["video"]).is_file()
+        assert (ROOT / source["telemetry"]).is_file()
+
+
+def test_all_local_catalog_adds_mp4728_without_expanding_map_dependent_catalog():
+    sources = [source for item in ALL_LOCAL_REPLAY_CATALOG for source in item["sources"]]
+    assert len(LOCAL_REPLAY_CATALOG) == 4
+    assert len(ALL_LOCAL_REPLAY_CATALOG) == 5
+    assert len(sources) == 13
+
+
+def test_all_local_replay_catalog_has_traceable_test_coordinates_for_acceptance():
+    for item in ALL_LOCAL_REPLAY_CATALOG:
         coordinate = item["test_coordinate"]
         assert 36.6 < coordinate["lat"] < 36.8
         assert 117.0 < coordinate["lon"] < 117.2
@@ -52,4 +90,4 @@ def test_local_replay_catalog_has_traceable_test_coordinates_for_map_acceptance(
 
 
 def test_all_local_replay_sources_start_without_lane_annotation_parameters():
-    assert all(not item.get("roads_json") for item in LOCAL_REPLAY_CATALOG)
+    assert all(not item.get("roads_json") for item in ALL_LOCAL_REPLAY_CATALOG)

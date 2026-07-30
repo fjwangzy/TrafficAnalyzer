@@ -72,6 +72,31 @@ def _percentile(values: list[float], percentile: float) -> float | None:
     return round(float(np.percentile(values, percentile)), 3)
 
 
+def _adaptive_imgsz_summary(samples: list[dict]) -> dict:
+    imgsz_counts: Counter[str] = Counter()
+    tier_counts: Counter[str] = Counter()
+    switch_counts: list[int] = []
+    for sample in samples:
+        imgsz = sample.get("effective_imgsz")
+        tier = sample.get("tier")
+        if isinstance(imgsz, (int, float)):
+            imgsz_counts[str(int(imgsz))] += 1
+        if isinstance(tier, str) and tier:
+            tier_counts[tier] += 1
+        try:
+            switch_counts.append(max(0, int(sample.get("switch_count") or 0)))
+        except (TypeError, ValueError):
+            continue
+    return {
+        "samples": len(samples),
+        "imgsz_counts": dict(sorted(imgsz_counts.items())),
+        "tier_counts": dict(sorted(tier_counts.items())),
+        "max_switch_count": max(switch_counts, default=0),
+        "all_effective_imgsz_960": bool(samples)
+        and imgsz_counts == Counter({"960": len(samples)}),
+    }
+
+
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as stream:
@@ -213,29 +238,40 @@ def _candidate_geometry_metrics(element: FrameElement) -> dict:
         )
     }
     for candidate in element.candidate_trajectories or []:
+        try:
+            association_id = int(
+                candidate.get("association_id", candidate.get("track_id"))
+            )
+        except (TypeError, ValueError):
+            alignment_failures += 1
+            continue
         px = candidate.get("trajectory_px") or []
         display = candidate.get("trajectory_display_px") or []
         timestamps = candidate.get("trajectory_timestamps_sec") or []
         frame_nums = candidate.get("trajectory_frame_nums") or []
+        # Candidate buffers and current association previews have different
+        # lifecycles.  Validate only lineage declared by the candidate itself;
+        # borrowing a shorter current-association tail creates false failures.
         lineage = candidate.get("point_quality_lineage") or []
         enu = candidate.get("trajectory_enu_m") or []
+        gcj = candidate.get("trajectory_gcj02") or []
         aligned = (
             bool(px)
-            and bool(display)
-            and len(display) <= len(px)
-            and len(px) == len(timestamps) == len(frame_nums) == len(lineage)
+            and len(px) == len(timestamps) == len(frame_nums)
         )
-        if enu:
+        if display:
+            aligned = aligned and len(display) <= len(px)
+        if lineage:
+            aligned = aligned and len(lineage) == len(px)
+        if enu or "trajectory_enu_m" in candidate:
             aligned = aligned and len(enu) == len(px)
+        if gcj or "trajectory_gcj02" in candidate:
+            aligned = aligned and len(gcj) == len(px)
         alignment_failures += int(not aligned)
 
-        try:
-            track_id = int(candidate.get("track_id"))
-        except (TypeError, ValueError):
-            continue
-        bbox = tracked.get(track_id)
-        if bbox is not None and display:
-            endpoint = np.asarray(display[-1], dtype=np.float64)
+        bbox = tracked.get(association_id)
+        if bbox is not None and px:
+            endpoint = np.asarray(px[-1], dtype=np.float64)
             ground = np.asarray(
                 [(float(bbox[0]) + float(bbox[2])) / 2.0, float(bbox[3])],
                 dtype=np.float64,
@@ -246,6 +282,23 @@ def _candidate_geometry_metrics(element: FrameElement) -> dict:
         "alignment_failures": alignment_failures,
         "endpoint_bbox_residual_px": endpoint_bbox_residual_px,
     }
+
+
+def _capability_leak_counts(element: FrameElement) -> dict[str, int]:
+    """Count only outputs forbidden by their own capability gate.
+
+    Pixel identities, image trajectories and generic detection counts remain
+    valid when geographic or road enrichment is unavailable.
+    """
+    road_leak = bool(
+        not bool(getattr(element, "road_analytics_eligible", False))
+        and (element.formal_track_ids or [])
+    )
+    tcc_leak = bool(
+        not bool(getattr(element, "tcc_analytics_eligible", False))
+        and (element.conflict_events or [])
+    )
+    return {"road": int(road_leak), "tcc": int(tcc_leak)}
 
 
 def _draw_evidence(frame: np.ndarray, element: FrameElement) -> np.ndarray:
@@ -402,6 +455,7 @@ def run(args: argparse.Namespace, bundle: dict) -> dict:
 
     inference_ms: list[float] = []
     frame_wall_ms: list[float] = []
+    adaptive_imgsz_samples: list[dict] = []
     phase_counts: Counter[str] = Counter()
     window_counts: dict[str, Counter[str]] = defaultdict(Counter)
     phase_segments: list[dict] = []
@@ -431,7 +485,8 @@ def run(args: argparse.Namespace, bundle: dict) -> dict:
     formal_track_observations = 0
     candidate_track_observations = 0
     departure_candidate_track_observations = 0
-    degraded_business_leaks = 0
+    road_capability_leaks = 0
+    tcc_capability_leaks = 0
     alignment_failures = 0
     completed_alignment_failures = 0
     candidate_alignment_failures = 0
@@ -442,6 +497,8 @@ def run(args: argparse.Namespace, bundle: dict) -> dict:
     shadow_unmatched_legacy = 0
     termination_reason_counts: Counter[str] = Counter()
     hover_exit_quality_break_observed = False
+    pre_departure_track_ids: set[int] = set()
+    post_departure_track_ids: set[int] = set()
     last_timestamp = args.start_offset_sec
     started_at = time.perf_counter()
     args.screenshots_dir.mkdir(parents=True, exist_ok=True)
@@ -473,6 +530,9 @@ def run(args: argparse.Namespace, bundle: dict) -> dict:
         processed_frames += 1
         detection_count = len(element.detected_xyxy or [])
         detection_diagnostics = element.detection_diagnostics or {}
+        adaptive_diagnostics = detection_diagnostics.get("adaptive_imgsz")
+        if isinstance(adaptive_diagnostics, dict):
+            adaptive_imgsz_samples.append(dict(adaptive_diagnostics))
         raw_detections += int(
             detection_diagnostics.get("raw_detection_count") or detection_count
         )
@@ -526,6 +586,14 @@ def run(args: argparse.Namespace, bundle: dict) -> dict:
             )
         for track_id in element.id_list or []:
             track_observations[int(track_id)].append(timestamp)
+        active_track_ids = {
+            int(track_id)
+            for track_id in (element.track_id_by_association or {}).values()
+        }
+        if args.departure_offset_sec - 2.0 <= timestamp < args.departure_offset_sec:
+            pre_departure_track_ids.update(active_track_ids)
+        elif args.departure_offset_sec <= timestamp <= args.departure_offset_sec + 2.0:
+            post_departure_track_ids.update(active_track_ids)
         termination_reason = (element.tracking_diagnostics or {}).get(
             "termination_reason"
         )
@@ -541,20 +609,14 @@ def run(args: argparse.Namespace, bundle: dict) -> dict:
         ):
             hover_exit_quality_break_observed = True
 
-        if element.formal_analytics_eligible:
+        if element.trajectory_output_eligible:
             alignment_failures += sum(
                 not _track_lengths_aligned(track)
                 for track in (element.buffer_tracks or {}).values()
             )
-        else:
-            info = element.info or {}
-            leak = bool(
-                (element.formal_track_ids or [])
-                or (element.buffer_tracks or {})
-                or (element.conflict_events or [])
-                or info.get("cars_amount") is not None
-            )
-            degraded_business_leaks += int(leak)
+        capability_leaks = _capability_leak_counts(element)
+        road_capability_leaks += capability_leaks["road"]
+        tcc_capability_leaks += capability_leaks["tcc"]
 
         for completed in element.completed_tracks or []:
             completed_tracks[int(completed["track_id"])] = completed
@@ -600,9 +662,16 @@ def run(args: argparse.Namespace, bundle: dict) -> dict:
                     "formal_analytics_eligible": bool(
                         element.formal_analytics_eligible
                     ),
+                    "trajectory_output_eligible": bool(
+                        element.trajectory_output_eligible
+                    ),
+                    "geo_analytics_eligible": bool(element.geo_analytics_eligible),
+                    "road_analytics_eligible": bool(element.road_analytics_eligible),
+                    "tcc_analytics_eligible": bool(element.tcc_analytics_eligible),
                     "detections": detection_count,
                     "tracks": association_count,
                     "candidate_trace_pixels": candidate_trace_pixels,
+                    "trajectory_trace_pixels": candidate_trace_pixels,
                 }
         if processed_frames % args.progress_every == 0:
             elapsed = time.perf_counter() - started_at
@@ -651,28 +720,36 @@ def run(args: argparse.Namespace, bundle: dict) -> dict:
         formal_visual_valid_frames / formal_frames if formal_frames else 0.0
     )
     source_sample_hz = fps / args.stride
+    steady_p50 = _percentile(steady_inference, 50)
     steady_p95 = _percentile(steady_inference, 95)
     frame_p95 = _percentile(frame_wall_ms[min(3, len(frame_wall_ms)) :], 95)
     endpoint_bbox_p95 = _percentile(candidate_endpoint_bbox_residual_px, 95)
     lineage = bundle["visual_registration"]
-    candidate_trail_evidence = [
+    trajectory_trail_evidence = [
         evidence
         for evidence in representative_saved.values()
-        if not evidence["formal_analytics_eligible"]
-        and evidence["candidate_trace_pixels"] > 0
+        if evidence["trajectory_output_eligible"]
+        and not evidence["road_analytics_eligible"]
+        and evidence["trajectory_trace_pixels"] > 0
     ]
+    track_ids_across_departure = pre_departure_track_ids & post_departure_track_ids
+    adaptive_imgsz = _adaptive_imgsz_summary(adaptive_imgsz_samples)
     gates = {
         "mps_runtime_available": args.device != "mps" or torch.backends.mps.is_available(),
         "source_sample_hz_gte_6": source_sample_hz >= 6.0,
+        "steady_detector_p50_lte_100ms": steady_p50 is not None and steady_p50 <= 100.0,
         "steady_detector_p95_lte_1s": steady_p95 is not None and steady_p95 <= 1000.0,
         "single_process_frame_p95_lte_1s": frame_p95 is not None and frame_p95 <= 1000.0,
         "telemetry_coverage_gte_95pct": telemetry_coverage >= 0.95,
         "detections_present": total_detections > 0 and detection_coverage >= 0.95,
         "zero_invalid_detection_geometry": invalid_detection_geometry_count == 0,
+        "adaptive_imgsz_all_960": adaptive_imgsz["all_effective_imgsz_960"],
+        "adaptive_imgsz_zero_switches": adaptive_imgsz["max_switch_count"] == 0,
         "hover_verified_observed": phase_counts["hover_verified"] > 0,
         "hover_exit_quality_break_observed": hover_exit_quality_break_observed,
-        "quality_break_terminates_formal_tracks": (
-            termination_reason_counts["mode_transition_quality_break"] > 0
+        "quality_break_preserves_image_identity": (
+            bool(track_ids_across_departure)
+            and termination_reason_counts["mode_transition_quality_break"] == 0
         ),
         "departure_motion_phase_observed": (
             phase_counts["cruise_nadir"] + phase_counts["unsupported_pose"] > 0
@@ -680,7 +757,8 @@ def run(args: argparse.Namespace, bundle: dict) -> dict:
         "formal_hover_observed": formal_hover_frames > 0,
         "formal_visual_valid_ratio_gte_95pct": formal_visual_valid_ratio >= 0.95,
         "candidate_departure_observed": departure_candidate_track_observations > 0,
-        "zero_degraded_business_leak": degraded_business_leaks == 0,
+        "zero_road_capability_leak": road_capability_leaks == 0,
+        "zero_tcc_capability_leak": tcc_capability_leaks == 0,
         "active_trajectory_point_alignment": alignment_failures == 0,
         "completed_trajectory_point_alignment": completed_alignment_failures == 0,
         "candidate_trajectory_point_alignment": candidate_alignment_failures == 0,
@@ -700,13 +778,13 @@ def run(args: argparse.Namespace, bundle: dict) -> dict:
             )
         ),
         "natural_eof_flush": tracker_flush.get("termination_reason") == "natural_eof",
-        "candidate_output_trail_rendered": bool(candidate_trail_evidence),
+        "trajectory_output_trail_rendered": bool(trajectory_trail_evidence),
         "representative_evidence_complete": set(representative_saved)
         == set(representative_targets),
     }
     engineering_passed = all(gates.values())
     return {
-        "schema_version": "uav.xqh-hover-departure-acceptance/v1",
+        "schema_version": "uav.xqh-hover-departure-acceptance/v2",
         "generated_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
         "acceptance_scope": {
             "type": "engineering_real_video_acceptance",
@@ -717,8 +795,9 @@ def run(args: argparse.Namespace, bundle: dict) -> dict:
                 "MPS steady-state timing",
                 "hover-to-departure phase and quality transition",
                 "pre-georeference image-motion ByteTrack and legacy shadow comparison",
-                "production ShowNode candidate-trail rendering",
-                "zero degraded trajectory leakage into formal statistics/TCC",
+                "production ShowNode image-trajectory rendering",
+                "road and TCC output isolation by explicit capability gates",
+                "image identity continuity across geographic quality breaks",
                 "natural EOF and per-point trajectory alignment",
                 "MPS detection geometry and post-ID image/world coordinate alignment",
             ],
@@ -755,6 +834,7 @@ def run(args: argparse.Namespace, bundle: dict) -> dict:
             "weight": config["detection_node"]["weight_pth"],
             "model_id": detector.yolo_model_id,
             "imgsz": config["detection_node"]["imgsz"],
+            "adaptive_imgsz": adaptive_imgsz,
             "confidence": config["detection_node"]["confidence"],
             "stride": args.stride,
             "source_fps": round(fps, 6),
@@ -767,7 +847,7 @@ def run(args: argparse.Namespace, bundle: dict) -> dict:
             "processed_frames": processed_frames,
             "wall_sec": round(wall_sec, 3),
             "cold_inference_ms": inference_ms[0] if inference_ms else None,
-            "steady_inference_p50_ms": _percentile(steady_inference, 50),
+            "steady_inference_p50_ms": steady_p50,
             "steady_inference_p95_ms": steady_p95,
             "steady_inference_max_ms": round(max(steady_inference), 3)
             if steady_inference
@@ -816,7 +896,13 @@ def run(args: argparse.Namespace, bundle: dict) -> dict:
             "formal_visual_valid_ratio": round(formal_visual_valid_ratio, 6),
             "formal_frames": formal_frames,
             "formal_hover_frames": formal_hover_frames,
-            "degraded_business_leaks": degraded_business_leaks,
+            "road_capability_leaks": road_capability_leaks,
+            "tcc_capability_leaks": tcc_capability_leaks,
+            "pre_departure_track_ids": len(pre_departure_track_ids),
+            "post_departure_track_ids": len(post_departure_track_ids),
+            "track_ids_preserved_across_departure": len(
+                track_ids_across_departure
+            ),
             "active_alignment_failures": alignment_failures,
             "completed_alignment_failures": completed_alignment_failures,
             "candidate_alignment_failures": candidate_alignment_failures,

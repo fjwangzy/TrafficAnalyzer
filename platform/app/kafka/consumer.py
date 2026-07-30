@@ -78,7 +78,12 @@ class KafkaConsumerService:
             request_timeout_ms=10000,
             retry_backoff_ms=500,
             metadata_max_age_ms=5000,
-            max_poll_interval_ms=300000,
+            # One canonical stats record can fan out into many Timescale rows.
+            # Keep delivery strictly one-at-a-time and allow a slow durable
+            # commit to finish without expiring group membership and replaying
+            # the same partition after a rebalance.
+            max_poll_records=1,
+            max_poll_interval_ms=1800000,
         )
 
         try:

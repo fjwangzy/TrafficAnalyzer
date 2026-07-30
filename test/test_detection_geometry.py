@@ -3,7 +3,10 @@ from types import SimpleNamespace
 import numpy as np
 
 from elements.FrameElement import FrameElement
+from elements.VideoEndBreakElement import VideoEndBreakElement
 from nodes.DetectionNode import DetectionNode
+from nodes.DetectionTrackingNodes import DetectionTrackingNodes
+from utils_local.adaptive_imgsz import AdaptiveImageSizePolicy
 from utils_local.detection_geometry import (
     configure_safe_mps_box_clipping,
     extract_valid_detections,
@@ -126,3 +129,101 @@ def test_detection_node_publishes_only_valid_rows_and_geometry_diagnostics():
     assert result.detected_cls == ["car"]
     assert result.detection_diagnostics["invalid_geometry_count"] == 1
     assert result.detection_diagnostics["safe_mps_box_clipping"] is False
+
+
+def test_detection_node_uses_altitude_selected_imgsz_and_publishes_context():
+    calls = []
+
+    def predict(*_args, **kwargs):
+        calls.append(kwargs)
+        return [SimpleNamespace(boxes=_boxes([], [], []))]
+
+    node = object.__new__(DetectionNode)
+    node.model = SimpleNamespace(predict=predict)
+    node.imgsz = 960
+    node.imgsz_policy = AdaptiveImageSizePolicy(
+        {
+            "enabled": True,
+            "low_imgsz": 640,
+            "medium_imgsz": 960,
+            "high_imgsz": 1280,
+        },
+        fallback_imgsz=960,
+    )
+    node.conf = 0.05
+    node.iou = 0.4
+    node.classes_to_detect = [3]
+    node.device = "cpu"
+    node.half = False
+    node.classes = {3: "car"}
+    node.yolo_model_id = "test-model"
+    node.safe_mps_box_clipping = False
+    frame = FrameElement(
+        source="test",
+        frame=np.zeros((2160, 3840, 3), dtype=np.uint8),
+        timestamp=4.0,
+        frame_num=10,
+        roads_info={},
+    )
+    frame.telemetry = {"altitude_agl": 90.0}
+
+    result = node.process(frame)
+
+    assert calls[0]["imgsz"] == 640
+    assert result.detection_diagnostics["adaptive_imgsz"]["effective_imgsz"] == 640
+    assert result.inference_context == {
+        "metric_scope": "yolo_predict_single_processed_frame",
+        "device": "cpu",
+        "precision": "fp32",
+        "model": "test-model",
+        "effective_imgsz": 640,
+        "agl_tier": "low",
+    }
+
+
+def test_legacy_detection_tracking_uses_the_same_altitude_policy():
+    calls = []
+
+    def predict(*_args, **kwargs):
+        calls.append(kwargs)
+        return [SimpleNamespace(boxes=_boxes([], [], []))]
+
+    node = object.__new__(DetectionTrackingNodes)
+    node.model = SimpleNamespace(predict=predict)
+    node.tracker = SimpleNamespace(update=lambda *_args, **_kwargs: [])
+    node.imgsz = 960
+    node.imgsz_policy = AdaptiveImageSizePolicy(
+        {"enabled": True, "low_imgsz": 640, "medium_imgsz": 960, "high_imgsz": 1280},
+        fallback_imgsz=960,
+    )
+    node.conf = 0.05
+    node.iou = 0.4
+    node.classes_to_detect = [3]
+    node.device = "cpu"
+    node.half = False
+    node.classes = {3: "car"}
+    node.yolo_model_id = "test-model"
+    node.safe_mps_box_clipping = False
+    frame = FrameElement(
+        source="test",
+        frame=np.zeros((2160, 3840, 3), dtype=np.uint8),
+        timestamp=4.0,
+        frame_num=10,
+        roads_info={},
+    )
+    frame.telemetry = {"altitude_agl": 180.0}
+
+    result = node.process(frame)
+
+    assert calls[0]["imgsz"] == 1280
+    assert result.detection_diagnostics["adaptive_imgsz"]["tier"] == "high"
+    assert result.inference_context["effective_imgsz"] == 1280
+
+
+def test_both_detection_paths_forward_eof_without_calling_yolo():
+    sentinel = VideoEndBreakElement("fixture.mp4", 9.5)
+    detector = object.__new__(DetectionNode)
+    legacy = object.__new__(DetectionTrackingNodes)
+
+    assert detector.process(sentinel) is sentinel
+    assert legacy.process(sentinel) is sentinel

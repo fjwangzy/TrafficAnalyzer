@@ -15,11 +15,11 @@ from utils_local.utils import profile_time
 
 
 class PostTrackingWorldProjectionNode:
-    """Project image associations into the map and segment formal business IDs.
+    """Enrich stable image associations with optional world-coordinate facts.
 
-    The node runs strictly after ``GroundTrajectoryTrackerNode``.  Homography
-    error may degrade or terminate a formal business segment, but it can never
-    alter the already assigned image association ID.
+    The node runs strictly after ``GroundTrajectoryTrackerNode``. Geographic
+    or road quality may make one enrichment point null, but neither can change
+    the output track identity or terminate its image-trajectory lifecycle.
     """
 
     tracking_method = "motion_compensated_image_v2"
@@ -29,32 +29,31 @@ class PostTrackingWorldProjectionNode:
         self._tail_points = int(
             tracker_cfg.get("candidate_trajectory_tail_points", 30)
         )
-        self._next_formal_track_id = 1
-        self._formal_id_by_association: dict[int, int] = {}
-        self._previous_formal_id_by_association: dict[int, int] = {}
+        self._next_track_id = 1
+        self._track_id_by_association: dict[int, int] = {}
+        self._previous_track_id_by_association: dict[int, int] = {}
         self._world_history: dict[int, dict[str, list]] = {}
-        self._last_formal_eligible: bool | None = None
         self.last_flush_result: dict | None = None
 
-    def _allocate_formal_track_id(self) -> int:
-        track_id = self._next_formal_track_id
-        self._next_formal_track_id += 1
+    def _allocate_track_id(self) -> int:
+        track_id = self._next_track_id
+        self._next_track_id += 1
         return track_id
 
-    def _close_formal_segments(
+    def _close_tracks(
         self, association_ids: set[int] | None = None
     ) -> tuple[list[int], list[int]]:
         targets = (
-            set(self._formal_id_by_association)
+            set(self._track_id_by_association)
             if association_ids is None
-            else set(association_ids) & set(self._formal_id_by_association)
+            else set(association_ids) & set(self._track_id_by_association)
         )
-        formal_ids = []
+        track_ids = []
         for association_id in sorted(targets):
-            formal_id = self._formal_id_by_association.pop(association_id)
-            self._previous_formal_id_by_association[association_id] = formal_id
-            formal_ids.append(formal_id)
-        return sorted(formal_ids), sorted(targets)
+            track_id = self._track_id_by_association.pop(association_id)
+            self._previous_track_id_by_association[association_id] = track_id
+            track_ids.append(track_id)
+        return sorted(track_ids), sorted(targets)
 
     @staticmethod
     def _project_pixel_point(
@@ -109,7 +108,11 @@ class PostTrackingWorldProjectionNode:
                 "point_quality_lineage": [],
             },
         )
-        world_position = self._project_pixel_point(frame_element, pixel_point)
+        world_position = (
+            self._project_pixel_point(frame_element, pixel_point)
+            if is_formal
+            else None
+        )
         if world_position is not None:
             world_fact = [
                 float(world_position[0]),
@@ -127,7 +130,9 @@ class PostTrackingWorldProjectionNode:
                 "frame_num": int(frame_element.frame_num),
                 "flight_phase": getattr(frame_element, "flight_phase", None),
                 "flight_segment_id": getattr(frame_element, "flight_segment_id", None),
-                "geo_reference_quality": geo_quality.get("status"),
+                "geo_reference_quality": geo_quality.get(
+                    "geo_status", geo_quality.get("status")
+                ),
                 "tracking_quality": "verified" if is_formal else "degraded",
             }
         )
@@ -139,7 +144,7 @@ class PostTrackingWorldProjectionNode:
     def _enrich_trajectories(
         self,
         frame_element: FrameElement,
-        formal_association_ids: set[int],
+        active_association_ids: set[int],
         covered_association_ids: set[int],
     ) -> None:
         raw_trajectories = getattr(frame_element, "association_trajectories", None) or []
@@ -162,27 +167,50 @@ class PostTrackingWorldProjectionNode:
             trajectory_px = raw.get("trajectory_px") or []
             if not trajectory_px:
                 continue
-            is_formal = association_id in formal_association_ids
+            is_active = association_id in active_association_ids
+            geo_eligible = bool(frame_element.geo_analytics_eligible)
+            road_eligible = (
+                bool(frame_element.road_analytics_eligible)
+                and association_id in covered_association_ids
+            )
             history = self._append_world_fact(
                 frame_element,
                 association_id,
                 list(trajectory_px[-1]),
-                is_formal,
+                geo_eligible,
             )
-            reasons = [] if is_formal else quality_reasons.copy()
-            if (
-                not is_formal
-                and bool(frame_element.formal_analytics_eligible)
-                and association_id not in covered_association_ids
-            ):
-                reasons = ["target_outside_map_coverage"]
-            elif not is_formal and not reasons:
-                reasons = ["formal_analytics_disabled"]
+            reasons = [] if geo_eligible else quality_reasons.copy()
+            if not road_eligible and association_id not in covered_association_ids:
+                reasons.append("target_outside_map_coverage")
+            reasons = list(dict.fromkeys(reasons))
+            track_id = self._track_id_by_association.get(association_id, association_id)
 
             item = dict(raw)
             item.update(
                 {
-                    "tracking_quality": "verified" if is_formal else "degraded",
+                    "track_id": track_id,
+                    "association_id": association_id,
+                    "trajectory_output_eligible": is_active,
+                    "geo_analytics_eligible": geo_eligible,
+                    "road_analytics_eligible": road_eligible,
+                    "tcc_analytics_eligible": bool(
+                        frame_element.tcc_analytics_eligible
+                    ),
+                    "tracking_quality": (
+                        (frame_element.tracking_diagnostics or {}).get(
+                            "association_quality", "verified"
+                        )
+                    ),
+                    "geo_reference_quality": quality.get(
+                        "geo_status", quality.get("status", "degraded")
+                    ),
+                    "road_match_quality": (
+                        "verified"
+                        if road_eligible
+                        else "missing"
+                        if "lane_verified_map_required" in quality_reasons
+                        else "degraded"
+                    ),
                     "quality_reasons": reasons,
                     "flight_phase": getattr(frame_element, "flight_phase", None),
                     "flight_segment_id": getattr(
@@ -208,7 +236,7 @@ class PostTrackingWorldProjectionNode:
                     trajectory_gcj02.append([round(lon, 8), round(lat, 8)])
                 item["trajectory_gcj02"] = trajectory_gcj02
             enriched.append(item)
-            if not is_formal:
+            if not is_active:
                 candidates.append(item)
         frame_element.association_trajectories = enriched
         frame_element.candidate_trajectories = candidates
@@ -217,15 +245,14 @@ class PostTrackingWorldProjectionNode:
         return self.process(frame_element)
 
     def flush(self, reason: str) -> dict:
-        formal_ids, association_ids = self._close_formal_segments()
+        track_ids, association_ids = self._close_tracks()
         result = {
             "tracking_method": self.tracking_method,
-            "terminated_track_ids": formal_ids,
+            "terminated_track_ids": track_ids,
             "terminated_association_ids": association_ids,
             "termination_reason": reason,
         }
         self._world_history.clear()
-        self._last_formal_eligible = None
         self.last_flush_result = result
         return result
 
@@ -246,31 +273,10 @@ class PostTrackingWorldProjectionNode:
         termination_reason = diagnostics.get("termination_reason")
 
         if terminated_association_ids:
-            closed_formal, _ = self._close_formal_segments(
+            closed_tracks, _ = self._close_tracks(
                 set(terminated_association_ids)
             )
-            terminated_formal_ids.extend(closed_formal)
-
-        current_formal = bool(frame_element.formal_analytics_eligible)
-        if (
-            self._last_formal_eligible is True
-            and not current_formal
-            and not termination_reason
-        ):
-            closed_formal, closed_associations = self._close_formal_segments()
-            terminated_formal_ids.extend(closed_formal)
-            terminated_association_ids.extend(closed_associations)
-            quality_reasons = set(
-                (getattr(frame_element, "geo_reference_quality", None) or {}).get(
-                    "reasons"
-                )
-                or []
-            )
-            termination_reason = (
-                "telemetry_gap"
-                if {"telemetry_gap", "telemetry_unavailable"} & quality_reasons
-                else "mode_transition_quality_break"
-            )
+            terminated_formal_ids.extend(closed_tracks)
 
         active_association_ids = {int(value) for value in (frame_element.id_list or [])}
         association_state_ids = set(
@@ -289,58 +295,56 @@ class PostTrackingWorldProjectionNode:
         }
         associations_to_close = {
             association_id
-            for association_id in self._formal_id_by_association
+            for association_id in self._track_id_by_association
             if association_id not in association_state_ids
-            or not current_formal
-            or association_id not in covered_association_ids
         }
         if associations_to_close:
-            closed_formal, closed_associations = self._close_formal_segments(
+            closed_tracks, closed_associations = self._close_tracks(
                 associations_to_close
             )
-            terminated_formal_ids.extend(closed_formal)
+            terminated_formal_ids.extend(closed_tracks)
             terminated_association_ids.extend(closed_associations)
-            termination_reason = termination_reason or (
-                "target_left_map_coverage"
-                if current_formal
-                else "mode_transition_quality_break"
-            )
+            termination_reason = termination_reason or "association_ended"
 
-        if current_formal:
-            for association_id in sorted(covered_association_ids):
-                if association_id not in self._formal_id_by_association:
-                    self._formal_id_by_association[association_id] = (
-                        self._allocate_formal_track_id()
-                    )
-            formal_association_ids = set(covered_association_ids)
-        else:
-            formal_association_ids = set()
+        for association_id in sorted(active_association_ids):
+            if association_id not in self._track_id_by_association:
+                self._track_id_by_association[association_id] = self._allocate_track_id()
 
-        frame_element.formal_track_ids = sorted(formal_association_ids)
+        road_association_ids = (
+            set(covered_association_ids)
+            if bool(frame_element.road_analytics_eligible)
+            else set()
+        )
+
+        frame_element.trajectory_output_eligible = bool(active_association_ids)
+        frame_element.trajectory_association_ids = sorted(active_association_ids)
+        frame_element.track_id_by_association = {
+            association_id: self._track_id_by_association[association_id]
+            for association_id in sorted(active_association_ids)
+        }
+        frame_element.formal_track_ids = sorted(road_association_ids)
         frame_element.formal_track_id_by_association = {
-            association_id: self._formal_id_by_association[association_id]
-            for association_id in sorted(formal_association_ids)
+            association_id: self._track_id_by_association[association_id]
+            for association_id in sorted(road_association_ids)
         }
         frame_element.previous_formal_track_id_by_association = {
-            association_id: self._previous_formal_id_by_association[association_id]
-            for association_id in sorted(formal_association_ids)
-            if association_id in self._previous_formal_id_by_association
+            association_id: self._previous_track_id_by_association[association_id]
+            for association_id in sorted(active_association_ids)
+            if association_id in self._previous_track_id_by_association
         }
         self._enrich_trajectories(
             frame_element,
-            formal_association_ids,
+            active_association_ids,
             covered_association_ids,
         )
-        geo_quality = getattr(frame_element, "geo_reference_quality", None) or {}
         diagnostics.update(
             {
                 "world_projection_stage": "post_bytetrack",
                 "tracking_quality": (
-                    "verified"
-                    if current_formal and geo_quality.get("status") == "verified"
-                    else "degraded"
+                    "verified" if active_association_ids else "degraded"
                 ),
-                "formal_track_count": len(formal_association_ids),
+                "trajectory_track_count": len(active_association_ids),
+                "formal_track_count": len(road_association_ids),
                 "candidate_track_count": len(
                     frame_element.candidate_trajectories or []
                 ),
@@ -352,5 +356,4 @@ class PostTrackingWorldProjectionNode:
             }
         )
         frame_element.tracking_diagnostics = diagnostics
-        self._last_formal_eligible = current_formal
         return frame_element

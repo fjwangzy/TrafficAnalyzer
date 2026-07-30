@@ -357,23 +357,25 @@ detection_node:
 
 #### 改进 12：Kalman 门控 + Mahalanobis 距离辅助关联
 
-**目标**：利用 Kalman 预测的不确定性进行门控，减少不合理匹配
+**状态（2026-07-29）**：生产硬门控已撤销，保留为 shadow-only 诊断。
 
-**方案**：
-- 当前 ByteTrack 已有 `gate_cost_matrix` 和 `fuse_motion` 函数（[matching.py:145-169](file:///Users/yaoyao/ai/TrafficAnalyzer/byte_tracker/utils/matching.py#L145-L169)），但**未被调用**
-- 在第一级关联（高分检测）中加入 Mahalanobis 距离门控，排除 Kalman 预测范围外的不合理匹配
+7 月 28 日曾在第一级关联中无条件调用 `gate_cost_matrix(..., only_position=True)`。该实现使用
+固定 `dt=1` 的 Kalman 协方差，却运行在生产默认 `frame_stride=5` 的 4K 小目标上。真实 xqh
+同检测输入消融证明，这会把正常位移当作越门候选，造成轨迹短命和 ID 重建，原“减少误匹配
+15–25%”只是未经真值验证的预期，不能作为已取得收益。
 
-**修改文件**：[byte_tracker_model.py](file:///Users/yaoyao/ai/TrafficAnalyzer/byte_tracker/byte_tracker_model.py) 的 `update` 方法
+当前第一轮关联仍以相机补偿后 IoU、检测置信度和类别软约束为生产代价。Mahalanobis 只在代价
+副本上计算，并通过 `tracking_diagnostics.mahalanobis_gate` 记录本来会拒绝的有效候选和会失去
+全部候选的轨迹数，不得改写匈牙利匹配输入。
 
 ```python
-# 在 Step 2 后添加门控
-dists = self._association_distance(strack_pool, detections)
-dists = matching.fuse_score(dists, detections)
-dists = matching.gate_cost_matrix(self.kalman_filter, dists, strack_pool, detections)
+# 只读诊断；linear_assignment 继续使用 dists
+shadow_gated_dists = matching.gate_cost_matrix(
+    self.kalman_filter, dists.copy(), strack_pool, detections, only_position=True
+)
 ```
 
-**预期收益**：减少远距离误匹配 15-25%
-**实施难度**：低（代码已存在，仅需调用）
+只有取得外部批准的身份真值并完成动态 `dt`/噪声标定后，才允许重新评审生产硬门控。
 
 ---
 
@@ -399,7 +401,7 @@ quadrantChart
     "9.SAHI切片推理": [0.55, 0.80]
     "10.ReID外观": [0.85, 0.85]
     "11.TTA精修": [0.10, 0.30]
-    "12.Mahal门控": [0.20, 0.55]
+    "12.Mahal shadow": [0.20, 0.20]
 ```
 
 ## 四、推荐实施路线
@@ -407,7 +409,7 @@ quadrantChart
 ### 第一阶段（1-2 周）— 无痛改进
 > 不改架构，不增依赖，仅调参数和激活已有代码
 
-- [x] **改进 12**：激活 Mahalanobis 门控（代码已存在，加一行调用）
+- [x] **改进 12**：生产硬门控撤销，保留 shadow-only 诊断并增加真实 stride 回归
 - [ ] **改进 7**：前景感知 NMS（设置 `agnostic_nms=False`）
 - [ ] **改进 11**：评估 TTA 对离线场景的收益
 - [ ] **改进 1**：置信度分层门控

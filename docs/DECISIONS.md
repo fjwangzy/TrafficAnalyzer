@@ -789,7 +789,8 @@ Platform 在容器内启动 YOLO 时只能走 CPU，真实任务常态 `inferenc
 
 ### 状态
 
-已实施并通过单元、真实 xqh 工程回归；生产准确率不在无真值条件下作声明。
+已实施并通过单元、真实 xqh 工程回归；其中“地理/地图质量中断结束正式业务分段”的生命周期
+规则已由 ADR-025 取代。以下相关描述作为历史决策背景保留，当前实现以 ADR-025 为准。
 
 ### 背景
 
@@ -856,3 +857,88 @@ ImageMotionEstimationNode
 ### 后果
 
 工程状态使用`local_engineering_acceptance_passed / production_accuracy_not_claimed`。它表示已验证的检测、候选跟踪、正式质量隔离与悬停流程可以交付，不等于宣称12m/s巡航精度。若未来外部项目提供经批准真值，可另行运行只读评测，但不扩大本项目范围。
+
+## ADR-025：轨迹生命周期与路网匹配解耦（2026-07-28）
+
+### 状态
+
+已实施；取代 ADR-023 中“地图/地理质量中断结束正式 track_id”的部分。ADR-023 的纯图像前置关联、逐帧世界事实和显示隔离继续有效。
+
+### 决策
+
+- 图像轨迹是基础业务事实。ByteTrack 确认关联后立即分配稳定 `track_id`；只有关联消失、源时间断点、超时或自然 EOF 结束轨迹。
+- 能力拆为 `trajectory_output_eligible`、`geo_analytics_eligible`、`road_analytics_eligible` 与 `tcc_analytics_eligible`。兼容字段 `formal_analytics_eligible` 只表示完整道路分析能力，不控制轨迹缓冲或完成事件。
+- `uav_track_complete/v1` 不换 Topic 或版本。像素、源时间和帧号必填同索引；ENU/GCJ-02 等长且可逐点为 `null`。地图、车道、Link 与匹配置信度可空；Movement/方向属于轨迹自身世界运动事实，不由路网匹配赋值。
+- 地理配准从地图中抽为版本化、checksum 保护的 SourceGeoRegistration。Mission 固定 verified 配准；地图 Bundle 可选。坐标版本/锚点不兼容只关闭道路分析并记录 `version_mismatch`。
+- 速度/方向仅消费可信 ENU；road gate 只控制 Lane/Link ID 与匹配质量，且 RoadMapMatching 禁止创建或覆盖世界坐标和轨迹自身的方向/转向。通用车辆计数继续消费成熟图像轨迹；TCC 使用独立世界坐标、时间、跟踪和证据门禁。缺事实字段为空，禁止伪造零速度或零道路指标。
+
+### 后果
+
+无地图、无配准仍必须输出成熟像素轨迹；有配准无地图可输出世界轨迹和速度；完整 verified 配准与地图继续提供车道级能力。候选只表示未成熟关联。该变更恢复轨迹事件不等于生产跟踪精度验收；无外部真值时 IDF1/HOTA、ID switch、位置 RMSE 与速度 MAE 仍为 `not_evaluated`。
+
+## ADR-026：固定时间步 Mahalanobis 门控退出生产关联（2026-07-29）
+
+### 状态
+
+已实施；生产关联恢复通过，Mahalanobis 保留为只读 shadow 诊断。
+
+### 背景
+
+2026-07-28 在 ByteTrack 第一轮高分关联中启用了
+`gate_cost_matrix(..., only_position=True)`。Kalman 模型固定 `dt=1`，生产却默认每 5 个源帧处理一次。
+对 8/10/15px 高的航拍小目标，该门控一次处理分别只允许约 2.69/3.36/5.04px 中心位移；
+车辆正常穿越路口也会被置为无穷代价，随后形成短命 ID 和不成熟尾迹。
+
+同一 xqh 400–430s、同一帧只执行一次 YOLO 的差分回归中，硬门控版本中心轨迹从旧版
+20.84/帧降为 17.38/帧，中心 ID 从 63 增到 192，中位观测寿命从 37 降为 1。关闭硬门控并
+保留相机运动补偿、类别策略、大目标初始化和 2 秒超时后，中心轨迹恢复为 19.81/帧、72 个 ID、
+中位寿命 33。该代理只证明工程回归，不是 IDF1/HOTA。
+
+### 决策
+
+- 第一轮生产关联使用相机补偿后 IoU、检测置信度和类别软约束；Mahalanobis 不再改写匹配代价。
+- 仍在代价副本上执行相同门控，并通过 `tracking_diagnostics.mahalanobis_gate` 输出有效候选数、
+  本来会拒绝的有效候选数和会失去全部候选的轨迹数。
+- 保留 2 秒真实时间丢失窗口、0.5 秒源时间断点、相机运动补偿、类别稳定和道路解耦。
+- 只有取得外部批准的身份真值，并完成动态 dt、过程噪声和不同 stride 标定后，才能重新评审硬门控。
+
+### 验收
+
+`scripts/compare_xqh_bytetrack.py` 固化同检测输入回归。按 canonical 检测几何运行时，当前中心密度
+为 7 月 15 日基线的 95.23%，中心碎片 ID 44、中位寿命 52，三项门禁通过；shadow 证明硬门控会
+拒绝 1080 个本可匹配候选并使 671 条轨迹失去全部候选。完整 xqh 840s–自然 EOF 原生 MPS
+25/25 通过，1142 帧、109899 个合法检测、61831 个关联、road/TCC 泄漏 0。
+
+## ADR-027：AGL 三档推理尺寸与能力感知运行档（2026-07-29）
+
+### 状态
+
+已实施代码与自动化回归。xqh 动态策略 1142 帧全为 960 且零切档，但 YOLO p50=165.8ms，未过
+100ms 性能门。按授权清空固定白名单中的历史轨迹/冲突事实并恢复 Docker 数据盘后，崇华路 v3
+原生 MPS 自然 EOF，产生 6302 条完成轨迹和 56 条有效严格 TCC，88 个唯一证据文件通过 hash/size
+校验。视频对齐 AGL 实为 156.35–178.15m，首帧进入 1280 后从未满足 `<152m` 下切条件，因此零切档
+符合设计；整个遥测文件的 104–222m 范围不能替代对齐窗口。1280 档 YOLO p50=371.4ms，性能门仍失败。
+
+### 决策
+
+- `DetectionNode` 与 legacy `DetectionTrackingNodes` 共用一个只读遥测策略，只接受同步后的
+  `altitude_agl` 或兼容 `height`。三档为 `<112m → 640`、`112–157m → 960`、`>=157m → 1280`；
+  130m 的既有 928 实验归入 960。
+- 最近 5 个有效 AGL 取中位数，边界使用 5m 滞回，新档连续 5 个处理帧成立才切换；首帧立即选档。
+  遥测缺失保持 2 秒源时间，之后回退固定 960。尺寸不得参与关联、世界坐标、道路或 TCC 门禁。
+- FlightPlan/Mission 未显式指定 tracking profile 时，verified SourceGeoRegistration 选择 cruise，
+  否则选择 legacy；显式请求优先。Mission snapshot 固化最终档、原因和注册 checksum，运行/恢复不重选。
+- `inference_ms` 定义为 YOLO 单处理帧耗时；另发 `pipeline_processing_ms` 和推理上下文。TCC 漏斗
+  逐项记录过滤原因。`<100ms` 只能描述指定尺寸下的 YOLO 样本，不代表整帧 P95。
+- Platform Kafka consumer 一次 poll 一条 canonical 消息，`max_poll_interval_ms=1800000`。这样密集
+  Stats 在 Timescale 展开时不会因单条事务超过默认 5 分钟而触发 rebalance；数据库提交后再提交
+  offset、inbox 幂等和消息契约均不改变。
+
+### 后果
+
+历史悬停源在无巡航注册时不会因 cruise 地理质量门把 TCC 全部归零；强制 cruise 且无注册仍保持
+安全负例。动态尺寸可改善不同高度的小目标覆盖，但在无外部批准真值时，IDF1/HOTA、正式 ID switch、
+位置 RMSE 和速度 MAE 继续为 `not_evaluated`。
+
+崇华路这份素材不能作为自然三档切换样本；三档实景延迟/检测/轨迹对比仍需一段对齐 AGL 真正跨越
+107m、117m、152m、162m 滞回阈值的视频，不能通过修改阈值或使用未对齐遥测强行制造切档。

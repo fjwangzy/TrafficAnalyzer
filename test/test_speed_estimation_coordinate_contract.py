@@ -3,6 +3,7 @@ import pytest
 
 from elements.FrameElement import FrameElement
 from elements.TrackElement import TrackElement
+from nodes.DirectionFlowNode import DirectionFlowNode
 from nodes.SpeedEstimationNode import SpeedEstimationNode
 
 
@@ -17,6 +18,7 @@ def _frame_with_track(track: TrackElement) -> FrameElement:
     frame.buffer_tracks = {track.id: track}
     frame.homography_matrix = np.eye(3)
     frame.drone_displacement_m = np.zeros(2)
+    frame.geo_analytics_eligible = True
     return frame
 
 
@@ -38,7 +40,8 @@ def test_hover_cruise_speed_requires_per_frame_world_facts():
     result = node.process(frame)
 
     assert result.buffer_tracks[1].velocity_ms is None
-    assert result.buffer_tracks[1].speed_kmh == 0.0
+    assert result.buffer_tracks[1].speed_kmh is None
+    assert result.buffer_tracks[1].avg_speed_kmh is None
 
 
 def test_hover_cruise_speed_uses_world_history_independent_of_current_h():
@@ -91,3 +94,22 @@ def test_hover_only_legacy_keeps_current_h_pixel_history_fallback():
         result.buffer_tracks[1].velocity_ms, [10.0, 0.0], atol=1e-9
     )
     assert result.buffer_tracks[1].speed_kmh == pytest.approx(36.0)
+
+
+def test_direction_statistics_keep_unknown_speed_null():
+    frame = FrameElement(
+        source="test",
+        frame=np.zeros((80, 120, 3), dtype=np.uint8),
+        timestamp=0.2,
+        frame_num=2,
+        roads_info={},
+    )
+    frame.geo_reference_quality = {"status": "verified"}
+    frame.geo_analytics_eligible = True
+    frame.buffer_tracks = {}
+    node = DirectionFlowNode({"direction_flow": {"enabled": True}})
+
+    result = node.process(frame)
+
+    for direction in ("straight", "left_turn", "right_turn", "u_turn"):
+        assert result.direction_stats[direction]["avg_speed_kmh"] is None

@@ -224,6 +224,7 @@ class VideoReader:
             frame_element.source_drop_reason = (
                 "realtime_latest_frame_superseded" if dropped else None
             )
+            frame_element.source_frame_stride = self.frame_stride
             # 注入车道多边形数据（供LaneAnalysisNode数据驱动使用）
             frame_element.lane_polygons = self.lane_polygons
             # 注入遥测数据（与帧时间戳同步）

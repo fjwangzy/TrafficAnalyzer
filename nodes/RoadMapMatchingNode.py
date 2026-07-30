@@ -3,20 +3,17 @@
 from __future__ import annotations
 
 import math
-import os
 
-import numpy as np
 from shapely.geometry import Point, shape
 
 from elements.FrameElement import FrameElement
 from elements.VideoEndBreakElement import VideoEndBreakElement
-from utils_local.coordinates import enu_to_gcj02
-from utils_local.homography import is_valid_homography, pixel_to_world
-from utils_local.motion_compensation import pixel_to_world_compensated
+from utils_local.runtime_geo import (
+    load_runtime_geo_registration,
+    runtime_geo_matches_map,
+)
 from utils_local.runtime_map import (
     load_runtime_map_bundle,
-    runtime_registration_homography,
-    select_runtime_visual_registration,
 )
 from utils_local.utils import profile_time
 
@@ -28,13 +25,13 @@ class RoadMapMatchingNode:
         self.bundle = load_runtime_map_bundle(config)
         self._lanes: list[tuple[dict, object, float | None, dict]] = []
         self._lane_transitions: dict[str, set[str]] = {}
-        self._homography = None
+        self._runtime_geo_registration = load_runtime_geo_registration(
+            config, runtime_map_bundle=self.bundle
+        )
+        self._map_compatible = runtime_geo_matches_map(
+            self._runtime_geo_registration, self.bundle
+        )
         if self.bundle:
-            source_profile_id = os.environ.get("SOURCE_PROFILE_ID")
-            registration = select_runtime_visual_registration(
-                self.bundle, source_profile_id
-            )
-            self._homography = runtime_registration_homography(registration)
             topology = self.bundle.get("topology") or {}
             lane_properties = topology.get("lane_properties") or {}
             self._lane_transitions = {
@@ -74,27 +71,7 @@ class RoadMapMatchingNode:
 
     @property
     def ready(self) -> bool:
-        return bool(self.bundle and self._homography is not None and self._lanes)
-
-    def _pixel_to_enu(
-        self, frame_element: FrameElement, x: float, y: float
-    ) -> tuple[float, float]:
-        absolute_matrix = getattr(frame_element, "pixel_to_map_enu", None)
-        if is_valid_homography(absolute_matrix):
-            projected = pixel_to_world(
-                np.asarray([[x, y]], dtype=np.float64), absolute_matrix
-            )[0]
-            return float(projected[0]), float(projected[1])
-        matrix = frame_element.homography_matrix
-        if not is_valid_homography(matrix):
-            matrix = self._homography
-        displacement = getattr(frame_element, "drone_displacement_m", None)
-        if displacement is None:
-            displacement = np.zeros(2, dtype=np.float64)
-        projected = pixel_to_world_compensated(
-            np.asarray([[x, y]], dtype=np.float64), matrix, displacement
-        )[0]
-        return float(projected[0]), float(projected[1])
+        return bool(self.bundle and self._map_compatible and self._lanes)
 
     @staticmethod
     def _heading_similarity(left: float, right: float) -> float:
@@ -133,14 +110,34 @@ class RoadMapMatchingNode:
 
     @profile_time
     def process(self, frame_element: FrameElement) -> FrameElement:
-        if isinstance(frame_element, VideoEndBreakElement) or not self.ready:
+        if isinstance(frame_element, VideoEndBreakElement):
+            return frame_element
+        if not self.ready:
+            status = (
+                "version_mismatch"
+                if self.bundle is not None and not self._map_compatible
+                else "degraded"
+                if self.bundle is not None
+                else "missing"
+            )
+            frame_element.road_context_status = status
+            frame_element.info["map_matching"] = {
+                "map_version_id": (
+                    self.bundle.get("map_version_id") if self.bundle else None
+                ),
+                "map_status": status,
+                "matched_tracks": 0,
+                "total_tracks": len(frame_element.buffer_tracks or {}),
+            }
+            for track in (frame_element.buffer_tracks or {}).values():
+                track.road_match_quality = status
             return frame_element
         frame_element.runtime_map_bundle = self.bundle
         frame_element.map_version_id = self.bundle["map_version_id"]
-        frame_element.anchor_gcj02 = tuple(self.bundle["anchor_gcj02"])
+        frame_element.road_context_status = "complete"
         if (
             getattr(frame_element, "geo_reference_quality", None) is not None
-            and not getattr(frame_element, "formal_analytics_eligible", False)
+            and not getattr(frame_element, "road_analytics_eligible", False)
         ):
             frame_element.info["map_matching"] = {
                 "map_version_id": self.bundle["map_version_id"],
@@ -156,14 +153,10 @@ class RoadMapMatchingNode:
             track = (frame_element.buffer_tracks or {}).get(track_id)
             if track is None:
                 continue
-            x1, _y1, x2, y2 = frame_element.tracked_xyxy[index]
             current_position = getattr(track, "current_position_enu_m", None)
-            if current_position is not None:
-                easting, northing = float(current_position[0]), float(current_position[1])
-            else:
-                easting, northing = self._pixel_to_enu(
-                    frame_element, (x1 + x2) / 2.0, y2
-                )
+            if current_position is None:
+                continue
+            easting, northing = float(current_position[0]), float(current_position[1])
             world_history = getattr(track, "position_history_enu_m", [])
             previous_position = world_history[-2][:2] if len(world_history) >= 2 else None
             vehicle_heading = None
@@ -172,23 +165,19 @@ class RoadMapMatchingNode:
                 dy = northing - float(previous_position[1])
                 if math.hypot(dx, dy) >= 0.2:
                     vehicle_heading = math.degrees(math.atan2(dy, dx)) % 360
-                    track.heading_angle = vehicle_heading
-            track.current_position_enu_m = [easting, northing]
-            lon, lat = enu_to_gcj02(easting, northing, self.bundle["anchor_gcj02"])
-            track.current_position_gcj02 = [lon, lat]
             result = self._match(
                 Point(easting, northing), track.matched_lane_key, vehicle_heading
             )
             if result is None:
                 continue
-            lane, properties, confidence = result
+            lane, _properties, confidence = result
             track.current_lane = lane["local_lane_id"]
             track.matched_lane_key = lane["local_lane_id"]
             track.source_lane_id = lane.get("source_lane_id")
             track.matched_link_id = lane.get("link_id")
-            track.movement_key = properties.get("movement_key") or properties.get("direction")
             track.map_version_id = self.bundle["map_version_id"]
             track.map_match_confidence = round(confidence, 4)
+            track.road_match_quality = "verified"
             track.lane_history.append((track.matched_lane_key, frame_element.timestamp))
             matched += 1
         frame_element.lane_source = "channelized_map"

@@ -198,6 +198,7 @@ describe('Console2 live module migration', () => {
         avg_speed_kmh: 27.4,
         fps: 29.7,
         inference_ms: 33,
+        inference_context: { effective_imgsz: 960, device: 'mps', precision: 'fp16' },
         lane_stats: [{ queue_length_m: 186 }],
         active_trajectories: [{ track_id: 101 }, { track_id: 102 }],
       },
@@ -207,6 +208,7 @@ describe('Console2 live module migration', () => {
     expect(screen.getByLabelText('飞行姿态数据')).toHaveTextContent('112.4')
     expect(screen.getByLabelText('飞行姿态数据')).toHaveTextContent('37.8')
     expect(screen.getByText('842')).toBeInTheDocument()
+    expect(screen.getByText('YOLO 单处理帧 33ms · 960')).toBeInTheDocument()
     expect(screen.getByText('186')).toBeInTheDocument()
     const trajectoryCard = screen.getByText('实时轨迹数量').closest('.congestion-card')
     expect(trajectoryCard).toHaveTextContent('2')
@@ -260,7 +262,7 @@ describe('Console2 live module migration', () => {
     }))
 
     expect(screen.getByText('近正射巡航')).toBeInTheDocument()
-    expect(screen.getByText('正式研判关闭')).toBeInTheDocument()
+    expect(screen.getByText('路网能力降级')).toBeInTheDocument()
     expect(screen.getByText('仅候选，不进入统计/TCC')).toBeInTheDocument()
     expect(screen.getByText(/遥测短缺或超出同步窗口/)).toBeInTheDocument()
     expect(screen.getByRole('img', { name: 'BEV 地图轨迹投放图' })).toHaveAttribute('data-trajectory-count', '1')
@@ -290,6 +292,43 @@ describe('Console2 live module migration', () => {
 
     expect(screen.getByRole('img', { name: 'BEV 地图轨迹投放图' })).toHaveAttribute('data-trajectory-count', '1')
     expect(screen.getByText('实时轨迹数量').closest('.congestion-card')).toHaveTextContent('0')
+  })
+
+  it('shows mature pixel trajectories as output with road analytics degraded', async () => {
+    open('/monitoring?intersection_id=INT-1&source_profile_id=SRC-1')
+    expect(await screen.findByText('历史路径交点事件')).toBeInTheDocument()
+
+    act(() => liveMocks.wsCallback({
+      type: 'uav_stats',
+      data: {
+        pipeline_id: 'P-1',
+        trajectory_output_eligible: true,
+        geo_analytics_eligible: false,
+        road_analytics_eligible: false,
+        tcc_analytics_eligible: false,
+        formal_analytics_eligible: false,
+        active_trajectories: [{
+          track_id: 81,
+          association_id: 181,
+          trajectory_output_eligible: true,
+          trajectory_px: [[10, 20], [12, 24]],
+          trajectory_enu_m: [null, null],
+          trajectory_gcj02: [null, null],
+        }],
+        candidate_trajectories: [],
+        geo_reference_quality: {
+          status: 'degraded',
+          reasons: ['lane_verified_map_required'],
+        },
+      },
+    }))
+
+    expect(screen.getByText('轨迹已输出，路网匹配降级')).toBeInTheDocument()
+    expect(screen.getByText(/Lane ID、Link ID 与匹配质量不可用/)).toBeInTheDocument()
+    expect(screen.getByText(/世界坐标、速度、方向、统计和 TCC 使用各自独立门禁/)).toBeInTheDocument()
+    expect(screen.queryByText('仅候选，不进入统计/TCC')).not.toBeInTheDocument()
+    expect(screen.getByRole('img', { name: 'BEV 地图轨迹投放图' })).toHaveTextContent('像素轨迹 1 条 · 地理投影不可用')
+    expect(screen.getByText('实时轨迹数量').closest('.congestion-card')).toHaveTextContent('1')
   })
 
   it('rejects stale realtime stats from an older pipeline on the same source', async () => {

@@ -16,6 +16,15 @@ RUNTIME_MAP_BUNDLE = {
     "anchor_gcj02": [117.0, 36.7],
     "geometry_enu_m": {"lanes": {}},
 }
+RUNTIME_GEO_REGISTRATION = {
+    "id": "SGR-TEST",
+    "source_profile_id": "SRC-REAL-001",
+    "status": "verified",
+    "coordinate_system": "GCJ02",
+    "anchor_gcj02": [117.0, 36.7],
+    "homography_pixel_to_enu": [[1, 0, 0], [0, 1, 0], [0, 0, 1]],
+    "checksum": "geo-fixture",
+}
 
 
 class _EmptyStream:
@@ -86,6 +95,7 @@ class PipelineManagerTest(unittest.IsolatedAsyncioTestCase):
                 intersection_id="INT_camera_1",
                 video_src="test_videos/inter_xqh/demo.mp4",
                 runtime_map_bundle=RUNTIME_MAP_BUNDLE,
+                runtime_geo_registration=RUNTIME_GEO_REGISTRATION,
                 telemetry_source="srt",
                 telemetry_file_path="test_videos/mp4new/srt/海右路 0624.txt",
                 telemetry_time_offset_sec=12.25,
@@ -120,6 +130,10 @@ class PipelineManagerTest(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(captured["env"]["VIDEO_SRC"], str(video_path.resolve()))
         self.assertEqual(captured["env"]["RUNTIME_MAP_BUNDLE_JSON"], '{"schema_version":"uav.runtime-road-map/v1","map_version_id":"CMV-TEST","map_status":"lane_verified","coordinate_system":"GCJ02","anchor_gcj02":[117.0,36.7],"geometry_enu_m":{"lanes":{}}}')
+        self.assertEqual(
+            captured["env"]["RUNTIME_GEO_REGISTRATION_JSON"],
+            '{"id":"SGR-TEST","source_profile_id":"SRC-REAL-001","status":"verified","coordinate_system":"GCJ02","anchor_gcj02":[117.0,36.7],"homography_pixel_to_enu":[[1,0,0],[0,1,0],[0,0,1]],"checksum":"geo-fixture"}',
+        )
         self.assertEqual(captured["env"]["TOPIC_NAME"], "uav_statistics_1700000000")
         self.assertEqual(captured["env"]["CAMERA_ID"], "1700000000")
         self.assertEqual(captured["env"]["DRONE_ID"], "drone_1")
@@ -229,6 +243,61 @@ class PipelineManagerTest(unittest.IsolatedAsyncioTestCase):
                 map_version_id="CMV-TEST",
                 video_stream_url="http://127.0.0.1:15702/video?token=secret",
             )
+
+    def test_external_candidate_pipeline_requires_explicit_cruise_isolation(self):
+        temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_dir.cleanup)
+        project_root = Path(temp_dir.name)
+        video_path = project_root / "test_videos/demo.mp4"
+        video_path.parent.mkdir(parents=True)
+        video_path.write_bytes(b"test")
+        manager = PipelineManager(project_root=project_root)
+
+        candidate = manager.register_pipeline(
+            drone_id="drone_candidate",
+            intersection_id="INT-CANDIDATE",
+            video_src="test_videos/demo.mp4",
+            source_profile_id="SRC-CANDIDATE",
+            inter_id="INT-CANDIDATE",
+            candidate_only=True,
+            tracking_profile="hover_cruise_v1",
+        )
+
+        assert candidate.map_version_id is None
+        assert candidate.candidate_only is True
+        assert candidate.road_context_status == "missing"
+        assert candidate.quality_status == "unverified"
+        assert candidate.source_profile_id == "SRC-CANDIDATE"
+        assert candidate.inter_id == "INT-CANDIDATE"
+        with self.assertRaisesRegex(ValueError, "requires hover_cruise_v1"):
+            manager.register_pipeline(
+                drone_id="drone_legacy",
+                intersection_id="INT-LEGACY",
+                video_src="test_videos/demo.mp4",
+                candidate_only=True,
+                tracking_profile="hover_only_legacy",
+            )
+
+    def test_external_roadless_pipeline_registers_as_degraded_not_candidate(self):
+        temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_dir.cleanup)
+        project_root = Path(temp_dir.name)
+        video_path = project_root / "test_videos/demo.mp4"
+        video_path.parent.mkdir(parents=True)
+        video_path.write_bytes(b"test")
+        manager = PipelineManager(project_root=project_root)
+
+        pipeline = manager.register_pipeline(
+            drone_id="drone_roadless",
+            intersection_id="INT-ROADLESS",
+            video_src="test_videos/demo.mp4",
+            source_profile_id="SRC-ROADLESS",
+        )
+
+        assert pipeline.map_version_id is None
+        assert pipeline.candidate_only is False
+        assert pipeline.road_context_status == "missing"
+        assert pipeline.quality_status == "degraded"
 
     def test_pipeline_output_never_exposes_rtsp_credentials_or_query_secret(self):
         pipeline = PipelineInstance(

@@ -138,5 +138,39 @@ class ByteTrackerCoreTest(unittest.TestCase):
 
         self.assertEqual(int(changed[0].class_name), 5)
 
+    def test_small_aerial_target_survives_stride_motion_class_jitter_and_one_missed_detection(self):
+        tracker = BYTETracker(
+            fps=30,
+            first_track_thresh=0.5,
+            second_track_thresh=0.1,
+            match_thresh=0.8,
+            track_buffer=30,
+            resize_width_height=1,
+            max_lost_sec=2.0,
+            class_group_resolver=lambda class_id: (
+                "non_motor" if class_id == 2 else "motor"
+            ),
+            class_switch_confirm_frames=3,
+        )
+
+        initial = tracker.update(
+            _detections([[10, 20, 20, 30, 0.9, 3]]),
+            timestamp=0.0,
+        )
+        after_stride_motion = tracker.update(
+            _detections([[14, 20, 24, 30, 0.9, 2]]),
+            timestamp=1 / 6,
+        )
+        tracker.update(_detections([]), timestamp=2 / 6)
+        recovered = tracker.update(
+            _detections([[18, 20, 28, 30, 0.9, 3]]),
+            timestamp=3 / 6,
+        )
+
+        self.assertEqual([track.track_id for track in initial], [1])
+        self.assertEqual([track.track_id for track in after_stride_motion], [1])
+        self.assertEqual([track.track_id for track in recovered], [1])
+        self.assertEqual(int(recovered[0].class_name), 3)
+
 if __name__ == "__main__":
     unittest.main()

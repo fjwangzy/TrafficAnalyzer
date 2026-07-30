@@ -1,5 +1,6 @@
 import numpy as np
 import unittest
+import json
 
 from elements.FrameElement import FrameElement
 from elements.TrackElement import TrackElement
@@ -63,6 +64,15 @@ class KafkaActiveTrajectoriesTest(unittest.TestCase):
             "evidence": ["hard_ttc_or_pet"],
         }]
         frame_element.telemetry = {"latitude": 36.7, "longitude": 117.0, "height": 120.0}
+        frame_element.source_frame_stride = 3
+        frame_element.inference_context = {
+            "metric_scope": "yolo_predict_single_processed_frame",
+            "device": "mps",
+            "precision": "fp16",
+            "model": "test-model",
+            "effective_imgsz": 960,
+            "agl_tier": "medium",
+        }
 
         producer = self._producer_without_kafka()
         sent = []
@@ -87,6 +97,9 @@ class KafkaActiveTrajectoriesTest(unittest.TestCase):
         self.assertEqual(stats["data"]["direction_flow"], frame_element.direction_stats)
         self.assertEqual(stats["data"]["queue_count"], 1)
         self.assertEqual(stats["data"]["conflict_count"], 1)
+        self.assertEqual(stats["data"]["inference_context"]["effective_imgsz"], 960)
+        self.assertEqual(stats["data"]["inference_context"]["frame_stride"], 3)
+        self.assertGreaterEqual(stats["data"]["pipeline_processing_ms"], 0.0)
 
         self.assertEqual(sent[1][1]["msg_type"], "uav_track_complete")
         self.assertEqual(sent[1][1]["data"]["track_id"], 101)
@@ -175,6 +188,40 @@ class KafkaActiveTrajectoriesTest(unittest.TestCase):
             "shadow_comparison", message["data"]["tracking_diagnostics"]
         )
 
+    def test_roadless_frame_keeps_non_lane_congestion_statistics(self):
+        frame_element = FrameElement(
+            "test",
+            np.zeros((20, 20, 3), dtype=np.uint8),
+            2.0,
+            1,
+            {},
+        )
+        frame_element.info = {"cars_amount": 10, "roads_activity": {}}
+        frame_element.buffer_tracks = {}
+        frame_element.geo_reference_quality = {
+            "status": "degraded",
+            "geo_status": "verified",
+            "road_status": "missing",
+            "reasons": ["lane_verified_map_required"],
+        }
+        frame_element.geo_analytics_eligible = True
+        frame_element.road_analytics_eligible = False
+        frame_element.formal_analytics_eligible = False
+        frame_element.direction_stats = {
+            "straight": {"count": 0, "avg_speed_kmh": None}
+        }
+
+        producer = self._producer_without_kafka()
+        sent = []
+        producer._enqueue = lambda topic, data, **_kwargs: sent.append((topic, data))
+
+        producer.process(frame_element)
+
+        stats = sent[0][1]["data"]
+        self.assertEqual(stats["cars"], 10)
+        self.assertEqual(stats["congestion_index"], 1.3)
+        self.assertIsNone(stats["avg_speed_kmh"])
+
     def test_realtime_device_event_time_is_verified(self):
         frame = FrameElement(
             "Processing of rtsp://camera/live",
@@ -223,6 +270,7 @@ class KafkaActiveTrajectoriesTest(unittest.TestCase):
 
         track = TrackElement(id=7, timestamp_first=1.0)
         track.association_id = 42
+        track.trajectory_output_eligible = True
         track.timestamp_last = 3.0
         track.vehicle_class = "motor"
         track.yolo_class_id = 3
@@ -273,6 +321,15 @@ class KafkaActiveTrajectoriesTest(unittest.TestCase):
                 "map_match_confidence": None,
                 "timestamp_first": 1.0,
                 "timestamp_last": 3.0,
+                "trajectory_output_eligible": True,
+                "geo_analytics_eligible": False,
+                "road_analytics_eligible": False,
+                "tcc_analytics_eligible": False,
+                "formal_analytics_eligible": False,
+                "road_context_status": "missing",
+                "geo_registration_id": None,
+                "quality_status": "degraded",
+                "quality_reasons": [],
             })
         self.assertEqual(len(active[0]["trajectory_gcj02"]), 3)
 
@@ -377,6 +434,61 @@ class KafkaActiveTrajectoriesTest(unittest.TestCase):
         self.assertNotIn("point_quality_lineage", candidates[0])
         self.assertNotIn("trajectory_display_px", candidates[0])
 
+    def test_realtime_trajectory_contract_caps_targets_before_kafka_serialization(self):
+        producer = self._producer_without_kafka()
+        producer._realtime_trajectory_max_tracks = 2
+        frame_element = FrameElement(
+            "test", np.zeros((20, 20, 3), dtype=np.uint8), 2.0, 1, {}
+        )
+        frame_element.candidate_trajectories = [
+            {"track_id": track_id, "trajectory_px": [[1.0, 2.0]]}
+            for track_id in (101, 102, 103)
+        ]
+
+        candidates = producer._build_candidate_trajectories(frame_element)
+
+        self.assertEqual([item["track_id"] for item in candidates], [101, 102])
+
+    def test_dense_stats_payload_stays_below_kafka_default_request_limit(self):
+        frame_element = FrameElement(
+            "test", np.zeros((20, 20, 3), dtype=np.uint8), 2.0, 1, {}
+        )
+        frame_element.info = {"cars_amount": 400, "roads_activity": {}}
+        frame_element.anchor_gcj02 = (117.0, 36.7)
+        frame_element.id_list = []
+        frame_element.tracked_xyxy = []
+        frame_element.tracked_cls = []
+        frame_element.buffer_tracks = {}
+        for track_id in range(400):
+            track = TrackElement(id=track_id, timestamp_first=0.0)
+            track.timestamp_last = 2.0
+            track.trajectory_output_eligible = True
+            track.trajectory_points = [
+                (float(point), float(point + track_id)) for point in range(30)
+            ]
+            track.trajectory_timestamps_sec = [point / 10.0 for point in range(30)]
+            track.trajectory_frame_nums = list(range(30))
+            track.trajectory_enu_m = [
+                (float(point), float(point + track_id)) for point in range(30)
+            ]
+            track.trajectory_gcj02 = [
+                (117.0 + point / 1_000_000.0, 36.7 + point / 1_000_000.0)
+                for point in range(30)
+            ]
+            frame_element.buffer_tracks[track_id] = track
+
+        producer = self._producer_without_kafka()
+        producer._realtime_trajectory_max_tracks = 200
+        sent = []
+        producer._enqueue = lambda topic, data, **_kwargs: sent.append((topic, data))
+
+        producer.process(frame_element)
+
+        stats = next(payload for topic, payload in sent if topic == "uav_statistics_7")
+        self.assertEqual(len(stats["data"]["active_trajectories"]), 200)
+        self.assertEqual(stats["data"]["active_trajectories_truncated"], 200)
+        self.assertLess(len(json.dumps(stats).encode("utf-8")), 1_000_000)
+
     def test_build_active_trajectories_limits_realtime_payload_to_tail_points(self):
         frame = np.zeros((100, 100, 3), dtype=np.uint8)
         frame_element = FrameElement("test", frame, 5.0, 150, {})
@@ -384,6 +496,7 @@ class KafkaActiveTrajectoriesTest(unittest.TestCase):
         frame_element.drone_displacement_m = np.array([0.0, 0.0], dtype=np.float64)
 
         track = TrackElement(id=9, timestamp_first=1.0)
+        track.trajectory_output_eligible = True
         track.timestamp_last = 5.0
         track.trajectory_points = [(float(i), float(i * 2)) for i in range(5)]
         track.trajectory_enu_m = [(float(i), float(i * 2)) for i in range(5)]

@@ -1,5 +1,7 @@
-import numpy as np
 import time
+
+import numpy as np
+
 
 class FrameElement:
     # 包含有关视频流特定帧信息的类
@@ -42,6 +44,7 @@ class FrameElement:
         self.tracked_xyxy = tracked_xyxy  # 带xyxy框坐标的列表
         self.id_list = id_list  # 检测到的可跟踪对象ID列表
         self.yolo_model_id: str | None = None  # 权重文件名 + 内容摘要
+        self.inference_context: dict | None = None  # 单处理帧 YOLO 推理设备、精度与有效输入尺寸
         # 帧的后处理：
         self.buffer_tracks = buffer_tracks  # 选定分析时间段内的活动跟踪缓冲区
         self.info = {}  # 结果统计字典（道路拥堵程度+车辆数量）
@@ -59,6 +62,10 @@ class FrameElement:
         self.map_version_id: str | None = None
         self.runtime_map_bundle: dict | None = None
         self.runtime_visual_registration: dict | None = None
+        self.runtime_geo_registration: dict | None = None
+        self.geo_registration_id: str | None = None
+        self.geo_registration_checksum: str | None = None
+        self.road_context_status: str = "missing"
         self.drone_displacement_m: np.ndarray | None = None  # [easting, northing] 无人机位移(m)
         self.drone_velocity_ms: np.ndarray | None = None  # [v_east, v_north] 无人机速度(m/s)
         self.gimbal_yaw_delta: float = 0.0  # 当前云台偏航 - 首帧云台偏航(度)
@@ -76,8 +83,17 @@ class FrameElement:
         self.visual_motion_quality: dict | None = None
         self.geo_reference_quality: dict | None = None
         self.tracking_diagnostics: dict | None = None
+        # Image-trajectory lifecycle is independent from geographic and road
+        # enrichment.  The four gates are deliberately explicit so callers do
+        # not use one broad quality flag to discard otherwise valid tracks.
+        self.trajectory_output_eligible: bool = False
+        self.geo_analytics_eligible: bool = False
+        self.road_analytics_eligible: bool = False
+        self.tcc_analytics_eligible: bool = False
         self.formal_analytics_eligible: bool = False
         self.association_id_list: list[int] | None = None
+        self.trajectory_association_ids: list[int] | None = None
+        self.track_id_by_association: dict[int, int] | None = None
         self.formal_track_ids: list[int] | None = None
         self.formal_track_id_by_association: dict[int, int] | None = None
         self.previous_formal_track_id_by_association: dict[int, int] | None = None
@@ -101,6 +117,7 @@ class FrameElement:
         self.source_is_realtime: bool = False
         self.source_drop_count: int = 0
         self.source_drop_reason: str | None = None
+        self.source_frame_stride: int = 1
 
         # ── 新增：Kafka发送控制 ──
         self.send_to_kafka: bool = False  # 本帧是否已发送到Kafka

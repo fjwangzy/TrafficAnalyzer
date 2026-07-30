@@ -5,14 +5,15 @@
   取斜率作为速度。相比首尾两点法，抗 bbox 抖动能力大幅提升。
   bbox ±3px 抖动下车速波动 <2km/h。
 """
-import math
-import numpy as np
 import logging
+import math
+
+import numpy as np
 
 from elements.FrameElement import FrameElement
 from elements.VideoEndBreakElement import VideoEndBreakElement
+from utils_local.homography import is_valid_homography, pixel_to_world, undistort_points
 from utils_local.utils import profile_time
-from utils_local.homography import pixel_to_world, is_valid_homography, undistort_points
 
 logger = logging.getLogger(__name__)
 
@@ -62,7 +63,7 @@ class SpeedEstimationNode:
         cam_intrinsics = getattr(frame_element, "camera_intrinsics", None)
         img_size = (frame_element.frame.shape[1], frame_element.frame.shape[0]) if dist_coeffs else None
 
-        for track_id, track in frame_element.buffer_tracks.items():
+        for track in frame_element.buffer_tracks.values():
             # 裁剪position_history到history_frames窗口
             if len(track.position_history) > self.history_frames:
                 track.position_history = track.position_history[-self.history_frames:]
@@ -150,7 +151,19 @@ class SpeedEstimationNode:
                 track.velocity_ms = None
 
             # EMA平滑
-            track.avg_speed_kmh = alpha * track.speed_kmh + (1 - alpha) * track.avg_speed_kmh
-            track.max_speed_kmh = max(track.max_speed_kmh, track.speed_kmh)
+            if track.speed_kmh is None:
+                continue
+            if track.avg_speed_kmh is None:
+                track.avg_speed_kmh = track.speed_kmh
+            else:
+                track.avg_speed_kmh = (
+                    alpha * track.speed_kmh
+                    + (1 - alpha) * track.avg_speed_kmh
+                )
+            track.max_speed_kmh = (
+                track.speed_kmh
+                if track.max_speed_kmh is None
+                else max(track.max_speed_kmh, track.speed_kmh)
+            )
 
         return frame_element

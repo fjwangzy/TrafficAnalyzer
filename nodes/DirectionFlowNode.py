@@ -1,11 +1,12 @@
 import logging
+
 import numpy as np
 
 from elements.FrameElement import FrameElement
 from elements.VideoEndBreakElement import VideoEndBreakElement
+from utils_local.homography import is_valid_homography, pixel_to_world
+from utils_local.trajectory_classifier import classify_direction, compute_heading
 from utils_local.utils import profile_time
-from utils_local.trajectory_classifier import compute_heading, classify_direction
-from utils_local.homography import pixel_to_world, is_valid_homography
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +49,7 @@ class DirectionFlowNode:
 
         if (
             getattr(frame_element, "geo_reference_quality", None) is not None
-            and not getattr(frame_element, "formal_analytics_eligible", False)
+            and not getattr(frame_element, "geo_analytics_eligible", False)
         ):
             frame_element.direction_stats = None
             frame_element.queue_count = 0
@@ -78,9 +79,12 @@ class DirectionFlowNode:
         direction_speeds: dict[str, list[float]] = {d: [] for d in direction_counts}
         queue_count = 0
 
-        for track_id, track in buffer_tracks.items():
+        for track in buffer_tracks.values():
             # 排队检测：速度 < 阈值
-            if track.speed_kmh < self.queue_speed_threshold_kmh and track.speed_kmh >= 0:
+            if (
+                track.speed_kmh is not None
+                and 0 <= track.speed_kmh < self.queue_speed_threshold_kmh
+            ):
                 queue_count += 1
                 continue
 
@@ -128,7 +132,8 @@ class DirectionFlowNode:
 
             direction = classify_direction(entry_heading, exit_heading, self.turn_thresholds)
             direction_counts[direction] += 1
-            direction_speeds[direction].append(track.speed_kmh)
+            if track.speed_kmh is not None:
+                direction_speeds[direction].append(track.speed_kmh)
 
             # 记录到TrackElement供下游使用
             track.direction_class = direction
@@ -158,7 +163,9 @@ class DirectionFlowNode:
             headways = self._headway_accumulator.get(d, [])
             direction_stats[d] = {
                 "count": direction_counts[d],
-                "avg_speed_kmh": round(sum(speeds) / len(speeds), 1) if speeds else 0,
+                "avg_speed_kmh": (
+                    round(sum(speeds) / len(speeds), 1) if speeds else None
+                ),
                 "avg_headway_sec": round(sum(headways) / len(headways), 2) if headways else None,
                 "min_headway_sec": round(min(headways), 2) if headways else None,
             }
@@ -172,7 +179,7 @@ class DirectionFlowNode:
         stats = {}
         for d in ["straight", "left_turn", "right_turn", "u_turn"]:
             stats[d] = {
-                "count": 0, "avg_speed_kmh": 0,
+                "count": 0, "avg_speed_kmh": None,
                 "avg_headway_sec": None, "min_headway_sec": None,
             }
         stats["unknown"] = {"count": 0}

@@ -253,6 +253,56 @@ class ChannelizedMapVersion(Base):
     )
 
 
+class SourceGeoRegistration(Base):
+    """Versioned, verified pixel-to-geographic registration for one source."""
+
+    __tablename__ = "uav_source_geo_registrations"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    source_profile_id: Mapped[str] = mapped_column(
+        ForeignKey("uav_video_sources.profile_id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+    version_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default="draft", index=True)
+    coordinate_system: Mapped[str] = mapped_column(String(16), nullable=False, default="GCJ02")
+    coordinate_transform_version: Mapped[str] = mapped_column(String(80), nullable=False)
+    anchor_gcj02: Mapped[list] = mapped_column(JSON, nullable=False)
+    homography_pixel_to_enu: Mapped[list] = mapped_column(JSON, nullable=False)
+    registration_pose: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    camera_calibration: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    coverage_enu_m: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    residuals: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    checksum: Mapped[str] = mapped_column(String(64), nullable=False)
+    provenance: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    created_by: Mapped[int | None] = mapped_column(ForeignKey("uav_users.id"), nullable=True)
+    verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=lambda: datetime.now(UTC), nullable=False
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "source_profile_id", "version_no",
+            name="uq_uav_source_geo_registration_version",
+        ),
+        UniqueConstraint(
+            "source_profile_id", "checksum",
+            name="uq_uav_source_geo_registration_checksum",
+        ),
+        CheckConstraint(
+            "status IN ('draft','verified','rejected','retired')",
+            name="ck_uav_source_geo_registration_status",
+        ),
+        CheckConstraint(
+            "coordinate_system = 'GCJ02'",
+            name="ck_uav_source_geo_registration_coordinate_system",
+        ),
+    )
+
+
 class VisualRegistration(Base):
     __tablename__ = "uav_visual_registrations"
 
@@ -262,6 +312,11 @@ class VisualRegistration(Base):
     )
     source_profile_id: Mapped[str | None] = mapped_column(
         ForeignKey("uav_video_sources.profile_id", ondelete="RESTRICT"),
+        nullable=True,
+        index=True,
+    )
+    source_geo_registration_id: Mapped[str | None] = mapped_column(
+        ForeignKey("uav_source_geo_registrations.id", ondelete="SET NULL"),
         nullable=True,
         index=True,
     )

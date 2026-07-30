@@ -1,3 +1,4 @@
+import copy
 import unittest
 
 import cv2
@@ -136,6 +137,77 @@ class ShowNodeClassColorsTest(unittest.TestCase):
             np.any(amber_pixels),
             "candidate ID moved but the detector output contains no candidate trail",
         )
+
+    def test_mature_pixel_trajectory_renders_without_road_analytics_eligibility(self):
+        node = self._make_node()
+        track = TrackElement(id=70, timestamp_first=0.0)
+        track.association_id = 7
+        track.timestamp_last = 3.0
+        track.trajectory_output_eligible = True
+        track.trajectory_points = [(60.0, 70.0), (80.0, 70.0), (100.0, 70.0)]
+
+        frame_element = FrameElement(
+            source="mature-pixel-only",
+            frame=np.zeros((100, 160, 3), dtype=np.uint8),
+            timestamp=3.0,
+            frame_num=30,
+            roads_info={},
+            tracked_conf=[0.8],
+            tracked_cls=["car"],
+            tracked_xyxy=[[90, 50, 110, 70]],
+            id_list=[7],
+            buffer_tracks={70: track},
+        )
+        frame_element.trajectory_association_ids = [7]
+        frame_element.track_id_by_association = {7: 70}
+        frame_element.formal_track_ids = []
+        frame_element.formal_track_id_by_association = {}
+        frame_element.association_trajectories = [{
+            "association_id": 7,
+            "track_id": 70,
+            "trajectory_output_eligible": True,
+            "road_analytics_eligible": False,
+            "trajectory_display_px": [[60.0, 70.0], [80.0, 70.0], [100.0, 70.0]],
+        }]
+        frame_element.candidate_trajectories = []
+
+        with_trails_frame = copy.copy(frame_element)
+        with_trails_frame.frame = frame_element.frame.copy()
+        with_trails = node.process(with_trails_frame).frame_result
+        without_trails_node = self._make_node()
+        without_trails_node.show_trace_trails = False
+        without_trails_frame = copy.copy(frame_element)
+        without_trails_frame.frame = frame_element.frame.copy()
+        without_trails = without_trails_node.process(without_trails_frame).frame_result
+        trail_delta = cv2.absdiff(with_trails, without_trails)
+        self.assertGreater(
+            np.count_nonzero(np.any(trail_delta > 0, axis=2)),
+            0,
+            "mature image trajectory disappeared because road analytics was unavailable",
+        )
+
+    def test_pixel_only_label_does_not_reuse_stale_world_speed(self):
+        node = self._make_node()
+        track = TrackElement(id=70, timestamp_first=0.0)
+        track.association_id = 7
+        track.avg_speed_kmh = 36.0
+        frame_element = FrameElement(
+            source="pixel-only-speed-gate",
+            frame=np.zeros((100, 160, 3), dtype=np.uint8),
+            timestamp=3.0,
+            frame_num=30,
+            roads_info={},
+            tracked_cls=["car"],
+            id_list=[7],
+            buffer_tracks={70: track},
+        )
+        frame_element.trajectory_association_ids = [7]
+        frame_element.track_id_by_association = {7: 70}
+        frame_element.geo_analytics_eligible = False
+
+        labels = node._make_labels(frame_element)
+
+        self.assertEqual(labels, ["#7 car"])
 
     def test_process_renders_formal_and_candidate_trails_together(self):
         node = self._make_node()

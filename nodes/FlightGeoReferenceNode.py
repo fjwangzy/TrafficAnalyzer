@@ -233,22 +233,34 @@ class FlightGeoReferenceNode:
         if self._tracking_profile == "hover_cruise_v1" and map_coverage["status"] != "verified":
             reasons.append("map_coverage_not_verified")
 
-        blocking = {
-            "lane_verified_map_required",
+        geo_blocking = {
             "pixel_to_map_projection_unavailable",
             "flight_pose_not_eligible",
             "visual_warp_not_verified",
             "flight_phase_not_verified",
             "registration_pose_lineage_required",
-            "map_coverage_not_verified",
             "invalid_detector_geometry",
         }
-        formal = not any(reason in blocking for reason in reasons)
+        geo_eligible = not any(reason in geo_blocking for reason in reasons)
+        coverage_eligible = (
+            map_coverage["status"] == "verified"
+            if self._tracking_profile == "hover_cruise_v1"
+            else True
+        )
+        road_eligible = bool(geo_eligible and runtime_map and coverage_eligible)
+        # Keep the legacy aggregate as the complete road-analysis capability;
+        # image trajectory lifecycle no longer consumes this value.
+        formal = road_eligible
         frame_element.pixel_to_map_enu = projection
         frame_element.pose_motion_warp = pose_warp
+        frame_element.geo_analytics_eligible = geo_eligible
+        frame_element.road_analytics_eligible = road_eligible
+        frame_element.tcc_analytics_eligible = geo_eligible
         frame_element.formal_analytics_eligible = formal
         frame_element.geo_reference_quality = {
             "status": "verified" if formal else "degraded",
+            "geo_status": "verified" if geo_eligible else "degraded",
+            "road_status": "verified" if road_eligible else "missing" if not runtime_map else "degraded",
             "flight_phase": phase.phase,
             "speed_source": phase.speed_source,
             "horizontal_speed_mps": phase.horizontal_speed_mps,
@@ -264,6 +276,12 @@ class FlightGeoReferenceNode:
                 "status": "verified" if pose_lineage_valid else "unavailable"
             },
             "map_coverage": map_coverage,
+            "capabilities": {
+                "geo_analytics_eligible": geo_eligible,
+                "road_analytics_eligible": road_eligible,
+                "tcc_analytics_eligible": geo_eligible,
+                "formal_analytics_eligible": formal,
+            },
             "reasons": list(dict.fromkeys(reasons)),
         }
 

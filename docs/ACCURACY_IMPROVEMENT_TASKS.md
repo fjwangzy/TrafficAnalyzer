@@ -2,7 +2,7 @@
 
 ## 第一阶段 — 无痛改进（不改架构，不增依赖）
 
-- [x] **改进 12**：激活 Mahalanobis 门控（`byte_tracker_model.py`）
+- [x] **改进 12**：Mahalanobis 改为 shadow-only 诊断（`byte_tracker_model.py`）；生产硬门控已被 xqh stride=5 回归否决
 - [x] **改进 7**：前景感知 NMS — 按类别独立 NMS（`DetectionNode.py`）
 - [x] **改进 1**：检测后置信度分层 + 大目标初始化门控（`app_config.yaml` + `GroundTrajectoryTrackerNode.py`）
 - [x] **改进 6**：轨迹分类多帧投票更新（`TrackElement.py` + `TrackerInfoUpdateNode.py`）
@@ -27,4 +27,4 @@
 - [x] 运行 `python -m pytest test/test_byte_tracker_core.py -q`
 - [x] 运行 `python -m pytest test/test_refactor_unit.py -q` (如存在)
 - [x] 运行回归 `python test/test_pipeline_inter_xqh.py`（预期 56 PASS）
-- [ ] 更新相关文档
+- [x] 更新相关文档

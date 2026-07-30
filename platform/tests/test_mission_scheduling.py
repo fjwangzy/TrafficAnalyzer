@@ -3,14 +3,18 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from app.models.mission import TelemetrySourceRecord, VideoSourceRecord
 from app.schemas.mission import MissionCreate
 from app.services.mission_orchestrator import (
     MissionOrchestrator,
     SourceValidator,
     _runtime_missing_grace_expired,
+    resolve_tracking_profile,
     schedule_occurrences,
 )
+from app.services.source_geo_registration import canonical_registration_checksum
 
 
 def test_once_schedule_preserves_exact_utc_window():
@@ -73,6 +77,22 @@ def test_manual_mission_accepts_an_explicit_runtime_map_version():
     )
 
     assert body.map_version_id == "CMV-READY"
+
+
+def test_tracking_profile_is_selected_from_verified_source_registration():
+    assert resolve_tracking_profile(None, None) == (
+        "hover_only_legacy",
+        "source_geo_registration_missing",
+    )
+    registration = SimpleNamespace(id="SGR-1", status="verified")
+    assert resolve_tracking_profile(None, registration) == (
+        "hover_cruise_v1",
+        "verified_source_geo_registration",
+    )
+    assert resolve_tracking_profile("hover_only_legacy", registration) == (
+        "hover_only_legacy",
+        "explicit_request",
+    )
 
 
 def test_local_source_validation_enforces_allowlist_and_pair_types(tmp_path):
@@ -173,6 +193,7 @@ def test_local_source_outside_allowlist_reports_stable_error_code(tmp_path):
     assert validator.validate(video, telemetry) == ("invalid", "source_outside_allowlist")
 
 
+@pytest.mark.asyncio
 async def test_manual_mission_runtime_params_allow_detection_without_road_context():
     video = VideoSourceRecord(
         id="video-1", profile_id="source-1", drone_id="drone-1", mode="local",
@@ -186,6 +207,9 @@ async def test_manual_mission_runtime_params_allow_detection_without_road_contex
     class Session:
         async def get(self, model, record_id):
             return video if model is VideoSourceRecord and record_id == video.id else telemetry
+
+        async def execute(self, _statement):
+            return SimpleNamespace(scalar_one_or_none=lambda: None)
 
     class RoadContextMustNotBeUsed:
         async def get(self, *_args):
@@ -202,6 +226,59 @@ async def test_manual_mission_runtime_params_allow_detection_without_road_contex
     params = await orchestrator._runtime_params(Session(), mission)
 
     assert params["runtime_map_bundle"] is None
+    assert params["runtime_geo_registration"] is None
     assert params["road_context_status"] == "missing"
-    assert params["quality_status"] == "unverified"
+    assert params["quality_status"] == "degraded"
     assert params["video_src"] == "test_videos/demo.mp4"
+
+
+@pytest.mark.asyncio
+async def test_mission_runtime_uses_exact_pinned_source_geo_registration():
+    video = VideoSourceRecord(
+        id="video-geo", profile_id="source-geo", drone_id="drone-geo", mode="local",
+        source_type="mp4", location="test_videos/geo.mp4", validation_status="valid",
+    )
+    telemetry = TelemetrySourceRecord(
+        id="telemetry-geo", profile_id="source-geo", drone_id="drone-geo", mode="local",
+        source_type="srt", location="test_videos/geo.srt", validation_status="valid", config={},
+    )
+    registration = SimpleNamespace(
+        id="SGR-PINNED", source_profile_id="source-geo", status="verified",
+        coordinate_system="GCJ02", coordinate_transform_version="transform-v1",
+        anchor_gcj02=[117.0, 36.7],
+        homography_pixel_to_enu=[[1, 0, 0], [0, 1, 0], [0, 0, 1]],
+        registration_pose={}, camera_calibration={}, coverage_enu_m={}, residuals={},
+        provenance={}, checksum="",
+    )
+    registration.checksum = canonical_registration_checksum(registration)
+
+    class Session:
+        async def get(self, model, record_id):
+            if model is VideoSourceRecord and record_id == video.id:
+                return video
+            return telemetry
+
+        async def execute(self, _statement):
+            return SimpleNamespace(scalar_one_or_none=lambda: registration)
+
+    orchestrator = object.__new__(MissionOrchestrator)
+    orchestrator._road_context = SimpleNamespace()
+    mission = SimpleNamespace(
+        id="mission-geo", drone_id="drone-geo", inter_id="INT-GEO",
+        road_data_version="unverified", video_source_id=video.id,
+        telemetry_source_id=telemetry.id,
+        context_snapshot={
+            "source_profile_id": "source-geo",
+            "source_geo_registration": {
+                "id": registration.id,
+                "checksum": registration.checksum,
+                "status": "verified",
+            },
+        },
+    )
+
+    params = await orchestrator._runtime_params(Session(), mission)
+
+    assert params["runtime_geo_registration"]["id"] == "SGR-PINNED"
+    assert params["runtime_map_bundle"] is None
+    assert params["road_context_status"] == "missing"

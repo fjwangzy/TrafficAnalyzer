@@ -105,7 +105,7 @@ class FlightPlanCreate(BaseModel):
     inter_id: str = Field(min_length=1, max_length=100)
     road_data_version: str = Field(min_length=1, max_length=100)
     ai_mode: str = Field(default="traffic_monitoring", max_length=40)
-    tracking_profile: Literal["hover_cruise_v1", "hover_only_legacy"] = "hover_cruise_v1"
+    tracking_profile: Literal["hover_cruise_v1", "hover_only_legacy"] | None = None
     timezone: str = Field(default="Asia/Shanghai", max_length=64)
     schedule: Schedule = Field(discriminator="type")
 
@@ -135,6 +135,7 @@ class MissionCreate(BaseModel):
     inter_id: str | None = Field(default=None, max_length=100)
     road_data_version: str | None = Field(default=None, max_length=100)
     map_version_id: str | None = Field(default=None, max_length=40)
+    tracking_profile: Literal["hover_cruise_v1", "hover_only_legacy"] | None = None
     scheduled_end_at: datetime | None = None
 
     @model_validator(mode="after")

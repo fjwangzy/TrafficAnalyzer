@@ -89,7 +89,7 @@ def test_xqh_acceptance_checks_candidate_pixel_world_display_alignment():
         tracked_xyxy=[[50, 40, 70, 70]],
         id_list=[7],
     )
-    element.pixel_to_map_enu = np.array([
+    element.pixel_to_world_enu = np.array([
         [1.0, 0.0, 20.0],
         [0.0, 1.0, 0.0],
         [0.0, 0.0, 1.0],

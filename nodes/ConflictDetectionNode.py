@@ -5,7 +5,7 @@ import numpy as np
 from elements.FrameElement import FrameElement
 from elements.VideoEndBreakElement import VideoEndBreakElement
 from utils_local.coordinates import enu_to_gcj02
-from utils_local.homography import is_valid_homography, pixel_to_world
+from utils_local.homography import is_valid_homography
 from utils_local.utils import profile_time
 
 logger = logging.getLogger(__name__)
@@ -66,6 +66,7 @@ class ConflictDetectionNode:
             "eligible_motor_tracks": 0,
             "eligible_non_motor_tracks": 0,
             "candidate_pairs": 0,
+            "association_immature": 0,
             "speed_missing": 0,
             "speed_below_min": 0,
             "history_insufficient": 0,
@@ -89,20 +90,18 @@ class ConflictDetectionNode:
             frame_element.conflict_events = []
             return frame_element
 
-        if (
-            getattr(frame_element, "geo_reference_quality", None) is not None
-            and not getattr(frame_element, "tcc_analytics_eligible", False)
-        ):
+        if not getattr(frame_element, "tcc_analytics_eligible", False):
             frame_element.conflict_events = []
             diagnostics["status"] = "quality_gate_blocked"
-            diagnostics["quality_reasons"] = frame_element.geo_reference_quality.get(
-                "reasons", []
+            geo_quality = getattr(frame_element, "geo_reference_quality", None)
+            diagnostics["quality_reasons"] = (
+                list(geo_quality.get("reasons") or ["geo_quality_unverified"])
+                if isinstance(geo_quality, dict)
+                else ["geo_quality_missing"]
             )
             return frame_element
 
-        H = getattr(frame_element, "pixel_to_map_enu", None)
-        if not is_valid_homography(H):
-            H = frame_element.homography_matrix
+        H = getattr(frame_element, "pixel_to_world_enu", None)
         if not is_valid_homography(H):
             frame_element.conflict_events = []
             diagnostics["status"] = "missing_calibration"
@@ -119,7 +118,7 @@ class ConflictDetectionNode:
             bbox = frame_element.tracked_xyxy[i]
             cx = (bbox[0] + bbox[2]) / 2.0
             cy = (bbox[1] + bbox[3]) / 2.0
-            motion_profile = self._motion_profile(track, H)
+            motion_profile = self._motion_profile(track)
             if motion_profile is None:
                 diagnostics["history_insufficient"] += 1
             velocity_ms = self._prediction_velocity_ms(
@@ -131,6 +130,12 @@ class ConflictDetectionNode:
             elif track.vehicle_class == "non_motor":
                 diagnostics["non_motor_tracks"] += 1
 
+            # TCC is a derived business fact, so a ByteTrack association must
+            # first satisfy the canonical source-time/point maturity contract.
+            if not getattr(track, "trajectory_output_eligible", False):
+                diagnostics["association_immature"] += 1
+                continue
+
             # 过滤从未真正移动过的车辆（纯 bbox 抖动噪声）
             # 用 max_speed_kmh 而非 avg_speed_kmh：急停过的车依然保留
             if track.max_speed_kmh is None:
@@ -141,22 +146,18 @@ class ConflictDetectionNode:
                 continue
             # 过滤轨迹长度不足的目标（路边停靠车辆等），要求世界坐标累计位移 >= 阈值
             world_history = getattr(track, "position_history_enu_m", None) or []
-            if len(world_history) >= 2:
-                pts_world = np.asarray(
-                    [(p[0], p[1]) for p in world_history], dtype=np.float64
-                )
-                traj_length = float(np.sum(np.linalg.norm(np.diff(pts_world, axis=0), axis=1)))
-                current_position = np.asarray(pts_world[-1], dtype=np.float64)
-                position_is_absolute = True
-            elif len(track.position_history) >= 2:
-                pts_px = np.array([(p[0], p[1]) for p in track.position_history])
-                pts_world = pixel_to_world(pts_px, H)
-                traj_length = float(np.sum(np.linalg.norm(np.diff(pts_world, axis=0), axis=1)))
-                current_position = pixel_to_world(np.asarray([[cx, cy]]), H)[0]
-                position_is_absolute = False
-            else:
+            if len(world_history) < 2:
                 diagnostics["history_insufficient"] += 1
-                continue  # 位置点不足，无法判断轨迹
+                continue
+            pts_world = np.asarray(
+                [(p[0], p[1]) for p in world_history], dtype=np.float64
+            )
+            traj_length = float(np.sum(np.linalg.norm(np.diff(pts_world, axis=0), axis=1)))
+            current_position = getattr(track, "current_position_enu_m", None)
+            if current_position is None:
+                diagnostics["history_insufficient"] += 1
+                continue
+            current_position = np.asarray(current_position, dtype=np.float64)
             if traj_length < self.min_trajectory_length_m:
                 diagnostics["displacement_insufficient"] += 1
                 continue
@@ -168,7 +169,7 @@ class ConflictDetectionNode:
                 "vehicle_class": track.vehicle_class,
                 "motion_profile": motion_profile,
                 "position_enu_m": current_position,
-                "position_is_absolute": position_is_absolute,
+                "position_is_absolute": True,
                 "tracking_quality": getattr(track, "tracking_quality", "degraded"),
             }
             if track.vehicle_class == "motor":
@@ -369,26 +370,24 @@ class ConflictDetectionNode:
 
         return recent_velocity / recent_speed * speed
 
-    def _motion_profile(self, track, H) -> dict | None:
+    def _motion_profile(self, track) -> dict | None:
         world_history = getattr(track, "position_history_enu_m", None) or []
-        history = world_history or (getattr(track, "position_history", None) or [])
-        if len(history) < self.min_history_points:
+        if len(world_history) < self.min_history_points:
             return None
 
         clean_history = [
             (float(x), float(y), float(t))
-            for x, y, t in history
+            for x, y, t in world_history
             if np.isfinite(x) and np.isfinite(y) and np.isfinite(t)
         ]
         if len(clean_history) < self.min_history_points:
             return None
 
-        pts_px = np.array([(x, y) for x, y, _ in clean_history], dtype=np.float64)
+        pts_world = np.array([(x, y) for x, y, _ in clean_history], dtype=np.float64)
         times = np.array([t for _, _, t in clean_history], dtype=np.float64)
         if np.any(np.diff(times) <= 0):
             return None
 
-        pts_world = pts_px if world_history else pixel_to_world(pts_px, H)
         deltas = np.diff(pts_world, axis=0)
         dt = np.diff(times)
         segment_velocities = deltas / dt[:, None]

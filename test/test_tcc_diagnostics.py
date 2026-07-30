@@ -34,14 +34,25 @@ def _config(**overrides):
     }
 
 
-def _track(track_id, vehicle_class, velocity, history, speed_kmh):
+def _track(
+    track_id,
+    vehicle_class,
+    velocity,
+    history,
+    speed_kmh,
+    *,
+    trajectory_output_eligible=True,
+):
     track = TrackElement(id=track_id, timestamp_first=history[0][2])
     track.vehicle_class = vehicle_class
     track.avg_speed_kmh = speed_kmh
     track.max_speed_kmh = speed_kmh
     track.velocity_ms = np.asarray(velocity, dtype=np.float64)
     track.position_history = history
+    track.position_history_enu_m = history.copy()
+    track.current_position_enu_m = list(history[-1][:2])
     track.trajectory_points = [(x, y) for x, y, _ in history]
+    track.trajectory_output_eligible = trajectory_output_eligible
     return track
 
 
@@ -55,6 +66,8 @@ def _frame(motor, non_motor, homography=np.eye(3)):
          non_motor.position_history[-1][0] + 1, non_motor.position_history[-1][1] + 1],
     ]
     frame.homography_matrix = homography
+    frame.pixel_to_world_enu = homography
+    frame.tcc_analytics_eligible = True
     frame.drone_displacement_m = np.array([0.0, 0.0])
     frame.buffer_tracks = {motor.id: motor, non_motor.id: non_motor}
     return frame
@@ -88,6 +101,7 @@ def test_tcc_diagnostics_explain_the_full_positive_funnel():
         "eligible_motor_tracks": 1,
         "eligible_non_motor_tracks": 1,
         "candidate_pairs": 1,
+        "association_immature": 0,
         "speed_missing": 0,
         "speed_below_min": 0,
         "history_insufficient": 0,
@@ -120,6 +134,40 @@ def test_tcc_diagnostics_counts_speed_rejections():
     assert result.tcc_diagnostics["status"] == "no_eligible_candidates"
 
 
+def test_tcc_rejects_world_tracks_until_image_association_is_mature():
+    motor, non_motor = _right_turn_pair()
+    non_motor.trajectory_output_eligible = False
+
+    result = ConflictDetectionNode(_config()).process(_frame(motor, non_motor))
+
+    assert result.conflict_events == []
+    assert result.tcc_diagnostics["association_immature"] == 1
+    assert result.tcc_diagnostics["eligible_motor_tracks"] == 1
+    assert result.tcc_diagnostics["eligible_non_motor_tracks"] == 0
+    assert result.tcc_diagnostics["status"] == "no_eligible_candidates"
+
+
+def test_tcc_world_result_is_identical_with_or_without_lane_and_link_fields():
+    motor, non_motor = _right_turn_pair()
+    roadless = ConflictDetectionNode(_config()).process(_frame(motor, non_motor))
+
+    motor, non_motor = _right_turn_pair()
+    for track, lane_id, link_id in (
+        (motor, "motor-lane", "motor-link"),
+        (non_motor, "non-motor-lane", "non-motor-link"),
+    ):
+        track.source_lane_id = lane_id
+        track.matched_link_id = link_id
+        track.map_match_confidence = 0.99
+    mapped_frame = _frame(motor, non_motor)
+    mapped_frame.road_analytics_eligible = True
+    mapped_frame.runtime_map_bundle = {"map_version_id": "CMV-road-only"}
+    mapped = ConflictDetectionNode(_config()).process(mapped_frame)
+
+    assert mapped.conflict_events == roadless.conflict_events
+    assert mapped.tcc_diagnostics == roadless.tcc_diagnostics
+
+
 def test_tcc_diagnostics_counts_distance_and_prediction_rejections():
     motor, non_motor = _right_turn_pair()
     non_motor.position_history = [
@@ -128,6 +176,8 @@ def test_tcc_diagnostics_counts_distance_and_prediction_rejections():
         (34.0, -6.0, 2.0),
         (36.0, -6.0, 3.0),
     ]
+    non_motor.position_history_enu_m = non_motor.position_history.copy()
+    non_motor.current_position_enu_m = [36.0, -6.0]
     far = ConflictDetectionNode(_config(max_pair_distance_m=15.0)).process(
         _frame(motor, non_motor)
     )
@@ -150,6 +200,20 @@ def test_tcc_diagnostics_explain_missing_calibration():
     assert result.tcc_diagnostics["enabled"] is True
     assert result.tcc_diagnostics["calibration_valid"] is False
     assert result.tcc_diagnostics["status"] == "missing_calibration"
+
+
+def test_tcc_missing_geo_quality_safely_degrades_without_map_or_crash():
+    motor, non_motor = _right_turn_pair()
+    frame = _frame(motor, non_motor)
+    frame.tcc_analytics_eligible = False
+    frame.geo_reference_quality = None
+    frame.runtime_map_bundle = None
+
+    result = ConflictDetectionNode(_config()).process(frame)
+
+    assert result.conflict_events == []
+    assert result.tcc_diagnostics["status"] == "quality_gate_blocked"
+    assert result.tcc_diagnostics["quality_reasons"] == ["geo_quality_missing"]
 
 
 def test_same_time_cpa_is_disabled_by_default():

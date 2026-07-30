@@ -245,7 +245,7 @@ class ShowNodeClassColorsTest(unittest.TestCase):
             id_list=[1, 7],
             buffer_tracks={1: formal_track},
         )
-        second.pixel_to_map_enu = np.eye(3)
+        second.pixel_to_world_enu = np.eye(3)
         second.formal_track_ids = [1]
         second.candidate_trajectories = [{
             "track_id": 7,
@@ -284,7 +284,7 @@ class ShowNodeClassColorsTest(unittest.TestCase):
             "association_id": 1,
             "trajectory_display_px": [[10.0, 70.0], [30.0, 70.0], [60.0, 70.0]],
         }]
-        frame.pixel_to_map_enu = np.array([
+        frame.pixel_to_world_enu = np.array([
             [1.0, 0.0, 100.0],
             [0.0, 1.0, 0.0],
             [0.0, 0.0, 1.0],

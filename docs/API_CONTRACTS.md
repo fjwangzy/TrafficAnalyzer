@@ -1133,15 +1133,14 @@ Content-Type: application/json
 直接 `POST /api/v1/pipelines` 提供的 `map_version_id` 必须指向相同路口、相同路网版本的不可变
 `lane_verified` 地图；运行中请求切换仍拒绝。`POST /api/v1/missions` 可选传入
 `map_version_id` 进行严格绑定：该地图必须属于当前 `inter_id`，并具备当前 SourceProfile 的
-`verified` 配准、pixel→ENU 单应矩阵、配准位姿、相机标定和地图覆盖；否则返回
-`422/runtime_map_not_ready`。未显式指定地图时，Mission 先尝试调用方给出的已就绪
-`road_data_version`，否则自动选择当前路口与 SourceProfile 最新的完整 `lane_verified` 地图，
-并把准确的 map/version/registration/checksum/选择策略冻结到 `context_snapshot`。Console2 快速启动
+`lane_verified`地图、Lane/Link几何与地图锚点；否则返回`422/runtime_map_not_ready`。未显式指定地图时，Mission先尝试调用方给出的已就绪
+`road_data_version`，否则自动选择当前路口最新的完整`lane_verified`地图，
+并把准确的map/version/checksum/选择策略冻结到`context_snapshot`。Console2快速启动
 不再发送无人机档案中的原始道路版本，由 Platform 执行该源级选择。
 
 手动 Mission 在没有任何可用地图时仍可启动 Pipeline，此时
 `road_context_status=missing`、`quality_status=unverified`，只不生成 Lane ID、Link ID 与匹配质量。
-世界坐标由独立 SourceGeoRegistration 决定；检测、像素跟踪、完成事件、速度、方向、统计、TCC
+世界坐标由当前帧视频尺寸、相机参数和同步遥测矩阵决定；检测、像素跟踪、完成事件、速度、方向、统计、TCC
 和 MJPEG 均使用各自证据门禁，不读取路网匹配状态。
 
 本地开发可通过环境变量控制平台启动的检测器子进程：
@@ -1538,8 +1537,6 @@ canonical 完成事实，不能先过滤旧版本记录再去重，否则分类�
 | GET/PUT | `/calibration/channelized-maps/{map_version_id}` | 读取或编辑 `draft/candidate`；已发布版本不可变 |
 | POST | `/calibration/channelized-maps/{map_version_id}/fit-from-image` | 必填已登记 `source_profile_id`；服务端执行 `pixel → ENU → GCJ02`，按地图+来源幂等保存拟合车道、渠化要素和视觉配准 |
 | POST | `/calibration/visual-registrations/{id}/verify` | 人工确认配准；媒体路径必须位于显式 allowlist 根目录 |
-| GET/POST | `/calibration/source-profiles/{source_profile_id}/geo-registrations` | 查询或创建独立、版本化 SourceGeoRegistration；创建默认为 draft |
-| POST | `/calibration/source-geo-registrations/{id}/verify` | checksum 校验后设为唯一当前 verified；同来源旧 verified 退役 |
 | POST | `/calibration/channelized-maps/{map_version_id}/publish` | 执行残差、拓扑、自交、重叠、方向、停止线和人工复核门禁 |
 | GET | `/calibration/channelized-maps/{map_version_id}/runtime-bundle` | 仅 `lane_verified` 可读，供 Mission 固定注入 |
 
@@ -1567,10 +1564,10 @@ Console2 的正拍编辑器可先调用 `POST /calibration/lane-keyframe-extract
 完成轨迹必须携带非空且同索引的 `trajectory_px/trajectory_timestamps_sec/trajectory_frame_nums`；
 `trajectory_enu_m/trajectory_gcj02` 必须等长并允许逐点为 `null`。`map_version_id`、
 `matched_lane_key`、`source_lane_id`、`matched_link_id`、`movement_key` 与匹配置信度全部可空。
-视觉配准残差必须包含 `registration_position_gcj02: [longitude, latitude]`
-和 `registration_gimbal_yaw_deg`，运行时据此计算相对配准帧的运动补偿。只有固定
-`lane_verified` Bundle 且精确命中当前 `SOURCE_PROFILE_ID` verified 配准的 Pipeline 可产生
-正式车道级统计。
+视觉配准残差中的 `registration_position_gcj02: [longitude, latitude]` 与
+`registration_gimbal_yaw_deg` 只用于车道地图制作、复核及 Lane/Link 几何谱系，不进入车辆世界
+投影。运行时只要固定的 `lane_verified` Bundle 可用即可产生正式车道级字段；视频/SRT世界事实及
+TCC不要求该 Bundle，也不要求任何独立来源配准。
 
 `GET /trajectories/{intersection_id}` 对每条记录显式返回 `coordinate_system: "GCJ02"`；
 `anchor_gcj02/trajectory_enu_m/trajectory_gcj02/map_version_id` 和车道匹配字段以事实表类型化列
@@ -1593,8 +1590,8 @@ canonical Topic、`msg_type`、WebSocket channel 和 `*/v1` schema 版本保持�
 - `trajectory_enu_m/trajectory_gcj02` 由 ByteTrack 后的逐帧世界投影唯一生成，下游不得使用当前 H 或当前 GCJ-02 锚点重算历史。内部 ENU 在速度回归前保留浮点全精度，序列化层可按契约格式化。投影暂缺时两个世界序列按同索引保留 `null`，后续恢复点仍可产生有效坐标；消费方必须结合逐点质量谱系判断，不得压缩掉 `null` 破坏对齐。
 - 背景视觉 `camera_motion_warp` 递推得到的 `trajectory_display_px` 是检测进程内的当前帧渲染缓存，`KafkaProducerNode` 必须在发布 `candidate_trajectories` 前剔除；不得从该字段持久化或重建世界事实，也不得用当前帧 H 替代它。
 - `association_id` 是地理参考之前分配的图像身份；ByteTrack 确认后立即映射稳定业务 `track_id`。地理质量、地图覆盖和路网匹配变化不创建新 ID。
-- `tracking_method` 当前值为 `motion_compensated_image_v2`。`uav_track_complete.data` 增加四层能力、分层质量、降级原因、`road_context_status`、可空地图字段和 `geo_registration_id/checksum`；Topic、`msg_type`、channel 与 v1 版本不变。
-- `uav_conflict.data`：`flight_phase` 与双方 `tracking_quality` 摘要。冲突 envelope 的 `quality_status` 取双方轨迹、地理参考、地图和时间质量的最差值。
+- `tracking_method` 当前值为 `motion_compensated_image_v2`。`uav_track_complete.data` 增加四层能力、分层质量、降级原因、`road_context_status`和可空地图字段；Topic、`msg_type`、channel与v1版本不变。历史`geo_registration_id`数据库列保留但新消息不再写入。
+- `uav_conflict.data`：`flight_phase` 与双方 `tracking_quality` 摘要。冲突只接受已成熟图像关联的可信世界轨迹与源时间；envelope 的 `quality_status` 取双方轨迹、地理参考和时间质量的最差值，不读取地图、Lane 或 Link。
 - 所有 envelope 的 `quality_status` 按当前帧/轨迹动态计算，不再只复制 Mission 启动时值。
 - 实时源带设备 `recorded_at` 时使用 `source_time_semantics=event_time/time_quality=verified`；离线回放时间锚点使用 `reconstructed`；缺少事件时间为 `ingest_only`。冲突遇到 `ingest_only/quarantined` 必须标记 `quality_status=unverified`，经批准的 `reconstructed` 回放仍可参与离线正式分析。
 
@@ -1609,10 +1606,9 @@ canonical Topic、`msg_type`、WebSocket channel 和 `*/v1` schema 版本保持�
 
 - `GET /api/v1/calibration/source-profiles/{source_profile_id}/flight-segments`：按 SourceProfile 查询持久化飞行分段。
 - `GET /api/v1/sources/{profile_id}/results`：新增 `flight_segments[]`。
-- Mission/Pipeline 列表和详情返回 `tracking_profile`、`tracking_profile_selection_reason`、`flight_phase`、`tracking_quality`、`formal_analytics_eligible`、`runtime_quality`。
-- FlightPlan/Mission create 可选 `tracking_profile=hover_cruise_v1|hover_only_legacy`。显式值优先；
-  未显式指定时，有 verified SourceGeoRegistration 选择 `hover_cruise_v1`，否则选择
-  `hover_only_legacy`。最终值、选择原因和注册 ID/checksum 固化到 Mission snapshot，恢复时不重选。
+- Mission/Pipeline 列表和详情返回 `tracking_profile`、`tracking_profile_selection_reason`、`flight_phase`、`tracking_quality`、兼容字段 `formal_analytics_eligible`、`runtime_quality`，并显式返回四层 `capabilities={trajectory,geo,road,tcc}` 与各层 `capability_reasons`。首个 Stats 到达前四层值为 `null/runtime_sample_pending`，不得根据地图或总质量猜测；到达后按当前帧四个独立布尔值更新。
+- FlightPlan/Mission create可选`tracking_profile=hover_cruise_v1|hover_only_legacy`。显式值优先；
+  未显式指定时固定选择`hover_cruise_v1`。最终值和选择原因固化到Mission snapshot，恢复时不重选。
 - `uav_stats.data.inference_context` 包含 `metric_scope=yolo_predict_single_processed_frame`、device、
   precision、model、`effective_imgsz`、`agl_tier`、`frame_stride`；`inference_ms` 仅是 YOLO 单处理帧，
   `pipeline_processing_ms` 是 FrameElement 创建至 Kafka 节点的整帧管道耗时，两者不得混用。
@@ -1623,8 +1619,8 @@ canonical Topic、`msg_type`、WebSocket channel 和 `*/v1` schema 版本保持�
   200 条并优先最新成熟轨迹；`active_tracks/eligible_active_tracks` 仍是完整计数，新增
   `active_trajectories_truncated/candidate_trajectories_truncated` 明确被省略数量。完整轨迹不截断，
   继续通过 `uav_track_complete_*` 发布。
-- visual registration/runtime bundle 新增 `registration_pose`、`camera_calibration`、`map_coverage_enu_m`。
+- visual registration 可为地图制作保留 `registration_pose`、`camera_calibration`、`map_coverage_enu_m`；Runtime Road Map Bundle 不携带这些来源姿态或世界投影矩阵，只携带 Lane/Link 地图事实。
 
-`registration_pose` 至少保存配准帧 AGL、云台 yaw/pitch/roll、zoom、GCJ-02 位置与 `telemetry_homography_pixel_to_local_enu`；`camera_calibration` 至少保存内参/畸变版本或哈希。缺少谱系时新 profile 必须降级，不能猜测补齐。
+地图制作记录中的 `registration_pose` 至少保存配准帧 AGL、云台 yaw/pitch/roll、zoom、GCJ-02 位置与 `telemetry_homography_pixel_to_local_enu`；`camera_calibration` 至少保存内参/畸变版本或哈希。它们只证明地图制作谱系，不能作为运行时世界真源或 tracking profile 选择条件。
 
-Mission 启动使用的 `RoadContext.runtime_map_bundle` 与校准 runtime-bundle API 必须返回完全相同的 registration 谱系字段；漏传任一字段会使 `hover_cruise_v1` 安全降级。衍生的 imagery-fit 地图若自身 `source_checksum` 为空，只允许沿 `quality.source_map_version_id` 追溯其父地图的不可变 checksum；不得按版本名猜测或回退到任意最新 snapshot。
+Mission 启动使用的 `RoadContext.runtime_map_bundle` 与校准 runtime-bundle API 必须返回完全相同的 Lane/Link 地图字段；漏传或版本不一致只关闭 road 能力。衍生的 imagery-fit 地图若自身 `source_checksum` 为空，只允许沿 `quality.source_map_version_id` 追溯其父地图的不可变 checksum；不得按版本名猜测或回退到任意最新 snapshot。

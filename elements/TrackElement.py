@@ -62,8 +62,6 @@ class TrackElement:
         self.geo_reference_quality: str = "degraded"
         self.road_match_quality: str = "missing"
         self.quality_reasons: list[str] = []
-        self.geo_registration_id: str | None = None
-        self.geo_registration_checksum: str | None = None
         self.road_context_status: str = "missing"
 
         # ── 新增：分类 ──

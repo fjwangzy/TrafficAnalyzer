@@ -722,9 +722,10 @@ Platform 在容器内启动 YOLO 时只能走 CPU，真实任务常态 `inferenc
 2. 不迁移历史坐标或业务事实，不保留 OSM/OpenLayers、旧坐标字段或道路 JSON 运行时 fallback。
 3. YCX 永远只读，仅在新路口本地无快照时按 `inter_id` 取该路口；WKT 文本在查询中由 PostGIS 转 geometry。road9/YCX 对象 ID 视为不透明 geomhash 字符串。
 4. `lane_info` 是 Link 偏移候选，不是车道真值。真实正拍影像经 pixel↔ENU↔GCJ-02 配准、人工拟合和质量门禁后发布不可变 `lane_verified` 地图。
-5. Mission 启动固定一个 Runtime Road Map Bundle；只有 `lane_verified` 地图能生成正式车道匹配、统计、冲突和研判结果，运行中不热切换。
-   Bundle 必须精确命中当前 SourceProfile 的 verified 视觉配准；配准时 GCJ-02 位置是运动补偿
-   零点，轨迹点按帧投影，不得用结束帧标定重算历史。
+5. 该条已由 2026-07-30 的 ADR-025 修订：Mission 可选固定一个 Runtime Road Map Bundle，只有
+   `lane_verified` 地图能生成正式 Lane/Link 匹配及车道级统计，运行中不热切换；地图和视觉配准
+   不再控制车辆世界坐标、速度、方向或冲突。世界事实逐帧使用视频、相机参数和同步遥测，不能用
+   地图制作配准或结束帧矩阵重算历史。
 6. 第一阶段与第二阶段严格串行。未覆盖全部启用数据源绑定路口时，不启动正式全量重跑。
 7. 测绘、轨迹、事件、Kafka 状态等历史业务数据已清除；仅保留可校验的原始 MP4/SRT/遥测/影像文件、SHA-256 清单与主数据，用于重新生成。
 
@@ -869,12 +870,12 @@ ImageMotionEstimationNode
 - 图像轨迹是基础业务事实。ByteTrack 确认关联后立即分配稳定 `track_id`；只有关联消失、源时间断点、超时或自然 EOF 结束轨迹。
 - 能力拆为 `trajectory_output_eligible`、`geo_analytics_eligible`、`road_analytics_eligible` 与 `tcc_analytics_eligible`。兼容字段 `formal_analytics_eligible` 只表示完整道路分析能力，不控制轨迹缓冲或完成事件。
 - `uav_track_complete/v1` 不换 Topic 或版本。像素、源时间和帧号必填同索引；ENU/GCJ-02 等长且可逐点为 `null`。地图、车道、Link 与匹配置信度可空；Movement/方向属于轨迹自身世界运动事实，不由路网匹配赋值。
-- 地理配准从地图中抽为版本化、checksum 保护的 SourceGeoRegistration。Mission 固定 verified 配准；地图 Bundle 可选。坐标版本/锚点不兼容只关闭道路分析并记录 `version_mismatch`。
+- 世界坐标由视频尺寸、相机参数和同步遥测形成的当前帧矩阵决定；不得增加独立注册输入或让地图矩阵覆盖该结果。地图 Bundle 可选，只为Lane/Link匹配提供独立地图锚点与几何。
 - 速度/方向仅消费可信 ENU；road gate 只控制 Lane/Link ID 与匹配质量，且 RoadMapMatching 禁止创建或覆盖世界坐标和轨迹自身的方向/转向。通用车辆计数继续消费成熟图像轨迹；TCC 使用独立世界坐标、时间、跟踪和证据门禁。缺事实字段为空，禁止伪造零速度或零道路指标。
 
 ### 后果
 
-无地图、无配准仍必须输出成熟像素轨迹；有配准无地图可输出世界轨迹和速度；完整 verified 配准与地图继续提供车道级能力。候选只表示未成熟关联。该变更恢复轨迹事件不等于生产跟踪精度验收；无外部真值时 IDF1/HOTA、ID switch、位置 RMSE 与速度 MAE 仍为 `not_evaluated`。
+无地图仍必须输出成熟像素轨迹；当前帧矩阵和遥测质量合格时，无地图也输出世界轨迹、速度、方向和TCC。只有Lane/Link及匹配质量依赖地图。候选只表示未成熟关联。该变更恢复轨迹事件不等于生产跟踪精度验收；无外部真值时 IDF1/HOTA、ID switch、位置 RMSE 与速度 MAE 仍为 `not_evaluated`。
 
 ## ADR-026：固定时间步 Mahalanobis 门控退出生产关联（2026-07-29）
 
@@ -926,8 +927,8 @@ ImageMotionEstimationNode
   130m 的既有 928 实验归入 960。
 - 最近 5 个有效 AGL 取中位数，边界使用 5m 滞回，新档连续 5 个处理帧成立才切换；首帧立即选档。
   遥测缺失保持 2 秒源时间，之后回退固定 960。尺寸不得参与关联、世界坐标、道路或 TCC 门禁。
-- FlightPlan/Mission 未显式指定 tracking profile 时，verified SourceGeoRegistration 选择 cruise，
-  否则选择 legacy；显式请求优先。Mission snapshot 固化最终档、原因和注册 checksum，运行/恢复不重选。
+- FlightPlan/Mission 未显式指定 tracking profile 时固定选择 `hover_cruise_v1`；仅显式请求可选择
+  `hover_only_legacy`。Mission snapshot 固化最终档与选择原因，运行/恢复不重选。
 - `inference_ms` 定义为 YOLO 单处理帧耗时；另发 `pipeline_processing_ms` 和推理上下文。TCC 漏斗
   逐项记录过滤原因。`<100ms` 只能描述指定尺寸下的 YOLO 样本，不代表整帧 P95。
 - Platform Kafka consumer 一次 poll 一条 canonical 消息，`max_poll_interval_ms=1800000`。这样密集
@@ -936,8 +937,7 @@ ImageMotionEstimationNode
 
 ### 后果
 
-历史悬停源在无巡航注册时不会因 cruise 地理质量门把 TCC 全部归零；强制 cruise 且无注册仍保持
-安全负例。动态尺寸可改善不同高度的小目标覆盖，但在无外部批准真值时，IDF1/HOTA、正式 ID switch、
+世界坐标、速度和TCC只按当前帧矩阵与遥测质量降级；地图缺失不再参与这些门禁。动态尺寸可改善不同高度的小目标覆盖，但在无外部批准真值时，IDF1/HOTA、正式 ID switch、
 位置 RMSE 和速度 MAE 继续为 `not_evaluated`。
 
 崇华路这份素材不能作为自然三档切换样本；三档实景延迟/检测/轨迹对比仍需一段对齐 AGL 真正跨越

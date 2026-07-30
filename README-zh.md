@@ -92,16 +92,16 @@ ENU 计算并以 GCJ-02 投放轨迹。当前四路口地图、9 个视频源配
 
 `hover_cruise_v1` 已把同一 Mission 内的进场巡航、悬停正拍和离场巡航接入统一质量链。YOLO
 仍在进程 1；进程 2 先用背景图像运动补偿执行纯图像 ByteTrack，再由
-`PostTrackingWorldProjectionNode` 为成熟图像关联分配稳定 `track_id`，并按独立
-SourceGeoRegistration 做逐帧 pixel→ENU/GCJ-02 投影。H、遥测、ENU 和地图覆盖不进入 ByteTrack
+`PostTrackingWorldProjectionNode` 为成熟图像关联分配稳定 `track_id`，并按视频尺寸、相机参数和
+同步SRT逐帧计算的当前矩阵做 pixel→ENU/GCJ-02 投影。H、遥测和ENU不进入 ByteTrack
 关联代价；地理质量变化只能让对应世界点降级为 `null`，不能改变、结束或拆分图像轨迹。
 Runtime Road Map Bundle 是可选富化，只影响 Lane ID、Link ID 与匹配质量，不创建或覆盖世界坐标。
 悬停关键帧仍是发布 `lane_verified` 地图的唯一来源，巡航帧不能创建或修改地图。
 
 2026-07-28 已实施 ADR-025：成熟像素轨迹不再受地理或路网质量门禁抑制。mp4728 的 3/5/7 m/s
 三源以原生 arm64/MPS 串行回放至自然 EOF，共输出 7,881 条完成轨迹，Kafka 与 road9 按
-`source_profile_id + pipeline_id` 精确一致。三源尚无 verified SourceGeoRegistration，因此本轮
-ENU/GCJ-02 与速度诚实为空；这与缺少 `lane_verified` 路网无关。当前结论是
+`source_profile_id + pipeline_id` 精确一致。该报告是修复前历史快照，当时世界能力因新增注册门禁
+被错误关闭；当前实现已恢复为视频+SRT逐帧矩阵门禁，是否有 `lane_verified` 路网只影响Lane/Link。原报告结论为
 `local_engineering_passed / source_inputs_complete / road_context_degraded / geo_not_evaluated /
 production_accuracy_not_claimed`。
 

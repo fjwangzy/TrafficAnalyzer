@@ -36,12 +36,9 @@ class CalcStatisticsNode:
             frame_element, FrameElement
         ), f"CalcStatisticsNode | 输入元素格式错误 {type(frame_element)}"
 
-        quality_is_explicit = (
-            getattr(frame_element, "geo_reference_quality", None) is not None
-        )
         road_eligible = bool(
             getattr(frame_element, "road_analytics_eligible", False)
-        ) if quality_is_explicit else True
+        )
         buffer_tracks = frame_element.buffer_tracks or {}
         self.cars_buffer.append(len(frame_element.buffer_tracks or {}))
 

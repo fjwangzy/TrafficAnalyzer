@@ -1,9 +1,10 @@
 import numpy as np
+import pytest
 
 from elements.FrameElement import FrameElement
 from nodes.FlightGeoReferenceNode import FlightGeoReferenceNode
+from nodes.PostTrackingWorldProjectionNode import PostTrackingWorldProjectionNode
 from utils_local.coordinates import enu_to_gcj02
-from utils_local.homography import compute_homography_from_telemetry
 
 
 ANCHOR = (117.0, 36.0)
@@ -28,6 +29,7 @@ def _frame(timestamp: float, drone_east_m: float, *, runtime_map: bool = True):
     frame.drone_displacement_m = np.array([drone_east_m, 0.0])
     frame.calibration_mode = "runtime_map" if runtime_map else "telemetry"
     frame.map_version_id = "CMV-1" if runtime_map else None
+    frame.runtime_map_bundle = {"map_version_id": "CMV-1"} if runtime_map else None
     frame.anchor_gcj02 = ANCHOR
     frame.detected_xyxy = []
     return frame
@@ -102,7 +104,7 @@ def test_telemetry_projection_without_road_enables_geo_but_not_road_analytics():
     frame.telemetry["horizontal_speed"] = 2.0
     result = node.process(frame)
 
-    assert result.pixel_to_map_enu is not None
+    assert result.pixel_to_world_enu is not None
     assert result.geo_analytics_eligible is True
     assert result.road_analytics_eligible is False
     assert result.tcc_analytics_eligible is True
@@ -111,12 +113,13 @@ def test_telemetry_projection_without_road_enables_geo_but_not_road_analytics():
     assert "lane_verified_map_required" in result.geo_reference_quality["reasons"]
 
 
-def test_invalid_detector_geometry_blocks_formal_frame_but_keeps_preview_data():
+def test_detector_diagnostics_do_not_override_matrix_and_telemetry_capability():
     node = FlightGeoReferenceNode({
         "tracking_profile": "hover_only_legacy",
         "geo_reference": {"require_visual_validation": False},
     })
     frame = _frame(0.0, 0.0)
+    frame.telemetry["horizontal_speed"] = 2.0
     frame.detected_xyxy = [[10.0, 10.0, 20.0, 20.0]]
     frame.detection_diagnostics = {
         "raw_detection_count": 2,
@@ -128,39 +131,14 @@ def test_invalid_detector_geometry_blocks_formal_frame_but_keeps_preview_data():
     result = node.process(frame)
 
     assert result.detected_xyxy == [[10.0, 10.0, 20.0, 20.0]]
-    assert result.formal_analytics_eligible is False
-    assert "invalid_detector_geometry" in result.geo_reference_quality["reasons"]
+    assert result.geo_analytics_eligible is True
+    assert result.tcc_analytics_eligible is True
+    assert result.formal_analytics_eligible is True
+    assert result.geo_reference_quality["detection_geometry"]["invalid_geometry_count"] == 1
 
 
-def test_hover_cruise_profile_requires_and_uses_registration_pose_lineage():
+def test_hover_cruise_uses_current_frame_matrix_without_source_registration():
     frame = _frame(0.0, 0.0)
-    intrinsics = {
-        "focal_length_mm": 4.5,
-        "sensor_width_mm": 6.4,
-        "sensor_height_mm": 4.8,
-    }
-    reference_local = compute_homography_from_telemetry(
-        frame.telemetry, intrinsics, (100, 100)
-    )
-    frame.runtime_visual_registration = {
-        "registration_pose": {
-            "altitude_agl": 100.0,
-            "gimbal_yaw": 0.0,
-            "gimbal_pitch": -90.0,
-            "gimbal_roll": 0.0,
-            "zoom_factor": 1.0,
-            "telemetry_homography_pixel_to_local_enu": reference_local.tolist(),
-        },
-        "camera_calibration": {
-            "camera_intrinsics": intrinsics,
-            "version": "camera/v1",
-            "sha256": "fixture",
-        },
-        "map_coverage_enu_m": {
-            "type": "Polygon",
-            "coordinates": [[[-1000, -1000], [1000, -1000], [1000, 1000], [-1000, 1000], [-1000, -1000]]],
-        },
-    }
     frame.telemetry["horizontal_speed"] = 2.0
     node = FlightGeoReferenceNode({
         "tracking_profile": "hover_cruise_v1",
@@ -170,13 +148,14 @@ def test_hover_cruise_profile_requires_and_uses_registration_pose_lineage():
     result = node.process(frame)
 
     assert result.formal_analytics_eligible is True
-    assert result.geo_reference_quality["registration_pose_lineage"]["status"] == "verified"
-    assert result.geo_reference_quality["map_coverage"]["status"] == "verified"
+    assert result.geo_reference_quality["current_frame_matrix"]["status"] == "verified"
+    assert result.pixel_to_world_enu is not None
 
 
-def test_forced_hover_cruise_without_registration_blocks_tcc_with_reason():
+def test_invalid_current_frame_matrix_blocks_world_and_tcc_with_reason():
     frame = _frame(0.0, 0.0)
     frame.telemetry["horizontal_speed"] = 2.0
+    frame.homography_matrix = None
     node = FlightGeoReferenceNode({
         "tracking_profile": "hover_cruise_v1",
         "geo_reference": {"require_visual_validation": False},
@@ -186,7 +165,52 @@ def test_forced_hover_cruise_without_registration_blocks_tcc_with_reason():
 
     assert result.tcc_analytics_eligible is False
     assert result.formal_analytics_eligible is False
-    assert result.geo_reference_quality["registration_pose_lineage"] == {
+    assert result.geo_reference_quality["current_frame_matrix"] == {
         "status": "unavailable"
     }
-    assert "registration_pose_lineage_required" in result.geo_reference_quality["reasons"]
+    assert "current_frame_matrix_invalid" in result.geo_reference_quality["geo_reasons"]
+
+
+@pytest.mark.parametrize(
+    ("telemetry_mutation", "expected_reason"),
+    [
+        (None, "telemetry_unavailable"),
+        ({"altitude_agl": 10.0}, "agl_out_of_range"),
+        ({"gimbal_pitch": -60.0}, "gimbal_pitch_out_of_range"),
+    ],
+)
+def test_invalid_current_telemetry_keeps_pixel_track_but_emits_no_world_fact(
+    telemetry_mutation,
+    expected_reason,
+):
+    frame = _frame(0.0, 0.0, runtime_map=False)
+    if telemetry_mutation is None:
+        frame.telemetry = None
+    else:
+        frame.telemetry.update(telemetry_mutation)
+    frame.trajectory_output_eligible = True
+    frame.id_list = [7]
+    frame.association_trajectories = [
+        {
+            "association_id": 7,
+            "track_id": 7,
+            "trajectory_px": [[30.0, 40.0]],
+            "trajectory_timestamps_sec": [0.0],
+            "trajectory_frame_nums": [0],
+        }
+    ]
+    frame.tracking_diagnostics = {"association_state_ids": [7]}
+
+    referenced = FlightGeoReferenceNode(
+        {"geo_reference": {"require_visual_validation": False}}
+    ).process(frame)
+    projected = PostTrackingWorldProjectionNode(
+        {"tracking_node": {"candidate_trajectory_tail_points": 30}}
+    ).process(referenced)
+
+    assert projected.trajectory_output_eligible is True
+    assert projected.geo_analytics_eligible is False
+    assert projected.road_analytics_eligible is False
+    assert projected.tcc_analytics_eligible is False
+    assert expected_reason in projected.geo_reference_quality["geo_reasons"]
+    assert projected.association_trajectories[0]["trajectory_enu_m"] == [None]

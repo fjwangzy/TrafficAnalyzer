@@ -95,11 +95,11 @@ Step 5: 初始化新轨迹
 Step 6: 清理超时轨迹
   - lost 状态默认超过 2 秒的轨迹标记为 Removed，不依赖处理 FPS
   - 源时间间隔超过 0.5 秒或时间倒退时重置图像关联
-  - 位姿、地理配准、地图或遥测质量变化不结束、不丢弃、不拆分仍连续的图像轨迹
+  - 位姿、当前帧矩阵、地图或遥测质量变化不结束、不丢弃、不拆分仍连续的图像轨迹
 
 Step 7: 稳定轨迹生命周期与可选能力富化
   - 成熟 ByteTrack 关联立即获得稳定 `track_id`，并保留原始 `association_id`
-  - `PostTrackingWorldProjectionNode` 只用独立 SourceGeoRegistration 投影当前源帧接地点；无可信投影时同索引世界点写 `null`
+  - `PostTrackingWorldProjectionNode` 只用视频尺寸、相机参数与同步遥测生成的当前帧矩阵投影接地点；无可信投影时同索引世界点写 `null`
   - `RoadMapMatchingNode` 只填充 Lane ID、Link ID 与匹配质量，不能创建或覆盖 ENU/GCJ-02
   - 轨迹只因关联消失、源时间断点、超时或自然 EOF 结束，并只发布一次完成事件
 
@@ -485,7 +485,7 @@ Console2 对新事件展示 `conflict_original_frame`“原始画面”和 `conf
 5. 提交复核至少需要一项带 metric geometry 的当前量算；复核可通过或带原因退回“补拍/修订量算”。技术复核通过不等于法定事故认定。
 6. 报告生成前重新计算全部引用材料的 SHA-256 和大小；按量算关联帧生成带几何与逐边长度的标注 JPEG，将其作为派生证据嵌入 PDF，并随 canonical JSON、GeoJSON 与 manifest hash 输出。历史任务优先展示固化标注图；旧报告可由不可变 BEV 和版本化量算记录只读重绘，不回写旧版本。重复请求用 `Idempotency-Key` 返回同一业务结果。
 7. 报告只有在 `survey_quality` 规则已批准且配置主平台 URL 后才创建 `survey_result` 事件和 outbox；worker 记录每次 HTTP 尝试，超过上限进入 dead letter。当前未冻结阈值保持 `unverified`，不得伪造“质量通过”或成功回执。
-8. 场景标注只能关联已持久化关键帧，车辆、痕迹、散落物和其他对象的创建/修改/删除保留 revision 与统一审计；渠化车道标注从真实关键帧显式创建任务，发布后形成不可变 `lane_verified` 地图。手动 Mission 独立冻结当前 SourceProfile 的 verified SourceGeoRegistration，并可选冻结匹配的 Runtime Road Map Bundle；不得用无人机档案的原始道路版本替代源级绑定。未绑定路网仍必须输出成熟像素轨迹和通用车辆计数；有可信地理配准时还可输出世界坐标和速度。只有 Lane ID、Link ID 与匹配质量不可用。
+8. 场景标注只能关联已持久化关键帧，车辆、痕迹、散落物和其他对象的创建/修改/删除保留 revision 与统一审计；渠化车道标注从真实关键帧显式创建任务，发布后形成不可变 `lane_verified` 地图。手动Mission固定视频与配对遥测，并可选冻结Runtime Road Map Bundle。未绑定路网仍必须按当前帧矩阵和遥测质量输出世界坐标、速度、方向和TCC；只有Lane ID、Link ID与匹配质量不可用。
 9. 冲突节点实际产出事件时才保存研判关键帧并附到统一证据包；当前素材没有真实事件时应保存“未检出事件”事实，禁止为了验收制造冲突。
 
 ## 统计数据的完整生命周期
@@ -651,7 +651,7 @@ GCJ-02/ENU 最大往返误差为 0.0068m。该口径不得写成 100 条人工�
 
 巡航正式包线为地速 1–12m/s、AGL 60–150m、云台俯角不高于 -80°、滚转绝对值不高于 5°、垂直速度不高于 2m/s、偏航角速度不高于 15°/s、变焦漂移不高于 2%。SRT/JSON 缷失速度时使用约 1 秒 GCJ-02 位置窗口派生；报告速度与派生速度持续相差超过 3m/s时标记不一致。所有文件与 MQTT 遥测超过同步容忍窗口都返回空，不复用超窗最近值。
 
-遥测、地理配准或地图质量短缺不得终止图像业务轨迹。ByteTrack 确认关联后分配稳定
+遥测、当前帧矩阵或地图质量短缺不得终止图像业务轨迹。ByteTrack 确认关联后分配稳定
 `track_id`，该 ID 只因关联消失、源时间断点、超时或自然 EOF 结束；地理质量恢复时沿用原 ID。
 缺失世界投影的点在 `trajectory_enu_m/trajectory_gcj02` 同索引写 `null`，速度保持空值。
 
@@ -663,10 +663,10 @@ Lane ID、Link ID 与匹配质量为不可用，不能用零值伪装；方向�
 正式业务门禁按以下边界执行：
 
 - `GroundTrajectoryTrackerNode` 对确认检测维护图像 `association_id`；`PostTrackingWorldProjectionNode` 立即分配稳定 `track_id`。只有未满足最短时长和点数的关联处于 `candidate_trajectories`。
-- `PostTrackingWorldProjectionNode` 是新版唯一世界事实所有者：先对当前接地点去畸变，再使用该源帧 `pixel_to_map_enu` 生成 ENU/GCJ-02；地图覆盖使用同一个投影点。`TrackerInfoUpdateNode` 只累积该结果，后续 H 或 GCJ-02 锚点变化不得触发二次计算。
+- `PostTrackingWorldProjectionNode` 是新版唯一世界事实所有者：先对当前接地点去畸变，再使用该源帧 `pixel_to_world_enu` 生成 ENU/GCJ-02。`TrackerInfoUpdateNode` 只累积该结果，后续H或GCJ-02锚点变化不得触发二次计算。
 - 原始类别变化只增加关联代价；同业务组类别可更新，机动车/非机动车跨组变化默认连续 3 帧确认后才改写轨迹业务类别。
 - `TrackerInfoUpdateNode` 接收全部图像关联并逐点保存同帧接地点像素、可空 ENU/GCJ-02、源时间、源帧号和质量谱系；成熟后进入 `active_trajectories`，结束时只发一次完成事件。
-- `SpeedEstimationNode` 与 `DirectionFlowNode` 只消费连续可信 ENU；证据不足时速度/方向为空。`RoadMapMatchingNode` 只读取上游已有 ENU，并用 `road_analytics_eligible` 填充 Lane/Link ID 与匹配质量；禁止从地图 Homography 创建或覆盖世界坐标，也不得覆盖轨迹自身的方向/转向。通用车辆计数消费成熟图像轨迹；`ConflictDetectionNode` 只消费独立的 `tcc_analytics_eligible`。
+- `SpeedEstimationNode` 与 `DirectionFlowNode` 只消费连续可信ENU；证据不足时速度/方向为空。`RoadMapMatchingNode`只读取上游已有GCJ-02并转换到地图自身ENU，以填充Lane/Link ID与匹配质量；禁止从地图Homography创建或覆盖世界坐标，也不得覆盖轨迹自身的方向/转向。通用车辆计数消费成熟图像轨迹；`ConflictDetectionNode`只消费独立的`tcc_analytics_eligible`。
 - active/completed trajectory 的 canonical `trajectory_px` 使用与世界坐标相同的接地点锚点，旧 bbox 中心放在 `trajectory_bbox_center_px`；active world 轨迹直接读取逐帧保存的 `trajectory_enu_m`，禁止用当前帧 H 重投影历史像素。
 - 地理参考、地图覆盖或路网版本变化不得拆分 `track_id`；只有关联消失、源时间倒退/超时或自然 EOF 结束轨迹。世界点可在同一轨迹内从有效降级为 `null` 后再恢复。
 - `degraded/unverified` 像素轨迹允许进入轨迹事件和通用车辆计数；缺路网时只不得产生 Lane ID、Link ID 与匹配质量。不满足独立世界证据时 TCC 数量必须为 0。

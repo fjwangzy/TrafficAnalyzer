@@ -328,7 +328,7 @@ def test_native_runner_keeps_map_verified_and_roadless_trajectory_modes():
     assert "ROADS_JSON" not in runner
 
 
-def test_runtime_bundle_selects_latest_lane_verified_map_registered_to_source_profile():
+def test_runtime_bundle_selects_latest_lane_verified_map_without_source_registration():
     client = object.__new__(PlatformClient)
     requested_paths = []
 
@@ -388,12 +388,11 @@ def test_runtime_bundle_selects_latest_lane_verified_map_registered_to_source_pr
         }
     )
 
-    assert bundle["map_version_id"] == "CMV-XQH"
-    assert bundle["road_data_version"] == "V2"
-    assert requested_paths[-2:] == [
-        "/api/v1/calibration/channelized-maps/CMV-UNBOUND/runtime-bundle",
-        "/api/v1/calibration/channelized-maps/CMV-XQH/runtime-bundle",
-    ]
+    assert bundle["map_version_id"] == "CMV-UNBOUND"
+    assert bundle["road_data_version"] == "V3"
+    assert requested_paths[-1] == (
+        "/api/v1/calibration/channelized-maps/CMV-UNBOUND/runtime-bundle"
+    )
 
 
 def test_native_runner_registers_browser_reachable_detector_stream_address():

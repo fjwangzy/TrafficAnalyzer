@@ -16,17 +16,6 @@ RUNTIME_MAP_BUNDLE = {
     "anchor_gcj02": [117.0, 36.7],
     "geometry_enu_m": {"lanes": {}},
 }
-RUNTIME_GEO_REGISTRATION = {
-    "id": "SGR-TEST",
-    "source_profile_id": "SRC-REAL-001",
-    "status": "verified",
-    "coordinate_system": "GCJ02",
-    "anchor_gcj02": [117.0, 36.7],
-    "homography_pixel_to_enu": [[1, 0, 0], [0, 1, 0], [0, 0, 1]],
-    "checksum": "geo-fixture",
-}
-
-
 class _EmptyStream:
     async def read(self, _size):
         return b""
@@ -95,7 +84,6 @@ class PipelineManagerTest(unittest.IsolatedAsyncioTestCase):
                 intersection_id="INT_camera_1",
                 video_src="test_videos/inter_xqh/demo.mp4",
                 runtime_map_bundle=RUNTIME_MAP_BUNDLE,
-                runtime_geo_registration=RUNTIME_GEO_REGISTRATION,
                 telemetry_source="srt",
                 telemetry_file_path="test_videos/mp4new/srt/海右路 0624.txt",
                 telemetry_time_offset_sec=12.25,
@@ -130,10 +118,7 @@ class PipelineManagerTest(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(captured["env"]["VIDEO_SRC"], str(video_path.resolve()))
         self.assertEqual(captured["env"]["RUNTIME_MAP_BUNDLE_JSON"], '{"schema_version":"uav.runtime-road-map/v1","map_version_id":"CMV-TEST","map_status":"lane_verified","coordinate_system":"GCJ02","anchor_gcj02":[117.0,36.7],"geometry_enu_m":{"lanes":{}}}')
-        self.assertEqual(
-            captured["env"]["RUNTIME_GEO_REGISTRATION_JSON"],
-            '{"id":"SGR-TEST","source_profile_id":"SRC-REAL-001","status":"verified","coordinate_system":"GCJ02","anchor_gcj02":[117.0,36.7],"homography_pixel_to_enu":[[1,0,0],[0,1,0],[0,0,1]],"checksum":"geo-fixture"}',
-        )
+        self.assertNotIn("RUNTIME_GEO_REGISTRATION_JSON", captured["env"])
         self.assertEqual(captured["env"]["TOPIC_NAME"], "uav_statistics_1700000000")
         self.assertEqual(captured["env"]["CAMERA_ID"], "1700000000")
         self.assertEqual(captured["env"]["DRONE_ID"], "drone_1")
@@ -150,6 +135,19 @@ class PipelineManagerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             pipeline.to_dict()["video_stream_url"],
             "http://127.0.0.1:8101/video",
+        )
+        self.assertEqual(
+            pipeline.to_dict()["capabilities"],
+            {"trajectory": None, "geo": None, "road": None, "tcc": None},
+        )
+        self.assertEqual(
+            pipeline.to_dict()["capability_reasons"],
+            {
+                "trajectory": ["runtime_sample_pending"],
+                "geo": ["runtime_sample_pending"],
+                "road": ["runtime_sample_pending"],
+                "tcc": ["runtime_sample_pending"],
+            },
         )
         self.assertEqual(captured["env"]["FRAME_STRIDE"], "12")
         self.assertEqual(captured["env"]["KAFKA_BOOTSTRAP"], "kafka:29092")

@@ -73,7 +73,7 @@ def test_hover_cruise_speed_uses_world_history_independent_of_current_h():
     assert result.buffer_tracks[1].speed_kmh == pytest.approx(18.0)
 
 
-def test_hover_only_legacy_keeps_current_h_pixel_history_fallback():
+def test_hover_only_legacy_does_not_invent_speed_from_pixel_history():
     track = TrackElement(id=1, timestamp_first=0.0)
     track.position_history = [
         (10.0, 20.0, 0.0),
@@ -90,10 +90,9 @@ def test_hover_only_legacy_keeps_current_h_pixel_history_fallback():
 
     result = node.process(frame)
 
-    np.testing.assert_allclose(
-        result.buffer_tracks[1].velocity_ms, [10.0, 0.0], atol=1e-9
-    )
-    assert result.buffer_tracks[1].speed_kmh == pytest.approx(36.0)
+    assert result.buffer_tracks[1].velocity_ms is None
+    assert result.buffer_tracks[1].speed_kmh is None
+    assert result.buffer_tracks[1].avg_speed_kmh is None
 
 
 def test_direction_statistics_keep_unknown_speed_null():

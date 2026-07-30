@@ -14,7 +14,7 @@
 
 - `hover_cruise_v1` 是新 FlightPlan 默认 profile；既有计划由 `20260723_0019` 保持为 `hover_only_legacy`。
 - 悬停关键帧是创建、拟合和发布 `lane_verified` 地图的唯一来源；巡航帧不得修改地图。
-- Mission 固定一个 SourceProfile、可选 verified SourceGeoRegistration 和可选 Runtime Road Map Bundle。
+- Mission固定一个视频SourceProfile及配对SRT/MQTT/JSON遥测，可选Runtime Road Map Bundle。
 - 公共坐标为 GCJ-02，ENU 只用于米制计算。
 - `degraded/unverified` 成熟像素轨迹必须进入轨迹事件和通用车辆计数；缺失能力按 geo/road/TCC
   独立降级，不得用零值伪装。
@@ -32,7 +32,7 @@
 进程 3：Show/MJPEG/VideoSaver
 ```
 
-`GroundTrajectoryTrackerNode` 保留 ByteTrack 高低置信两轮关联，只使用背景视觉 warp、补偿后 IoU、类别软约束、置信度和真实源时间。它禁止读取 H、ENU、遥测和地图质量。`PostTrackingWorldProjectionNode` 在 ID 确定后唯一执行接地点去畸变及独立 SourceGeoRegistration 的 ENU/GCJ-02 投影；`TrackerInfoUpdateNode` 只消费其结果。路网只由后置 `RoadMapMatchingNode` 填充 Lane ID、Link ID 与匹配质量，不能创建、覆盖或关闭世界坐标。旧组合节点和当前 H 历史重投影速度回退只服务 `hover_only_legacy`。
+`GroundTrajectoryTrackerNode`保留ByteTrack高低置信两轮关联，只使用背景视觉warp、补偿后IoU、类别软约束、置信度和真实源时间。它禁止读取H、ENU、遥测和地图质量。`PostTrackingWorldProjectionNode`在ID确定后唯一执行接地点去畸变及当前帧视频/SRT矩阵的ENU/GCJ-02投影；`TrackerInfoUpdateNode`只消费其结果。路网只由后置`RoadMapMatchingNode`填充Lane ID、Link ID与匹配质量，不能创建、覆盖或关闭世界坐标。所有profile均禁止当前H历史重投影速度回退。
 
 ## 3. 运行前检查
 
@@ -59,7 +59,7 @@
    # 期望：20260728_0020 (head)
    ```
 
-4. 世界坐标运行只需确认 SourceProfile 的 verified SourceGeoRegistration、配准位姿、相机哈希和地理配准覆盖；`lane_verified` map 不是前置条件。没有地理配准时仍输出成熟像素轨迹，ENU/GCJ-02 与速度诚实为空。
+4. 世界坐标运行检查视频尺寸、相机参数、SRT关联与同步容差、GPS/AGL/云台姿态及当前帧矩阵；`lane_verified` map不是前置条件。遥测或矩阵无效时仍输出成熟像素轨迹，ENU/GCJ-02与速度为空、TCC为0。
 
 ## 4. 本机启动
 
@@ -73,6 +73,9 @@ cd console2 && npm run dev
 ```bash
 python main_optimized.py pipeline.send_info_kafka=False tracking_profile=hover_cruise_v1
 ```
+
+需要把自然 EOF 回放的生产 `ShowNode` 结果与 Kafka/road9 对账证据保存在同一目录时，使用
+`scripts/run_native_mps_replays.py --save-video`；输出视频写入对应 SourceProfile 结果目录。
 
 实时 RTSP 使用有界最新帧策略；离线 MP4 使用反压且不丢源帧。两者都必须保留真实源时间和 EOF。
 
@@ -126,7 +129,7 @@ Monitoring 出现能力降级时，按以下顺序分别检查：
 2. `telemetry_quality`：时间同步、GPS、AGL、姿态和派生/报告速度是否一致。
 3. `visual_warp_quality`：背景点数、RANSAC inlier、重投影误差和遥测/视觉差异。
 4. `trajectory_output_eligible`：只检查检测、图像关联成熟度、时间间隔和终止原因。
-5. `geo_analytics_eligible`：检查独立 SourceGeoRegistration、姿态与当前点世界投影；失败只让
+5. `geo_analytics_eligible`：检查当前帧矩阵、遥测同步与姿态质量；失败只让
    对应 ENU/GCJ-02、速度和方向降级。
 6. `road_analytics_eligible`：检查可选地图、版本/anchor 兼容与 Lane/Link 匹配；失败只关闭
    Lane ID、Link ID 与匹配质量。
@@ -228,7 +231,7 @@ hover_only_legacy
 
 - 恢复既有悬停检测/跟踪能力。
 - 自动关闭巡航正式研判。
-- 不降级 `20260728_0020`，不删除 SourceGeoRegistration、`uav_flight_segments` 或轨迹质量事实，
+- 不降级`20260728_0020`，不删除其中保留但停用的兼容表、`uav_flight_segments`或轨迹质量事实，
   不恢复旧 Topic，也不得恢复“地理/路网质量结束轨迹”的旧生命周期。
 - 不删除新节点；待生产门禁通过并稳定观察后，才单独评审删除 legacy 路径。
 

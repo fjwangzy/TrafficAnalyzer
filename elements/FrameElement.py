@@ -61,10 +61,6 @@ class FrameElement:
         self.anchor_gcj02: tuple | None = None  # (longitude, latitude) canonical map anchor
         self.map_version_id: str | None = None
         self.runtime_map_bundle: dict | None = None
-        self.runtime_visual_registration: dict | None = None
-        self.runtime_geo_registration: dict | None = None
-        self.geo_registration_id: str | None = None
-        self.geo_registration_checksum: str | None = None
         self.road_context_status: str = "missing"
         self.drone_displacement_m: np.ndarray | None = None  # [easting, northing] 无人机位移(m)
         self.drone_velocity_ms: np.ndarray | None = None  # [v_east, v_north] 无人机速度(m/s)
@@ -75,7 +71,9 @@ class FrameElement:
         # ── 巡航/悬停融合地理参考 ──
         self.flight_phase: str = "telemetry_unavailable"
         self.flight_segment_id: str | None = None
-        self.pixel_to_map_enu: np.ndarray | None = None
+        # Canonical per-frame video/SRT projection. Road-map context never owns
+        # or supplies this transform.
+        self.pixel_to_world_enu: np.ndarray | None = None
         # Canonical association warp: background image motion only.  Geographic
         # pose motion is kept separately so H/telemetry noise cannot affect IDs.
         self.camera_motion_warp: np.ndarray | None = None

@@ -70,7 +70,6 @@ VideoReader
 | `utils_local/detection_geometry.py` | 新旧profile共享的MPS安全bbox裁剪、字段对齐和非法几何过滤边界 |
 | `utils_local/image_motion.py`、`nodes/ImageMotionEstimationNode.py` | 排除检测框后的背景 LK/RANSAC 图像运动估计；输出唯一关联 warp，不读取遥测/H |
 | `nodes/GroundTrajectoryTrackerNode.py` | 地理参考之前的纯图像 ByteTrack，输出兼容 `tracked_*`/`id_list` 和显示轨迹；含离线 shadow |
-| `utils_local/runtime_geo.py` | 解析独立 SourceGeoRegistration，兼容旧 Runtime Map Bundle 中精确命中的 verified 配准，并检查地图坐标版本/anchor 兼容性 |
 | `nodes/FlightGeoReferenceNode.py` | ByteTrack 后计算逐帧绝对 pixel→ENU，并分别生成 geo/road/TCC 能力门禁 |
 | `nodes/PostTrackingWorldProjectionNode.py` | 图像关联后立即分配稳定 `track_id`，唯一执行逐帧去畸变与可空 ENU/GCJ-02 投影；地图/地理质量不控制生命周期 |
 | `nodes/TrackerInfoUpdateNode.py` | 累积所有成熟图像轨迹及同索引像素/时间/帧号/可空世界点；关联结束或 EOF 只发一次完成事件 |
@@ -110,10 +109,10 @@ platform/
 │       ├── metric_store.py        # inbox、事实、死信、dispatch 状态机
 │       ├── audit_service.py       # `uav_audit_logs` 持久审计
 │       ├── pipeline_manager.py    # 子进程/端口/资产/RTSP allowlist 与生命周期
+│       ├── runtime_capabilities.py# trajectory/geo/road/tcc 四层运行能力与原因规范化
 │       ├── survey_service.py      # 测绘、证据、量算、六项复核门禁
 │       ├── mission_orchestrator.py# Mission/Pipeline 调度和终态同步
-│       ├── road_context.py        # SourceProfile 级 lane_verified 地图/配准选择与 Runtime Bundle
-│       ├── source_geo_registration.py # 独立、版本化且 checksum 保护的 SourceGeoRegistration
+│       ├── road_context.py        # 路口级 lane_verified 地图选择与纯Lane/Link Runtime Bundle
 │       └── ...                    # dashboard、alert、enforcement 等领域模块
 ├── tests/                         # 单元、契约和显式 PostgreSQL/TimescaleDB integration
 ├── pyproject.toml                 # 应用与 dev 依赖、Ruff/pytest 配置
@@ -193,8 +192,8 @@ console2/
 - `nodes/DetectionNode.py`：仅 YOLO 检测。
 - `utils_local/image_motion.py`、`nodes/ImageMotionEstimationNode.py`：只从背景图像估计 previous→current warp。
 - `nodes/GroundTrajectoryTrackerNode.py`：地理参考前的纯图像 ByteTrack、图像 ID/显示历史，以及默认关闭的离线 legacy shadow 对比报告。
-- `nodes/FlightGeoReferenceNode.py`、`nodes/PostTrackingWorldProjectionNode.py`：ByteTrack 后基于独立 SourceGeoRegistration 生成世界事实与分层质量；PostProjection 是新版唯一坐标转换所有者，不得读取路网门禁或反馈修改图像 ID。
-- `test/test_speed_estimation_coordinate_contract.py`：锁定新版仅消费逐帧 ENU、当前 H 不重投影历史，以及 legacy 回退继续可用。
+- `nodes/FlightGeoReferenceNode.py`、`nodes/PostTrackingWorldProjectionNode.py`：ByteTrack后基于当前帧视频/SRT矩阵生成世界事实与分层质量；PostProjection是唯一坐标转换所有者，不得读取路网门禁或反馈修改图像ID。
+- `test/test_speed_estimation_coordinate_contract.py`：锁定所有profile仅消费逐帧ENU、当前H不重投历史且禁止像素速度回退。
 - `utils_local/cruise_evaluation.py`、`scripts/evaluate_cruise_tracking.py`：未来外部项目提供批准真值时的可选只读评测入口；本项目不生成、预标注或审核真值。
 - `utils_local/cruise_acceptance_package.py`：只读校验外部资产、内容哈希、Mission/帧 lineage、拍摄包线和真值来源，不构成人工标注工作包。
 - `docs/templates/cruise-acceptance-package-v1.json`：仅供未来外部批准真值接入时参考的只读输入示例；不作为本项目采集、预标注、标注分派或复核工作流。

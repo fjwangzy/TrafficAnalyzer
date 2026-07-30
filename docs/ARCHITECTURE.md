@@ -50,12 +50,12 @@ TrafficAnalyzer 是智慧交通大项目下的无人机 AI 交通分析子系统
                       ▼
 ┌─────────────────────────────────────────────────────────┐
 │ HomographyCalibration + MotionCompensation               │
-│  按 SourceProfile 配准与当前遥测生成逐帧 pixel→map ENU      │
+│  按视频尺寸、相机参数与当前遥测生成逐帧 pixel→world ENU      │
 └─────────────────────┬───────────────────────────────────┘
                       ▼
 ┌─────────────────────────────────────────────────────────┐
 │ FlightGeoReference + PostTrackingWorldProjection         │
-│  稳定 track_id + 独立 SourceGeoRegistration 世界投影       │
+│  稳定 track_id + 当前帧视频/SRT矩阵世界投影                 │
 │  地理/路网质量变化不得结束、丢弃或拆分图像轨迹                │
 └─────────────────────┬───────────────────────────────────┘
                       ▼
@@ -455,11 +455,9 @@ Console2 在配置了 `AMAP_SECURITY_JS_CODE` 时，于 Loader 执行前设置
 不得传入空对象伪装 Runtime Bundle。
 宿主机外部检测进程可通过 `POST /api/v1/pipelines/register` 登记无图模式；地图缺失只关闭
 道路分析，不关闭图像轨迹生命周期或完成事件。
-`HomographyCalibrationNode` 优先按 `SOURCE_PROFILE_ID` 加载独立、checksum 校验通过的
-`SourceGeoRegistration`；旧 Runtime Map Bundle 中精确命中的 verified 配准只作为兼容回退。
-配准与地图的坐标版本或锚点不一致时标记 `version_mismatch` 并关闭道路分析，图像轨迹不中断。
-地理配准在速度和车道匹配之前锁定锚点与单应矩阵。`MotionCompensationNode` 以配准时刻的
-`registration_position_gcj02` 为位移零点；车辆底部接地点在每一帧使用该帧矩阵与位移累积为
+`HomographyCalibrationNode` 只使用视频尺寸、相机参数与同步遥测生成当前帧矩阵；Runtime Map
+Bundle不得提供、替换或修正世界投影矩阵。`MotionCompensationNode` 以SRT起始位置或显式设备锚点
+为位移零点；车辆底部接地点在每一帧使用该帧矩阵与位移累积为
 ENU/GCJ-02，不允许在轨迹结束时用末帧矩阵重投整段历史。像素轨迹是基础业务事实；它不能
 凭空进入地图或产生车道级统计，但必须独立形成活动/完成轨迹。
 
@@ -892,25 +890,29 @@ Kalman/Mahalanobis 95% 门控不得作为当前生产关联的硬资格。固定
 
 迁移验证可设置 `TRACKING_SHADOW_ENABLED=true`，在离线源旁路运行不使用视觉 warp 的 legacy ByteTrack，并把逐帧双方轨迹数、bbox IoU 对应和未匹配 ID 写入 `uav.tracking-shadow/v2` JSONL。主/影子跟踪器使用隔离的 ID 分配器；shadow 结果不写入 `FrameElement` 业务字段、不进入 Kafka/road9/统计/TCC，并在 `offline_only` 下拒绝 RTSP/HTTP/摄像头源。
 
-`DetectionNode` 与 legacy `DetectionTrackingNodes` 共用 `utils_local/detection_geometry.py`。Apple MPS 在推理前强制 Ultralytics 选择非原地 bbox 裁剪，避免旧 PyTorch MPS 的 sliced `clamp_` 静默破坏边界框；输出再按同一行同时校验 bbox、置信度和类别，非有限值、零/负宽高或数组错位均被丢弃并写入 `detection_diagnostics`。任何 `invalid_geometry_count>0` 都由 `FlightGeoReferenceNode` 以 `invalid_detector_geometry` 阻断当帧正式研判，剩余合法框仅可预览。
+`DetectionNode` 与 legacy `DetectionTrackingNodes` 共用 `utils_local/detection_geometry.py`。Apple MPS 在推理前强制 Ultralytics 选择非原地 bbox 裁剪，避免旧 PyTorch MPS 的 sliced `clamp_` 静默破坏边界框；输出再按同一行同时校验 bbox、置信度和类别，非有限值、零/负宽高或数组错位均被丢弃并写入 `detection_diagnostics`。检测几何诊断不替代当前帧矩阵与遥测质量门禁。
 
 `FlightGeoReferenceNode` 与 `PostTrackingWorldProjectionNode` 位于图像关联之后，但不再拥有轨迹生命周期。后者在成熟的 ByteTrack 关联首次出现时立即分配稳定 `track_id`，并保留原始 `association_id`；地图、地理投影或姿态质量变化只能改变逐帧能力与质量谱系，不能结束、丢弃或拆分图像轨迹。`TrackerInfoUpdateNode` 对所有成熟图像轨迹建立 `buffer_tracks`，关联消失、超时或自然 EOF 才生成一次完成事件。
 
 运行能力分为四层：`trajectory_output_eligible` 只取决于图像关联成熟度；`geo_analytics_eligible` 控制 ENU/GCJ-02、速度与方向；`road_analytics_eligible` 只控制 Lane/Link ID 及其匹配质量；`tcc_analytics_eligible` 由可信世界坐标、时间、跟踪质量和 TCC 证据单独决定。通用车辆计数、方向/转向和 TCC 不读取 road gate。旧字段 `formal_analytics_eligible` 继续表示 Lane/Link 匹配能力，仅用于兼容，不再控制其他能力。
 
-`PostTrackingWorldProjectionNode` 是 `hover_cruise_v1` 唯一的像素→ENU→GCJ-02 事实所有者：镜头去畸变、目标接地点投影和地图覆盖判断复用同一个逐帧计算结果。`TrackerInfoUpdateNode` 只能消费已经生成的当前点，禁止再次读取 H 投影；后续 H 或锚点变化不能改写该帧事实。`SpeedEstimationNode` 在该 profile 下只对至少3个逐帧 `position_history_enu_m` 点做真实时间回归，世界历史不足时不产生正式速度；“用当前 H 重投影全部历史像素”的逻辑仅保留给 `hover_only_legacy` 回滚。
+`uav_stats` 每帧携带四个独立布尔值；Platform 将它们和分层原因持久化到 Pipeline
+`runtime_quality.capabilities/capability_reasons`，Mission/Pipeline 详情原样返回。首个运行样本前状态
+为 `null/runtime_sample_pending`，不得用启动时地图状态或单一 `quality_status` 推断其他能力。
+
+`PostTrackingWorldProjectionNode` 是 `hover_cruise_v1` 唯一的像素→ENU→GCJ-02 事实所有者：镜头去畸变和目标接地点投影复用同一个逐帧视频/SRT计算结果。`TrackerInfoUpdateNode` 只能消费已经生成的当前点，禁止再次读取 H 投影；后续 H 或锚点变化不能改写该帧事实。`SpeedEstimationNode` 对至少3个逐帧 `position_history_enu_m` 点做真实时间回归，世界历史不足时速度为空；所有profile均禁止用当前H重投历史像素或把px/s冒充km/h。
 
 轨迹坐标分为三层且不得混用：`trajectory_px` 是每个源帧中的车辆地面接触点；`trajectory_display_px` 是用相邻背景视觉 `camera_motion_warp` 逐帧递推到当前画面的显示缓存；`trajectory_enu_m/trajectory_gcj02` 是 ByteTrack 分配 ID 后，用每个点所属源帧的绝对矩阵生成的世界事实。源像素、世界坐标、`trajectory_timestamps_sec/trajectory_frame_nums/point_quality_lineage` 按同一索引保留；旧 bbox 中心显式保留为 `trajectory_bbox_center_px`。ShowNode 禁止用当前 H 反投影整段历史，世界坐标也禁止反馈关联或修正显示 ID。
 
 进程 3 的 `ShowNode` 不再使用 `sv.TraceAnnotator` 的隐式跨帧 bbox-center 缓存。正式和候选尾迹都消费显式的当前帧图像坐标并使用同一个接地点锚点：正式轨迹绘制类别色实线，候选轨迹绘制最多30点的琥珀虚线；亚像素 bbox 往返抖动只在绘制副本中简化，不改写图像或世界轨迹事实。每车使用紧凑 `#ID class C` 标签，右上角只绘制一次 `AMBER DASHED = CANDIDATE / NO STATS-TCC` 图例。候选框、标签、尾迹的字号、线宽和虚线节距按源画面到1280×720交付视口的比例缩放，同时截断不连续跳变和过长尾迹。`trajectory_display_px` 在 Kafka 发布前剔除，不创建或补写 `buffer_tracks`，也不改变任何正式质量门禁。
 
-独立的 SourceGeoRegistration 保存 source-scoped anchor、pixel→ENU、配准姿态、相机标定、覆盖范围、残差、状态和 checksum；Mission 固定 verified 配准 ID/checksum，Pipeline 通过 `RUNTIME_GEO_REGISTRATION_JSON` 注入。Runtime Map Bundle 保持可选，并兼容从其中精确命中的 verified visual registration 构造同一地理载荷。地图与地理配准的坐标版本或 anchor 不兼容时只关闭道路能力并记录 `version_mismatch`。悬停矩阵在稳定姿态下退化为既有固定配准；巡航帧在同一配准上动态投影。巡航帧不能创建、修改或发布地图。
+系统不接收独立SourceGeoRegistration输入，也不注入`RUNTIME_GEO_REGISTRATION_JSON`。当前帧世界矩阵只由视频尺寸、相机参数和同步遥测计算；Runtime Map Bundle保持可选，只携带Lane/Link几何、拓扑及地图锚点。`RoadMapMatchingNode`将已生成的GCJ-02车辆点转换到地图自身ENU后匹配，不能创建、覆盖或关闭世界坐标、速度、方向或TCC。
 
 RTSP 由单后台解码线程持续排空到一个“最新帧”槽位，记录 `source_drop_count/source_drop_reason/source_capture_time`；MP4 仍采用完整帧反压。自然 EOF 到达进程 2 时，`GroundTrajectoryTracker.flush(natural_eof)` 先终止关联，`TrackerInfoUpdateNode.flush()` 再把剩余正式轨迹序列化并在 publisher 关闭前发送；随后继续透传唯一 EOF sentinel。三段队列和共享内存责任不变。
 
-Mission 取得 Runtime Bundle 时，`Road9RoadContextAdapter` 与校准 API 共用同一 registration 输出边界，必须携带位姿、相机和地图覆盖三类谱系。衍生 V2 地图缺少直接 checksum 时只沿显式 `quality.source_map_version_id` 追溯父地图的上游 snapshot；不存在谱系就拒绝解析，不能选“最新”快照。
+Mission取得Runtime Bundle时，`Road9RoadContextAdapter`与校准API只输出不可变Lane/Link地图事实。衍生V2地图缺少直接checksum时只沿显式`quality.source_map_version_id`追溯父地图的上游snapshot；不存在谱系就拒绝解析，不能选“最新”快照。
 
-手动 Mission 分别解析来源地理配准与可选地图。verified SourceGeoRegistration 按 `source_profile_id` 选择并冻结 ID/checksum；显式 `map_version_id` 仍是严格约束，未显式指定时才按 `inter_id + source_profile_id` 选择匹配的不可变 `lane_verified` 地图。没有合格地图时检测、图像轨迹、世界坐标、速度、方向、通用统计、TCC 和完成事件仍按各自独立证据运行；没有可信地理配准时 ENU/GCJ-02 对应点写 `null`，速度为空。地图缺失或与配准不兼容时只关闭 Lane ID、Link ID 与匹配质量。
+手动Mission解析视频、配对遥测与可选地图。显式`map_version_id`是严格约束，未指定时按`inter_id`选择最新不可变`lane_verified`地图。没有合格地图时检测、图像轨迹、世界坐标、速度、方向、通用统计、TCC和完成事件仍按各自独立证据运行；当前帧矩阵或遥测质量不可信时ENU/GCJ-02对应点写`null`、速度为空、TCC为0。地图缺失只关闭Lane ID、Link ID与匹配质量。
 
 Console2 监控态分为历史 REST 与实时 WebSocket 两个状态层，展示标量时实时层覆盖历史层；只有 WebSocket 层可更新实时活动/候选轨迹和新鲜度时钟。实时业务消息必须同时匹配当前 SourceProfile 与运行 `pipeline_id`，Pipeline id 变化会重置旧会话的统计、轨迹与冲突，避免 Kafka backlog 或同源旧任务覆盖当前 Runtime 质量。BEV 地图只消费服务端提供的 GCJ-02 点列，降级候选以虚线投放；仅有像素轨迹时展示明确空态，不在浏览器中重建坐标。
 

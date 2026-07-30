@@ -7,8 +7,11 @@ from app.api.v1 import alerts, drones, intersections, pipelines, system, traject
 
 
 class _PipelineManager:
+    def __init__(self):
+        self.pipelines = []
+
     def list_pipelines(self):
-        return []
+        return self.pipelines
 
     def get_active_count(self):
         return 0
@@ -45,6 +48,25 @@ class _MetricStore:
         self.conflict_query_args = None
         self.traffic_query_args = None
         self.trajectory_analysis_args = None
+
+    async def pipeline_runtime_quality(self, pipeline_ids):
+        return {
+            pipeline_id: {
+                "capabilities": {
+                    "trajectory": True,
+                    "geo": True,
+                    "road": False,
+                    "tcc": True,
+                },
+                "capability_reasons": {
+                    "trajectory": [],
+                    "geo": [],
+                    "road": ["lane_verified_map_required"],
+                    "tcc": [],
+                },
+            }
+            for pipeline_id in pipeline_ids
+        }
 
     async def query_tracks(self, *args, **kwargs):
         return []
@@ -117,6 +139,59 @@ class CoreApiRoutesTest(unittest.TestCase):
             with self.subTest(endpoint=endpoint):
                 response = self.client.get(endpoint)
                 self.assertEqual(response.status_code, 200)
+
+    def test_pipeline_endpoint_reports_persisted_runtime_capabilities(self):
+        self.client.app.state.pipeline_manager.pipelines = [{
+            "pipeline_id": "pipe-1",
+            "drone_id": "drone-1",
+            "intersection_id": "INT-1",
+            "video_src": "/redacted/video.mp4",
+            "map_version_id": None,
+            "topic_name": "uav_statistics_1",
+            "camera_id": 1,
+            "video_port": 8101,
+            "video_stream_url": "http://127.0.0.1:8101/video",
+            "capabilities": {
+                "trajectory": None,
+                "geo": None,
+                "road": None,
+                "tcc": None,
+            },
+            "capability_reasons": {
+                key: ["runtime_sample_pending"]
+                for key in ("trajectory", "geo", "road", "tcc")
+            },
+            "status": "running",
+            "started_at": 1.0,
+            "stopped_at": 0.0,
+            "error_message": "",
+            "uptime_seconds": 1.0,
+        }]
+
+        response = self.client.get("/api/v1/pipelines")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json()[0]["capabilities"],
+            {"trajectory": True, "geo": True, "road": False, "tcc": True},
+        )
+        self.assertEqual(
+            response.json()[0]["capability_reasons"]["road"],
+            ["lane_verified_map_required"],
+        )
+
+    def test_pipeline_openapi_declares_four_layer_capability_contract(self):
+        schema = self.client.get("/openapi.json").json()
+        response_schema = schema["components"]["schemas"]["PipelineResponse"]
+
+        self.assertIn("capabilities", response_schema["properties"])
+        self.assertIn("capability_reasons", response_schema["properties"])
+        self.assertEqual(
+            schema["paths"]["/api/v1/pipelines"]["get"]["responses"]["200"][
+                "content"
+            ]["application/json"]["schema"]["items"]["$ref"],
+            "#/components/schemas/PipelineResponse",
+        )
 
     def test_conflict_history_endpoint_returns_replay_evidence(self):
         response = self.client.get(

@@ -7,7 +7,7 @@
 
 用户观察到的“相对 7 月 15 日轨迹识别明显变差”包含两层独立回归。第一层是本报告 7 月 28 日定位的显示与道路资格耦合；第二层是当天稍后加入的固定 `dt=1` Mahalanobis 硬门控与生产 `frame_stride=5` 不相容，导致 4K 小目标关联被拒绝、ID 碎片化。没有发现 YOLO 配置或路网强关联导致检测框消失。
 
-两阶段均采用前向修复：显示只读取图像轨迹资格；生产关联移除硬门控，但保留相同 Mahalanobis 计算作为 shadow 诊断。没有回退图像运动补偿、图像优先 ByteTrack、2 秒真实时间、ID 后世界投影、SourceGeoRegistration、RoadMapMatching、能力门禁或 TCC 证据链。
+两阶段均采用前向修复：显示只读取图像轨迹资格；生产关联移除硬门控，但保留相同 Mahalanobis 计算作为 shadow 诊断。没有回退图像运动补偿、图像优先 ByteTrack、2 秒真实时间、ID 后世界投影、RoadMapMatching、能力门禁或 TCC 证据链。报告当时保留的 SourceGeoRegistration 运行时设计已于 2026-07-30 被逐帧视频/SRT世界矩阵取代。
 
 ## 2. 7 月 15 日基线与排除项
 

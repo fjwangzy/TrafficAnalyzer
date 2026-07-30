@@ -27,7 +27,7 @@
 ### 1.1 本地开发库实况（2026-07-16 纯净切换）
 
 - 当前连接 database 为 `road9`，应用对象位于 `public`；这只是本地开发现状，不代表生产目标 schema 已冻结。
-- migration head 为 `20260728_0020`，版本表为 `uav_alembic_version`；`0012` 增加检测事实 lineage，`0013` 增加 inbox 可恢复派发，`0014/0015` 增加轨迹研判维度/索引，`0016/0017` 建立 GCJ-02 渠化地图与多视频源视觉配准，`0018` 增加路口项目、视频接入、分段素材绑定和标定检查审计，`0019` 增加飞行分段、跟踪 profile 与运行质量字段，`0020` 将 SourceGeoRegistration 和轨迹质量事实从路网匹配中解耦，并幂等回填既有 verified 逐源配准。
+- migration head为`20260728_0020`，版本表为`uav_alembic_version`；`0012`增加检测事实lineage，`0013`增加inbox可恢复派发，`0014/0015`增加轨迹研判维度/索引，`0016/0017`建立GCJ-02渠化地图与多视频源视觉配准，`0018`增加路口项目、视频接入、分段素材绑定和标定检查审计，`0019`增加飞行分段、跟踪profile与运行质量字段。`0020`中的独立地理注册表已在本机应用但现已停用，保留仅为非破坏性迁移兼容；运行时世界事实改由视频/SRT当前帧矩阵生成。
 - 正式本机端口 `5432` 由根 Compose 的 TimescaleDB 提供，使用稳定新卷 `traffic_road9_data`；不挂载旧 PostgreSQL、实验 TimescaleDB 或旧目标卷。
 - migration 自动启用 TimescaleDB 并创建 5 张 `uav_*` hypertable。初始化数据仅允许管理员账号，业务、指标、轨迹、任务和告警表为空。
 - `uav_traffic_metrics`、`uav_track_points`、`uav_conflict_events`、`uav_telemetry_metrics`、`uav_system_metrics`、普通表 `uav_track_events` 及长期 `uav_message_inbox` 已实现。永久性输入错误进入独立的 `uav_message_dead_letters`；可变技术复核状态位于普通表 `uav_conflict_reviews`，两者都不更新追加型冲突事实。
@@ -584,12 +584,11 @@ ByteTrack 仍前置于 H/ENU，但 `uav_track_events.track_id` 现在表示独�
 `association_id` 保留原始图像关联身份。地理或地图质量变化不拆分记录。候选关联只在未满足成熟
 时长/点数时存在，不写完成事实。
 
-### 10.7 独立地理配准与分层轨迹质量（2026-07-28）
+### 10.7 分层轨迹质量与停用地理注册兼容结构（2026-07-28，2026-07-30修订）
 
-Alembic `20260728_0020` 新增 `uav_source_geo_registrations`，按 SourceProfile 保存版本、状态、
-GCJ-02 锚点、坐标转换版本、pixel→ENU、配准姿态、相机参数、覆盖、残差、provenance 与 canonical
-SHA-256。Mission 固定 verified 记录 ID/校验和；`uav_visual_registrations` 以可空外键保留原地图关联。
-迁移幂等提升历史 verified VisualRegistration，不修改历史地图或业务事实。
+Alembic`20260728_0020`已在本机创建`uav_source_geo_registrations`及相关可空外键。该结构不删除、不回写，
+但API、Mission选择、Pipeline环境和检测运行时均已停止读写；它不是外部输入，也不再决定世界坐标或tracking profile。
+世界事实由视频尺寸、相机参数和同步遥测形成的当前帧矩阵生成，路网表只服务Lane/Link匹配。
 
 同一迁移为 `uav_track_events` 增加可查询的 `association_id/tracking_method/tracking_quality/
 geo_reference_quality/road_match_quality/quality_reasons/geo_registration_id`。原坐标、地图和车道列继续

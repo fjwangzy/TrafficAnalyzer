@@ -12,7 +12,6 @@ from app.models.mission import (
     ChannelizedMapVersion,
     RoadContextSnapshot,
     VisualLaneBinding,
-    VisualRegistration,
 )
 
 
@@ -31,7 +30,6 @@ class RoadContextResult:
     map_version_id: str | None = None
     map_status: str = "missing"
     runtime_map_bundle: dict | None = None
-    selected_registration_id: str | None = None
     selection_strategy: str | None = None
 
 
@@ -90,55 +88,19 @@ class RoadContext:
         )
 
 
-def _runtime_registration_payload(registration: VisualRegistration) -> dict:
-    """Serialize every coordinate-lineage fact required by hover_cruise_v1.
-
-    Keep this adapter aligned with the calibration runtime-bundle endpoint.  A
-    missing field here silently degrades Mission-started pipelines even when the
-    verified registration in road9 contains the required pose lineage.
-    """
-    return {
-        "id": registration.id,
-        "source_profile_id": registration.source_profile_id,
-        "status": registration.status,
-        "homography_pixel_to_enu": registration.homography_pixel_to_enu,
-        "residuals": registration.residuals,
-        "registration_pose": registration.registration_pose,
-        "camera_calibration": registration.camera_calibration,
-        "map_coverage_enu_m": registration.map_coverage_enu_m,
-    }
-
-
-def _runtime_registration_ready(registration: VisualRegistration) -> bool:
-    """Require the complete source-specific coordinate lineage for map projection."""
-    return bool(
-        registration.status == "verified"
-        and registration.source_profile_id
-        and registration.homography_pixel_to_enu
-        and registration.registration_pose
-        and registration.camera_calibration
-        and registration.map_coverage_enu_m
-    )
-
-
 def _select_runtime_candidate(
-    rows: list[tuple[ChannelizedMapVersion, VisualRegistration]],
+    rows: list[ChannelizedMapVersion],
     road_data_version: str | None = None,
-) -> tuple[ChannelizedMapVersion, VisualRegistration, str] | None:
-    ready = [
-        (channelized_map, registration)
-        for channelized_map, registration in rows
-        if _runtime_registration_ready(registration)
-    ]
-    if not ready:
+) -> tuple[ChannelizedMapVersion, str] | None:
+    if not rows:
         return None
     preferred = [
-        item for item in ready
-        if road_data_version and item[0].road_data_version == road_data_version
+        item for item in rows
+        if road_data_version and item.road_data_version == road_data_version
     ]
-    selected_map, selected_registration = (preferred or ready)[0]
-    strategy = "requested_road_data_version" if preferred else "latest_source_verified"
-    return selected_map, selected_registration, strategy
+    selected_map = (preferred or rows)[0]
+    strategy = "requested_road_data_version" if preferred else "latest_lane_verified"
+    return selected_map, strategy
 
 
 async def _resolve_source_checksum(
@@ -224,18 +186,6 @@ class Road9RoadContextAdapter:
                     binding_statement
                 )
             ).scalars().all()
-            registrations = []
-            if channelized_map is not None:
-                registrations = (
-                    await session.execute(
-                        select(VisualRegistration)
-                        .where(
-                            VisualRegistration.map_version_id == channelized_map.id,
-                            VisualRegistration.status == "verified",
-                        )
-                        .order_by(VisualRegistration.updated_at.desc())
-                    )
-                ).scalars().all()
             payload = snapshot.payload
             return RoadContextResult(
                 inter_id=snapshot.inter_id,
@@ -280,15 +230,6 @@ class Road9RoadContextAdapter:
                         "geometry_enu_m": channelized_map.geometry_enu_m,
                         "topology": channelized_map.topology,
                         "quality": channelized_map.quality,
-                        "visual_registration": (
-                            _runtime_registration_payload(registrations[0])
-                            if registrations
-                            else None
-                        ),
-                        "visual_registrations": [
-                            _runtime_registration_payload(item)
-                            for item in registrations
-                        ],
                         "lanes": [
                             {
                                 "local_lane_id": item.local_lane_id,
@@ -316,34 +257,19 @@ class Road9RoadContextAdapter:
         road_data_version: str | None = None,
         map_version_id: str | None = None,
     ) -> RoadContextResult | None:
-        """Select a deterministic lane_verified map that is usable by this source.
-
-        A caller-supplied map id is strict. A legacy/raw road version is only a
-        preference: if it has no complete source registration, the newest ready
-        source-bound map is selected. No ready map remains a valid detector-only
-        mission and therefore returns ``None``.
-        """
+        """Select a deterministic lane map without coupling it to world projection."""
         async with self._session_factory() as session:
             statement = (
-                select(ChannelizedMapVersion, VisualRegistration)
-                .join(
-                    VisualRegistration,
-                    VisualRegistration.map_version_id == ChannelizedMapVersion.id,
-                )
+                select(ChannelizedMapVersion)
                 .where(
                     ChannelizedMapVersion.inter_id == inter_id,
                     ChannelizedMapVersion.status == "lane_verified",
-                    VisualRegistration.source_profile_id == source_profile_id,
-                    VisualRegistration.status == "verified",
                 )
-                .order_by(
-                    ChannelizedMapVersion.version_no.desc(),
-                    VisualRegistration.updated_at.desc(),
-                )
+                .order_by(ChannelizedMapVersion.version_no.desc())
             )
             if map_version_id:
                 statement = statement.where(ChannelizedMapVersion.id == map_version_id)
-            rows = (await session.execute(statement)).all()
+            rows = (await session.execute(statement)).scalars().all()
 
         selected = _select_runtime_candidate(rows, road_data_version)
         if map_version_id and selected is None:
@@ -353,7 +279,7 @@ class Road9RoadContextAdapter:
         if selected is None:
             return None
 
-        selected_map, selected_registration, strategy = selected
+        selected_map, strategy = selected
         if map_version_id:
             strategy = "explicit_map_version"
         result = await self.get(
@@ -368,16 +294,4 @@ class Road9RoadContextAdapter:
                 )
             return None
 
-        bundle = dict(result.runtime_map_bundle or {})
-        registrations = list(bundle.get("visual_registrations") or [])
-        registrations.sort(
-            key=lambda item: item.get("id") != selected_registration.id
-        )
-        bundle["visual_registrations"] = registrations
-        bundle["visual_registration"] = _runtime_registration_payload(selected_registration)
-        return replace(
-            result,
-            runtime_map_bundle=bundle,
-            selected_registration_id=selected_registration.id,
-            selection_strategy=strategy,
-        )
+        return replace(result, selection_strategy=strategy)

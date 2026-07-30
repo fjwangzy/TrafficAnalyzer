@@ -34,6 +34,7 @@ from app.models.metrics import (
 )
 from app.models.mission import MessageDeadLetter, MessageInbox, PipelineRecord
 from app.models.survey import EvidenceItem, EvidencePackage
+from app.services.runtime_capabilities import capability_report_from_stats
 from app.services.survey_storage import ContentAddressedStore
 from app.services.trajectory_analysis import build_trajectory_analysis
 
@@ -174,6 +175,64 @@ class PostgresMetricStoreAdapter:
 
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]):
         self._sessions = session_factory
+
+    async def pipeline_runtime_quality(
+        self, pipeline_ids: list[str]
+    ) -> dict[str, dict[str, Any]]:
+        """Return the last persisted per-frame quality for active Pipelines.
+
+        Mission-owned runs have a ``PipelineRecord``. Externally registered
+        native-MPS runs do not, so their canonical intersection Stats fact is
+        the fallback source of the exact same four-layer report.
+        """
+        selected_ids = list(dict.fromkeys(item for item in pipeline_ids if item))
+        if not selected_ids:
+            return {}
+        async with self._sessions() as session:
+            pipeline_rows = (
+                await session.execute(
+                    select(PipelineRecord.id, PipelineRecord.runtime_quality).where(
+                        PipelineRecord.id.in_(selected_ids)
+                    )
+                )
+            ).all()
+            result = {
+                str(pipeline_id): (
+                    runtime_quality if isinstance(runtime_quality, dict) else {}
+                )
+                for pipeline_id, runtime_quality in pipeline_rows
+            }
+            unresolved = [
+                pipeline_id
+                for pipeline_id in selected_ids
+                if not isinstance(result.get(pipeline_id, {}).get("capabilities"), dict)
+            ]
+            if unresolved:
+                stats_rows = (
+                    await session.execute(
+                        select(TrafficMetric.pipeline_id, TrafficMetric.payload)
+                        .where(
+                            TrafficMetric.pipeline_id.in_(unresolved),
+                            TrafficMetric.grain_type == "intersection",
+                        )
+                        .distinct(TrafficMetric.pipeline_id)
+                        .order_by(
+                            TrafficMetric.pipeline_id,
+                            TrafficMetric.observed_at.desc(),
+                        )
+                    )
+                ).all()
+                for pipeline_id, payload in stats_rows:
+                    data = (payload or {}).get("data") or {}
+                    result[str(pipeline_id)] = self._pipeline_runtime_values(data)[
+                        "runtime_quality"
+                    ]
+        return {
+            str(pipeline_id): (
+                runtime_quality if isinstance(runtime_quality, dict) else {}
+            )
+            for pipeline_id, runtime_quality in result.items()
+        }
 
     async def quarantine(self, envelope: MessageEnvelope, error: MetricContractError) -> str:
         """Persist a poison record idempotently before its offset is advanced."""
@@ -423,6 +482,9 @@ class PostgresMetricStoreAdapter:
         geo_quality = geo_quality if isinstance(geo_quality, dict) else {}
         tracking = tracking if isinstance(tracking, dict) else {}
         tracking_quality = tracking.get("tracking_quality") or geo_quality.get("status")
+        capabilities, capability_reasons = capability_report_from_stats(
+            data, geo_quality
+        )
         return {
             "flight_phase": data.get("flight_phase") or geo_quality.get("flight_phase"),
             "tracking_quality": tracking_quality,
@@ -431,6 +493,8 @@ class PostgresMetricStoreAdapter:
                 "flight_segment_id": data.get("flight_segment_id"),
                 "geo_reference_quality": geo_quality,
                 "tracking_diagnostics": tracking,
+                "capabilities": capabilities,
+                "capability_reasons": capability_reasons,
                 "candidate_track_count": data.get("candidate_tracks"),
                 "source_drop_count": data.get("source_drop_count"),
                 "source_drop_reason": data.get("source_drop_reason"),
@@ -594,7 +658,9 @@ class PostgresMetricStoreAdapter:
             ),
             road_match_quality=_quality_status(data.get("road_match_quality")),
             quality_reasons=data.get("quality_reasons") or [],
-            geo_registration_id=data.get("geo_registration_id"),
+            # Deprecated 0020 compatibility column: preserve historical rows,
+            # but never attach a retired SGR identifier to new runtime facts.
+            geo_registration_id=None,
             vehicle_class=data.get("vehicle_class", data.get("class_name")),
             yolo_class_id=_int(data.get("yolo_class_id")),
             yolo_class_name=data.get("yolo_class_name"),

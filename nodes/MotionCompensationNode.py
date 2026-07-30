@@ -1,7 +1,6 @@
 """运动补偿节点：注入 GCJ-02 锚点、无人机位移、速度矢量到 FrameElement。
 
 位置：HomographyCalibrationNode之后，TrackerInfoUpdateNode之前。
-runtime_map 模式使用已验证影像配准时刻作为位移零点；telemetry 模式保留首帧锚定策略。
 
 GPS锚定策略：首帧 GCJ-02 位置为 ENU 原点（或配置的 anchor），后续帧通过 GPS 增量定位。
 悬停自动跳过速度补偿，避免GPS抖动引入伪运动。
@@ -61,58 +60,6 @@ class MotionCompensationNode:
         telemetry = normalize_telemetry_position(getattr(frame_element, "telemetry", None))
         if telemetry:
             frame_element.telemetry = telemetry
-
-        if frame_element.calibration_mode == "runtime_map":
-            bundle = getattr(frame_element, "runtime_map_bundle", None) or {}
-            registration = getattr(frame_element, "runtime_visual_registration", None) or {}
-            anchor = bundle.get("anchor_gcj02")
-            if not anchor:
-                raise ValueError("runtime_map frame is missing anchor_gcj02")
-            residuals = registration.get("residuals") or {}
-            registration_pose = registration.get("registration_pose") or {}
-            reference = registration_pose.get("position_gcj02") or residuals.get(
-                "registration_position_gcj02"
-            )
-            if not isinstance(reference, (list, tuple)) or len(reference) != 2:
-                raise ValueError(
-                    "runtime visual registration is missing registration_position_gcj02"
-                )
-            frame_element.anchor_gcj02 = tuple(anchor)
-            position = (telemetry or {}).get("position_gcj02") or {}
-            if position.get("longitude") is not None and position.get("latitude") is not None:
-                drone_disp = np.asarray(
-                    gcj02_to_enu(
-                        position["longitude"], position["latitude"], reference
-                    ),
-                    dtype=np.float64,
-                )
-                self._last_displacement = drone_disp.copy()
-            elif self._last_displacement is not None:
-                drone_disp = self._last_displacement
-            else:
-                drone_disp = np.zeros(2, dtype=np.float64)
-
-            drone_vel = compute_drone_velocity_vector(telemetry or {})
-            hovering = is_hovering(telemetry or {}, self.hover_threshold_ms)
-            if hovering:
-                drone_vel = np.zeros(2, dtype=np.float64)
-            reference_yaw = registration_pose.get("gimbal_yaw")
-            if reference_yaw is None:
-                reference_yaw = residuals.get("registration_gimbal_yaw_deg")
-            if reference_yaw is None:
-                reference_yaw = (telemetry or {}).get("gimbal_yaw", 0) or 0
-            gimbal_yaw = (telemetry or {}).get("gimbal_yaw", reference_yaw) or reference_yaw
-            yaw_delta = float(gimbal_yaw) - float(reference_yaw)
-            while yaw_delta > 180:
-                yaw_delta -= 360
-            while yaw_delta < -180:
-                yaw_delta += 360
-            frame_element.drone_displacement_m = drone_disp
-            frame_element.drone_velocity_ms = drone_vel
-            frame_element.gimbal_yaw_initial = float(reference_yaw)
-            frame_element.gimbal_yaw_delta = yaw_delta
-            frame_element.is_hovering = hovering
-            return frame_element
 
         if not telemetry:
             return frame_element

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import numpy as np
-from shapely.geometry import Point, shape
 
 from elements.FrameElement import FrameElement
 from elements.VideoEndBreakElement import VideoEndBreakElement
@@ -59,7 +58,7 @@ class PostTrackingWorldProjectionNode:
     def _project_pixel_point(
         frame_element: FrameElement, pixel_point: list[float]
     ) -> np.ndarray | None:
-        projection = getattr(frame_element, "pixel_to_map_enu", None)
+        projection = getattr(frame_element, "pixel_to_world_enu", None)
         if not is_valid_homography(projection):
             return None
         point_px = np.asarray([pixel_point], dtype=np.float64)
@@ -73,24 +72,6 @@ class PostTrackingWorldProjectionNode:
                 dist_coeffs,
             )
         return pixel_to_world(point_px, projection)[0]
-
-    @classmethod
-    def _inside_map_coverage(cls, frame_element: FrameElement, bbox) -> bool:
-        quality = getattr(frame_element, "geo_reference_quality", None) or {}
-        coverage = quality.get("map_coverage") or {}
-        raw = coverage.get("geometry_enu_m")
-        if not raw:
-            return coverage.get("status") in {None, "verified"}
-        try:
-            ground = cls._project_pixel_point(
-                frame_element,
-                [(bbox[0] + bbox[2]) / 2.0, bbox[3]],
-            )
-            if ground is None:
-                return False
-            return bool(shape(raw).covers(Point(float(ground[0]), float(ground[1]))))
-        except (TypeError, ValueError):
-            return False
 
     def _append_world_fact(
         self,
@@ -145,7 +126,7 @@ class PostTrackingWorldProjectionNode:
         self,
         frame_element: FrameElement,
         active_association_ids: set[int],
-        covered_association_ids: set[int],
+        road_association_ids: set[int],
     ) -> None:
         raw_trajectories = getattr(frame_element, "association_trajectories", None) or []
         active_ids = {int(value) for value in (frame_element.id_list or [])}
@@ -171,7 +152,7 @@ class PostTrackingWorldProjectionNode:
             geo_eligible = bool(frame_element.geo_analytics_eligible)
             road_eligible = (
                 bool(frame_element.road_analytics_eligible)
-                and association_id in covered_association_ids
+                and association_id in road_association_ids
             )
             history = self._append_world_fact(
                 frame_element,
@@ -180,8 +161,8 @@ class PostTrackingWorldProjectionNode:
                 geo_eligible,
             )
             reasons = [] if geo_eligible else quality_reasons.copy()
-            if not road_eligible and association_id not in covered_association_ids:
-                reasons.append("target_outside_map_coverage")
+            if not road_eligible:
+                reasons.extend(quality.get("road_reasons") or [])
             reasons = list(dict.fromkeys(reasons))
             track_id = self._track_id_by_association.get(association_id, association_id)
 
@@ -282,17 +263,6 @@ class PostTrackingWorldProjectionNode:
         association_state_ids = set(
             diagnostics.get("association_state_ids") or active_association_ids
         )
-        boxes_by_association = {
-            int(association_id): bbox
-            for association_id, bbox in zip(
-                frame_element.id_list or [], frame_element.tracked_xyxy or []
-            )
-        }
-        covered_association_ids = {
-            association_id
-            for association_id, bbox in boxes_by_association.items()
-            if self._inside_map_coverage(frame_element, bbox)
-        }
         associations_to_close = {
             association_id
             for association_id in self._track_id_by_association
@@ -311,7 +281,7 @@ class PostTrackingWorldProjectionNode:
                 self._track_id_by_association[association_id] = self._allocate_track_id()
 
         road_association_ids = (
-            set(covered_association_ids)
+            set(active_association_ids)
             if bool(frame_element.road_analytics_eligible)
             else set()
         )
@@ -335,7 +305,7 @@ class PostTrackingWorldProjectionNode:
         self._enrich_trajectories(
             frame_element,
             active_association_ids,
-            covered_association_ids,
+            road_association_ids,
         )
         diagnostics.update(
             {

@@ -25,7 +25,6 @@ from app.models.mission import (
     MissionRecord,
     PipelineRecord,
     RoadContextSnapshot,
-    SourceGeoRegistration,
     TelemetrySourceRecord,
     VideoSourceRecord,
 )
@@ -40,24 +39,16 @@ from app.schemas.mission import (
 )
 from app.services.pipeline_manager import detector_video_stream_url
 from app.services.road_context import RoadContext
-from app.services.source_geo_registration import (
-    runtime_geo_registration,
-    select_verified_registration,
-)
+from app.services.runtime_capabilities import capability_report_from_runtime_quality
 
 logger = logging.getLogger(__name__)
 
 
-def resolve_tracking_profile(
-    requested: str | None,
-    registration: SourceGeoRegistration | None,
-) -> tuple[str, str]:
-    """Resolve a stable tracking profile from explicit intent or source capability."""
+def resolve_tracking_profile(requested: str | None) -> tuple[str, str]:
+    """Use the image-first tracker unless an operator explicitly requests rollback."""
     if requested is not None:
         return requested, "explicit_request"
-    if registration is not None and registration.status == "verified":
-        return "hover_cruise_v1", "verified_source_geo_registration"
-    return "hover_only_legacy", "source_geo_registration_missing"
+    return "hover_cruise_v1", "default_hover_cruise"
 
 
 class MissionError(RuntimeError):
@@ -481,13 +472,7 @@ class MissionOrchestrator:
             pair = await self._pair(session, body.source_profile_id)
             if pair is None or pair[0].drone_id != body.drone_id:
                 raise MissionError("source profile not found for drone", 422, "source_profile_invalid")
-            registration = await select_verified_registration(
-                session, body.source_profile_id
-            )
-            tracking_profile, _ = resolve_tracking_profile(
-                body.tracking_profile,
-                registration,
-            )
+            tracking_profile, _ = resolve_tracking_profile(body.tracking_profile)
             _tz(body.timezone)
             row = FlightPlanRecord(
                 id=_id("PLAN"), name=body.name, drone_id=body.drone_id,
@@ -599,21 +584,11 @@ class MissionOrchestrator:
                 raise MissionError("source profile is invalid", code="source_profile_invalid")
             video_id, telemetry_id = pair[0].id, pair[1].id
             snapshot["source_profile_id"] = body.source_profile_id
-            registration = await select_verified_registration(
-                session, body.source_profile_id
-            )
             tracking_profile, selection_reason = resolve_tracking_profile(
-                body.tracking_profile,
-                registration,
+                body.tracking_profile
             )
             snapshot["tracking_profile"] = tracking_profile
             snapshot["tracking_profile_selection_reason"] = selection_reason
-            if registration is not None:
-                snapshot["source_geo_registration"] = {
-                    "id": registration.id,
-                    "checksum": registration.checksum,
-                    "status": registration.status,
-                }
             try:
                 runtime_context = await self._road_context.select_runtime(
                     body.inter_id,
@@ -633,7 +608,6 @@ class MissionOrchestrator:
                 snapshot["road_context_selection"] = {
                     "map_version_id": runtime_context.map_version_id,
                     "road_data_version": runtime_context.road_data_version,
-                    "registration_id": runtime_context.selected_registration_id,
                     "checksum": runtime_context.checksum,
                     "strategy": runtime_context.selection_strategy,
                 }
@@ -830,7 +804,6 @@ class MissionOrchestrator:
         except IntegrityError:
             await session.rollback()
             return 0
-        await self._pin_source_geo_registration(session, mission)
         await self._start_mission(session, mission)
         return 1
 
@@ -896,21 +869,6 @@ class MissionOrchestrator:
         telemetry = await session.get(TelemetrySourceRecord, mission.telemetry_source_id)
         if video is None or telemetry is None:
             raise MissionError("mission source snapshot cannot be resolved", code="source_missing")
-        await self._pin_source_geo_registration(session, mission, video.profile_id)
-        geo_selection = mission.context_snapshot.get("source_geo_registration") or {}
-        geo_registration: SourceGeoRegistration | None = None
-        if geo_selection.get("id"):
-            geo_registration = await select_verified_registration(
-                session,
-                video.profile_id,
-                registration_id=geo_selection["id"],
-                checksum=geo_selection.get("checksum"),
-            )
-        runtime_geo = (
-            runtime_geo_registration(geo_registration)
-            if geo_registration is not None
-            else None
-        )
         context = None
         if mission.road_data_version and mission.road_data_version != "unverified":
             try:
@@ -946,11 +904,6 @@ class MissionOrchestrator:
                 else {}
             ),
             "source_profile_id": video.profile_id,
-            "geo_context": {
-                "status": "verified" if runtime_geo else "missing",
-                "registration_id": runtime_geo.get("id") if runtime_geo else None,
-                "checksum": runtime_geo.get("checksum") if runtime_geo else None,
-            },
         }
         return {
             "drone_id": mission.drone_id, "intersection_id": mission.inter_id,
@@ -968,7 +921,6 @@ class MissionOrchestrator:
             "road_context_status": "complete" if runtime_map_bundle else "missing",
             "quality_status": context.quality_status if runtime_map_bundle else "degraded",
             "runtime_map_bundle": runtime_map_bundle,
-            "runtime_geo_registration": runtime_geo,
             "tracking_profile": mission.context_snapshot.get(
                 "tracking_profile", "hover_cruise_v1"
             ),
@@ -986,35 +938,6 @@ class MissionOrchestrator:
             raise MissionError("source profile must be validated before enable", code="source_profile_unverified")
         # Road context is optional enrichment. A missing or incompatible map may
         # degrade road analytics but must never prevent image trajectory output.
-
-    async def _pin_source_geo_registration(
-        self,
-        session: AsyncSession,
-        mission: MissionRecord,
-        source_profile_id: str | None = None,
-    ) -> None:
-        snapshot = dict(mission.context_snapshot or {})
-        if "source_geo_registration" in snapshot:
-            return
-        profile_id = source_profile_id or snapshot.get("source_profile_id")
-        if not profile_id and mission.video_source_id:
-            video = await session.get(VideoSourceRecord, mission.video_source_id)
-            profile_id = video.profile_id if video else None
-        registration = (
-            await select_verified_registration(session, profile_id)
-            if profile_id
-            else None
-        )
-        snapshot["source_geo_registration"] = (
-            {
-                "id": registration.id,
-                "checksum": registration.checksum,
-                "status": registration.status,
-            }
-            if registration is not None
-            else {"id": None, "checksum": None, "status": "missing"}
-        )
-        mission.context_snapshot = snapshot
 
     async def _reject_overlap(self, session: AsyncSession, plan: FlightPlanRecord) -> None:
         start = _now() - timedelta(days=1)
@@ -1170,6 +1093,9 @@ class MissionOrchestrator:
         video_stream_url = (runtime or {}).get("video_stream_url")
         if not video_stream_url and pipeline and pipeline.video_port:
             video_stream_url = detector_video_stream_url(pipeline.video_port)
+        capabilities, capability_reasons = capability_report_from_runtime_quality(
+            pipeline.runtime_quality if pipeline else None
+        )
         return {
             "id": row.id, "name": row.name, "flight_plan_id": row.flight_plan_id,
             "parent_mission_id": row.parent_mission_id, "retry_index": row.retry_index,
@@ -1189,6 +1115,8 @@ class MissionOrchestrator:
                 "tracking_quality": pipeline.tracking_quality,
                 "formal_analytics_eligible": pipeline.formal_analytics_eligible,
                 "runtime_quality": pipeline.runtime_quality,
+                "capabilities": capabilities,
+                "capability_reasons": capability_reasons,
                 "tracking_profile": row.context_snapshot.get("tracking_profile"),
                 "tracking_profile_selection_reason": row.context_snapshot.get(
                     "tracking_profile_selection_reason"

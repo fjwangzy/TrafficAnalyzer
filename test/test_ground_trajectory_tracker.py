@@ -75,7 +75,7 @@ def _multi_frame(timestamp, boxes, projection):
         detected_xyxy=boxes,
     )
     frame.camera_motion_warp = np.eye(3)
-    frame.pixel_to_map_enu = projection
+    frame.pixel_to_world_enu = projection
     frame.geo_reference_quality = {"status": "verified"}
     frame.geo_analytics_eligible = True
     frame.road_analytics_eligible = True
@@ -241,7 +241,7 @@ def test_geo_reference_quality_break_keeps_same_output_track_in_business_buffer(
 
     formal = _frame(0.0, [20, 20, 40, 40])
     formal.homography_matrix = np.eye(3)
-    formal.pixel_to_map_enu = np.eye(3)
+    formal.pixel_to_world_enu = np.eye(3)
     formal.drone_displacement_m = np.zeros(2)
     formal = tracker.process(formal)
     accumulated = accumulator.process(formal)
@@ -255,7 +255,7 @@ def test_geo_reference_quality_break_keeps_same_output_track_in_business_buffer(
     degraded.flight_phase = "unsupported_pose"
     degraded.geo_reference_quality = {"status": "degraded"}
     degraded.homography_matrix = np.eye(3)
-    degraded.pixel_to_map_enu = np.eye(3)
+    degraded.pixel_to_world_enu = np.eye(3)
     degraded.drone_displacement_m = np.zeros(2)
     degraded = tracker.process(degraded)
     accumulated = accumulator.process(degraded)
@@ -272,7 +272,7 @@ def test_geo_reference_quality_break_keeps_same_output_track_in_business_buffer(
 def test_active_tail_keeps_image_history_across_geo_quality_break():
     tracker = _TrackingPipeline(_config())
     formal = _frame(0.0, [20, 20, 40, 40])
-    formal.pixel_to_map_enu = np.eye(3)
+    formal.pixel_to_world_enu = np.eye(3)
     tracker.process(formal)
 
     degraded = _frame(0.1, [21, 20, 41, 40])
@@ -284,7 +284,7 @@ def test_active_tail_keeps_image_history_across_geo_quality_break():
         "status": "degraded",
         "reasons": ["visual_warp_not_verified"],
     }
-    degraded.pixel_to_map_enu = np.eye(3)
+    degraded.pixel_to_world_enu = np.eye(3)
 
     result = tracker.process(degraded)
 
@@ -318,11 +318,16 @@ def test_target_outside_map_coverage_still_enters_output_buffer_without_road_mat
     tracker = _TrackingPipeline(_config())
     accumulator = TrackerInfoUpdateNode(_config())
     frame = _frame(0.0, [20, 20, 40, 40])
-    frame.pixel_to_map_enu = np.eye(3)
+    frame.pixel_to_world_enu = np.eye(3)
     frame.homography_matrix = np.eye(3)
     frame.drone_displacement_m = np.zeros(2)
+    frame.road_analytics_eligible = False
+    frame.formal_analytics_eligible = False
     frame.geo_reference_quality = {
         "status": "verified",
+        "geo_status": "verified",
+        "road_reasons": ["lane_verified_map_required"],
+        # Historical map coverage metadata must not gate image/world tracks.
         "map_coverage": {
             "status": "verified",
             "geometry_enu_m": {
@@ -343,8 +348,10 @@ def test_target_outside_map_coverage_still_enters_output_buffer_without_road_mat
     trajectory = frame.association_trajectories[0]
     assert trajectory["track_id"] == 1
     assert trajectory["trajectory_output_eligible"] is True
+    assert trajectory["geo_analytics_eligible"] is True
     assert trajectory["road_analytics_eligible"] is False
-    assert trajectory["quality_reasons"] == ["target_outside_map_coverage"]
+    assert trajectory["tcc_analytics_eligible"] is True
+    assert trajectory["quality_reasons"] == ["lane_verified_map_required"]
 
 
 def test_degraded_active_history_is_bounded_and_never_marked_road_eligible():
@@ -362,7 +369,7 @@ def test_degraded_active_history_is_bounded_and_never_marked_road_eligible():
             "status": "degraded",
             "reasons": ["flight_pose_not_eligible"],
         }
-        frame.pixel_to_map_enu = np.eye(3)
+        frame.pixel_to_world_enu = np.eye(3)
         frames.append(tracker.process(frame))
 
     trajectory = frames[-1].association_trajectories[0]
@@ -419,7 +426,7 @@ def test_degraded_active_keeps_source_pixels_without_world_projection():
     first.road_analytics_eligible = False
     first.tcc_analytics_eligible = False
     first.geo_reference_quality = {"status": "degraded"}
-    first.pixel_to_map_enu = np.eye(3)
+    first.pixel_to_world_enu = np.eye(3)
     tracker.process(first)
 
     current_h = np.array([
@@ -434,7 +441,7 @@ def test_degraded_active_keeps_source_pixels_without_world_projection():
     second.road_analytics_eligible = False
     second.tcc_analytics_eligible = False
     second.geo_reference_quality = {"status": "degraded"}
-    second.pixel_to_map_enu = current_h
+    second.pixel_to_world_enu = current_h
 
     trajectory = tracker.process(second).association_trajectories[0]
 
@@ -480,7 +487,7 @@ def test_quality_recovery_keeps_one_output_track_in_same_image_family():
 
     first = _frame(0.0, [20, 20, 40, 40])
     first.homography_matrix = np.eye(3)
-    first.pixel_to_map_enu = np.eye(3)
+    first.pixel_to_world_enu = np.eye(3)
     first.drone_displacement_m = np.zeros(2)
     accumulator.process(tracker.process(first))
 
@@ -495,13 +502,13 @@ def test_quality_recovery_keeps_one_output_track_in_same_image_family():
         "reasons": ["telemetry_unavailable"],
     }
     degraded.homography_matrix = np.eye(3)
-    degraded.pixel_to_map_enu = np.eye(3)
+    degraded.pixel_to_world_enu = np.eye(3)
     degraded.drone_displacement_m = np.zeros(2)
     accumulator.process(tracker.process(degraded))
 
     recovered = _frame(0.2, [20, 20, 40, 40])
     recovered.homography_matrix = np.eye(3)
-    recovered.pixel_to_map_enu = np.eye(3)
+    recovered.pixel_to_world_enu = np.eye(3)
     recovered.drone_displacement_m = np.zeros(2)
     result = accumulator.process(tracker.process(recovered))
 
@@ -575,7 +582,7 @@ def test_natural_eof_flushes_remaining_formal_track_with_aligned_points():
     for index in range(5):
         frame = _frame(index * 0.1, [20 + index, 20, 40 + index, 40])
         frame.homography_matrix = np.eye(3)
-        frame.pixel_to_map_enu = np.eye(3)
+        frame.pixel_to_world_enu = np.eye(3)
         frame.drone_displacement_m = np.zeros(2)
         accumulator.process(tracker.update(frame))
 

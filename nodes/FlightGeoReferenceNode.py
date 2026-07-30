@@ -3,15 +3,12 @@
 from __future__ import annotations
 
 import numpy as np
-from shapely.geometry import Polygon, shape
 
 from elements.FrameElement import FrameElement
 from elements.VideoEndBreakElement import VideoEndBreakElement
 from utils_local.flight_motion import FlightMotionClassifier
 from utils_local.homography import (
-    compute_homography_from_telemetry,
     is_valid_homography,
-    pixel_to_world,
 )
 from utils_local.utils import profile_time
 
@@ -53,7 +50,6 @@ class FlightGeoReferenceNode:
             hover_exit_confirm_sec=motion.get("hover_exit_confirm_sec", 2.0),
         )
         quality = config.get("geo_reference", {})
-        self._tracking_profile = config.get("tracking_profile", "hover_cruise_v1")
         self._require_visual = bool(quality.get("require_visual_validation", True))
         self._max_pose_visual_p95 = float(
             quality.get(
@@ -68,76 +64,18 @@ class FlightGeoReferenceNode:
     def _absolute_projection(
         self, frame_element: FrameElement
     ) -> tuple[np.ndarray | None, bool]:
+        """Build the current frame's absolute ENU projection from video/SRT only."""
         H = getattr(frame_element, "homography_matrix", None)
         displacement = getattr(frame_element, "drone_displacement_m", None)
         if not is_valid_homography(H) or displacement is None:
             return None, False
-
-        registration = getattr(frame_element, "runtime_visual_registration", None) or {}
-        pose = registration.get("registration_pose") or {}
-        camera = registration.get("camera_calibration") or {}
-        reference_local = pose.get("telemetry_homography_pixel_to_local_enu")
-        intrinsics = camera.get("camera_intrinsics") or camera.get("intrinsics")
-        telemetry = getattr(frame_element, "telemetry", None)
-        if reference_local is not None and intrinsics and telemetry and frame_element.frame is not None:
-            reference_local = np.asarray(reference_local, dtype=np.float64)
-            current_local = compute_homography_from_telemetry(
-                telemetry,
-                intrinsics,
-                (frame_element.frame.shape[1], frame_element.frame.shape[0]),
-            )
-            if is_valid_homography(reference_local) and is_valid_homography(current_local):
-                try:
-                    correction = np.asarray(H, dtype=np.float64) @ np.linalg.inv(reference_local)
-                    result = (
-                        _translation(float(displacement[0]), float(displacement[1]))
-                        @ correction
-                        @ current_local
-                    )
-                    result = result / result[2, 2] if abs(result[2, 2]) > 1e-12 else result
-                    return result, True
-                except np.linalg.LinAlgError:
-                    pass
-
         result = _translation(float(displacement[0]), float(displacement[1])) @ np.asarray(
             H, dtype=np.float64
         )
         return (
             result / result[2, 2] if abs(result[2, 2]) > 1e-12 else result,
-            False,
+            True,
         )
-
-    @staticmethod
-    def _map_coverage(
-        frame_element: FrameElement, projection: np.ndarray | None
-    ) -> dict:
-        registration = getattr(frame_element, "runtime_visual_registration", None) or {}
-        raw = registration.get("map_coverage_enu_m") or {}
-        if not raw:
-            return {"status": "unavailable", "coverage_ratio": None}
-        try:
-            coverage = shape(raw)
-            height, width = frame_element.frame.shape[:2]
-            frame_world = pixel_to_world(
-                np.asarray(
-                    [[0.0, 0.0], [width - 1.0, 0.0], [width - 1.0, height - 1.0], [0.0, height - 1.0]],
-                    dtype=np.float64,
-                ),
-                projection,
-            )
-            footprint = Polygon(frame_world)
-            ratio = (
-                float(footprint.intersection(coverage).area / footprint.area)
-                if footprint.is_valid and footprint.area > 1e-9
-                else 0.0
-            )
-            return {
-                "status": "verified" if ratio > 0 else "outside",
-                "coverage_ratio": round(ratio, 6),
-                "geometry_enu_m": raw,
-            }
-        except (TypeError, ValueError):
-            return {"status": "unavailable", "coverage_ratio": None}
 
     @profile_time
     def process(self, frame_element: FrameElement) -> FrameElement:
@@ -156,7 +94,7 @@ class FlightGeoReferenceNode:
             telemetry["horizontal_speed"] = phase.horizontal_speed_mps
             telemetry["speed_source"] = phase.speed_source
             frame_element.telemetry = telemetry
-        projection, pose_lineage_valid = self._absolute_projection(frame_element)
+        projection, current_frame_matrix_valid = self._absolute_projection(frame_element)
         pose_warp = None
         if projection is not None and self._previous_projection is not None:
             try:
@@ -206,52 +144,39 @@ class FlightGeoReferenceNode:
                         visual.setdefault("reasons", []).append(
                             "pose_visual_residual_exceeded"
                         )
-        reasons = list(phase.reasons)
-        runtime_map = (
-            getattr(frame_element, "calibration_mode", None) == "runtime_map"
-            and bool(getattr(frame_element, "map_version_id", None))
-        )
-        if not runtime_map:
-            reasons.append("lane_verified_map_required")
+        geo_reasons = list(phase.reasons)
+        runtime_map = bool(getattr(frame_element, "runtime_map_bundle", None))
         if projection is None:
-            reasons.append("pixel_to_map_projection_unavailable")
-        if self._tracking_profile == "hover_cruise_v1" and not pose_lineage_valid:
-            reasons.append("registration_pose_lineage_required")
+            geo_reasons.append("pixel_to_world_projection_unavailable")
+        if not current_frame_matrix_valid:
+            geo_reasons.append("current_frame_matrix_invalid")
         if not phase.formal_pose_eligible:
-            reasons.append("flight_pose_not_eligible")
+            geo_reasons.append("flight_pose_not_eligible")
         if phase.phase not in {"hover_verified", "cruise_nadir"}:
-            reasons.append("flight_phase_not_verified")
+            geo_reasons.append("flight_phase_not_verified")
         if self._require_visual and visual.get("status") not in {"verified", "bootstrap"}:
-            reasons.append("visual_warp_not_verified")
+            visual.setdefault("reasons", []).append("visual_warp_not_verified")
         detection_diagnostics = (
             getattr(frame_element, "detection_diagnostics", None) or {}
         )
-        if int(detection_diagnostics.get("invalid_geometry_count") or 0) > 0:
-            reasons.append("invalid_detector_geometry")
-
-        map_coverage = self._map_coverage(frame_element, projection) if projection is not None and frame_element.frame is not None else {"status": "unavailable", "coverage_ratio": None}
-        if self._tracking_profile == "hover_cruise_v1" and map_coverage["status"] != "verified":
-            reasons.append("map_coverage_not_verified")
 
         geo_blocking = {
-            "pixel_to_map_projection_unavailable",
+            "pixel_to_world_projection_unavailable",
+            "current_frame_matrix_invalid",
             "flight_pose_not_eligible",
-            "visual_warp_not_verified",
             "flight_phase_not_verified",
-            "registration_pose_lineage_required",
-            "invalid_detector_geometry",
         }
-        geo_eligible = not any(reason in geo_blocking for reason in reasons)
-        coverage_eligible = (
-            map_coverage["status"] == "verified"
-            if self._tracking_profile == "hover_cruise_v1"
-            else True
-        )
-        road_eligible = bool(geo_eligible and runtime_map and coverage_eligible)
+        geo_reasons = list(dict.fromkeys(geo_reasons))
+        geo_eligible = not any(reason in geo_blocking for reason in geo_reasons)
+        road_reasons = [] if runtime_map else ["lane_verified_map_required"]
+        if not geo_eligible:
+            road_reasons.append("world_position_unavailable")
+        road_reasons = list(dict.fromkeys(road_reasons))
+        road_eligible = bool(geo_eligible and runtime_map)
         # Keep the legacy aggregate as the complete road-analysis capability;
         # image trajectory lifecycle no longer consumes this value.
         formal = road_eligible
-        frame_element.pixel_to_map_enu = projection
+        frame_element.pixel_to_world_enu = projection
         frame_element.pose_motion_warp = pose_warp
         frame_element.geo_analytics_eligible = geo_eligible
         frame_element.road_analytics_eligible = road_eligible
@@ -272,17 +197,19 @@ class FlightGeoReferenceNode:
             },
             "visual_warp": visual,
             "detection_geometry": detection_diagnostics,
-            "registration_pose_lineage": {
-                "status": "verified" if pose_lineage_valid else "unavailable"
+            "current_frame_matrix": {
+                "status": "verified" if current_frame_matrix_valid else "unavailable"
             },
-            "map_coverage": map_coverage,
             "capabilities": {
                 "geo_analytics_eligible": geo_eligible,
                 "road_analytics_eligible": road_eligible,
                 "tcc_analytics_eligible": geo_eligible,
                 "formal_analytics_eligible": formal,
             },
-            "reasons": list(dict.fromkeys(reasons)),
+            "geo_reasons": geo_reasons,
+            "road_reasons": road_reasons,
+            "tcc_reasons": geo_reasons,
+            "reasons": list(dict.fromkeys([*geo_reasons, *road_reasons])),
         }
 
         self._previous_projection = projection.copy() if projection is not None else None

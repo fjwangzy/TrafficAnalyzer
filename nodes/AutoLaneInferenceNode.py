@@ -313,13 +313,22 @@ class AutoLaneInferenceNode:
 
             # 平均车速
             if active_in_lane:
-                speeds = [t.avg_speed_kmh for t in active_in_lane if t.avg_speed_kmh > 0]
+                speeds = [
+                    t.avg_speed_kmh
+                    for t in active_in_lane
+                    if t.avg_speed_kmh is not None and t.avg_speed_kmh > 0
+                ]
                 lane.avg_speed_kmh = round(sum(speeds) / len(speeds), 1) if speeds else 0
             else:
                 lane.avg_speed_kmh = 0
 
             # 排队检测
-            stopped = [t for t in active_in_lane if t.avg_speed_kmh < self.queue_speed_threshold_kmh]
+            stopped = [
+                t
+                for t in active_in_lane
+                if t.avg_speed_kmh is not None
+                and 0 <= t.avg_speed_kmh < self.queue_speed_threshold_kmh
+            ]
             lane.stopped_count = len(stopped)
 
             # 排队长度（基于像素距离，有H时转世界坐标）

@@ -254,7 +254,11 @@ class ChannelizedMapVersion(Base):
 
 
 class SourceGeoRegistration(Base):
-    """Versioned, verified pixel-to-geographic registration for one source."""
+    """Deprecated storage retained for the already-applied 0020 migration.
+
+    Runtime world projection is derived from video/SRT. No API or mission
+    selection path may read or write this compatibility table.
+    """
 
     __tablename__ = "uav_source_geo_registrations"
 

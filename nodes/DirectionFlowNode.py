@@ -1,10 +1,7 @@
 import logging
 
-import numpy as np
-
 from elements.FrameElement import FrameElement
 from elements.VideoEndBreakElement import VideoEndBreakElement
-from utils_local.homography import is_valid_homography, pixel_to_world
 from utils_local.trajectory_classifier import classify_direction, compute_heading
 from utils_local.utils import profile_time
 
@@ -47,12 +44,11 @@ class DirectionFlowNode:
         if not self.enabled:
             return frame_element
 
-        if (
-            getattr(frame_element, "geo_reference_quality", None) is not None
-            and not getattr(frame_element, "geo_analytics_eligible", False)
-        ):
+        if not getattr(frame_element, "geo_analytics_eligible", False):
             frame_element.direction_stats = None
             frame_element.queue_count = 0
+            for track in (frame_element.buffer_tracks or {}).values():
+                track.direction_class = None
             return frame_element
 
         buffer_tracks = frame_element.buffer_tracks
@@ -60,19 +56,6 @@ class DirectionFlowNode:
             frame_element.direction_stats = self._empty_stats()
             frame_element.queue_count = 0
             return frame_element
-
-        # 运动补偿数据
-        H = frame_element.homography_matrix
-        has_H = is_valid_homography(H)
-        drone_disp = getattr(frame_element, "drone_displacement_m", None)
-        drone_vel = getattr(frame_element, "drone_velocity_ms", None)
-        drone_speed = float(np.linalg.norm(drone_vel)) if drone_vel is not None else 0
-        # 无人机速度过快时世界坐标近似误差大，回退到像素空间heading
-        use_world_coords = (
-            has_H
-            and drone_disp is not None
-            and drone_speed < self.max_drone_speed_for_world_heading_ms
-        )
 
         # 1. 对每条活跃轨迹计算当前方向
         direction_counts = {"straight": 0, "left_turn": 0, "right_turn": 0, "u_turn": 0, "unknown": 0}
@@ -90,41 +73,18 @@ class DirectionFlowNode:
 
             # 方向分类：需要足够的轨迹点
             world_history = getattr(track, "position_history_enu_m", [])
-            if max(len(track.position_history), len(world_history)) < self.min_position_points:
+            if len(world_history) < self.min_position_points:
                 direction_counts["unknown"] += 1
+                track.direction_class = None
                 continue
 
-            if len(world_history) >= self.min_position_points:
-                mid = len(world_history) // 2
-                entry_heading = compute_heading(
-                    world_history[: mid + 1], self.heading_window
-                )
-                exit_heading = compute_heading(
-                    world_history[mid:], self.heading_window
-                )
-            elif use_world_coords:
-                # 转换position_history到世界坐标，计算世界空间heading
-                pos_px = np.array([(p[0], p[1]) for p in track.position_history])
-                pos_world = pixel_to_world(pos_px, H) + drone_disp  # Nx2
-
-                # 构建world-space position_history格式 [(x, y, t), ...]
-                world_history = [
-                    (pos_world[i][0], pos_world[i][1], track.position_history[i][2])
-                    for i in range(len(track.position_history))
-                ]
-
-                mid = len(world_history) // 2
-                entry_heading = compute_heading(world_history[: mid + 1], self.heading_window)
-                exit_heading = compute_heading(world_history[mid:], self.heading_window)
-            else:
-                # 像素空间回退
-                mid = len(track.position_history) // 2
-                entry_heading = compute_heading(
-                    track.position_history[: mid + 1], self.heading_window
-                )
-                exit_heading = compute_heading(
-                    track.position_history[mid:], self.heading_window
-                )
+            mid = len(world_history) // 2
+            entry_heading = compute_heading(
+                world_history[: mid + 1], self.heading_window
+            )
+            exit_heading = compute_heading(
+                world_history[mid:], self.heading_window
+            )
 
             if entry_heading is None or exit_heading is None:
                 direction_counts["unknown"] += 1

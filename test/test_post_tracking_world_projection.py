@@ -34,7 +34,7 @@ def _frame(timestamp: float, projection: np.ndarray) -> FrameElement:
         detected_xyxy=[[20, 20, 40, 40]],
     )
     frame.camera_motion_warp = np.eye(3)
-    frame.pixel_to_map_enu = projection
+    frame.pixel_to_world_enu = projection
     frame.geo_reference_quality = {"status": "verified"}
     frame.geo_analytics_eligible = True
     frame.road_analytics_eligible = True
@@ -181,7 +181,7 @@ def test_tracker_info_consumes_post_tracking_world_fact_without_reprojection():
 
     # Simulate an accidental downstream mutation. The already-produced world
     # fact remains authoritative and must be consumed as-is.
-    projected.pixel_to_map_enu = np.array(
+    projected.pixel_to_world_enu = np.array(
         [[1.0, 0.0, 100.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
     )
     accumulated = accumulator.process(projected)

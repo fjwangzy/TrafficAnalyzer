@@ -1,5 +1,8 @@
 # mp4729 垂直俯拍视频 3 秒效果测试（2026-07-30）
 
+> 修订说明：以下三秒烟测产生于 SourceGeoRegistration 运行时门禁移除之前，保留为历史渲染证据；
+> 缺少该记录不再关闭 geo/TCC，当前能力只由同步遥测和当前帧世界矩阵决定。
+
 ## 结论
 
 - 状态：`local_smoke_passed_with_warning / production_accuracy_not_evaluated`。
@@ -8,7 +11,9 @@
 - 三份 DJI Cloud OSD 导出都包含录制前后数据。测试按 MP4 `creation_time` 对齐，分别使用 73.779、17.884、99.111 秒偏移；每个样本 23/23 个处理帧均命中遥测。
 - 同步高度约 171.4–171.5 m，当前自适应尺寸策略在三个样本中均选择 `high / imgsz=1280`。
 - 画面中的检测框、类别标签和候选像素尾迹可见，未发生旋转、拉伸、黑帧或保存中断。密集车流区域的文字标签有重叠，属于当前 4K 全量标注布局的可读性限制。
-- 短样本、无 verified SourceGeoRegistration、无 lane_verified Runtime Road Map Bundle，因此黄色虚线候选和 `NO STATS-TCC` 是正确的能力降级；不得据此声称 IDF1/HOTA、ID switch、位置 RMSE、速度 MAE或生产精度。
+- 当时短样本显示黄色虚线候选和 `NO STATS-TCC`，属于旧 SGR 门禁下的历史结果；当前实现不得因
+  SGR 或地图缺失关闭 geo/TCC。无外部真值时仍不得据此声称 IDF1/HOTA、ID switch、位置 RMSE、
+  速度 MAE 或生产精度。
 
 ## 运行口径
 
@@ -47,4 +52,4 @@
 - 完整原始 3 m/s 视频及对应 OSD 已注册为 `SRC-MP4729-JS-0729-3MS`。
 - 归属无人机：`UAV-MP4728-JS`（“回放无人机 · 经十路巡航”）。
 - 该新源设为无人机默认源；已有 mp4728 3/5/7 m/s 源均保留。
-- 注册继续采用 `roadless_trajectory`，无 verified SourceGeoRegistration 时不提升地理、道路或 TCC 能力。
+- `roadless_trajectory` 只表示道路能力缺失；当前实现中 SGR 不存在，geo/TCC 由逐帧遥测和世界矩阵独立决定。

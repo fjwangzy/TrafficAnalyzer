@@ -414,9 +414,6 @@ class KafkaProducerNode:
                 "road_context_status": getattr(
                     track, "road_context_status", "missing"
                 ),
-                "geo_registration_id": getattr(
-                    track, "geo_registration_id", None
-                ),
                 "quality_status": (
                     "verified"
                     if getattr(track, "road_analytics_eligible", False)

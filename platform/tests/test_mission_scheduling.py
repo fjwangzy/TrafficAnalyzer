@@ -14,7 +14,6 @@ from app.services.mission_orchestrator import (
     resolve_tracking_profile,
     schedule_occurrences,
 )
-from app.services.source_geo_registration import canonical_registration_checksum
 
 
 def test_once_schedule_preserves_exact_utc_window():
@@ -79,20 +78,87 @@ def test_manual_mission_accepts_an_explicit_runtime_map_version():
     assert body.map_version_id == "CMV-READY"
 
 
-def test_tracking_profile_is_selected_from_verified_source_registration():
-    assert resolve_tracking_profile(None, None) == (
-        "hover_only_legacy",
-        "source_geo_registration_missing",
-    )
-    registration = SimpleNamespace(id="SGR-1", status="verified")
-    assert resolve_tracking_profile(None, registration) == (
+def test_tracking_profile_defaults_to_cruise_without_registration_or_map():
+    assert resolve_tracking_profile(None) == (
         "hover_cruise_v1",
-        "verified_source_geo_registration",
+        "default_hover_cruise",
     )
-    assert resolve_tracking_profile("hover_only_legacy", registration) == (
+    assert resolve_tracking_profile("hover_only_legacy") == (
         "hover_only_legacy",
         "explicit_request",
     )
+
+
+@pytest.mark.asyncio
+async def test_mission_pipeline_reports_four_runtime_capabilities_independently():
+    runtime_quality = {
+        "capabilities": {
+            "trajectory": True,
+            "geo": True,
+            "road": False,
+            "tcc": True,
+        },
+        "capability_reasons": {
+            "trajectory": [],
+            "geo": [],
+            "road": ["lane_verified_map_required"],
+            "tcc": [],
+        },
+    }
+    pipeline = SimpleNamespace(
+        id="pipe-1",
+        desired_status="running",
+        observed_status="running",
+        topic_name="uav_statistics_1",
+        camera_id=1,
+        video_port=8101,
+        error_message=None,
+        flight_phase="cruise_nadir",
+        tracking_quality="verified",
+        formal_analytics_eligible=False,
+        runtime_quality=runtime_quality,
+    )
+    mission = SimpleNamespace(
+        id="mission-1",
+        name="mission",
+        flight_plan_id=None,
+        parent_mission_id=None,
+        retry_index=0,
+        trigger_type="manual",
+        drone_id="drone-1",
+        inter_id="INT-1",
+        road_data_version="unverified",
+        scheduled_start_at=None,
+        scheduled_end_at=None,
+        actual_start_at=None,
+        actual_end_at=None,
+        status="running",
+        reason_code=None,
+        error_message=None,
+        pipeline_id=pipeline.id,
+        context_snapshot={
+            "tracking_profile": "hover_cruise_v1",
+            "tracking_profile_selection_reason": "default_hover_cruise",
+        },
+        created_at=None,
+        updated_at=None,
+    )
+
+    class Session:
+        async def get(self, _model, record_id):
+            return pipeline if record_id == pipeline.id else None
+
+    orchestrator = object.__new__(MissionOrchestrator)
+    orchestrator._pipeline = SimpleNamespace(get=lambda _pipeline_id: None)
+
+    result = await orchestrator._mission_dict(Session(), mission)
+
+    assert result["pipeline"]["capabilities"] == runtime_quality["capabilities"]
+    assert (
+        result["pipeline"]["capability_reasons"]
+        == runtime_quality["capability_reasons"]
+    )
+    assert result["pipeline"]["formal_analytics_eligible"] is False
 
 
 def test_local_source_validation_enforces_allowlist_and_pair_types(tmp_path):
@@ -226,59 +292,6 @@ async def test_manual_mission_runtime_params_allow_detection_without_road_contex
     params = await orchestrator._runtime_params(Session(), mission)
 
     assert params["runtime_map_bundle"] is None
-    assert params["runtime_geo_registration"] is None
     assert params["road_context_status"] == "missing"
     assert params["quality_status"] == "degraded"
     assert params["video_src"] == "test_videos/demo.mp4"
-
-
-@pytest.mark.asyncio
-async def test_mission_runtime_uses_exact_pinned_source_geo_registration():
-    video = VideoSourceRecord(
-        id="video-geo", profile_id="source-geo", drone_id="drone-geo", mode="local",
-        source_type="mp4", location="test_videos/geo.mp4", validation_status="valid",
-    )
-    telemetry = TelemetrySourceRecord(
-        id="telemetry-geo", profile_id="source-geo", drone_id="drone-geo", mode="local",
-        source_type="srt", location="test_videos/geo.srt", validation_status="valid", config={},
-    )
-    registration = SimpleNamespace(
-        id="SGR-PINNED", source_profile_id="source-geo", status="verified",
-        coordinate_system="GCJ02", coordinate_transform_version="transform-v1",
-        anchor_gcj02=[117.0, 36.7],
-        homography_pixel_to_enu=[[1, 0, 0], [0, 1, 0], [0, 0, 1]],
-        registration_pose={}, camera_calibration={}, coverage_enu_m={}, residuals={},
-        provenance={}, checksum="",
-    )
-    registration.checksum = canonical_registration_checksum(registration)
-
-    class Session:
-        async def get(self, model, record_id):
-            if model is VideoSourceRecord and record_id == video.id:
-                return video
-            return telemetry
-
-        async def execute(self, _statement):
-            return SimpleNamespace(scalar_one_or_none=lambda: registration)
-
-    orchestrator = object.__new__(MissionOrchestrator)
-    orchestrator._road_context = SimpleNamespace()
-    mission = SimpleNamespace(
-        id="mission-geo", drone_id="drone-geo", inter_id="INT-GEO",
-        road_data_version="unverified", video_source_id=video.id,
-        telemetry_source_id=telemetry.id,
-        context_snapshot={
-            "source_profile_id": "source-geo",
-            "source_geo_registration": {
-                "id": registration.id,
-                "checksum": registration.checksum,
-                "status": "verified",
-            },
-        },
-    )
-
-    params = await orchestrator._runtime_params(Session(), mission)
-
-    assert params["runtime_geo_registration"]["id"] == "SGR-PINNED"
-    assert params["runtime_map_bundle"] is None
-    assert params["road_context_status"] == "missing"

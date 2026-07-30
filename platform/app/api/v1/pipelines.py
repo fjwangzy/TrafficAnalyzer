@@ -5,6 +5,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from app.services.pipeline_manager import redact_video_source
+from app.services.runtime_capabilities import capability_report_from_runtime_quality
 
 logger = logging.getLogger(__name__)
 
@@ -93,17 +94,22 @@ class PipelineResponse(BaseModel):
     pipeline_id: str
     drone_id: str
     intersection_id: str
+    mission_id: str | None = None
     source_profile_id: str | None = None
     inter_id: str | None = None
+    road_data_version: str | None = None
     video_src: str
     map_version_id: str | None
-    geo_registration_id: str | None = None
-    geo_registration_checksum: str | None = None
     candidate_only: bool = False
     topic_name: str
     camera_id: int
     video_port: int
     video_stream_url: str
+    road_context_status: str = "missing"
+    quality_status: str = "unverified"
+    tracking_profile: str = "hover_cruise_v1"
+    capabilities: dict[str, bool | None]
+    capability_reasons: dict[str, list[str]]
     status: str
     started_at: float
     stopped_at: float
@@ -125,14 +131,43 @@ def _get_pm(request: Request):
     return pm
 
 
+async def _with_runtime_capabilities(request: Request, pipelines: list[dict]) -> list[dict]:
+    """Overlay active-process metadata with the last canonical stats sample."""
+    metric_store = getattr(request.app.state, "metric_store", None)
+    read_quality = getattr(metric_store, "pipeline_runtime_quality", None)
+    if read_quality is None or not pipelines:
+        return pipelines
+    try:
+        runtime_quality = await read_quality(
+            [str(item.get("pipeline_id") or "") for item in pipelines]
+        )
+    except Exception as exc:  # Keep process monitoring available during DB outages.
+        logger.warning("pipeline runtime capability lookup failed: %s", exc)
+        return pipelines
+    enriched = []
+    for item in pipelines:
+        payload = dict(item)
+        pipeline_id = str(payload.get("pipeline_id") or "")
+        if pipeline_id in runtime_quality:
+            capabilities, reasons = capability_report_from_runtime_quality(
+                runtime_quality[pipeline_id]
+            )
+            payload["capabilities"] = capabilities
+            payload["capability_reasons"] = reasons
+        enriched.append(payload)
+    return enriched
+
+
 # ── Endpoints ──
 
 
-@router.get("", summary="List all pipeline instances")
+@router.get(
+    "", response_model=list[PipelineResponse], summary="List all pipeline instances"
+)
 async def list_pipelines(request: Request):
     """Return all pipeline instances and their current status."""
     pm = _get_pm(request)
-    return pm.list_pipelines()
+    return await _with_runtime_capabilities(request, pm.list_pipelines())
 
 
 @router.get("/summary", summary="Pipeline fleet summary")
@@ -160,7 +195,12 @@ async def proxy_map(request: Request):
     }
 
 
-@router.post("", status_code=201, summary="Start a new detection pipeline")
+@router.post(
+    "",
+    response_model=PipelineResponse,
+    status_code=201,
+    summary="Start a new detection pipeline",
+)
 async def start_pipeline(body: PipelineCreateRequest, request: Request):
     """Start a detection pipeline bound to a drone and intersection.
 
@@ -239,11 +279,14 @@ class PipelineRegisterRequest(BaseModel):
         default="hover_cruise_v1", pattern="^(hover_cruise_v1|hover_only_legacy)$"
     )
     candidate_only: bool = False
-    geo_registration_id: str | None = Field(default=None, max_length=40)
-    geo_registration_checksum: str | None = Field(default=None, min_length=64, max_length=64)
 
 
-@router.post("/register", status_code=201, summary="Register an externally-running pipeline")
+@router.post(
+    "/register",
+    response_model=PipelineResponse,
+    status_code=201,
+    summary="Register an externally-running pipeline",
+)
 async def register_pipeline(body: PipelineRegisterRequest, request: Request):
     """Register a pipeline that was started outside the Platform.
 
@@ -305,21 +348,21 @@ async def register_pipeline(body: PipelineRegisterRequest, request: Request):
             candidate_only=body.candidate_only,
             road_context_status=road_context_status,
             quality_status=quality_status,
-            geo_registration_id=body.geo_registration_id,
-            geo_registration_checksum=body.geo_registration_checksum,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return pipeline.to_dict()
 
 
-@router.get("/{pipeline_id}", summary="Get pipeline details")
+@router.get(
+    "/{pipeline_id}", response_model=PipelineResponse, summary="Get pipeline details"
+)
 async def get_pipeline(pipeline_id: str, request: Request):
     pm = _get_pm(request)
     pipeline = pm.get_pipeline(pipeline_id)
     if not pipeline:
         raise HTTPException(status_code=404, detail="Pipeline not found")
-    return pipeline.to_dict()
+    return (await _with_runtime_capabilities(request, [pipeline.to_dict()]))[0]
 
 
 @router.get("/{pipeline_id}/status", summary="Get pipeline health status")

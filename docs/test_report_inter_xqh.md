@@ -561,8 +561,9 @@ ADR-019 strict local 审计已以当前 native macOS Platform + Docker road9/Kaf
 实现新增共享 `AdaptiveImageSizePolicy`，同时接入 `DetectionNode` 与 legacy
 `DetectionTrackingNodes`。策略只消费同步后的正数 `altitude_agl/height`：AGL `<112m` 使用 640、
 `112–157m` 使用 960、`>=157m` 使用 1280；最近 5 点取中位数，5m 滞回、连续 5 个处理帧切档，
-缺失保持 2 秒后回退 960。Mission/FlightPlan 未显式选档时按 verified SourceGeoRegistration
-选择 cruise，否则选择 legacy，并把最终档、原因和注册 checksum 固化到 snapshot。
+缺失保持 2 秒后回退 960。此处原“按 verified SourceGeoRegistration 自动选择 cruise/legacy”的
+历史实现已于 2026-07-30 废弃；Mission/FlightPlan 未显式选档时固定使用 `hover_cruise_v1`，
+`hover_only_legacy` 只允许显式回滚。
 
 xqh 840s–自然 EOF 使用原生 arm64/MPS、stride=4、自适应开启。机器报告
 `/private/tmp/TrafficAnalyzer-xqh-adaptive-imgsz-20260729-v2.json` 的既有工程门禁和新增尺寸门禁

@@ -38,6 +38,7 @@ from app.services.pipeline_executor import (
     PipelineExecutor,
     PipelineLaunchSpec,
 )
+from app.services.runtime_capabilities import pending_capability_report
 
 logger = logging.getLogger(__name__)
 
@@ -118,8 +119,6 @@ class PipelineInstance:
     quality_status: str = "unverified"
     tracking_profile: str = "hover_cruise_v1"
     map_version_id: str | None = None
-    geo_registration_id: str | None = None
-    geo_registration_checksum: str | None = None
     candidate_only: bool = False
     status: PipelineStatus = PipelineStatus.PENDING
     process: Any = field(default=None, repr=False)
@@ -131,6 +130,7 @@ class PipelineInstance:
     io_tasks: list[asyncio.Task] = field(default_factory=list, repr=False)
 
     def to_dict(self) -> dict:
+        capabilities, capability_reasons = pending_capability_report()
         return {
             "pipeline_id": self.pipeline_id,
             "drone_id": self.drone_id,
@@ -146,10 +146,10 @@ class PipelineInstance:
             "road_data_version": self.road_data_version,
             "road_context_status": self.road_context_status,
             "quality_status": self.quality_status,
+            "capabilities": capabilities,
+            "capability_reasons": capability_reasons,
             "tracking_profile": self.tracking_profile,
             "map_version_id": self.map_version_id,
-            "geo_registration_id": self.geo_registration_id,
-            "geo_registration_checksum": self.geo_registration_checksum,
             "candidate_only": self.candidate_only,
             "status": self.status.value,
             "started_at": self.started_at,
@@ -275,8 +275,6 @@ class PipelineManager:
         candidate_only: bool = False,
         road_context_status: str | None = None,
         quality_status: str | None = None,
-        geo_registration_id: str | None = None,
-        geo_registration_checksum: str | None = None,
     ) -> PipelineInstance:
         """Register an externally-running pipeline (e.g. started locally).
 
@@ -340,8 +338,6 @@ class PipelineManager:
                 quality_status
                 or ("verified" if map_version_id else "unverified" if candidate_only else "degraded")
             ),
-            geo_registration_id=geo_registration_id,
-            geo_registration_checksum=geo_registration_checksum,
         )
         self._pipelines[pipeline_id] = pipeline
         assign_drone_to_intersection(drone_id, intersection_id)
@@ -357,7 +353,6 @@ class PipelineManager:
         intersection_id: str,
         video_src: str,
         runtime_map_bundle: dict | None = None,
-        runtime_geo_registration: dict | None = None,
         telemetry_source: str | None = None,
         telemetry_file_path: str | None = None,
         telemetry_time_offset_sec: float | None = None,
@@ -379,7 +374,6 @@ class PipelineManager:
             intersection_id: The intersection to monitor.
             video_src: Video source — RTSP URL, file path, or camera index.
             runtime_map_bundle: Optional immutable lane-verified channelized map bundle.
-            runtime_geo_registration: Optional immutable verified source projection.
             telemetry_source: Optional telemetry source override.
             telemetry_file_path: Optional telemetry file path override.
             kafka_bootstrap: Override Kafka bootstrap servers.
@@ -393,14 +387,6 @@ class PipelineManager:
         video_src = self._validate_video_source(video_src)
         if runtime_map_bundle is not None and runtime_map_bundle.get("map_status") != "lane_verified":
             raise ValueError("runtime_map_bundle must be lane_verified when provided")
-        if runtime_geo_registration is not None:
-            if runtime_geo_registration.get("status") != "verified":
-                raise ValueError("runtime_geo_registration must be verified when provided")
-            registration_source = runtime_geo_registration.get("source_profile_id")
-            if source_profile_id and registration_source != source_profile_id:
-                raise ValueError("runtime_geo_registration source_profile_id mismatch")
-            if not runtime_geo_registration.get("homography_pixel_to_enu"):
-                raise ValueError("runtime_geo_registration requires homography_pixel_to_enu")
         telemetry_file_path = self._validate_support_file(
             telemetry_file_path,
             (".srt", ".json", ".txt"),
@@ -433,14 +419,6 @@ class PipelineManager:
             map_version_id=(
                 runtime_map_bundle.get("map_version_id") if runtime_map_bundle else None
             ),
-            geo_registration_id=(
-                runtime_geo_registration.get("id") if runtime_geo_registration else None
-            ),
-            geo_registration_checksum=(
-                runtime_geo_registration.get("checksum")
-                if runtime_geo_registration
-                else None
-            ),
         )
 
         launch = PipelineLaunchSpec(
@@ -459,7 +437,6 @@ class PipelineManager:
             quality_status=quality_status,
             tracking_profile=tracking_profile,
             runtime_map_bundle=runtime_map_bundle,
-            runtime_geo_registration=runtime_geo_registration,
             frame_stride=self._frame_stride,
             kafka_bootstrap=kafka_bootstrap or self._kafka_bootstrap,
             telemetry_source=telemetry_source,

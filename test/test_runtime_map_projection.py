@@ -1,145 +1,88 @@
 import json
 
 import numpy as np
-import pytest
 
 from elements.FrameElement import FrameElement
 from nodes.HomographyCalibrationNode import HomographyCalibrationNode
 from nodes.MotionCompensationNode import MotionCompensationNode
-from nodes.TrackerInfoUpdateNode import TrackerInfoUpdateNode
 from utils_local.coordinates import enu_to_gcj02
 
 
-def _bundle(*, include_reference: bool = True, legacy_reference: bool = False) -> dict:
-    residuals = {
-        "registration_gimbal_yaw_deg": 0.0,
-    }
-    if include_reference and legacy_reference:
-        residuals["registration_position_gcj02"] = [117.0, 36.0]
-    registration_pose = (
-        {"position_gcj02": [117.0, 36.0], "gimbal_yaw": 0.0}
-        if include_reference and not legacy_reference
-        else {}
-    )
+ANCHOR = [117.0, 36.0]
+INTRINSICS = {
+    "focal_length_mm": 4.5,
+    "sensor_width_mm": 6.4,
+    "sensor_height_mm": 3.6,
+}
+
+
+def _bundle() -> dict:
     return {
         "map_status": "lane_verified",
         "coordinate_system": "GCJ02",
         "map_version_id": "CMV-opaque",
-        "anchor_gcj02": [117.0, 36.0],
+        "anchor_gcj02": ANCHOR,
+        # Deliberately wrong legacy matrices: neither may affect world projection.
         "visual_registrations": [
             {
                 "source_profile_id": "SRC-A",
-                "status": "verified",
-                "homography_pixel_to_enu": [
-                    [1.0, 0.0, 100.0],
-                    [0.0, 1.0, 100.0],
-                    [0.0, 0.0, 1.0],
-                ],
-                "residuals": residuals,
-                "registration_pose": registration_pose,
-            },
-            {
-                "source_profile_id": "SRC-B",
-                "status": "verified",
-                "homography_pixel_to_enu": [
-                    [1.0, 0.0, 0.0],
-                    [0.0, 1.0, 0.0],
-                    [0.0, 0.0, 1.0],
-                ],
-                "residuals": residuals,
-                "registration_pose": registration_pose,
-            },
+                "homography_pixel_to_enu": [[1, 0, 999], [0, 1, 999], [0, 0, 1]],
+            }
         ],
+        "lanes": [],
     }
 
 
-def _frame(timestamp: float = 0.0) -> FrameElement:
+def _frame(east_m: float = 10.0, north_m: float = 5.0) -> FrameElement:
+    lon, lat = enu_to_gcj02(east_m, north_m, ANCHOR)
     frame = FrameElement(
-        "video.mp4", np.zeros((40, 40, 3), dtype=np.uint8), timestamp, timestamp, {}
+        "video.mp4", np.zeros((40, 40, 3), dtype=np.uint8), 0.0, 0, {}
     )
-    frame.id_list = [7]
-    frame.tracked_xyxy = [[0.0, 0.0, 10.0, 20.0]]
-    frame.tracked_cls = ["car"]
-    frame.tracked_cls_ids = [2]
-    return frame
-
-
-def test_runtime_map_locks_exact_source_and_registration_relative_motion(monkeypatch):
-    bundle = _bundle()
-    monkeypatch.setenv("SOURCE_PROFILE_ID", "SRC-B")
-    monkeypatch.setenv("RUNTIME_MAP_BUNDLE_JSON", json.dumps(bundle))
-    lon, lat = enu_to_gcj02(10.0, 5.0, [117.0, 36.0])
-    frame = _frame()
     frame.telemetry = {
         "position_gcj02": {"longitude": lon, "latitude": lat},
         "coordinate_system": "GCJ02",
-        "horizontal_speed": 0.0,
+        "altitude_agl": 100.0,
+        "gimbal_pitch": -90.0,
+        "gimbal_roll": 0.0,
         "gimbal_yaw": 0.0,
+        "horizontal_speed": 2.0,
+        "zoom_factor": 1.0,
     }
+    return frame
 
-    calibrated = HomographyCalibrationNode({"calibration": {}}).process(frame)
-    result = MotionCompensationNode({}).process(calibrated)
 
-    assert result.calibration_mode == "runtime_map"
+def _calibrate_and_compensate(frame: FrameElement):
+    calibrated = HomographyCalibrationNode(
+        {"calibration": {"mode": "auto", "camera_intrinsics": INTRINSICS}}
+    ).process(frame)
+    return MotionCompensationNode(
+        {"motion_compensation": {"anchor_gcj02": ANCHOR}}
+    ).process(calibrated)
+
+
+def test_runtime_map_does_not_replace_video_srt_world_matrix(monkeypatch):
+    monkeypatch.setenv("RUNTIME_MAP_BUNDLE_JSON", json.dumps(_bundle()))
+
+    result = _calibrate_and_compensate(_frame())
+
+    assert result.calibration_mode == "telemetry"
     assert result.map_version_id == "CMV-opaque"
-    assert result.runtime_visual_registration["source_profile_id"] == "SRC-B"
-    assert np.allclose(result.homography_matrix, np.eye(3))
+    assert result.runtime_map_bundle["map_version_id"] == "CMV-opaque"
+    assert not hasattr(result, "runtime_visual_registration") or result.runtime_visual_registration is None
+    assert not np.allclose(result.homography_matrix, np.eye(3))
     assert np.allclose(result.drone_displacement_m, [10.0, 5.0], atol=0.01)
 
 
-def test_runtime_map_requires_motion_reference(monkeypatch):
-    monkeypatch.setenv("SOURCE_PROFILE_ID", "SRC-B")
-    monkeypatch.setenv("RUNTIME_MAP_BUNDLE_JSON", json.dumps(_bundle(include_reference=False)))
-    frame = HomographyCalibrationNode({"calibration": {}}).process(_frame())
+def test_world_matrix_is_identical_with_or_without_road_map(monkeypatch):
+    monkeypatch.delenv("RUNTIME_MAP_BUNDLE_JSON", raising=False)
+    without_map = _calibrate_and_compensate(_frame())
 
-    with pytest.raises(ValueError, match="registration_position_gcj02"):
-        MotionCompensationNode({}).process(frame)
-
-
-def test_runtime_map_accepts_legacy_residual_motion_reference(monkeypatch):
-    monkeypatch.setenv("SOURCE_PROFILE_ID", "SRC-B")
-    monkeypatch.setenv(
-        "RUNTIME_MAP_BUNDLE_JSON",
-        json.dumps(_bundle(legacy_reference=True)),
-    )
-    frame = HomographyCalibrationNode({"calibration": {}}).process(_frame())
-    frame.telemetry = {
-        "position_gcj02": {"longitude": 117.0, "latitude": 36.0},
-        "coordinate_system": "GCJ02",
-        "horizontal_speed": 0.0,
-        "gimbal_yaw": 0.0,
-    }
-
-    result = MotionCompensationNode({}).process(frame)
-
-    assert np.allclose(result.drone_displacement_m, [0.0, 0.0])
-
-
-def test_tracker_accumulates_each_frames_ground_contact_in_map_enu(monkeypatch):
-    monkeypatch.setenv("SOURCE_PROFILE_ID", "SRC-B")
     monkeypatch.setenv("RUNTIME_MAP_BUNDLE_JSON", json.dumps(_bundle()))
-    calibration = HomographyCalibrationNode({"calibration": {}})
-    motion = MotionCompensationNode({})
-    tracker = TrackerInfoUpdateNode(
-        {
-            "general": {"buffer_analytics": 1, "min_time_life_track": 1},
-            "trajectory": {"min_track_duration_sec": 0},
-        }
+    with_map = _calibrate_and_compensate(_frame())
+
+    np.testing.assert_allclose(
+        with_map.homography_matrix, without_map.homography_matrix, atol=1e-12
     )
-
-    for timestamp, east in ((0.0, 0.0), (1.0, 10.0)):
-        lon, lat = enu_to_gcj02(east, 0.0, [117.0, 36.0])
-        frame = _frame(timestamp)
-        frame.telemetry = {
-            "position_gcj02": {"longitude": lon, "latitude": lat},
-            "coordinate_system": "GCJ02",
-            "horizontal_speed": 0.0,
-            "gimbal_yaw": 0.0,
-        }
-        tracker.process(motion.process(calibration.process(frame)))
-
-    track = tracker.buffer_tracks[7]
-    assert track.map_version_id == "CMV-opaque"
-    assert np.allclose(track.trajectory_enu_m[0], [5.0, 20.0], atol=0.01)
-    assert np.allclose(track.trajectory_enu_m[1], [15.0, 20.0], atol=0.01)
-    assert len(track.trajectory_gcj02) == 2
+    np.testing.assert_allclose(
+        with_map.drone_displacement_m, without_map.drone_displacement_m, atol=1e-6
+    )

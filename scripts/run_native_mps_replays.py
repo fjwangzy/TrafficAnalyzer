@@ -40,7 +40,6 @@ if str(PLATFORM_DIR) not in sys.path:
 
 from scripts.bootstrap_mp4new_sources import ALL_LOCAL_REPLAY_CATALOG  # noqa: E402
 from utils_local.event_evidence import CONFLICT_EVIDENCE_KINDS  # noqa: E402
-from utils_local.runtime_map import select_runtime_visual_registration  # noqa: E402
 
 
 def source_catalog() -> dict[str, dict]:
@@ -494,30 +493,13 @@ class PlatformClient:
                 "GET",
                 f"/api/v1/calibration/channelized-maps/{selected['id']}/runtime-bundle",
             )
-            try:
-                select_runtime_visual_registration(bundle, source["profile_id"])
-            except ValueError:
-                continue
             return bundle
         if not required:
             return None
         raise RuntimeError(
-            "stage-1 gate blocked: no lane_verified map with a verified "
-            f"registration for {source['inter_id']}@{source['profile_id']}"
+            "stage-1 gate blocked: no lane_verified map for "
+            f"{source['inter_id']}"
         )
-
-    def runtime_geo_registration(self, source: dict) -> dict | None:
-        registrations = self.request(
-            "GET",
-            "/api/v1/calibration/source-profiles/"
-            f"{source['profile_id']}/geo-registrations",
-        )
-        eligible = sorted(
-            (item for item in registrations if item.get("status") == "verified"),
-            key=lambda item: int(item.get("version_no") or 0),
-            reverse=True,
-        )
-        return eligible[0] if eligible else None
 
     def register(
         self,
@@ -525,7 +507,6 @@ class PlatformClient:
         camera_id: int,
         video_port: int,
         runtime_bundle: dict | None,
-        runtime_geo_registration: dict | None = None,
         tracking_profile: str = "hover_cruise_v1",
     ) -> dict:
         return self.request(
@@ -545,14 +526,6 @@ class PlatformClient:
                 "topic_name": f"uav_statistics_{camera_id}",
                 "tracking_profile": tracking_profile,
                 "candidate_only": False,
-                "geo_registration_id": (
-                    runtime_geo_registration.get("id")
-                    if runtime_geo_registration else None
-                ),
-                "geo_registration_checksum": (
-                    runtime_geo_registration.get("checksum")
-                    if runtime_geo_registration else None
-                ),
             },
         )
 
@@ -791,6 +764,7 @@ def run_source(
     drain_seconds: float,
     tracking_profile: str,
     show_in_web: bool = False,
+    save_video: bool = False,
 ) -> dict:
     camera_id = 5700 + index
     video_port = 15700 + index
@@ -799,7 +773,6 @@ def run_source(
         source,
         required=configured_mode not in {"roadless_trajectory", "candidate_isolation"},
     )
-    runtime_geo_registration = client.runtime_geo_registration(source)
     telemetry_enabled = source.get("telemetry_enabled", True)
     if not telemetry_enabled:
         runtime_bundle = None
@@ -809,7 +782,6 @@ def run_source(
         camera_id,
         video_port,
         runtime_bundle,
-        runtime_geo_registration,
         tracking_profile=tracking_profile,
     )
     pipeline_id = registered["pipeline_id"]
@@ -841,8 +813,8 @@ def run_source(
     source_dir = output_dir / source["profile_id"]
     source_dir.mkdir(parents=True, exist_ok=True)
     env = os.environ.copy()
-    env.pop("RUNTIME_MAP_BUNDLE_JSON", None)
     env.pop("RUNTIME_GEO_REGISTRATION_JSON", None)
+    env.pop("RUNTIME_MAP_BUNDLE_JSON", None)
     env.update(
         {
             "VIDEO_SRC": str((ROOT / source["video"]).resolve()),
@@ -869,16 +841,13 @@ def run_source(
         env["RUNTIME_MAP_BUNDLE_JSON"] = json.dumps(
             runtime_bundle, ensure_ascii=False, separators=(",", ":")
         )
-    if runtime_geo_registration:
-        env["RUNTIME_GEO_REGISTRATION_JSON"] = json.dumps(
-            runtime_geo_registration, ensure_ascii=False, separators=(",", ":")
-        )
     command = [
         sys.executable,
         str(ROOT / "main_optimized.py"),
         f"pipeline.show_in_web={'true' if show_in_web else 'false'}",
-        "pipeline.save_video=false",
+        f"pipeline.save_video={'true' if save_video else 'false'}",
         "pipeline.send_info_kafka=true",
+        f"video_saver_node.out_folder={hydra_string(str(source_dir))}",
         "video_saver_node.save_conflict_clips=false",
         "kafka_producer_node.hover_annotation_snapshot_enabled=false",
         "detection_node.device=mps",
@@ -968,6 +937,7 @@ def run_source(
         "adaptive_imgsz": adaptive_imgsz,
         "tracking_profile": tracking_profile,
         "show_in_web": show_in_web,
+        "save_video": save_video,
         "return_code": return_code,
         "natural_eof": return_code == 0,
         "elapsed_sec": round(time.monotonic() - started, 3),
@@ -980,13 +950,6 @@ def run_source(
         "candidate_isolation": candidate,
         "trajectory_output": trajectory_output,
         "eligible_completed_tracks": trajectory_output["eligible_completed_tracks"],
-        "geo_registration_id": (
-            runtime_geo_registration.get("id") if runtime_geo_registration else None
-        ),
-        "geo_registration_checksum": (
-            runtime_geo_registration.get("checksum")
-            if runtime_geo_registration else None
-        ),
         "road9_reconciliation": road9,
         "performance": inference_summary(buckets["stats"]),
         "error": error,
@@ -1028,6 +991,11 @@ def parse_args() -> argparse.Namespace:
         "--show-in-web",
         action="store_true",
         help="serve the MJPEG stream during an interactive browser acceptance run",
+    )
+    parser.add_argument(
+        "--save-video",
+        action="store_true",
+        help="save the production ShowNode output beside the replay result",
     )
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--resume", action="store_true", help="reuse completed source artifacts")
@@ -1103,6 +1071,7 @@ def main() -> int:
             drain_seconds=args.drain_seconds,
             tracking_profile=args.tracking_profile,
             show_in_web=args.show_in_web,
+            save_video=args.save_video,
         )
         result["source_integrity"] = source_integrity[profile_id]
         result["source_input_complete"] = not bool(catalog[profile_id].get("known_degradation"))

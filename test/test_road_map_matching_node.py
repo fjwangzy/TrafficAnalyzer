@@ -5,6 +5,7 @@ import numpy as np
 from elements.FrameElement import FrameElement
 from elements.TrackElement import TrackElement
 from nodes.RoadMapMatchingNode import RoadMapMatchingNode
+from utils_local.coordinates import enu_to_gcj02
 
 
 def test_matches_bbox_ground_contact_to_lane(monkeypatch):
@@ -22,7 +23,9 @@ def test_matches_bbox_ground_contact_to_lane(monkeypatch):
     node = RoadMapMatchingNode({})
     track = TrackElement(7, 0)
     track.current_position_enu_m = [5.0, 8.0]
-    track.current_position_gcj02 = [118.0, 37.0]
+    previous_gcj02 = enu_to_gcj02(4.0, 8.0, bundle["anchor_gcj02"])
+    current_gcj02 = enu_to_gcj02(5.0, 8.0, bundle["anchor_gcj02"])
+    track.trajectory_gcj02 = [previous_gcj02, current_gcj02]
     track.position_history_enu_m = [[4.0, 8.0, 0.0], [5.0, 8.0, 1.0]]
     track.heading_angle = 17.5
     track.movement_key = "vision:left"
@@ -30,17 +33,18 @@ def test_matches_bbox_ground_contact_to_lane(monkeypatch):
     frame.id_list = [7]
     frame.tracked_xyxy = [[2, 2, 8, 8]]
     frame.buffer_tracks = {7: track}
+    frame.geo_analytics_eligible = True
     result = node.process(frame)
     assert track.matched_lane_key == "east-1"
     assert track.source_lane_id == "L1"
     assert track.movement_key == "vision:left"
     assert track.current_position_enu_m == [5.0, 8.0]
-    assert track.current_position_gcj02 == [118.0, 37.0]
+    assert track.trajectory_gcj02[-1] == current_gcj02
     assert track.heading_angle == 17.5
     assert result.map_version_id == "CMV-1"
 
 
-def test_selects_registration_for_exact_source_profile(monkeypatch):
+def test_lane_matching_ignores_source_visual_registration_matrices(monkeypatch):
     bundle = {
         "map_status": "lane_verified", "coordinate_system": "GCJ02",
         "map_version_id": "CMV-1", "inter_id": "011opaque", "anchor_gcj02": [117.0, 36.0],
@@ -69,10 +73,12 @@ def test_selects_registration_for_exact_source_profile(monkeypatch):
     node = RoadMapMatchingNode({})
     track = TrackElement(8, 0)
     track.current_position_enu_m = [5.0, 8.0]
+    track.trajectory_gcj02 = [enu_to_gcj02(5.0, 8.0, bundle["anchor_gcj02"])]
     frame = FrameElement("x", np.zeros((20, 20, 3)), 1, 1, {})
     frame.id_list = [8]
     frame.tracked_xyxy = [[2, 2, 8, 8]]
     frame.buffer_tracks = {8: track}
+    frame.geo_analytics_eligible = True
 
     node.process(frame)
 
@@ -115,7 +121,7 @@ def test_does_not_create_world_coordinates_from_road_map(monkeypatch):
     assert track.matched_lane_key is None
 
 
-def test_incompatible_geo_registration_degrades_road_match_without_blocking_track(monkeypatch):
+def test_unusable_lane_bundle_degrades_only_road_capability(monkeypatch):
     bundle = {
         "map_status": "lane_verified",
         "coordinate_system": "GCJ02",
@@ -127,18 +133,8 @@ def test_incompatible_geo_registration_degrades_road_match_without_blocking_trac
         "topology": {},
         "lanes": [],
     }
-    registration = {
-        "id": "SGR-2",
-        "source_profile_id": "SRC-2",
-        "status": "verified",
-        "coordinate_system": "GCJ02",
-        "coordinate_transform_version": "transform/v2",
-        "anchor_gcj02": [118.0, 36.0],
-        "homography_pixel_to_enu": [[1, 0, 0], [0, 1, 0], [0, 0, 1]],
-    }
     monkeypatch.setenv("SOURCE_PROFILE_ID", "SRC-2")
     monkeypatch.setenv("RUNTIME_MAP_BUNDLE_JSON", json.dumps(bundle))
-    monkeypatch.setenv("RUNTIME_GEO_REGISTRATION_JSON", json.dumps(registration))
 
     node = RoadMapMatchingNode({})
     track = TrackElement(9, 0)
@@ -147,10 +143,14 @@ def test_incompatible_geo_registration_degrades_road_match_without_blocking_trac
     frame.tracked_xyxy = [[2, 2, 8, 8]]
     frame.buffer_tracks = {9: track}
     frame.trajectory_output_eligible = True
+    frame.geo_analytics_eligible = True
+    frame.tcc_analytics_eligible = True
 
     result = node.process(frame)
 
     assert result.buffer_tracks[9] is track
     assert track.matched_lane_key is None
-    assert result.road_context_status == "version_mismatch"
-    assert result.info["map_matching"]["map_status"] == "version_mismatch"
+    assert result.road_context_status == "degraded"
+    assert result.info["map_matching"]["map_status"] == "degraded"
+    assert result.geo_analytics_eligible is True
+    assert result.tcc_analytics_eligible is True

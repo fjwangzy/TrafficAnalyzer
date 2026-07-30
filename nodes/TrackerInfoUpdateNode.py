@@ -238,14 +238,6 @@ class TrackerInfoUpdateNode:
             track.tcc_analytics_eligible = track.tcc_analytics_eligible or bool(
                 frame_element.tcc_analytics_eligible
             )
-            track.geo_registration_id = (
-                getattr(frame_element, "geo_registration_id", None)
-                or track.geo_registration_id
-            )
-            track.geo_registration_checksum = (
-                getattr(frame_element, "geo_registration_checksum", None)
-                or track.geo_registration_checksum
-            )
             track.road_context_status = getattr(
                 frame_element, "road_context_status", track.road_context_status
             )
@@ -290,13 +282,13 @@ class TrackerInfoUpdateNode:
             ground_x = cx
             ground_y = float(bbox[3])
             track = self.buffer_tracks[id]
-            # Map lineage belongs to the Pipeline, not to successful lane
-            # containment.  Unmatched intersection tracks still must be
-            # traceable to the immutable lane_verified map used for projection.
+            # Map lineage belongs to road matching only. Unmatched tracks may
+            # retain the selected map version without making world projection
+            # depend on it.
             if getattr(frame_element, "map_version_id", None):
                 track.map_version_id = frame_element.map_version_id
             track.ground_contact_points_px.append((ground_x, ground_y))
-            absolute_H = getattr(frame_element, "pixel_to_map_enu", None)
+            absolute_H = getattr(frame_element, "pixel_to_world_enu", None)
             H = frame_element.homography_matrix
             drone_disp = getattr(frame_element, "drone_displacement_m", None)
             anchor_gcj02 = getattr(frame_element, "anchor_gcj02", None)
@@ -515,8 +507,6 @@ class TrackerInfoUpdateNode:
                     "geo_reference_quality": track.geo_reference_quality,
                     "road_match_quality": track.road_match_quality,
                     "quality_reasons": track.quality_reasons,
-                    "geo_registration_id": track.geo_registration_id,
-                    "geo_registration_checksum": track.geo_registration_checksum,
                     "road_context_status": track.road_context_status,
                     "quality_status": (
                         "verified" if track.road_analytics_eligible else "degraded"

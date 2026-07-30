@@ -47,6 +47,25 @@ class _RecordingSession:
         self.rows.append(row)
 
 
+class _QueryResult:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def all(self):
+        return self._rows
+
+
+class _RuntimeQualitySession:
+    def __init__(self, results):
+        self.execute = AsyncMock(side_effect=[_QueryResult(rows) for rows in results])
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, traceback):
+        return False
+
+
 class MetricStoreContractTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.adapter = PostgresMetricStoreAdapter(None)
@@ -88,10 +107,17 @@ class MetricStoreContractTest(unittest.IsolatedAsyncioTestCase):
         values = self.adapter._pipeline_runtime_values({
             "flight_phase": "cruise_nadir",
             "flight_segment_id": "runtime-flight-0004",
+            "trajectory_output_eligible": True,
+            "geo_analytics_eligible": True,
+            "road_analytics_eligible": False,
+            "tcc_analytics_eligible": True,
             "formal_analytics_eligible": False,
             "geo_reference_quality": {
                 "status": "degraded",
                 "reasons": ["telemetry_gap"],
+                "geo_reasons": [],
+                "road_reasons": ["lane_verified_map_required"],
+                "tcc_reasons": [],
             },
             "tracking_diagnostics": {
                 "tracking_method": "pose_aware_world_v1",
@@ -103,12 +129,53 @@ class MetricStoreContractTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(values["tracking_quality"], "degraded")
         self.assertFalse(values["formal_analytics_eligible"])
         self.assertEqual(
+            values["runtime_quality"]["capabilities"],
+            {"trajectory": True, "geo": True, "road": False, "tcc": True},
+        )
+        self.assertEqual(
+            values["runtime_quality"]["capability_reasons"],
+            {
+                "trajectory": [],
+                "geo": [],
+                "road": ["lane_verified_map_required"],
+                "tcc": [],
+            },
+        )
+        self.assertEqual(
             values["runtime_quality"]["flight_segment_id"],
             "runtime-flight-0004",
         )
         self.assertEqual(
             values["runtime_quality"]["geo_reference_quality"]["reasons"],
             ["telemetry_gap"],
+        )
+
+    async def test_external_pipeline_capabilities_fall_back_to_latest_stats_fact(self):
+        stats_data = {
+            "trajectory_output_eligible": True,
+            "geo_analytics_eligible": True,
+            "road_analytics_eligible": False,
+            "tcc_analytics_eligible": True,
+            "geo_reference_quality": {
+                "geo_reasons": [],
+                "road_reasons": ["lane_verified_map_required"],
+                "tcc_reasons": [],
+            },
+        }
+        session = _RuntimeQualitySession(
+            [[], [("pipe-external", {"data": stats_data})]]
+        )
+        adapter = PostgresMetricStoreAdapter(lambda: session)
+
+        reports = await adapter.pipeline_runtime_quality(["pipe-external"])
+
+        self.assertEqual(
+            reports["pipe-external"]["capabilities"],
+            {"trajectory": True, "geo": True, "road": False, "tcc": True},
+        )
+        self.assertEqual(
+            reports["pipe-external"]["capability_reasons"]["road"],
+            ["lane_verified_map_required"],
         )
 
     def test_snapshot_evidence_links_package_for_foreign_key_ordering(self):
@@ -230,8 +297,8 @@ class MetricStoreContractTest(unittest.IsolatedAsyncioTestCase):
                 "tracking_quality": "confirmed",
                 "geo_reference_quality": {"status": "missing"},
                 "road_match_quality": "missing",
-                "quality_reasons": ["geo_registration_missing", "road_context_missing"],
-                "geo_registration_id": None,
+                "quality_reasons": ["current_frame_matrix_invalid", "road_context_missing"],
+                "geo_registration_id": "SGR-retired-input-must-be-ignored",
                 "vehicle_class": "motor",
                 "yolo_class_id": 3,
                 "yolo_class_name": "car",
@@ -262,8 +329,9 @@ class MetricStoreContractTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(track.road_match_quality, "missing")
         self.assertEqual(
             track.quality_reasons,
-            ["geo_registration_missing", "road_context_missing"],
+            ["current_frame_matrix_invalid", "road_context_missing"],
         )
+        self.assertIsNone(track.geo_registration_id)
 
     def test_invalid_detector_evidence_path_keeps_conflict_fact_as_incomplete(self):
         now = datetime.now(UTC).isoformat()

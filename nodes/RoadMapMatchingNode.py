@@ -8,10 +8,7 @@ from shapely.geometry import Point, shape
 
 from elements.FrameElement import FrameElement
 from elements.VideoEndBreakElement import VideoEndBreakElement
-from utils_local.runtime_geo import (
-    load_runtime_geo_registration,
-    runtime_geo_matches_map,
-)
+from utils_local.coordinates import gcj02_to_enu
 from utils_local.runtime_map import (
     load_runtime_map_bundle,
 )
@@ -25,12 +22,6 @@ class RoadMapMatchingNode:
         self.bundle = load_runtime_map_bundle(config)
         self._lanes: list[tuple[dict, object, float | None, dict]] = []
         self._lane_transitions: dict[str, set[str]] = {}
-        self._runtime_geo_registration = load_runtime_geo_registration(
-            config, runtime_map_bundle=self.bundle
-        )
-        self._map_compatible = runtime_geo_matches_map(
-            self._runtime_geo_registration, self.bundle
-        )
         if self.bundle:
             topology = self.bundle.get("topology") or {}
             lane_properties = topology.get("lane_properties") or {}
@@ -71,7 +62,17 @@ class RoadMapMatchingNode:
 
     @property
     def ready(self) -> bool:
-        return bool(self.bundle and self._map_compatible and self._lanes)
+        return bool(self.bundle and self.bundle.get("anchor_gcj02") and self._lanes)
+
+    @staticmethod
+    def _clear_road_fields(track, quality: str) -> None:
+        track.current_lane = None
+        track.matched_lane_key = None
+        track.source_lane_id = None
+        track.matched_link_id = None
+        track.map_version_id = None
+        track.map_match_confidence = None
+        track.road_match_quality = quality
 
     @staticmethod
     def _heading_similarity(left: float, right: float) -> float:
@@ -114,12 +115,12 @@ class RoadMapMatchingNode:
             return frame_element
         if not self.ready:
             status = (
-                "version_mismatch"
-                if self.bundle is not None and not self._map_compatible
-                else "degraded"
+                "degraded"
                 if self.bundle is not None
                 else "missing"
             )
+            frame_element.road_analytics_eligible = False
+            frame_element.formal_analytics_eligible = False
             frame_element.road_context_status = status
             frame_element.info["map_matching"] = {
                 "map_version_id": (
@@ -130,35 +131,48 @@ class RoadMapMatchingNode:
                 "total_tracks": len(frame_element.buffer_tracks or {}),
             }
             for track in (frame_element.buffer_tracks or {}).values():
-                track.road_match_quality = status
+                self._clear_road_fields(track, status)
             return frame_element
         frame_element.runtime_map_bundle = self.bundle
         frame_element.map_version_id = self.bundle["map_version_id"]
         frame_element.road_context_status = "complete"
-        if (
-            getattr(frame_element, "geo_reference_quality", None) is not None
-            and not getattr(frame_element, "road_analytics_eligible", False)
-        ):
+        if not getattr(frame_element, "geo_analytics_eligible", False):
+            frame_element.road_analytics_eligible = False
+            frame_element.formal_analytics_eligible = False
             frame_element.info["map_matching"] = {
                 "map_version_id": self.bundle["map_version_id"],
                 "map_status": "quality_gate_blocked",
                 "matched_tracks": 0,
                 "total_tracks": 0,
             }
+            for track in (frame_element.buffer_tracks or {}).values():
+                self._clear_road_fields(track, "quality_gate_blocked")
             return frame_element
+        frame_element.road_analytics_eligible = True
+        frame_element.formal_analytics_eligible = True
         matched = 0
+        map_anchor = self.bundle["anchor_gcj02"]
         for index, track_id in enumerate(frame_element.id_list or []):
             if index >= len(frame_element.tracked_xyxy or []):
                 continue
             track = (frame_element.buffer_tracks or {}).get(track_id)
             if track is None:
                 continue
-            current_position = getattr(track, "current_position_enu_m", None)
-            if current_position is None:
+            self._clear_road_fields(track, "unmatched")
+            gcj_history = [
+                point for point in (getattr(track, "trajectory_gcj02", None) or [])
+                if point is not None
+            ]
+            if not gcj_history:
                 continue
-            easting, northing = float(current_position[0]), float(current_position[1])
-            world_history = getattr(track, "position_history_enu_m", [])
-            previous_position = world_history[-2][:2] if len(world_history) >= 2 else None
+            easting, northing = gcj02_to_enu(
+                float(gcj_history[-1][0]), float(gcj_history[-1][1]), map_anchor
+            )
+            previous_position = None
+            if len(gcj_history) >= 2:
+                previous_position = gcj02_to_enu(
+                    float(gcj_history[-2][0]), float(gcj_history[-2][1]), map_anchor
+                )
             vehicle_heading = None
             if previous_position:
                 dx = easting - float(previous_position[0])

@@ -95,7 +95,7 @@ VideoReader → DetectionNode → ImageMotionEstimationNode → GroundTrajectory
 
 | 模块 | 文件 | 责任 |
 |---|---|---|
-| 视频读取 | `nodes/VideoReader.py` | MP4/RTSP、遥测、可选 SourceGeoRegistration 与可选 Runtime Road Map Bundle 注入 |
+| 视频读取 | `nodes/VideoReader.py` | MP4/RTSP、SRT/MQTT/JSON 遥测与可选 Runtime Road Map Bundle 注入 |
 | 检测 | `nodes/DetectionNode.py` | `hover_cruise_v1` 的 YOLO11-only 检测；输出 `detected_*` |
 | 图像跟踪 | `nodes/ImageMotionEstimationNode.py`、`nodes/GroundTrajectoryTrackerNode.py` | 背景视觉运动估计及纯图像 ByteTrack；禁止读取 H/ENU/地图质量 |
 | 地理参考/世界投影 | `nodes/FlightGeoReferenceNode.py`、`nodes/PostTrackingWorldProjectionNode.py` | 为成熟图像关联分配稳定 track_id，并生成可空的逐帧 ENU/GCJ-02；不得因地理或路网质量拆分轨迹 |
@@ -112,7 +112,7 @@ VideoReader → DetectionNode → ImageMotionEstimationNode → GroundTrajectory
 python main_optimized.py pipeline.send_info_kafka=False
 ```
 
-关键环境变量为 `VIDEO_SRC`、可选 `RUNTIME_GEO_REGISTRATION_JSON`、可选 `RUNTIME_MAP_BUNDLE_JSON`、`TOPIC_NAME`、`CAMERA_ID`、`KAFKA_BOOTSTRAP`。图像轨迹与世界坐标均不依赖地图；世界坐标需要 verified SourceGeoRegistration。Runtime Road Map Bundle 只填充 Lane/Link 及其匹配质量，通用车辆计数、速度、方向和 TCC 不受路网影响。`TOPIC_NAME` 示例必须使用 `uav_statistics_1`。
+关键环境变量为 `VIDEO_SRC`、可选 `RUNTIME_MAP_BUNDLE_JSON`、`TOPIC_NAME`、`CAMERA_ID`、`KAFKA_BOOTSTRAP`。图像轨迹与世界坐标均不依赖地图；世界坐标由当前帧视频尺寸、相机参数及同步遥测计算。Runtime Road Map Bundle 只填充 Lane/Link 及其匹配质量，通用车辆计数、速度、方向和 TCC 不受路网影响。`TOPIC_NAME` 示例必须使用 `uav_statistics_1`。
 
 ## canonical 消息契约
 

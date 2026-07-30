@@ -327,7 +327,6 @@ class KafkaActiveTrajectoriesTest(unittest.TestCase):
                 "tcc_analytics_eligible": False,
                 "formal_analytics_eligible": False,
                 "road_context_status": "missing",
-                "geo_registration_id": None,
                 "quality_status": "degraded",
                 "quality_reasons": [],
             })

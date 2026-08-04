@@ -157,3 +157,70 @@ final result: passed
 - 无阻断项。
 
 final result: passed
+
+---
+
+# 路网标注对标升级 Design QA
+
+## Source truth
+
+- 参考全局对齐：`/private/tmp/trafficanalyzer-road-annotation-reference-global-align.png`
+- 参考局部控制柄：`/private/tmp/trafficanalyzer-road-annotation-reference-local-handles.png`
+- 参考标线样式：`/private/tmp/trafficanalyzer-road-annotation-reference-marking-style.png`
+- 实现全局对齐：`/private/tmp/trafficanalyzer-road-annotation-implementation-global.png`
+- 实现曲线精调：`/private/tmp/trafficanalyzer-road-annotation-implementation-curve.png`
+- 实现干净渠化图：`/private/tmp/trafficanalyzer-road-annotation-implementation-clean-pass3.png`
+- 最终参数化设计器：`/private/tmp/trafficanalyzer-road-annotation-implementation-parameter-final.png`
+- 崇华路候选重载：`/private/tmp/trafficanalyzer-road-annotation-chonghua-after-reload.png`
+- 边界修复与最终保存重载：`/private/tmp/trafficanalyzer-road-editor-acceptance-20260803.png`
+
+## Environment
+
+- route: `/admin/calibration/editor?project_id=IPR-2316df5aa119c35953467a12&inter_id=011wwe29k1q00001`
+- viewport: 1334 × 750 CSS px
+- screenshot: 1334 × 750 px
+- device pixel ratio: 1
+- state: authenticated admin, 崇华路 v2 candidate, `FRM-C4DF19FD1CF8`, 23 lanes
+
+## Full-view comparison
+
+第一轮对照确认整体配准区保持固定无人机影像，覆盖层提供 X/Y、角度、统一缩放、透明度和复位；右侧任务、质量门禁及版本状态保持既有工作台信息架构。实现没有复制参考产品皮肤，而是复用了本项目暗色工作台和现有控件体系。
+
+2026-08-03 浏览器复核反馈指出整体配准浮层遮挡画布。已将其改为默认 244×34px 的单行位姿摘要，主动展开后才显示 X/Y、角度、缩放、透明度与复位；展开态也收紧为 270px，并移除常驻说明文字，减少对正拍证据图的覆盖。
+
+崇华路实数页面在保存并重载后同时呈现 23 条参考车道和 23 条拟合车道，状态为 `candidate`。发布动作保持禁用，符合不可变 `lane_verified` 与人工复核边界。
+
+## Focused comparisons
+
+### 曲线控制柄
+
+选中单车道后可把指定边界段转换为三次 Bézier；两个控制柄可拖动，提交时转为确定性采样点。全局姿态变化和撤销重做均保持曲线控制点一致。
+
+### 干净渠化图
+
+第一轮发现道路底色、车道线和要素对比度偏低，模板在 3840 × 2160 画布中过小（P2）。第二、三轮提高道路与标线对比度，并按关键帧尺寸自适应进口长度、展宽和车道宽度；最终四进口模板在主画布占比清晰，crosswalk、channelizing island 和 lane marking 可辨识。
+
+## Interaction and browser checks
+
+- 整体 X 位移会改变车道 polygon，撤销后恢复到逐字符相同的 points。
+- 生成四进口模板得到 16 条车道与 8 个要素，进口车道数改为 3 后联动为 17 条车道。
+- 四个进口骨架均有拖拽手柄；拖动反向更新方向角和进口长度，再从同一 `editor_model` 重建几何。
+- 1180 × 720 视口下 `scrollWidth === innerWidth`，无横向溢出。
+- 崇华路 v2 保存后重载自动恢复 23 条拟合车道，当前状态保持 `candidate`。
+- 右侧边缘 Link 可从 `maxX=3840` 向画面外拖到 `4731`；四个顶点统一 `ΔX=891px`、`ΔY=0`，未被影像边界夹紧或扭曲。验证后重载恢复未保存状态。
+- 再次保存并重载后抽查车道 `points` 逐字符一致；页面为 23 条参考车道 + 23 条拟合车道，v2 保存为 `freeform` 像素模型。
+- 原始 pixel → ENU 单应矩阵为只读诊断项；控制点为空，因此不据此声明地图精度。
+- 浏览器验收过程未观察到未处理的页面异常或控制台错误。
+
+## Findings
+
+- P2 fixed: 干净渠化图对比度和模板尺度不足。
+- P2 fixed: 保存成功后旧 workspace cache 一度把 `candidate` 状态覆盖回 `draft`。
+- P2 fixed: 不同 Link 的合法转向流被全局车道面重叠检查误拒绝，现收紧为同一 Link 域内互斥。
+- P1 fixed: 现有车道/Link/顶点曾被影像边界钳制，只能向画面中间拖；现有几何改为无界编辑坐标，新增绘制仍限定在证据图内。
+- P1 fixed: 自由 Bézier 控制信息和 Feature 曾在无参数骨架时无法保存；新增 `freeform` 模式并完成保存重开回归。
+- P2 fixed: 已发布版本派生原由 Console 自行复制，缺少服务端来源链；现改为 `derive-draft` 并重置复核。
+- P1 fixed: 冷登录时 workspace 摘要曾先占用地图详情缓存键，完整 `editor_model` 到达后仍显示 0 条草稿；水合键现包含模型模式和像素几何数量，候选保护逻辑直接读取权威详情，冷登录重载恢复 23 条。
+- P3 accepted: 真实崇华路关键帧没有批准控制点真值，质量面板保持待复核，发布门禁不解锁。
+
+final result: passed

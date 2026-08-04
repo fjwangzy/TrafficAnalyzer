@@ -1,13 +1,30 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
-import { ArrowRight, ArrowsOutSimple, CheckCircle, CursorClick, Hand, LinkSimple, Minus, Plus, Stack, WarningCircle } from '@phosphor-icons/react'
+import { ArrowClockwise, ArrowCounterClockwise, ArrowRight, ArrowsOutSimple, CheckCircle, CursorClick, Hand, LinkSimple, Minus, Plus, Stack, WarningCircle } from '@phosphor-icons/react'
 import { ChannelizedMapPreview } from '../components/ChannelizedMapPreview'
 import { QualityNotice, StatusBadge } from '../components/Common'
 import { IntersectionWorkbenchShell } from '../components/IntersectionWorkbenchShell'
 import { apiErrorMessage, platformApi } from '../lib/api'
 import { adoptLaneDrafts, deleteLaneDrafts, emptyLaneSelection, mergeLaneDrafts, selectLaneDraft, splitLaneDraft } from '../lib/laneDraftGeometry'
 import { dragImageGeometry, imageContainViewport, projectMetricPolygonToImage } from '../lib/surveyGeometry'
+import {
+  approachHandlePoint,
+  commitEditorHistory,
+  composeRegistrationHomography,
+  createCubicLaneEdge,
+  createDefaultEditorModel,
+  createEditorHistory,
+  createFreeformEditorModel,
+  createRegistrationPose,
+  generateEditorGeometry,
+  redoEditorHistory,
+  sampleLaneCurves,
+  transformPoint,
+  transformPointBetweenPoses,
+  undoEditorHistory,
+  updateApproachFromHandle,
+} from '../lib/channelizedEditorGeometry'
 
 const initialQuality = {
   link_residual_p95_m: '3',
@@ -25,9 +42,12 @@ const geometryLabels = {
   stop_line: '停止线',
   guide_zone: '导流区',
   waiting_zone: '待转区',
+  crosswalk: '人行横道',
+  channelizing_island: '渠化岛',
+  lane_marking: '分段标线',
 }
 
-const isLineGeometry = (mode) => mode === 'stop_line' || mode === 'lane_boundary'
+const isLineGeometry = (mode) => ['stop_line', 'lane_boundary', 'lane_marking'].includes(mode)
 const isEditableMap = (map) => ['draft', 'candidate'].includes(map?.status)
 
 const laneExtractionChecks = [
@@ -203,6 +223,11 @@ export function ChannelizationCalibrationPage() {
   const [direction, setDirection] = useState('straight')
   const [homography, setHomography] = useState(compactMatrix())
   const [controlPoints, setControlPoints] = useState('[]')
+  const [registrationPose, setRegistrationPose] = useState(() => createRegistrationPose())
+  const [overlayOpacity, setOverlayOpacity] = useState(.72)
+  const [editorModel, setEditorModel] = useState(null)
+  const [selectedApproachId, setSelectedApproachId] = useState('east')
+  const [curveEdgeIndex, setCurveEdgeIndex] = useState(0)
   const [quality, setQuality] = useState(initialQuality)
   const [registrationId, setRegistrationId] = useState('')
   const [sourceProfileId, setSourceProfileId] = useState('')
@@ -212,9 +237,15 @@ export function ChannelizationCalibrationPage() {
   const [canvasZoom, setCanvasZoom] = useState(1)
   const [layerVisibility, setLayerVisibility] = useState({ draft: true, boundaries: true, features: true })
   const [sourcePanelOpen, setSourcePanelOpen] = useState(false)
+  const [registrationPanelOpen, setRegistrationPanelOpen] = useState(false)
   const laneDragRef = useRef(null)
+  const editorHistoryRef = useRef(createEditorHistory({
+    pose: createRegistrationPose(), lanes: [], features: [], editorModel: null,
+  }))
   const stageRef = useRef(null)
   const autoBootstrapRef = useRef('')
+  const hydratedMapRef = useRef('')
+  const hydratedCandidateRef = useRef('')
 
   const workspaceQuery = useQuery({ queryKey: ['intersection-project-workspace', projectId], queryFn: () => platformApi.intersectionProjectWorkspace(projectId), enabled: Boolean(projectId) })
   const workspacePreferredMap = useMemo(() => {
@@ -270,19 +301,29 @@ export function ChannelizationCalibrationPage() {
     setDraftLanes([])
     setDraftFeatures([])
     setLaneSelection(emptyLaneSelection)
+    setEditorModel(null)
+    setRegistrationPose(createRegistrationPose())
     laneDragRef.current = null
+    editorHistoryRef.current = createEditorHistory({
+      pose: createRegistrationPose(), lanes: [], features: [], editorModel: null,
+    })
   }, [])
 
   const adoptTask = useCallback((task) => {
     if (!task) return
     const intersectionChanged = task.intersection_id !== interId
+    resetGeometry()
+    const initialPose = createRegistrationPose({
+      center_px: [(task.image_width || 960) / 2, (task.image_height || 540) / 2],
+    })
     setSelectedTaskId(task.task_id)
     setInterId(task.intersection_id)
     setSourceProfileId(task.source_profile_id || '')
     setHomography(compactMatrix(task.homography_pixel_to_enu))
     setControlPoints(JSON.stringify(task.control_points || []))
+    setRegistrationPose(initialPose)
+    editorHistoryRef.current = createEditorHistory({ pose: initialPose, lanes: [], features: [], editorModel: null })
     setSourcePanelOpen(false)
-    resetGeometry()
     if (intersectionChanged) {
       setMapVersion(null)
       setRegistrationId('')
@@ -397,6 +438,25 @@ export function ChannelizationCalibrationPage() {
   }, [mapVersion, workspaceMapDetailQuery.data])
 
   useEffect(() => {
+    const detail = workspaceMapDetailQuery.data
+    if (!detail?.id) return
+    const savedPose = detail.visual_registration?.registration_pose
+    const savedModel = detail.topology?.editor_model || null
+    const pixelGeometry = savedModel?.pixel_geometry || {}
+    const pose = savedPose?.schema_version ? createRegistrationPose(savedPose) : registrationPose
+    const lanes = Array.isArray(pixelGeometry.lanes) ? pixelGeometry.lanes : []
+    const features = Array.isArray(pixelGeometry.features) ? pixelGeometry.features : []
+    const hydrationKey = `${detail.id}:${savedModel?.mode || savedModel?.schema_version || 'canonical'}:${lanes.length}:${features.length}`
+    if (hydratedMapRef.current === hydrationKey) return
+    hydratedMapRef.current = hydrationKey
+    if (savedPose?.schema_version) setRegistrationPose(pose)
+    if (savedModel) setEditorModel(savedModel)
+    if (lanes.length) setDraftLanes(lanes)
+    if (features.length) setDraftFeatures(features)
+    editorHistoryRef.current = createEditorHistory({ pose, lanes, features, editorModel: savedModel })
+  }, [registrationPose, workspaceMapDetailQuery.data])
+
+  useEffect(() => {
     if (!mapVersion?.quality) return
     const saved = mapVersion.quality
     setQuality((current) => ({
@@ -418,25 +478,7 @@ export function ChannelizationCalibrationPage() {
     bootstrap.mutate()
   }, [bootstrap, hasScopedIntersection, interId, mapVersion, projectId, workspacePreferredMap, workspaceQuery.isFetched])
   const forkDraft = useMutation({
-    mutationFn: () => platformApi.createChannelizedMap({
-      inter_id: mapVersion.inter_id,
-      road_data_version: mapVersion.road_data_version,
-      anchor_gcj02: mapVersion.anchor_gcj02,
-      geometry_gcj02: mapVersion.geometry_gcj02 || {},
-      geometry_enu_m: mapVersion.geometry_enu_m || {},
-      topology: mapVersion.topology || {},
-      quality: mapVersion.quality || {},
-      source_checksum: mapVersion.source_checksum || null,
-      lanes: (mapVersion.lanes || []).map((lane) => ({
-        local_lane_id: lane.local_lane_id,
-        source_lane_id: lane.source_lane_id || null,
-        link_id: lane.link_id || null,
-        geometry_source: lane.geometry_source || 'link_offset_derived',
-        geometry_gcj02: lane.geometry_gcj02,
-        geometry_enu_m: lane.geometry_enu_m,
-        match_confidence: lane.match_confidence ?? null,
-      })),
-    }),
+    mutationFn: () => platformApi.deriveChannelizedMapDraft(mapVersion.id),
     onSuccess: (data) => {
       setMapVersion(data)
       setRegistrationId('')
@@ -448,14 +490,15 @@ export function ChannelizationCalibrationPage() {
     mutationFn: () => platformApi.fitChannelizedMapFromImage(mapVersion.id, {
       task_id: selectedTask.task_id,
       source_profile_id: sourceProfileId.trim(),
-      homography_pixel_to_enu: JSON.parse(homography),
+      homography_pixel_to_enu: effectiveHomography,
       control_points: JSON.parse(controlPoints),
       lanes: draftLanes.map((lane) => ({
         local_lane_id: lane.local_lane_id,
         source_lane_id: lane.source_lane_id || null,
         link_id: lane.link_id || null,
         direction: lane.direction,
-        polygon_px: lane.points,
+        special_lane_attribute: lane.special_lane_attribute || null,
+        polygon_px: sampleLaneCurves(lane),
       })),
       features: draftFeatures.map((feature) => ({
         feature_id: feature.feature_id,
@@ -470,11 +513,22 @@ export function ChannelizationCalibrationPage() {
       direction_checks_passed: quality.direction_checks_passed,
       stop_line_checks_passed: quality.stop_line_checks_passed,
       reviewed: quality.reviewed,
+      registration_pose: registrationPose,
+      editor_model: {
+        ...(editorModel ? { ...editorModel, mode: editorModel.mode || 'parameterized' } : createFreeformEditorModel(
+          [imageSize[0] / 2, imageSize[1] / 2],
+          draftLanes,
+          draftFeatures,
+        )),
+        pixel_geometry: { lanes: draftLanes, features: draftFeatures },
+      },
     }),
     onSuccess: (data) => {
+      queryClient.setQueryData(['channelized-map', data.id], data)
       setMapVersion(data)
       setRegistrationId(data.registration?.id || '')
       queryClient.invalidateQueries({ queryKey: ['channelized-maps'] })
+      queryClient.invalidateQueries({ queryKey: ['intersection-project-workspace', projectId] })
     },
   })
   const verify = useMutation({
@@ -490,6 +544,13 @@ export function ChannelizationCalibrationPage() {
     () => [selectedTask?.image_width || 960, selectedTask?.image_height || 540],
     [selectedTask],
   )
+  const baseHomography = useMemo(() => {
+    try { return JSON.parse(homography) } catch { return [[1, 0, 0], [0, 1, 0], [0, 0, 1]] }
+  }, [homography])
+  const effectiveHomography = useMemo(
+    () => composeRegistrationHomography(baseHomography, registrationPose),
+    [baseHomography, registrationPose],
+  )
   const hasMapAlignedTask = Boolean(
     selectedTask?.homography_coordinate_frame === 'map_enu'
     && Array.isArray(selectedTask.map_anchor_gcj02)
@@ -499,33 +560,197 @@ export function ChannelizationCalibrationPage() {
   )
   const referenceLanes = useMemo(() => {
     if (!hasMapAlignedTask) return []
-    let pixelToEnu
-    try {
-      pixelToEnu = JSON.parse(homography)
-    } catch {
-      return []
-    }
     return (mapVersion?.lanes || []).flatMap((lane) => {
-      const points = projectMetricPolygonToImage(lane.geometry_enu_m, pixelToEnu, {
+      const points = projectMetricPolygonToImage(lane.geometry_enu_m, baseHomography, {
         width: imageSize[0],
         height: imageSize[1],
-      })
+      }).map((point) => transformPoint(point, registrationPose))
       return points.length >= 3 ? [{ ...lane, points }] : []
     })
-  }, [hasMapAlignedTask, homography, imageSize, mapVersion])
+  }, [baseHomography, hasMapAlignedTask, imageSize, mapVersion, registrationPose])
+  useEffect(() => {
+    const hydrationKey = `${mapVersion?.id || ''}:${selectedTask?.task_id || ''}`
+    const savedPixelLanes = (
+      workspaceMapDetailQuery.data?.topology?.editor_model?.pixel_geometry?.lanes
+      || mapVersion?.topology?.editor_model?.pixel_geometry?.lanes
+    )
+    if (
+      mapVersion?.status !== 'candidate'
+      || !selectedTask
+      || !referenceLanes.length
+      || draftLanes.length
+      || (Array.isArray(savedPixelLanes) && savedPixelLanes.length)
+      || hydratedCandidateRef.current === hydrationKey
+    ) return
+    hydratedCandidateRef.current = hydrationKey
+    const lanes = referenceLanes.map((lane) => ({
+      ...lane,
+      points: lane.points.map((point) => [...point]),
+    }))
+    setDraftLanes(lanes)
+    editorHistoryRef.current = createEditorHistory({
+      pose: registrationPose,
+      lanes,
+      features: draftFeatures,
+      editorModel,
+    })
+  }, [draftFeatures, draftLanes.length, editorModel, mapVersion?.id, mapVersion?.status, mapVersion?.topology, referenceLanes, registrationPose, selectedTask, workspaceMapDetailQuery.data?.topology])
+  const editorSnapshot = () => ({
+    pose: registrationPose,
+    lanes: draftLanes,
+    features: draftFeatures,
+    editorModel,
+  })
+  const restoreEditorSnapshot = (snapshot) => {
+    setRegistrationPose(snapshot.pose)
+    setDraftLanes(snapshot.lanes)
+    setDraftFeatures(snapshot.features)
+    setEditorModel(snapshot.editorModel)
+  }
+  const commitEditorSnapshot = (next) => {
+    editorHistoryRef.current = commitEditorHistory(
+      { ...editorHistoryRef.current, present: editorSnapshot() },
+      next,
+    )
+    restoreEditorSnapshot(next)
+  }
+  const registrationAdjustedSnapshot = (source, nextPose) => {
+    const previous = source.pose
+    const transformPoints = (points = []) => points.map((point) => transformPointBetweenPoses(point, previous, nextPose))
+    const scaleRatio = nextPose.uniform_scale / previous.uniform_scale
+    const rotationDelta = nextPose.rotation_deg - previous.rotation_deg
+    const nextLanes = source.lanes.map((lane) => ({
+      ...lane,
+      points: transformPoints(lane.points),
+      boundary_curves: lane.boundary_curves?.map((curve) => ({
+        ...curve,
+        control1: transformPointBetweenPoses(curve.control1, previous, nextPose),
+        control2: transformPointBetweenPoses(curve.control2, previous, nextPose),
+      })),
+    }))
+    const nextFeatures = source.features.map((feature) => ({ ...feature, points: transformPoints(feature.points) }))
+    const nextModel = source.editorModel ? {
+      ...source.editorModel,
+      center_px: transformPointBetweenPoses(source.editorModel.center_px, previous, nextPose),
+      approaches: source.editorModel.approaches.map((approach) => ({
+        ...approach,
+        angle_deg: approach.angle_deg + rotationDelta,
+        lane_width_px: approach.lane_width_px * scaleRatio,
+        approach_length_px: approach.approach_length_px * scaleRatio,
+        flare_length_px: approach.flare_length_px * scaleRatio,
+      })),
+      feature_templates: source.editorModel.feature_templates.map((feature) => ({
+        ...feature,
+        width_px: feature.width_px == null ? null : feature.width_px * scaleRatio,
+        setback_px: Number(feature.setback_px || 0) * scaleRatio,
+        length_px: feature.length_px == null ? null : feature.length_px * scaleRatio,
+        lateral_offset_px: Number(feature.lateral_offset_px || 0) * scaleRatio,
+      })),
+    } : null
+    return { pose: nextPose, lanes: nextLanes, features: nextFeatures, editorModel: nextModel }
+  }
+  const updateRegistrationPose = (patch) => {
+    const nextPose = createRegistrationPose({ ...registrationPose, ...patch })
+    commitEditorSnapshot(registrationAdjustedSnapshot(editorSnapshot(), nextPose))
+  }
+  const undoEditor = () => {
+    editorHistoryRef.current = undoEditorHistory({ ...editorHistoryRef.current, present: editorSnapshot() })
+    restoreEditorSnapshot(editorHistoryRef.current.present)
+  }
+  const redoEditor = () => {
+    editorHistoryRef.current = redoEditorHistory({ ...editorHistoryRef.current, present: editorSnapshot() })
+    restoreEditorSnapshot(editorHistoryRef.current.present)
+  }
+  const generateFromParameters = () => {
+    const model = editorModel && editorModel.mode !== 'freeform'
+      ? editorModel
+      : createDefaultEditorModel([imageSize[0] / 2, imageSize[1] / 2])
+    const generated = generateEditorGeometry(model, { lanes: draftLanes, features: draftFeatures })
+    commitEditorSnapshot({ pose: registrationPose, lanes: generated.lanes, features: generated.features, editorModel: model })
+  }
+  const curveSelectedLaneEdge = () => {
+    if (laneSelection.mode !== 'lane' || laneSelection.laneIds.length !== 1) return
+    const laneId = laneSelection.laneIds[0]
+    const nextLanes = draftLanes.map((lane) => lane.local_lane_id === laneId
+      ? createCubicLaneEdge(lane, Math.min(Math.max(0, curveEdgeIndex), lane.points.length - 1))
+      : lane)
+    const manualOverrides = new Set(editorModel?.manual_overrides || [])
+    manualOverrides.add(laneId)
+    commitEditorSnapshot({
+      pose: registrationPose,
+      lanes: nextLanes,
+      features: draftFeatures,
+      editorModel: editorModel ? { ...editorModel, manual_overrides: [...manualOverrides] } : null,
+    })
+  }
+  const updateEditorApproach = (field, value) => {
+    const model = editorModel || createDefaultEditorModel([imageSize[0] / 2, imageSize[1] / 2])
+    const nextModel = {
+      ...model,
+      approaches: model.approaches.map((approach) => approach.approach_id === selectedApproachId
+        ? { ...approach, [field]: value }
+        : approach),
+    }
+    const generated = generateEditorGeometry(nextModel, { lanes: draftLanes, features: draftFeatures })
+    commitEditorSnapshot({ pose: registrationPose, lanes: generated.lanes, features: generated.features, editorModel: nextModel })
+  }
+  const updateFeatureTemplate = (featureId, field, value) => {
+    const nextModel = {
+      ...editorModel,
+      feature_templates: editorModel.feature_templates.map((item) => item.feature_id === featureId
+        ? { ...item, [field]: value }
+        : item),
+    }
+    const generated = generateEditorGeometry(nextModel, { lanes: draftLanes, features: draftFeatures })
+    commitEditorSnapshot({ pose: registrationPose, lanes: generated.lanes, features: generated.features, editorModel: nextModel })
+  }
+  const addFeatureTemplate = (featureType, variant = 'standard') => {
+    const model = editorModel || createDefaultEditorModel([imageSize[0] / 2, imageSize[1] / 2])
+    const existingId = featureType === 'crosswalk' && variant === 'right_turn'
+      ? `crosswalk-right:${selectedApproachId}`
+      : `${featureType}:${selectedApproachId}`
+    const template = {
+      feature_id: existingId,
+      feature_type: featureType,
+      variant,
+      approach_id: selectedApproachId,
+      width_px: featureType === 'waiting_zone' ? 28 : 16,
+      setback_px: 28,
+      length_px: featureType === 'lane_marking' ? 150 : 72,
+      lateral_offset_px: featureType === 'waiting_zone' ? 18 : 0,
+      color: 'white',
+      line_style: featureType === 'lane_marking' ? 'dashed' : 'solid',
+      manual_override: false,
+    }
+    const nextModel = {
+      ...model,
+      feature_templates: [...model.feature_templates.filter((item) => item.feature_id !== existingId), template],
+    }
+    const generated = generateEditorGeometry(nextModel, { lanes: draftLanes, features: draftFeatures })
+    commitEditorSnapshot({ pose: registrationPose, lanes: generated.lanes, features: generated.features, editorModel: nextModel })
+  }
   const adoptReferenceLane = (reference, mode = 'link') => {
     const selection = selectLaneDraft(referenceLanes, reference.local_lane_id, mode)
     setLaneSelection(selection)
     setDraftLanes((lanes) => adoptLaneDrafts(lanes, referenceLanes, selection))
   }
-  const imagePointFromEvent = (event) => {
+  const adoptAllReferenceLanes = () => {
+    const nextLanes = referenceLanes.map((lane) => ({
+      ...lane,
+      points: lane.points.map((point) => [...point]),
+      manual_override: false,
+    }))
+    commitEditorSnapshot({ pose: registrationPose, lanes: nextLanes, features: draftFeatures, editorModel })
+    setLaneSelection(emptyLaneSelection)
+  }
+  const imagePointFromEvent = (event, allowOutside = false) => {
     const svg = event.currentTarget.ownerSVGElement || event.currentTarget
     const rect = svg.getBoundingClientRect()
     const viewport = imageContainViewport(rect.width, rect.height, imageSize[0], imageSize[1])
     if (!viewport) return null
     const x = event.clientX - rect.left - viewport.offsetX
     const y = event.clientY - rect.top - viewport.offsetY
-    if (x < 0 || y < 0 || x > viewport.width || y > viewport.height) return null
+    if (!allowOutside && (x < 0 || y < 0 || x > viewport.width || y > viewport.height)) return null
     return [Math.round(x / viewport.scale), Math.round(y / viewport.scale)]
   }
   const addPoint = (event) => {
@@ -533,25 +758,95 @@ export function ChannelizationCalibrationPage() {
     const point = imagePointFromEvent(event)
     if (point) setDraftPoints((points) => [...points, point])
   }
+  const startCanvasPointer = (event) => {
+    if (editorTool !== 'align' || event.target !== event.currentTarget && event.target.tagName !== 'image') return
+    const origin = imagePointFromEvent(event)
+    if (!origin) return
+    const source = editorSnapshot()
+    laneDragRef.current = { type: 'registration', origin, source, preview: source }
+    event.currentTarget.setPointerCapture?.(event.pointerId)
+    event.preventDefault()
+  }
   const moveLaneDrag = (event) => {
     const drag = laneDragRef.current
     if (!drag) return
-    const point = imagePointFromEvent(event)
+    const point = imagePointFromEvent(event, true)
     if (!point) return
-    setDraftLanes((lanes) => lanes.map((lane) => {
+    if (drag.type === 'registration') {
+      const nextPose = createRegistrationPose({
+        ...drag.source.pose,
+        translation_px: [
+          drag.source.pose.translation_px[0] + point[0] - drag.origin[0],
+          drag.source.pose.translation_px[1] + point[1] - drag.origin[1],
+        ],
+      })
+      drag.preview = registrationAdjustedSnapshot(drag.source, nextPose)
+      restoreEditorSnapshot(drag.preview)
+      return
+    }
+    if (drag.type === 'approach_parameter') {
+      const nextModel = updateApproachFromHandle(drag.source.editorModel, drag.approachId, point)
+      const generated = generateEditorGeometry(nextModel, {
+        lanes: drag.source.lanes,
+        features: drag.source.features,
+      })
+      drag.preview = { ...drag.source, lanes: generated.lanes, features: generated.features, editorModel: nextModel }
+      restoreEditorSnapshot(drag.preview)
+      return
+    }
+    const nextLanes = drag.source.lanes.map((lane) => {
       if (drag.type === 'translate' && drag.laneIds.includes(lane.local_lane_id)) {
         return {
           ...lane,
-          points: dragImageGeometry(drag.originalPointsById[lane.local_lane_id], { type: 'translate', dx: point[0] - drag.origin[0], dy: point[1] - drag.origin[1] }, { width: imageSize[0], height: imageSize[1] }),
+          manual_override: true,
+          points: dragImageGeometry(drag.originalPointsById[lane.local_lane_id], { type: 'translate', dx: point[0] - drag.origin[0], dy: point[1] - drag.origin[1] }),
         }
       }
       if (drag.type === 'vertex' && lane.local_lane_id === drag.laneId) {
-        return { ...lane, points: dragImageGeometry(lane.points, { type: 'vertex', index: drag.index, point }, { width: imageSize[0], height: imageSize[1] }) }
+        return { ...lane, manual_override: true, points: dragImageGeometry(lane.points, { type: 'vertex', index: drag.index, point }) }
+      }
+      if (drag.type === 'curve_control' && lane.local_lane_id === drag.laneId) {
+        return {
+          ...lane,
+          manual_override: true,
+          boundary_curves: lane.boundary_curves.map((curve) => curve.edge_index === drag.edgeIndex
+            ? { ...curve, [drag.control]: point }
+            : curve),
+        }
       }
       return lane
-    }))
+    })
+    drag.preview = { ...drag.source, lanes: nextLanes }
+    if (!drag.historyCommitted) {
+      editorHistoryRef.current = commitEditorHistory(
+        { ...editorHistoryRef.current, present: drag.source },
+        drag.preview,
+      )
+      drag.historyCommitted = true
+    } else {
+      editorHistoryRef.current = { ...editorHistoryRef.current, present: drag.preview }
+    }
+    setDraftLanes(nextLanes)
   }
-  const finishLaneDrag = () => { laneDragRef.current = null }
+  const finishLaneDrag = () => {
+    const drag = laneDragRef.current
+    if (['registration', 'approach_parameter'].includes(drag?.type) && drag.preview !== drag.source) {
+      editorHistoryRef.current = commitEditorHistory(
+        { ...editorHistoryRef.current, present: drag.source },
+        drag.preview,
+      )
+    }
+    if (['translate', 'vertex', 'curve_control'].includes(drag?.type) && drag.preview) {
+      let nextModel = drag.preview.editorModel
+      const manualOverrides = new Set(nextModel?.manual_overrides || [])
+      for (const laneId of drag.laneIds || [drag.laneId]) if (laneId) manualOverrides.add(laneId)
+      if (nextModel) nextModel = { ...nextModel, manual_overrides: [...manualOverrides] }
+      const next = { ...drag.preview, editorModel: nextModel }
+      editorHistoryRef.current = { ...editorHistoryRef.current, present: next }
+      restoreEditorSnapshot(next)
+    }
+    laneDragRef.current = null
+  }
   const closeGeometry = () => {
     if (draftPoints.length < (isLineGeometry(drawingMode) ? 2 : 3)) return
     if (drawingMode === 'lane') {
@@ -681,6 +976,57 @@ export function ChannelizationCalibrationPage() {
         />
       </details>
 
+      <details className='workbench-side-card workbench-disclosure' open>
+        <summary><strong>参数化渠化</strong><span>{editorModel && editorModel.mode !== 'freeform' ? `${editorModel.approaches.length} 个进口方向` : '自由编辑模式'}</span></summary>
+        <div className='channelized-parameter-panel'>
+          <button type='button' className='primary-button full' disabled={!selectedTask || isPublished} onClick={generateFromParameters}>{editorModel && editorModel.mode !== 'freeform' ? '按参数刷新几何' : '生成四进口模板'}</button>
+          {editorModel && editorModel.mode !== 'freeform' && <>
+            <label>进口方向<select aria-label='参数进口方向' value={selectedApproachId} onChange={(event) => setSelectedApproachId(event.target.value)}>{editorModel.approaches.map((approach) => <option key={approach.approach_id} value={approach.approach_id}>{approach.approach_id}</option>)}</select></label>
+            {(() => {
+              const approach = editorModel.approaches.find((item) => item.approach_id === selectedApproachId) || editorModel.approaches[0]
+              if (!approach) return null
+              return <div className='channelized-parameter-grid'>
+                <label>方向角<input aria-label='进口方向角' type='number' step='1' value={approach.angle_deg} onChange={(event) => updateEditorApproach('angle_deg', Number(event.target.value))} /></label>
+                <label>进口车道<input aria-label='进口车道数' type='number' min='1' max='12' value={approach.inbound_lane_count} onChange={(event) => updateEditorApproach('inbound_lane_count', Number(event.target.value))} /></label>
+                <label>出口车道<input aria-label='出口车道数' type='number' min='1' max='12' value={approach.outbound_lane_count} onChange={(event) => updateEditorApproach('outbound_lane_count', Number(event.target.value))} /></label>
+                <label>车道宽度<input aria-label='车道宽度像素' type='number' min='2' value={approach.lane_width_px} onChange={(event) => updateEditorApproach('lane_width_px', Number(event.target.value))} /></label>
+                <label>进口长度<input aria-label='进口长度像素' type='number' min='11' value={approach.approach_length_px} onChange={(event) => updateEditorApproach('approach_length_px', Number(event.target.value))} /></label>
+                <label>展宽长度<input aria-label='展宽长度像素' type='number' min='0' value={approach.flare_length_px} onChange={(event) => updateEditorApproach('flare_length_px', Number(event.target.value))} /></label>
+                <label className='parameter-check'><input type='checkbox' checked={approach.right_turn_lane} onChange={(event) => updateEditorApproach('right_turn_lane', event.target.checked)} /> 右转专用道</label>
+                {Array.from({ length: approach.inbound_lane_count }, (_, index) => <label key={`turn-${index}`}>{`进口 ${index + 1} 转向`}<select aria-label={`进口车道 ${index + 1} 转向`} value={approach.turn_directions?.[index] || 'straight'} onChange={(event) => {
+                  const directions = [...(approach.turn_directions || [])]
+                  directions[index] = event.target.value
+                  updateEditorApproach('turn_directions', directions)
+                }}><option value='left_turn'>左转</option><option value='straight'>直行</option><option value='right_turn'>右转</option><option value='u_turn'>掉头</option></select></label>)}
+                {Array.from({ length: approach.inbound_lane_count }, (_, index) => <label key={`special-${index}`}>{`进口 ${index + 1} 属性`}<select aria-label={`进口车道 ${index + 1} 特殊属性`} value={approach.special_lane_attributes?.[`lane_${index + 1}`] || ''} onChange={(event) => {
+                  const attributes = { ...(approach.special_lane_attributes || {}) }
+                  if (event.target.value) attributes[`lane_${index + 1}`] = event.target.value
+                  else delete attributes[`lane_${index + 1}`]
+                  updateEditorApproach('special_lane_attributes', attributes)
+                }}><option value=''>无</option><option value='bus'>公交</option><option value='tidal'>潮汐</option></select></label>)}
+              </div>
+            })()}
+            <div className='channelized-template-actions' role='group' aria-label='渠化要素模板'>
+              <button type='button' className='secondary-button' onClick={() => addFeatureTemplate('crosswalk')}>标准人行横道</button>
+              <button type='button' className='secondary-button' onClick={() => addFeatureTemplate('crosswalk', 'right_turn')}>右转人行横道</button>
+              <button type='button' className='secondary-button' onClick={() => addFeatureTemplate('channelizing_island', 'right_turn')}>右转渠化岛</button>
+              <button type='button' className='secondary-button' onClick={() => addFeatureTemplate('waiting_zone')}>左转待转区</button>
+              <button type='button' className='secondary-button' onClick={() => addFeatureTemplate('lane_boundary')}>车道边界</button>
+              <button type='button' className='secondary-button' onClick={() => addFeatureTemplate('lane_marking')}>分段标线</button>
+            </div>
+            <div className='channelized-template-parameters'>{editorModel.feature_templates.filter((item) => item.approach_id === selectedApproachId).map((template) => <div key={template.feature_id}>
+              <strong>{template.variant === 'right_turn' ? '右转人行横道' : geometryLabels[template.feature_type] || template.feature_type}</strong>
+              <label>宽度<input aria-label={`${template.feature_id} 宽度`} type='number' min='1' value={template.width_px || 1} onChange={(event) => updateFeatureTemplate(template.feature_id, 'width_px', Number(event.target.value))} /></label>
+              <label>退距<input aria-label={`${template.feature_id} 退距`} type='number' value={template.setback_px || 0} onChange={(event) => updateFeatureTemplate(template.feature_id, 'setback_px', Number(event.target.value))} /></label>
+              <label>长度<input aria-label={`${template.feature_id} 长度`} type='number' min='1' value={template.length_px || 1} onChange={(event) => updateFeatureTemplate(template.feature_id, 'length_px', Number(event.target.value))} /></label>
+              <select aria-label={`${template.feature_id} 颜色`} value={template.color || 'white'} onChange={(event) => updateFeatureTemplate(template.feature_id, 'color', event.target.value)}><option value='white'>白</option><option value='yellow'>黄</option><option value='blue'>蓝</option></select>
+              <select aria-label={`${template.feature_id} 线型`} value={template.line_style || 'solid'} onChange={(event) => updateFeatureTemplate(template.feature_id, 'line_style', event.target.value)}><option value='solid'>实线</option><option value='dashed'>虚线</option></select>
+            </div>)}</div>
+            <small>公交、潮汐等特殊车道仅记录属性；专用运行规则尚未实现。</small>
+          </>}
+        </div>
+      </details>
+
       <section className='workbench-side-card'>
         <header><strong>质量门禁</strong><span className='quality-score'>{qualityPassed}/{qualityChecks.length} 通过</span></header>
         <ul className='workbench-checks'>{qualityChecks.map(([label, passed]) => <li key={label} className={passed ? 'passed' : ''}>{passed ? <CheckCircle size={14} weight='fill' /> : <WarningCircle size={14} />}<span>{label}</span><b>{passed ? '通过' : '待处理'}</b></li>)}</ul>
@@ -689,7 +1035,7 @@ export function ChannelizationCalibrationPage() {
       <details className='workbench-side-card workbench-disclosure'>
         <summary><strong>高级配准参数</strong><span>仅重新测定时修改</span></summary>
         <label className='field-label'>SourceProfile ID<input value={sourceProfileId} onChange={(event) => setSourceProfileId(event.target.value)} /></label>
-        <label className='field-label'>pixel → ENU 3×3 单应矩阵<textarea value={homography} onChange={(event) => setHomography(event.target.value)} /></label>
+        <label className='field-label'>原始 pixel → ENU 3×3 单应矩阵（只读诊断）<textarea aria-label='pixel → ENU 3×3 单应矩阵' value={homography} readOnly /></label>
         <label className='field-label'>控制点 JSON<textarea value={controlPoints} onChange={(event) => setControlPoints(event.target.value)} /></label>
         <label className='field-label'>Link 残差 P95（m）<input value={quality.link_residual_p95_m} onChange={(event) => setQuality((item) => ({ ...item, link_residual_p95_m: event.target.value }))} /></label>
         <label className='field-label'>车道残差中位数（m）<input value={quality.lane_residual_median_m} onChange={(event) => setQuality((item) => ({ ...item, lane_residual_median_m: event.target.value }))} /></label>
@@ -717,28 +1063,29 @@ export function ChannelizationCalibrationPage() {
       <section className='workbench-canvas-card'>
         <header className='workbench-canvas-toolbar'>
           <div>
-            <select aria-label='画布视图' value={canvasMode} onChange={(event) => setCanvasMode(event.target.value)}><option value='image'>正拍图</option><option value='map'>GCJ-02 路网</option></select>
+            <select aria-label='画布视图' value={canvasMode} onChange={(event) => setCanvasMode(event.target.value)}><option value='image'>影像叠加</option><option value='clean'>干净渠化图</option>{!selectedTask && <option value='map'>GCJ-02 发布预览</option>}</select>
             <select aria-label='当前关键帧' value={selectedTaskId} onChange={(event) => adoptTask(tasks.find((task) => task.task_id === event.target.value))}><option value=''>选择关键帧</option>{tasks.map((task) => <option key={task.task_id} value={task.task_id}>{task.source_frame_id || task.task_id}</option>)}</select>
-            <button type='button' className='secondary-button' onClick={() => setCanvasMode((value) => value === 'image' ? 'map' : 'image')}>影像 / 路网对照</button>
+            <button type='button' className='secondary-button' onClick={() => setCanvasMode((value) => value === 'image' ? 'clean' : 'image')}>影像 / 干净渠化图</button>
           </div>
           <span>{selectedTask ? `${selectedTask.source_profile_id || 'SourceProfile'} · ${selectedTask.source_frame_id || selectedTask.task_id}` : '尚未载入关键帧'}</span>
         </header>
 
         <div className='workbench-canvas-stage' ref={stageRef}>
-          {canvasMode === 'map' ? <ChannelizedMapPreview mapVersion={mapVersion} /> : <div className='annotation-stage live-annotation' style={{ '--canvas-zoom': canvasZoom }}>
-            {selectedTask && taskImageUrl ? <svg
+          {canvasMode === 'map' ? <ChannelizedMapPreview mapVersion={mapVersion} /> : <div className={`annotation-stage live-annotation${canvasMode === 'clean' ? ' channelized-clean-canvas' : ''}`} style={{ '--canvas-zoom': canvasZoom }}>
+            {selectedTask && (taskImageUrl || canvasMode === 'clean') ? <svg
               viewBox={`0 0 ${imageSize[0]} ${imageSize[1]}`}
               preserveAspectRatio='xMidYMid meet'
               onClick={addPoint}
+              onPointerDown={startCanvasPointer}
               onPointerMove={moveLaneDrag}
               onPointerUp={finishLaneDrag}
               onPointerCancel={finishLaneDrag}
               aria-label='渠化几何绘制画布'
             >
-              <image href={taskImageUrl} width={imageSize[0]} height={imageSize[1]} />
-              {showReferenceLanes && referenceLanes.map((lane) => <polygon key={`reference-${lane.local_lane_id}`} aria-label={`路网参考车道 ${lane.local_lane_id}`} className='channelized-reference-lane' points={lane.points.map((point) => point.join(',')).join(' ')} onClick={(event) => { event.stopPropagation(); adoptReferenceLane(lane) }} onDoubleClick={(event) => { event.stopPropagation(); adoptReferenceLane(lane, 'lane') }} />)}
-              {layerVisibility.draft && draftLanes.map((lane) => <g key={lane.local_lane_id}>
-                <polygon aria-label={`拟合车道 ${lane.local_lane_id}`} aria-selected={laneSelection.laneIds.includes(lane.local_lane_id)} className={laneSelection.laneIds.includes(lane.local_lane_id) ? `channelized-draft-lane selected${laneSelection.mode === 'lane' ? ' single' : ''}` : 'channelized-draft-lane'} points={lane.points.map((point) => point.join(',')).join(' ')} onClick={(event) => { event.stopPropagation(); setLaneSelection(selectLaneDraft(draftLanes, lane.local_lane_id, 'link')) }} onDoubleClick={(event) => { event.stopPropagation(); setLaneSelection(selectLaneDraft(draftLanes, lane.local_lane_id, 'lane')) }} onPointerDown={(event) => {
+              {canvasMode === 'image' && <image href={taskImageUrl} width={imageSize[0]} height={imageSize[1]} />}
+              {canvasMode !== 'clean' && showReferenceLanes && referenceLanes.map((lane) => <polygon style={{ opacity: overlayOpacity }} key={`reference-${lane.local_lane_id}`} aria-label={`路网参考车道 ${lane.local_lane_id}`} className='channelized-reference-lane' points={lane.points.map((point) => point.join(',')).join(' ')} onClick={(event) => { event.stopPropagation(); adoptReferenceLane(lane) }} onDoubleClick={(event) => { event.stopPropagation(); adoptReferenceLane(lane, 'lane') }} />)}
+              {layerVisibility.draft && draftLanes.map((lane) => <g style={{ opacity: canvasMode === 'clean' ? 1 : overlayOpacity }} key={lane.local_lane_id}>
+                <polygon aria-label={`拟合车道 ${lane.local_lane_id}`} aria-selected={laneSelection.laneIds.includes(lane.local_lane_id)} className={laneSelection.laneIds.includes(lane.local_lane_id) ? `channelized-draft-lane selected${laneSelection.mode === 'lane' ? ' single' : ''}` : 'channelized-draft-lane'} points={sampleLaneCurves(lane).map((point) => point.join(',')).join(' ')} onClick={(event) => { event.stopPropagation(); setLaneSelection(selectLaneDraft(draftLanes, lane.local_lane_id, 'link')) }} onDoubleClick={(event) => { event.stopPropagation(); setLaneSelection(selectLaneDraft(draftLanes, lane.local_lane_id, 'lane')) }} onPointerDown={(event) => {
                   const origin = imagePointFromEvent(event)
                   if (!origin) return
                   event.preventDefault(); event.stopPropagation()
@@ -748,6 +1095,7 @@ export function ChannelizationCalibrationPage() {
                   setLaneSelection(dragSelection)
                   laneDragRef.current = {
                     type: 'translate',
+                    source: editorSnapshot(),
                     laneIds: dragSelection.laneIds,
                     origin,
                     originalPointsById: Object.fromEntries(draftLanes
@@ -757,12 +1105,36 @@ export function ChannelizationCalibrationPage() {
                   event.currentTarget.ownerSVGElement?.setPointerCapture?.(event.pointerId)
                 }} />
                 {laneSelection.laneIds.length === 1 && laneSelection.laneIds[0] === lane.local_lane_id && lane.points.map(([x, y], index) => <circle key={`${lane.local_lane_id}-${index}`} aria-label={`调整车道顶点 ${index + 1}`} className='channelized-lane-handle' cx={x} cy={y} r='6' onPointerDown={(event) => {
-                  event.preventDefault(); event.stopPropagation(); laneDragRef.current = { type: 'vertex', laneId: lane.local_lane_id, index }; event.currentTarget.ownerSVGElement?.setPointerCapture?.(event.pointerId)
+                  event.preventDefault(); event.stopPropagation(); laneDragRef.current = { type: 'vertex', laneId: lane.local_lane_id, index, source: editorSnapshot() }; event.currentTarget.ownerSVGElement?.setPointerCapture?.(event.pointerId)
                 }} onClick={(event) => event.stopPropagation()} />)}
+                {laneSelection.laneIds.length === 1 && laneSelection.laneIds[0] === lane.local_lane_id && (lane.boundary_curves || []).map((curve) => {
+                  const start = lane.points[curve.edge_index]
+                  const end = lane.points[(curve.edge_index + 1) % lane.points.length]
+                  return <g className='channelized-curve-controls' key={`${lane.local_lane_id}-curve-${curve.edge_index}`}>
+                    <line x1={start[0]} y1={start[1]} x2={curve.control1[0]} y2={curve.control1[1]} />
+                    <line x1={end[0]} y1={end[1]} x2={curve.control2[0]} y2={curve.control2[1]} />
+                    {['control1', 'control2'].map((control) => <circle key={control} aria-label={`调整曲线控制点 ${control === 'control1' ? 1 : 2}`} className='channelized-curve-handle' cx={curve[control][0]} cy={curve[control][1]} r='7' onPointerDown={(event) => {
+                      event.preventDefault(); event.stopPropagation(); laneDragRef.current = { type: 'curve_control', laneId: lane.local_lane_id, edgeIndex: curve.edge_index, control, source: editorSnapshot() }; event.currentTarget.ownerSVGElement?.setPointerCapture?.(event.pointerId)
+                    }} />)}
+                  </g>
+                })}
               </g>)}
-              {draftFeatures.filter((feature) => feature.feature_type === 'guide_zone' || feature.feature_type === 'waiting_zone' ? layerVisibility.features : layerVisibility.boundaries).map((feature) => feature.feature_type === 'guide_zone' || feature.feature_type === 'waiting_zone'
-                ? <polygon key={feature.feature_id} points={feature.points.map((point) => point.join(',')).join(' ')} className='channelized-feature-area' />
-                : <polyline key={feature.feature_id} points={feature.points.map((point) => point.join(',')).join(' ')} className={feature.feature_type === 'stop_line' ? 'channelized-stop-line' : 'channelized-boundary'} />)}
+              {draftFeatures.filter((feature) => ['guide_zone', 'waiting_zone', 'crosswalk', 'channelizing_island'].includes(feature.feature_type) ? layerVisibility.features : layerVisibility.boundaries).map((feature) => ['guide_zone', 'waiting_zone', 'crosswalk', 'channelizing_island'].includes(feature.feature_type)
+                ? <polygon style={{ opacity: canvasMode === 'clean' ? 1 : overlayOpacity }} key={feature.feature_id} points={feature.points.map((point) => point.join(',')).join(' ')} className={`channelized-feature-area ${feature.feature_type}`} />
+                : <polyline style={{ opacity: canvasMode === 'clean' ? 1 : overlayOpacity }} key={feature.feature_id} points={feature.points.map((point) => point.join(',')).join(' ')} className={feature.feature_type === 'stop_line' ? 'channelized-stop-line' : `channelized-boundary ${feature.properties?.line_style || ''}`} />)}
+              {editorModel && editorModel.approaches.map((approach) => {
+                const handle = approachHandlePoint(editorModel, approach)
+                return <g className={`channelized-approach-guide${approach.approach_id === selectedApproachId ? ' selected' : ''}`} key={`approach-guide-${approach.approach_id}`}>
+                  <line x1={editorModel.center_px[0]} y1={editorModel.center_px[1]} x2={handle[0]} y2={handle[1]} />
+                  <circle aria-label={`调整进口骨架 ${approach.approach_id}`} cx={handle[0]} cy={handle[1]} r='10' onPointerDown={(event) => {
+                    event.preventDefault(); event.stopPropagation()
+                    const source = editorSnapshot()
+                    laneDragRef.current = { type: 'approach_parameter', approachId: approach.approach_id, source, preview: source }
+                    setSelectedApproachId(approach.approach_id)
+                    event.currentTarget.ownerSVGElement?.setPointerCapture?.(event.pointerId)
+                  }} />
+                </g>
+              })}
               {draftPoints.length > 1 && <polyline points={draftPoints.map((point) => point.join(',')).join(' ')} />}
               {draftPoints.map(([x, y], index) => <circle key={`${x}-${y}-${index}`} cx={x} cy={y} r='5' />)}
             </svg> : <div className='workbench-canvas-empty'><strong>载入正拍关键帧开始渠化拟合</strong><span>右侧“关键帧与素材”只展示当前路口的真实测绘任务。</span><button type='button' className='primary-button' onClick={openSourcePicker}>选择关键帧</button></div>}
@@ -772,11 +1144,38 @@ export function ChannelizationCalibrationPage() {
             <div className='workbench-toolstrip' aria-label='画布工具'>
               <button type='button' className={editorTool === 'inspect' ? 'active' : ''} aria-label='查看模式' onClick={() => setEditorTool('inspect')}><Hand size={18} /></button>
               <button type='button' className={editorTool === 'draw' ? 'active' : ''} aria-label='绘制模式' onClick={() => setEditorTool('draw')}><CursorClick size={18} /></button>
+              <button type='button' className={editorTool === 'align' ? 'active' : ''} aria-label='整体对齐模式' onClick={() => setEditorTool('align')}><LinkSimple size={18} /></button>
+              <button type='button' aria-label='撤销编辑' disabled={!editorHistoryRef.current.past.length} onClick={undoEditor}><ArrowCounterClockwise size={18} /></button>
+              <button type='button' aria-label='重做编辑' disabled={!editorHistoryRef.current.future.length} onClick={redoEditor}><ArrowClockwise size={18} /></button>
               <button type='button' aria-label='图层'><Stack size={18} /></button>
               <button type='button' aria-label='吸附参考车道' onClick={() => setShowReferenceLanes((value) => !value)}><LinkSimple size={18} /></button>
               <button type='button' aria-label='放大' onClick={() => setCanvasZoom((value) => Math.min(2, value + 0.15))}><Plus size={18} /></button>
               <button type='button' aria-label='缩小' onClick={() => setCanvasZoom((value) => Math.max(.7, value - 0.15))}><Minus size={18} /></button>
               <button type='button' aria-label='全屏' onClick={() => stageRef.current?.requestFullscreen?.()}><ArrowsOutSimple size={18} /></button>
+            </div>
+            <div className={`workbench-registration-panel${registrationPanelOpen ? ' expanded' : ''}`}>
+              <button
+                type='button'
+                className='registration-panel-toggle'
+                aria-expanded={registrationPanelOpen}
+                aria-controls='registration-panel-details'
+                aria-label={`${registrationPanelOpen ? '收起' : '展开'}整体配准`}
+                onClick={() => setRegistrationPanelOpen((value) => !value)}
+              >
+                <strong>整体配准</strong>
+                <span>X {Number(registrationPose.translation_px[0].toFixed(1))} · Y {Number(registrationPose.translation_px[1].toFixed(1))} · {Number(registrationPose.rotation_deg.toFixed(1))}° · {Number(registrationPose.uniform_scale.toFixed(2))}×</span>
+                <i aria-hidden='true'>{registrationPanelOpen ? '收起' : '调整'}</i>
+              </button>
+              {registrationPanelOpen && <div id='registration-panel-details' className='registration-panel-details'>
+                <header><span>固定正拍图，移动路网覆盖层</span><button type='button' onClick={() => updateRegistrationPose({ translation_px: [0, 0], rotation_deg: 0, uniform_scale: 1 })}>复位</button></header>
+                <div className='registration-fields'>
+                  <label>X<input aria-label='路网 X 位移' type='number' value={Number(registrationPose.translation_px[0].toFixed(2))} onChange={(event) => updateRegistrationPose({ translation_px: [Number(event.target.value), registrationPose.translation_px[1]] })} /></label>
+                  <label>Y<input aria-label='路网 Y 位移' type='number' value={Number(registrationPose.translation_px[1].toFixed(2))} onChange={(event) => updateRegistrationPose({ translation_px: [registrationPose.translation_px[0], Number(event.target.value)] })} /></label>
+                  <label>角度<input aria-label='路网旋转角' type='number' step='.1' value={Number(registrationPose.rotation_deg.toFixed(2))} onChange={(event) => updateRegistrationPose({ rotation_deg: Number(event.target.value) })} /></label>
+                  <label>缩放<input aria-label='路网统一缩放' type='number' min='.1' max='10' step='.01' value={Number(registrationPose.uniform_scale.toFixed(3))} onChange={(event) => updateRegistrationPose({ uniform_scale: Number(event.target.value) })} /></label>
+                </div>
+                <label className='registration-opacity'>透明度<input aria-label='路网覆盖层透明度' type='range' min='.1' max='1' step='.05' value={overlayOpacity} onChange={(event) => setOverlayOpacity(Number(event.target.value))} /></label>
+              </div>}
             </div>
             <div className='workbench-layer-legend'>
               <strong>图层图例</strong>
@@ -791,16 +1190,19 @@ export function ChannelizationCalibrationPage() {
 
         {selectedTask && mapVersion && !hasMapAlignedTask && <div className='form-error workbench-inline-error' role='alert'>该关键帧仍是局部量算坐标；请从右侧测绘帧重新载入，刷新为当前地图 ENU。</div>}
         <div className='annotation-toolbar workbench-editor-toolbar'>
-          <select aria-label='几何类型' value={drawingMode} onChange={(event) => { setDrawingMode(event.target.value); setDraftPoints([]) }}><option value='lane'>车道面</option><option value='lane_boundary'>车道边界</option><option value='stop_line'>停止线</option><option value='guide_zone'>导流区</option><option value='waiting_zone'>待转区</option></select>
+          <select aria-label='几何类型' value={drawingMode} onChange={(event) => { setDrawingMode(event.target.value); setDraftPoints([]) }}><option value='lane'>车道面</option><option value='lane_boundary'>车道边界</option><option value='stop_line'>停止线</option><option value='guide_zone'>导流区</option><option value='waiting_zone'>待转区</option><option value='crosswalk'>人行横道</option><option value='channelizing_island'>渠化岛</option><option value='lane_marking'>分段标线</option></select>
           {drawingMode === 'lane' && <select aria-label='车道方向' value={direction} onChange={(event) => setDirection(event.target.value)}><option value='straight'>直行</option><option value='left_turn'>左转</option><option value='right_turn'>右转</option><option value='u_turn'>掉头</option></select>}
           <button className='secondary-button' disabled={draftPoints.length < (isLineGeometry(drawingMode) ? 2 : 3)} onClick={closeGeometry}>完成{geometryLabels[drawingMode]}</button>
           <button className='secondary-button' disabled={!draftPoints.length} onClick={() => setDraftPoints((points) => points.slice(0, -1))}>撤销一点</button>
           <button className='secondary-button' disabled={!draftPoints.length} onClick={() => setDraftPoints([])}>清空顶点</button>
           <button className='secondary-button' disabled={!hasGeometryForMode} onClick={removeLastGeometry}>移除最后{geometryLabels[drawingMode]}</button>
+          {drawingMode === 'lane' && <button className='secondary-button' disabled={!referenceLanes.length} onClick={adoptAllReferenceLanes}>采用整套路网（{referenceLanes.length} 条）</button>}
           {drawingMode === 'lane' && <div className='lane-operation-cluster' role='group' aria-label='车道编辑操作'>
             <button className='secondary-button danger' disabled={!laneSelection.laneIds.length} onClick={deleteSelectedLanes}>删除所选</button>
             <button className='secondary-button' disabled={laneSelection.mode !== 'lane' || laneSelection.laneIds.length !== 1} onClick={splitSelectedLane}>拆分车道</button>
             <button className='secondary-button' disabled={laneSelection.laneIds.length < 2} onClick={mergeSelectedLanes}>合并车道</button>
+            <label className='curve-edge-input'>边界段<input aria-label='曲线边界段序号' type='number' min='1' value={curveEdgeIndex + 1} onChange={(event) => setCurveEdgeIndex(Math.max(0, Number(event.target.value) - 1))} /></label>
+            <button className='secondary-button' disabled={laneSelection.mode !== 'lane' || laneSelection.laneIds.length !== 1} onClick={curveSelectedLaneEdge}>边界段转曲线</button>
           </div>}
           {laneSelection.mode === 'link' && laneSelection.laneIds.length > 0 && <strong className='lane-selection-summary'>{`Link ${laneSelection.linkId || '未分组'} · ${laneSelection.laneIds.length} 条车道`}</strong>}
           {laneSelection.mode === 'lane' && laneSelection.laneIds.length === 1 && <strong className='lane-selection-summary'>{`单车道 · ${laneSelection.laneIds[0]}`}</strong>}

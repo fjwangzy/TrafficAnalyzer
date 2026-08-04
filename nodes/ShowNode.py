@@ -752,7 +752,19 @@ class ShowNode:
             or bool(getattr(frame_element, "geo_analytics_eligible", False))
         )
         mature_trajectory_ids = set()
-        if trajectory_contract_active:
+        mature_trajectory_association_ids = getattr(
+            frame_element, "mature_trajectory_association_ids", None
+        )
+        if mature_trajectory_association_ids is not None:
+            # TrackerInfoUpdateNode owns lifecycle maturity. Rendering must not
+            # reinterpret a transient repository/view mismatch as candidate C.
+            mature_trajectory_ids = {
+                int(association_id)
+                for association_id in mature_trajectory_association_ids
+            }
+        elif trajectory_contract_active:
+            # Backward-compatible fallback for frames created before the
+            # explicit mature lifecycle view was introduced.
             for association_id in trajectory_association_ids_raw:
                 association_id = int(association_id)
                 track_id = int(track_map.get(association_id, association_id))

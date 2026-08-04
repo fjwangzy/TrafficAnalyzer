@@ -72,6 +72,7 @@ async def test_local_executor_forces_configured_mps_device(tmp_path):
     )
     assert "detection_node.device=mps" in captured["command"]
     assert "detection_node.imgsz=960" in captured["command"]
+    assert "detection_node.adaptive_imgsz.enabled=true" in captured["command"]
     assert captured["environment"]["KAFKA_BOOTSTRAP"] == "127.0.0.1:9092"
     assert captured["environment"]["PYTORCH_ENABLE_MPS_FALLBACK"] == "1"
     assert captured["cwd"] == str(tmp_path.resolve())

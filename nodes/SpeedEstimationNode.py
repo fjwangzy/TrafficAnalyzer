@@ -11,6 +11,7 @@ import numpy as np
 
 from elements.FrameElement import FrameElement
 from elements.VideoEndBreakElement import VideoEndBreakElement
+from utils_local.track_lifecycle import active_tracks_of, mature_tracks_of
 from utils_local.utils import profile_time
 
 
@@ -44,13 +45,13 @@ class SpeedEstimationNode:
             return frame_element
 
         if not getattr(frame_element, "geo_analytics_eligible", False):
-            for track in (frame_element.buffer_tracks or {}).values():
+            for track in active_tracks_of(frame_element).values():
                 self._clear_current_world_motion(track)
             return frame_element
 
         alpha = 2.0 / (self.smoothing_window + 1)
 
-        for track in frame_element.buffer_tracks.values():
+        for track in mature_tracks_of(frame_element).values():
             # 裁剪position_history到history_frames窗口
             if len(track.position_history) > self.history_frames:
                 track.position_history = track.position_history[-self.history_frames:]

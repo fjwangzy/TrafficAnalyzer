@@ -4,6 +4,7 @@ from elements.FrameElement import FrameElement
 from elements.VideoEndBreakElement import VideoEndBreakElement
 from utils_local.homography import is_valid_homography
 from utils_local.lane_geometry import assign_vehicle_to_lane, compute_queue_extent
+from utils_local.track_lifecycle import mature_track_for_association, mature_tracks_of
 from utils_local.utils import profile_time
 
 logger = logging.getLogger(__name__)
@@ -46,7 +47,7 @@ class LaneAnalysisNode:
 
         if getattr(frame_element, "runtime_map_bundle", None):
             lane_stats: dict[str, dict] = {}
-            for track in (frame_element.buffer_tracks or {}).values():
+            for track in mature_tracks_of(frame_element).values():
                 lane_id = getattr(track, "matched_lane_key", None)
                 if not lane_id:
                     continue
@@ -80,7 +81,9 @@ class LaneAnalysisNode:
                 bbox = frame_element.tracked_xyxy[i]
                 lane_hit = assign_vehicle_to_lane(bbox, {lane_id: poly})
                 if lane_hit == lane_id:
-                    track = frame_element.buffer_tracks.get(track_id)
+                    track = mature_track_for_association(frame_element, track_id)
+                    if track is None:
+                        continue
                     cx = (bbox[0] + bbox[2]) / 2.0
                     cy = (bbox[1] + bbox[3]) / 2.0
                     vehicles_in_lane.append({

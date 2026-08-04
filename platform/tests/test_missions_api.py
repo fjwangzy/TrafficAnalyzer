@@ -70,7 +70,34 @@ class MissionsApiTest(unittest.TestCase):
         body, actor_id = self.orchestrator.created
         self.assertEqual(body.inter_id, "INT_camera_7")
         self.assertEqual(body.source_profile_id, "SRC-7")
+        self.assertIsNone(body.frame_stride)
         self.assertIsNone(actor_id)
+
+    def test_mission_accepts_a_user_selected_frame_stride(self):
+        response = self.client.post(
+            "/api/v1/missions",
+            json={
+                "drone_id": "drone_7",
+                "inter_id": "INT_camera_7",
+                "source_profile_id": "SRC-7",
+                "frame_stride": 6,
+            },
+        )
+
+        self.assertEqual(response.status_code, 201)
+        body, _ = self.orchestrator.created
+        self.assertEqual(body.frame_stride, 6)
+
+        rejected = self.client.post(
+            "/api/v1/missions",
+            json={
+                "drone_id": "drone_7",
+                "inter_id": "INT_camera_7",
+                "source_profile_id": "SRC-7",
+                "frame_stride": 31,
+            },
+        )
+        self.assertEqual(rejected.status_code, 422)
 
     def test_orchestrator_errors_preserve_status_and_code(self):
         self.client.app.state.mission_orchestrator = _FailingOrchestrator()

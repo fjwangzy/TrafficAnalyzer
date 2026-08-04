@@ -173,6 +173,7 @@ python main_optimized.py pipeline.send_info_kafka=False
 
 ```bash
 VIDEO_SRC="test_videos/inter_xqh/DJI_20260403142902_0001_V小清河北路与水屯路路口.mp4" \
+FRAME_STRIDE=3 \
 RUNTIME_MAP_BUNDLE_JSON="$(<lane-verified-runtime-bundle.json)" \
 TOPIC_NAME="uav_statistics_1" \
 CAMERA_ID=1 \
@@ -183,6 +184,8 @@ python main_optimized.py \
   telemetry.source=srt \
   +telemetry.file_path=test_videos/inter_xqh/telemetry.srt
 ```
+
+`FRAME_STRIDE=3` 表示每 3 个源帧处理 1 帧；Platform/Console2 交互式启动默认同样为 3，管理员可在启动检测前于 `1–30` 范围内调整。30 FPS 源使用 3 时约处理 10 FPS。
 
 canonical Kafka Topic：
 

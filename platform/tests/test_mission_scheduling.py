@@ -78,6 +78,30 @@ def test_manual_mission_accepts_an_explicit_runtime_map_version():
     assert body.map_version_id == "CMV-READY"
 
 
+def test_manual_mission_frame_stride_uses_platform_default_and_is_bounded():
+    body = MissionCreate(
+        drone_id="drone-1",
+        source_profile_id="source-1",
+        inter_id="INT-1",
+    )
+
+    assert body.frame_stride is None
+    assert MissionCreate(
+        drone_id="drone-1",
+        source_profile_id="source-1",
+        inter_id="INT-1",
+        frame_stride=8,
+    ).frame_stride == 8
+
+    with pytest.raises(ValueError):
+        MissionCreate(
+            drone_id="drone-1",
+            source_profile_id="source-1",
+            inter_id="INT-1",
+            frame_stride=0,
+        )
+
+
 def test_tracking_profile_defaults_to_cruise_without_registration_or_map():
     assert resolve_tracking_profile(None) == (
         "hover_cruise_v1",
@@ -286,7 +310,8 @@ async def test_manual_mission_runtime_params_allow_detection_without_road_contex
     mission = SimpleNamespace(
         id="mission-1", drone_id="drone-1", inter_id="INT-1",
         road_data_version="unverified", video_source_id=video.id,
-        telemetry_source_id=telemetry.id, context_snapshot={"quality_status": "unverified"},
+        telemetry_source_id=telemetry.id,
+        context_snapshot={"quality_status": "unverified", "frame_stride": 7},
     )
 
     params = await orchestrator._runtime_params(Session(), mission)
@@ -295,3 +320,4 @@ async def test_manual_mission_runtime_params_allow_detection_without_road_contex
     assert params["road_context_status"] == "missing"
     assert params["quality_status"] == "degraded"
     assert params["video_src"] == "test_videos/demo.mp4"
+    assert params["frame_stride"] == 7

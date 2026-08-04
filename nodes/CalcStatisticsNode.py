@@ -9,6 +9,7 @@ import numpy as np
 
 from elements.FrameElement import FrameElement
 from elements.VideoEndBreakElement import VideoEndBreakElement
+from utils_local.track_lifecycle import mature_tracks_of
 from utils_local.utils import profile_time
 
 
@@ -26,6 +27,9 @@ class CalcStatisticsNode:
         ]  # 跟踪的最小生存时间（秒）
         self.count_cars_buffer_frames = config_general["count_cars_buffer_frames"]
         self.cars_buffer = deque(maxlen=self.count_cars_buffer_frames)  # 创建值缓冲区
+        self.road_event_window_sec = float(self.time_buffer_analytics) * 60.0
+        self.road_entry_events = deque()
+        self.registered_road_entry_track_ids: set[int] = set()
 
     @profile_time
     def process(self, frame_element: FrameElement) -> FrameElement:
@@ -39,8 +43,8 @@ class CalcStatisticsNode:
         road_eligible = bool(
             getattr(frame_element, "road_analytics_eligible", False)
         )
-        buffer_tracks = frame_element.buffer_tracks or {}
-        self.cars_buffer.append(len(frame_element.buffer_tracks or {}))
+        mature_tracks = mature_tracks_of(frame_element)
+        self.cars_buffer.append(len(mature_tracks))
 
         info_dictionary = {
             "cars_amount": round(np.mean(self.cars_buffer)),
@@ -70,16 +74,29 @@ class CalcStatisticsNode:
         )
         roads_activity = {rid: 0 for rid in road_ids}
 
-        # 计算已经存在较长时间且有来源道路值的车辆数量
-        for track_element in buffer_tracks.values():
+        # 每条成熟轨迹只登记一次道路入口事件。30 秒到期只让事件退出
+        # 流量窗口，绝不改变轨迹生命周期，也不允许同一 ID 再登记。
+        for track_id, track_element in mature_tracks.items():
+            timestamp_init_road = getattr(track_element, "timestamp_init_road", None)
             if (
-                track_element.timestamp_last - track_element.timestamp_init_road
+                int(track_id) not in self.registered_road_entry_track_ids
+                and timestamp_init_road is not None
+                and frame_element.timestamp - timestamp_init_road
                 > self.min_time_life_track
-                and track_element.start_road is not None
+                and getattr(track_element, "start_road", None) is not None
             ):
-                key = track_element.start_road
-                if key in roads_activity:
-                    roads_activity[key] += 1
+                self.registered_road_entry_track_ids.add(int(track_id))
+                self.road_entry_events.append(
+                    (float(frame_element.timestamp), track_element.start_road, int(track_id))
+                )
+
+        cutoff = float(frame_element.timestamp) - self.road_event_window_sec
+        while self.road_entry_events and self.road_entry_events[0][0] <= cutoff:
+            self.road_entry_events.popleft()
+
+        for _, road_id, _ in self.road_entry_events:
+            if road_id in roads_activity:
+                roads_activity[road_id] += 1
 
         # 根据已知的缓冲区大小将值转换为车辆/分钟
         for key in roads_activity:

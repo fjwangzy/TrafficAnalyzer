@@ -68,6 +68,7 @@ VideoReader
 | `nodes/VideoReader.py` | MP4/RTSP、固定 Runtime Road Map Bundle、SRT/JSON/MQTT 遥测注入；启用遥测时 fail-fast |
 | `nodes/DetectionNode.py` | 当前 `hover_cruise_v1` 的 YOLO11-only 检测节点，输出已校验的 `detected_*` 与检测几何诊断 |
 | `utils_local/detection_geometry.py` | 新旧profile共享的MPS安全bbox裁剪、字段对齐和非法几何过滤边界 |
+| `utils_local/detection_tracking_evaluation.py` | 纯函数聚合 Stats/Track Complete/生命周期审计，输出检测→跟踪工程覆盖、分段和寿命口径；不冒充正式精度 |
 | `utils_local/image_motion.py`、`nodes/ImageMotionEstimationNode.py` | 排除检测框后的背景 LK/RANSAC 图像运动估计；输出唯一关联 warp，不读取遥测/H |
 | `nodes/GroundTrajectoryTrackerNode.py` | 地理参考之前的纯图像 ByteTrack，输出兼容 `tracked_*`/`id_list` 和显示轨迹；含离线 shadow |
 | `nodes/FlightGeoReferenceNode.py` | ByteTrack 后计算逐帧绝对 pixel→ENU，并分别生成 geo/road/TCC 能力门禁 |
@@ -97,6 +98,7 @@ platform/
 │   ├── main.py                    # lifespan、路由、strict readiness、HLS 受控挂载、WebSocket
 │   ├── core/
 │   │   ├── config.py              # local/uat/production 配置和 UAT fail-closed 校验
+│   │   ├── pipeline_options.py    # frame_stride 默认值、范围与启动期统一校验
 │   │   └── database.py            # road9、Alembic、async session
 │   ├── middleware/auth.py         # REST Bearer + 媒体/WS HttpOnly Cookie + active-user 回查
 │   ├── api/v1/                    # auth、dashboard、survey、mission、pipeline、video、enforcement 等
@@ -169,6 +171,7 @@ console2/
 | `scripts/validate_adr019_local_retirement.py` | canonical 容器、road9、Topic、旧存储隔离与恢复/soak 证据 |
 | `test/test_pipeline_inter_xqh.py` | 真实 4K MP4 + DJI SRT 的 56 项管道回归 |
 | `scripts/run_native_mps_replays.py` | Apple Silicon 原生 MPS 多源检测、Kafka 直采、轨迹/TCC 诊断与断点续跑 |
+| `scripts/analyze_detection_tracking_coverage.py` | 只读分析既有回放 JSON，生成 `uav.detection-tracking-evaluation/v1` |
 | `platform/scripts/inventory_trajectory_replay.py` | 清理前按固定 SourceProfile 只读盘点 canonical 轨迹、统计、冲突、遥测、证据和 Inbox 影响范围 |
 | `platform/scripts/build_demo_channelized_maps.py` | YCX 按需只读导入、九源影像配准、四路口质量门禁和不可变地图发布 |
 | `platform/scripts/finalize_demo_replay_batches.py` | 对账后创建 completed Mission，并固化视频/遥测/模型哈希与地图 lineage |
@@ -212,3 +215,8 @@ console2/
 - `platform/app/api/v1/calibration.py`：路口项目、统一视频接入/确认、工作台聚合与标定检查接口。
 - `platform/alembic/versions/20260722_0018_intersection_video_ingestion.py`：项目、接入任务、分段绑定和检查审计迁移。
 - `console2/src/pages/IntersectionProjectPages.jsx`：项目库、双入口向导、项目工作台和接入确认。
+- `console2/src/lib/channelizedEditorGeometry.js`：固定影像姿态矩阵、曲线采样、编辑历史、parameterized/freeform 模型、四进口模板及正式 Feature 生成。
+- `platform/app/services/channelized_editor_geometry.py`：服务端姿态组合、尺度归一矩阵一致性校验和旧请求兼容边界。
+- `platform/tests/test_channelized_editor_geometry.py`：姿态/逆变换、类型化模型、Feature 类型和错误矩阵拒绝回归。
+- `platform/tests/test_channelized_map_editor_api.py`：拟合接口的姿态重算、几何拒绝、Feature 持久化、发布不可变及服务端派生来源链回归。
+- `docs/ROAD_ANNOTATION_UPGRADE_ACCEPTANCE_20260803.md`：两期计划的逐项验收矩阵、崇华路实证、自动化门禁与精度边界。

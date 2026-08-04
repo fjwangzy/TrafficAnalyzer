@@ -52,6 +52,11 @@ def test_mac_local_platform_uses_persistent_evidence_storage():
     assert 'SURVEY_STORAGE_DIR="$LOCAL_SURVEY_STORAGE_DIR"' in script
 
 
+def test_mac_local_platform_defaults_detector_frame_stride_to_three():
+    script = (ROOT / "scripts" / "mac_local_platform.sh").read_text(encoding="utf-8")
+    assert 'PIPELINE_FRAME_STRIDE="${PIPELINE_FRAME_STRIDE:-3}"' in script
+
+
 def test_mac_local_platform_fails_closed_on_duplicate_uvicorn_instances():
     script = (ROOT / "scripts" / "mac_local_platform.sh").read_text(encoding="utf-8")
     assert "platform_instance_pids" in script

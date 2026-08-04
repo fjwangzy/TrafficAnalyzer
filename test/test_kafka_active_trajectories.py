@@ -16,6 +16,7 @@ class KafkaActiveTrajectoriesTest(unittest.TestCase):
         producer.telemetry_topic = "uav_telemetry_7"
         producer.intersection_id = "INT_camera_7"
         producer.camera_id = 7
+        producer.pipeline_id = "pipeline-test-7"
         producer.how_often_sec = 1.0
         producer.last_send_time = None
         producer.buffer_analytics_sec = 0.0
@@ -51,6 +52,7 @@ class KafkaActiveTrajectoriesTest(unittest.TestCase):
             "avg_speed_kmh": 18.0,
             "entry_point_m": [0.1, 0.2],
             "exit_point_m": [0.3, 0.4],
+            "termination_reason": "natural_eof",
         }]
         frame_element.conflict_events = [{
             "motor_id": 101,
@@ -115,6 +117,78 @@ class KafkaActiveTrajectoriesTest(unittest.TestCase):
             "suspected_right_turn_mv_nmv",
         )
         self.assertNotIn("evidence_files", pending_conflict["data"])
+
+    def test_stats_reports_detection_to_track_recognition_diagnostics(self):
+        frame = FrameElement(
+            "test",
+            np.zeros((20, 20, 3), dtype=np.uint8),
+            2.0,
+            1,
+            {},
+        )
+        frame.info = {"cars_amount": 0, "roads_activity": {}}
+        frame.buffer_tracks = {}
+        frame.detected_cls = ["motor", "motor", "car", "car"]
+        frame.detected_cls_ids = [9, 9, 3, 3]
+        frame.detected_xyxy = [
+            [1, 1, 3, 3],
+            [4, 1, 6, 3],
+            [1, 4, 3, 6],
+            [4, 4, 6, 6],
+        ]
+        frame.tracked_cls = ["motor", "motor", "car"]
+        frame.tracked_cls_ids = [9, 9, 3]
+        frame.tracked_xyxy = [
+            [1, 1, 3, 3],
+            [4, 1, 6, 3],
+            [1, 4, 3, 6],
+        ]
+        frame.id_list = [101, 102, 103]
+        frame.detection_diagnostics = {
+            "raw_detection_count": 4,
+            "valid_detection_count": 4,
+            "invalid_geometry_count": 0,
+        }
+
+        producer = self._producer_without_kafka()
+        sent = []
+        producer._enqueue = lambda topic, data, **_kwargs: sent.append((topic, data))
+
+        producer.process(frame)
+
+        stats = sent[0][1]["data"]["recognition_diagnostics"]
+        self.assertEqual(stats["truth_status"], "not_evaluated")
+        self.assertEqual(stats["valid_yolo_detection_count"], 4)
+        self.assertEqual(stats["yolo_class_counts"], {"car": 2, "motor": 2})
+        self.assertEqual(stats["emitted_image_track_count"], 3)
+        self.assertEqual(stats["emitted_track_class_counts"], {"car": 1, "motor": 2})
+        self.assertEqual(stats["unassociated_detection_count"], 1)
+        self.assertEqual(stats["same_frame_track_to_detection_ratio"], 0.75)
+        self.assertEqual(stats["invalid_detector_geometry_count"], 0)
+        self.assertEqual(stats["small_target_max_area_px2"], 4096)
+        self.assertEqual(stats["small_yolo_detection_count"], 4)
+        self.assertEqual(stats["small_emitted_track_count"], 3)
+        self.assertEqual(stats["small_track_to_detection_ratio"], 0.75)
+        self.assertEqual(stats["small_yolo_class_counts"], {"car": 2, "motor": 2})
+        self.assertEqual(stats["small_emitted_track_class_counts"], {"car": 1, "motor": 2})
+
+    def test_completed_track_message_id_is_deterministic_for_pipeline_and_track(self):
+        producer = self._producer_without_kafka()
+        sent = []
+        producer._enqueue = lambda topic, data, **_kwargs: sent.append((topic, data))
+        frame = FrameElement(
+            "test", np.zeros((8, 8, 3), dtype=np.uint8), 10.0, 100, {}
+        )
+        frame.completed_tracks = [{
+            "track_id": 42,
+            "termination_reason": "association_timeout",
+        }]
+
+        producer.publish_completed_tracks(frame)
+        producer.publish_completed_tracks(frame)
+
+        self.assertEqual(sent[0][1]["message_id"], sent[1][1]["message_id"])
+        self.assertEqual(sent[0][1]["data"]["pipeline_id"], "pipeline-test-7")
 
     def test_topic_builder_rejects_unsafe_camera_id(self):
         self.assertEqual(
@@ -447,6 +521,31 @@ class KafkaActiveTrajectoriesTest(unittest.TestCase):
         candidates = producer._build_candidate_trajectories(frame_element)
 
         self.assertEqual([item["track_id"] for item in candidates], [101, 102])
+
+    def test_candidate_low_speed_cannot_inflate_congestion_index(self):
+        candidate = TrackElement(id=77, timestamp_first=0.0)
+        candidate.trajectory_output_eligible = False
+        candidate.avg_speed_kmh = 0.0
+        frame = FrameElement(
+            "test", np.zeros((20, 20, 3), dtype=np.uint8), 2.0, 1, {}
+        )
+        frame.info = {"cars_amount": 0, "roads_activity": {}}
+        frame.buffer_tracks = {77: candidate}
+        frame.active_tracks = {77: candidate}
+        frame.mature_tracks = {}
+        frame.candidate_trajectories = [{"track_id": 77, "trajectory_px": [[1, 2]]}]
+
+        producer = self._producer_without_kafka()
+        sent = []
+        producer._enqueue = lambda topic, data, **_kwargs: sent.append((topic, data))
+
+        producer.process(frame)
+
+        stats = next(payload for topic, payload in sent if topic == "uav_statistics_7")
+        self.assertEqual(stats["data"]["congestion_index"], 0.0)
+        self.assertEqual(stats["data"]["cars"], 0)
+        self.assertEqual(stats["data"]["eligible_active_tracks"], 0)
+        self.assertEqual(stats["data"]["candidate_tracks"], 1)
 
     def test_dense_stats_payload_stays_below_kafka_default_request_limit(self):
         frame_element = FrameElement(

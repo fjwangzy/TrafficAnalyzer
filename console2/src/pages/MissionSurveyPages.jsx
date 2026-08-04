@@ -66,13 +66,14 @@ export function DronesPage() {
     onError: (error) => setActionError(apiErrorMessage(error)),
   })
   const cameraMutation = useMutation({
-    mutationFn: ({ kind, drone, sourceProfileId, mission }) => {
+    mutationFn: ({ kind, drone, sourceProfileId, frameStride, mission }) => {
       if (kind === 'stop') return platformApi.stopMission(mission.id, 'Console2 路口摄像头人工停止')
       return platformApi.createMission({
         name: `实时检测 · ${drone.intersection_name || drone.name}`,
         drone_id: drone.id,
         source_profile_id: sourceProfileId,
         inter_id: drone.default_inter_id,
+        frame_stride: frameStride,
         ...(drone.default_road_data_version ? { road_data_version: drone.default_road_data_version } : {}),
         scheduled_end_at: new Date(Date.now() + 3_600_000).toISOString(),
       })
@@ -171,6 +172,7 @@ function scheduleLabel(schedule = {}, timezone) {
 
 function ReplayCameraControls({ drones, sources, missions, isAdmin, pending, onAction }) {
   const [selection, setSelection] = useState({})
+  const [strideSelection, setStrideSelection] = useState({})
   const cameras = drones.filter((drone) => drone.default_inter_id && sources.some((source) => source.drone_id === drone.id && source.mode === 'local'))
   if (!cameras.length) return <QualityNotice tone='info' title='暂无回放摄像头'>登记本地 MP4 + SRT/JSON 数据源后，可在这里按路口独立启动检测。</QualityNotice>
   return <Panel title='路口实时检测控制' subtitle='每个路口同一时间只运行一个 Mission；不同路口可独立启停'>
@@ -179,6 +181,7 @@ function ReplayCameraControls({ drones, sources, missions, isAdmin, pending, onA
         const options = sources.filter((source) => source.drone_id === drone.id && source.mode === 'local' && source.enabled)
         const defaultSource = options.find((source) => source.video.id === drone.default_video_source_id) || options[0]
         const sourceProfileId = selection[drone.id] || defaultSource?.profile_id || ''
+        const frameStride = strideSelection[drone.id] || 3
         const mission = missions.find((item) => item.drone_id === drone.id && ['pending', 'starting', 'running'].includes(item.status))
         const cameraId = mission?.pipeline?.camera_id
         const videoStreamUrl = detectorVideoStreamSrc(mission?.pipeline)
@@ -195,10 +198,11 @@ function ReplayCameraControls({ drones, sources, missions, isAdmin, pending, onA
               : <div className='replay-camera-empty'><Camera size={27} /><strong>{mission ? 'Pipeline 启动中' : '摄像头待命'}</strong><span>{mission ? (mission.status === 'running' ? '正在等待检测器登记直连视频地址' : '正在等待首个 MJPEG 检测帧') : '选择回放源后启动检测'}</span></div>}
             <div className='replay-camera-overlay'>
               <label><span>回放源</span><select aria-label={`${drone.intersection_name || drone.name}回放源`} value={sourceProfileId} disabled={Boolean(mission)} onChange={(event) => setSelection((current) => ({ ...current, [drone.id]: event.target.value }))}>{options.map((source) => <option key={source.profile_id} value={source.profile_id}>{source.display_name || source.profile_id}</option>)}</select></label>
-              <span className='replay-camera-quality'>{analysisMode ? `${analysisMode} · ` : ''}{!drone.default_road_data_version || drone.road_context_quality === 'unverified' ? '道路未标定 · 仅检测/跟踪/遥测' : drone.default_road_data_version}</span>
+              <label><span>抽帧</span><input aria-label={`${drone.intersection_name || drone.name}抽帧步长`} title='每 N 帧处理 1 帧；范围 1–30' type='number' min='1' max='30' value={frameStride} disabled={Boolean(mission)} onChange={(event) => setStrideSelection((current) => ({ ...current, [drone.id]: Math.min(30, Math.max(1, Number(event.target.value) || 1)) }))} /></label>
+              <span className='replay-camera-quality'>{analysisMode ? `${analysisMode} · ` : ''}{mission?.pipeline?.frame_stride ? `stride ${mission.pipeline.frame_stride} · ` : ''}{!drone.default_road_data_version || drone.road_context_quality === 'unverified' ? '道路未标定 · 仅检测/跟踪/遥测' : drone.default_road_data_version}</span>
               {mission
                 ? <button className='danger-button replay-camera-action' disabled={!isAdmin || pending} onClick={() => onAction({ kind: 'stop', drone, mission })}><Pause size={14} />停止</button>
-                : <button className='primary-button replay-camera-action' disabled={!isAdmin || pending || !sourceProfileId} onClick={() => onAction({ kind: 'start', drone, sourceProfileId })}><Play size={14} />启动检测</button>}
+                : <button className='primary-button replay-camera-action' disabled={!isAdmin || pending || !sourceProfileId} onClick={() => onAction({ kind: 'start', drone, sourceProfileId, frameStride })}><Play size={14} />启动检测</button>}
             </div>
           </div>
         </article>
@@ -229,13 +233,14 @@ function S9CreateDrawer({ mode, drones, sources, onClose, onSubmit, pending }) {
     video_src: 'test_videos/inter_xqh/DJI_20260403142902_0001_V小清河北路与水屯路路口.mp4',
     telemetry_file_path: 'test_videos/inter_xqh/telemetry.srt',
     start_at: localInput(initialStart), end_at: localInput(initialEnd),
+    frame_stride: 3,
   })
   const set = (key, value) => setForm((current) => ({ ...current, [key]: value }))
   const submit = () => {
     if (mode === 'fleet') return onSubmit({ id: form.drone_id, name: form.name || form.drone_id, model: form.model || null, enabled: true, default_inter_id: form.inter_id })
     if (mode === 'sources') return onSubmit({ drone_id: form.drone_id, payload: { mode: 'local', video: { source_type: 'mp4', location: form.video_src }, telemetry: { source_type: /\.(json|txt)$/i.test(form.telemetry_file_path) ? 'file' : 'srt', location: form.telemetry_file_path }, enabled: true, set_default: true } })
     if (mode === 'plans') return onSubmit({ name: form.name || '新建飞行计划', drone_id: form.drone_id, source_profile_id: form.source_profile_id, inter_id: form.inter_id, road_data_version: form.road_data_version, timezone: 'Asia/Shanghai', schedule: { type: 'once', start_at: new Date(form.start_at).toISOString(), end_at: new Date(form.end_at).toISOString() } })
-    return onSubmit({ name: form.name || '手动 Mission', drone_id: form.drone_id, source_profile_id: form.source_profile_id, inter_id: form.inter_id, road_data_version: form.road_data_version })
+    return onSubmit({ name: form.name || '手动 Mission', drone_id: form.drone_id, source_profile_id: form.source_profile_id, inter_id: form.inter_id, road_data_version: form.road_data_version, frame_stride: form.frame_stride })
   }
   return <DetailDrawer title={mode === 'fleet' ? '登记无人机' : mode === 'sources' ? '登记本地 MP4 + SRT/JSON 数据源' : mode === 'plans' ? '新建单次飞行计划' : '新建手动 Mission'} subtitle='S9 真实配置' onClose={onClose} footer={<><button className='secondary-button' onClick={onClose}>取消</button><button className='primary-button' disabled={pending} onClick={submit}>保存到 road9</button></>}>
     <label>无人机 ID<input value={form.drone_id} onChange={(event) => { set('drone_id', event.target.value); const matched = sources.find((item) => item.drone_id === event.target.value); if (matched) set('source_profile_id', matched.profile_id) }} /></label>
@@ -243,6 +248,7 @@ function S9CreateDrawer({ mode, drones, sources, onClose, onSubmit, pending }) {
     {mode === 'fleet' && <label>型号<input value={form.model || ''} onChange={(event) => set('model', event.target.value)} /></label>}
     {mode === 'sources' && <><label>服务器 MP4 路径<input value={form.video_src} onChange={(event) => set('video_src', event.target.value)} /></label><label>DJI SRT 或 Cloud JSON 路径<input value={form.telemetry_file_path} onChange={(event) => set('telemetry_file_path', event.target.value)} /></label></>}
     {(mode === 'plans' || mode === 'missions') && <><label>数据源<select value={form.source_profile_id} onChange={(event) => set('source_profile_id', event.target.value)}>{sources.filter((item) => !form.drone_id || item.drone_id === form.drone_id).map((item) => <option key={item.profile_id} value={item.profile_id}>{item.profile_id}</option>)}</select></label><label>权威路口 ID<input value={form.inter_id} onChange={(event) => set('inter_id', event.target.value)} /></label><label>路网版本<input value={form.road_data_version} onChange={(event) => set('road_data_version', event.target.value)} /></label></>}
+    {mode === 'missions' && <label>抽帧步长<input aria-label='Mission 抽帧步长' title='每 N 帧处理 1 帧；范围 1–30' type='number' min='1' max='30' value={form.frame_stride} onChange={(event) => set('frame_stride', Math.min(30, Math.max(1, Number(event.target.value) || 1)))} /></label>}
     {mode === 'plans' && <><label>开始时间<input type='datetime-local' value={form.start_at} onChange={(event) => set('start_at', event.target.value)} /></label><label>结束时间<input type='datetime-local' value={form.end_at} onChange={(event) => set('end_at', event.target.value)} /></label></>}
     <QualityNotice tone='info' title='边界说明'>本页面只调度 AI Pipeline，不下发航线、起降、返航或云台控制。</QualityNotice>
   </DetailDrawer>

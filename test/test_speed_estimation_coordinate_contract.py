@@ -56,6 +56,7 @@ def test_hover_cruise_speed_uses_world_history_independent_of_current_h():
         (0.5, 0.0, 0.1),
         (1.0, 0.0, 0.2),
     ]
+    track.trajectory_output_eligible = True
     frame = _frame_with_track(track)
     frame.homography_matrix = np.array(
         [[100.0, 0.0, 9000.0], [0.0, 100.0, -8000.0], [0.0, 0.0, 1.0]]
@@ -112,3 +113,36 @@ def test_direction_statistics_keep_unknown_speed_null():
 
     for direction in ("straight", "left_turn", "right_turn", "u_turn"):
         assert result.direction_stats[direction]["avg_speed_kmh"] is None
+
+
+def test_candidate_track_cannot_enter_speed_direction_or_queue_business_outputs():
+    candidate = TrackElement(id=9, timestamp_first=0.0)
+    candidate.position_history_enu_m = [
+        (0.0, 0.0, 0.0),
+        (1.0, 0.0, 0.1),
+        (2.0, 0.0, 0.2),
+    ]
+    candidate.trajectory_output_eligible = False
+    frame = _frame_with_track(candidate)
+    frame.active_tracks = {9: candidate}
+    frame.mature_tracks = {}
+
+    speed = SpeedEstimationNode(
+        {
+            "tracking_profile": "hover_cruise_v1",
+            "speed_estimation": {"enabled": True, "smoothing_window": 1},
+        }
+    ).process(frame)
+    result = DirectionFlowNode(
+        {"direction_flow": {"enabled": True, "queue_speed_threshold_kmh": 5.0}}
+    ).process(speed)
+
+    assert candidate.velocity_ms is None
+    assert candidate.speed_kmh is None
+    assert candidate.avg_speed_kmh is None
+    assert result.queue_count == 0
+    assert all(
+        result.direction_stats[direction]["count"] == 0
+        for direction in ("straight", "left_turn", "right_turn", "u_turn")
+    )
+    assert result.direction_stats["unknown"]["count"] == 0

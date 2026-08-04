@@ -392,13 +392,17 @@ describe('Console2 full prototype', () => {
     platformApi.missions.mockResolvedValueOnce([])
     open('/drones?tab=fleet')
     const selector = await screen.findByRole('combobox', { name: '小清河北路 × 水屯路回放源' })
+    const strideInput = screen.getByRole('spinbutton', { name: '小清河北路 × 水屯路抽帧步长' })
+    expect(strideInput).toHaveValue(3)
     fireEvent.change(selector, { target: { value: 'SRC-LOCAL-XQH-PM' } })
+    fireEvent.change(strideInput, { target: { value: '6' } })
     fireEvent.click(screen.getByRole('button', { name: '启动检测' }))
     await waitFor(() => expect(platformApi.createMission).toHaveBeenCalledWith(expect.objectContaining({
       drone_id: 'UAV-M300-03',
       source_profile_id: 'SRC-LOCAL-XQH-PM',
       inter_id: 'INT_camera_1',
       road_data_version: 'ROAD-LOCAL-INTER-XQH',
+      frame_stride: 6,
     })))
   })
 

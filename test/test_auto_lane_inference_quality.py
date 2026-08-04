@@ -21,9 +21,11 @@ def test_unknown_world_speed_is_not_treated_as_zero_or_a_stopped_vehicle():
     node._inferred_lanes = {lane.lane_id: lane}
 
     unknown = TrackElement(id=1, timestamp_first=0.0)
+    unknown.trajectory_output_eligible = True
     unknown.current_lane = lane.lane_id
     unknown.avg_speed_kmh = None
     moving = TrackElement(id=2, timestamp_first=0.0)
+    moving.trajectory_output_eligible = True
     moving.current_lane = lane.lane_id
     moving.avg_speed_kmh = 18.0
 

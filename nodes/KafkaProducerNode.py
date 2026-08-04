@@ -12,6 +12,7 @@ import os
 import re
 import time
 import uuid
+from collections import Counter
 from datetime import UTC, datetime
 from json import dumps
 
@@ -22,6 +23,7 @@ from elements.FrameElement import FrameElement
 from elements.VideoEndBreakElement import VideoEndBreakElement
 from nodes.ReliableKafkaPublisher import ReliableKafkaPublisher
 from utils_local.coordinates import enu_to_gcj02, normalize_telemetry_position
+from utils_local.track_lifecycle import active_tracks_of, mature_tracks_of
 from utils_local.utils import profile_time
 
 logger = logging.getLogger(__name__)
@@ -157,6 +159,8 @@ class KafkaProducerNode:
         msg_type: str,
         data: dict,
         frame_element: FrameElement,
+        *,
+        message_id: str | None = None,
     ) -> dict:
         """Wrap business data in the ADR-019 v1 message envelope."""
         produced_at = datetime.now(UTC)
@@ -191,7 +195,7 @@ class KafkaProducerNode:
             elif time_quality == "inferred" and dynamic_quality == "verified":
                 dynamic_quality = "degraded"
         return {
-            "message_id": str(uuid.uuid4()),
+            "message_id": message_id or str(uuid.uuid4()),
             "msg_type": msg_type,
             "schema_version": f"{msg_type}/v1",
             "occurred_at": occurred_at,
@@ -245,6 +249,68 @@ class KafkaProducerNode:
                 return round(len(self._fps_timestamps) / dt, 1)
         return 0.0
 
+    @staticmethod
+    def _recognition_diagnostics(frame_element: FrameElement) -> dict:
+        """Expose detector-to-current-track coverage without claiming truth accuracy."""
+        small_target_max_area_px2 = 4096
+
+        def small_target_counts(boxes, classes) -> tuple[int, dict[str, int]]:
+            counts: Counter[str] = Counter()
+            for box, class_name in zip(boxes or [], classes):
+                if not isinstance(box, (list, tuple)) or len(box) < 4:
+                    continue
+                width = max(float(box[2]) - float(box[0]), 0.0)
+                height = max(float(box[3]) - float(box[1]), 0.0)
+                if width > 0 and height > 0 and width * height <= small_target_max_area_px2:
+                    counts[str(class_name)] += 1
+            return sum(counts.values()), dict(sorted(counts.items()))
+
+        detection_quality = getattr(frame_element, "detection_diagnostics", None) or {}
+        detected_classes = [
+            str(value) for value in (getattr(frame_element, "detected_cls", None) or [])
+        ]
+        tracked_classes = [
+            str(value) for value in (getattr(frame_element, "tracked_cls", None) or [])
+        ]
+        valid_detections = int(
+            detection_quality.get(
+                "valid_detection_count",
+                len(getattr(frame_element, "detected_xyxy", None) or []),
+            )
+        )
+        emitted_tracks = len(getattr(frame_element, "id_list", None) or [])
+        small_detections, small_detection_classes = small_target_counts(
+            getattr(frame_element, "detected_xyxy", None), detected_classes
+        )
+        small_tracks, small_track_classes = small_target_counts(
+            getattr(frame_element, "tracked_xyxy", None), tracked_classes
+        )
+        return {
+            "truth_status": "not_evaluated",
+            "truth_reason": "approved_external_truth_unavailable",
+            "valid_yolo_detection_count": valid_detections,
+            "yolo_class_counts": dict(sorted(Counter(detected_classes).items())),
+            "emitted_image_track_count": emitted_tracks,
+            "emitted_track_class_counts": dict(
+                sorted(Counter(tracked_classes).items())
+            ),
+            "unassociated_detection_count": max(valid_detections - emitted_tracks, 0),
+            "same_frame_track_to_detection_ratio": round(
+                emitted_tracks / valid_detections, 4
+            ) if valid_detections else None,
+            "invalid_detector_geometry_count": int(
+                detection_quality.get("invalid_geometry_count", 0)
+            ),
+            "small_target_max_area_px2": small_target_max_area_px2,
+            "small_yolo_detection_count": small_detections,
+            "small_emitted_track_count": small_tracks,
+            "small_track_to_detection_ratio": round(
+                small_tracks / small_detections, 4
+            ) if small_detections else None,
+            "small_yolo_class_counts": small_detection_classes,
+            "small_emitted_track_class_counts": small_track_classes,
+        }
+
     def _compute_congestion_index(
         self, cars: int, roads_activity: dict, frame_element: FrameElement
     ) -> float:
@@ -273,10 +339,10 @@ class KafkaProducerNode:
                 max_queue_m = max(max_queue_m, q)
         queue_score = min(max_queue_m / max(self._queue_threshold_m, 1), 1.0) * 3
 
-        # 因子3: 低速比例 (0-3) — 从 buffer_tracks 中统计低速车辆占比
+        # 因子3: 低速比例 (0-3) — 只统计成熟业务轨迹
         slow_count = 0
         total_tracks = 0
-        for track in frame_element.buffer_tracks.values():
+        for track in mature_tracks_of(frame_element).values():
             total_tracks += 1
             if track.avg_speed_kmh is not None and track.avg_speed_kmh < 10:
                 slow_count += 1
@@ -343,16 +409,14 @@ class KafkaProducerNode:
         lets the platform draw in-progress trajectories at the same cadence as
         the left-side detection stream.
         """
-        buffer_tracks = getattr(frame_element, "buffer_tracks", None) or {}
-        if not buffer_tracks:
+        mature_tracks = mature_tracks_of(frame_element)
+        if not mature_tracks:
             return []
 
         anchor_gcj02 = getattr(frame_element, "anchor_gcj02", None)
 
         active = []
-        for track_id, track in sorted(buffer_tracks.items(), key=lambda item: item[0]):
-            if not getattr(track, "trajectory_output_eligible", False):
-                continue
+        for track_id, track in sorted(mature_tracks.items(), key=lambda item: item[0]):
             bbox_center_px = getattr(track, "trajectory_points", None) or []
             ground_contact_px = getattr(track, "ground_contact_points_px", None) or []
             trajectory_px = (
@@ -530,18 +594,38 @@ class KafkaProducerNode:
     def publish_completed_tracks(self, frame_element: FrameElement) -> int:
         """Publish completed tracks before a terminal sentinel closes the publisher."""
         completed_tracks = getattr(frame_element, "completed_tracks", None) or []
+        published = 0
         for track in completed_tracks:
+            termination_reason = track.get("termination_reason")
+            if not termination_reason:
+                logger.warning(
+                    "Skipped track_complete without termination reason: pipeline=%s track=%s",
+                    getattr(self, "pipeline_id", None),
+                    track.get("track_id"),
+                )
+                continue
             message = {"intersection_id": self.intersection_id, **track}
+            deterministic_id = str(
+                uuid.uuid5(
+                    uuid.NAMESPACE_URL,
+                    "traffic-analyzer:uav_track_complete:"
+                    f"{getattr(self, 'pipeline_id', None)}:{track.get('track_id')}",
+                )
+            )
             message = self._canonical_envelope(
-                "uav_track_complete", message, frame_element
+                "uav_track_complete",
+                message,
+                frame_element,
+                message_id=deterministic_id,
             )
             self._enqueue(self.track_complete_topic, message, durable=True)
+            published += 1
             logger.debug(
                 "KAFKA enqueued track_complete: id=%s topic=%s",
                 track.get("track_id"),
                 self.track_complete_topic,
             )
-        return len(completed_tracks)
+        return published
 
     @profile_time
     def process(self, frame_element: FrameElement):
@@ -597,10 +681,7 @@ class KafkaProducerNode:
             candidate_trajectories = candidate_trajectories[
                 : max(0, realtime_limit - len(active_trajectories))
             ]
-            eligible_active_track_count = sum(
-                bool(getattr(track, "trajectory_output_eligible", False))
-                for track in (frame_element.buffer_tracks or {}).values()
-            )
+            eligible_active_track_count = len(mature_tracks_of(frame_element))
             candidate_source_count = len(
                 getattr(frame_element, "candidate_trajectories", None) or []
             )
@@ -626,10 +707,11 @@ class KafkaProducerNode:
                     1,
                 ),
                 "inference_context": inference_context or None,
+                "recognition_diagnostics": self._recognition_diagnostics(frame_element),
                 "source_capture_time": getattr(frame_element, "source_capture_time", None),
                 "source_drop_count": getattr(frame_element, "source_drop_count", 0),
                 "source_drop_reason": getattr(frame_element, "source_drop_reason", None),
-                "active_tracks": len(frame_element.buffer_tracks or {}),
+                "active_tracks": len(active_tracks_of(frame_element)),
                 "eligible_active_tracks": eligible_active_track_count,
                 "candidate_tracks": candidate_source_count,
                 "realtime_trajectory_max_tracks": realtime_limit,

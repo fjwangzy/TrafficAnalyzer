@@ -17,6 +17,7 @@ import numpy as np
 
 from elements.FrameElement import FrameElement
 from elements.VideoEndBreakElement import VideoEndBreakElement
+from utils_local.track_lifecycle import mature_tracks_of
 from utils_local.utils import profile_time
 from utils_local.homography import pixel_to_world, is_valid_homography
 from utils_local.auto_lane_inference import (
@@ -266,11 +267,11 @@ class AutoLaneInferenceNode:
         if not self._inferred_lanes:
             return
 
-        buffer_tracks = frame_element.buffer_tracks
-        if not buffer_tracks:
+        mature_tracks = mature_tracks_of(frame_element)
+        if not mature_tracks:
             return
 
-        for track_id, track in buffer_tracks.items():
+        for track_id, track in mature_tracks.items():
             # 需要足够的轨迹点才能匹配
             if len(track.trajectory_points) < 3:
                 continue
@@ -300,12 +301,12 @@ class AutoLaneInferenceNode:
         if not self._inferred_lanes:
             return
 
-        buffer_tracks = frame_element.buffer_tracks or {}
+        mature_tracks = mature_tracks_of(frame_element)
 
         for lane_id, lane in self._inferred_lanes.items():
             # 找到当前在此车道的活跃轨迹
             active_in_lane = []
-            for track_id, track in buffer_tracks.items():
+            for track_id, track in mature_tracks.items():
                 if track.current_lane == lane_id:
                     active_in_lane.append(track)
 

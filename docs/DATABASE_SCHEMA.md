@@ -593,3 +593,7 @@ Alembic`20260728_0020`已在本机创建`uav_source_geo_registrations`及相关�
 同一迁移为 `uav_track_events` 增加可查询的 `association_id/tracking_method/tracking_quality/
 geo_reference_quality/road_match_quality/quality_reasons/geo_registration_id`。原坐标、地图和车道列继续
 可空，原始 Kafka payload 完整保留。该不可逆迁移不删除或回写旧运行结果。
+
+### 10.8 参数化渠化编辑模型（2026-08-03，无迁移）
+
+本次不新增表或 Alembic revision。`uav_channelized_map_versions.topology.editor_model` 保存 `parameterized|freeform` 版本模型及可重开像素几何；服务端派生草稿同时在 topology/quality 写 `derived_from_map_version_id` 并把 `reviewed` 归零。`uav_visual_registrations.registration_pose` 保存固定影像/移动路网的版本化姿态。正式 ENU/GCJ-02 Lane/Feature 仍写既有 geometry JSON，`uav_visual_lane_bindings` 仍是候选/发布车道绑定事实。`lane_verified` 行和绑定保持不可变，编辑器元数据不进入 Runtime Bundle。

@@ -12,6 +12,11 @@ from utils_local.coordinates import gcj02_to_enu
 from utils_local.runtime_map import (
     load_runtime_map_bundle,
 )
+from utils_local.track_lifecycle import (
+    active_tracks_of,
+    mature_track_for_association,
+    mature_tracks_of,
+)
 from utils_local.utils import profile_time
 
 
@@ -128,9 +133,9 @@ class RoadMapMatchingNode:
                 ),
                 "map_status": status,
                 "matched_tracks": 0,
-                "total_tracks": len(frame_element.buffer_tracks or {}),
+                "total_tracks": len(mature_tracks_of(frame_element)),
             }
-            for track in (frame_element.buffer_tracks or {}).values():
+            for track in active_tracks_of(frame_element).values():
                 self._clear_road_fields(track, status)
             return frame_element
         frame_element.runtime_map_bundle = self.bundle
@@ -145,7 +150,7 @@ class RoadMapMatchingNode:
                 "matched_tracks": 0,
                 "total_tracks": 0,
             }
-            for track in (frame_element.buffer_tracks or {}).values():
+            for track in active_tracks_of(frame_element).values():
                 self._clear_road_fields(track, "quality_gate_blocked")
             return frame_element
         frame_element.road_analytics_eligible = True
@@ -155,7 +160,7 @@ class RoadMapMatchingNode:
         for index, track_id in enumerate(frame_element.id_list or []):
             if index >= len(frame_element.tracked_xyxy or []):
                 continue
-            track = (frame_element.buffer_tracks or {}).get(track_id)
+            track = mature_track_for_association(frame_element, track_id)
             if track is None:
                 continue
             self._clear_road_fields(track, "unmatched")
@@ -199,6 +204,6 @@ class RoadMapMatchingNode:
             "map_version_id": self.bundle["map_version_id"],
             "map_status": "lane_verified",
             "matched_tracks": matched,
-            "total_tracks": len(frame_element.buffer_tracks or {}),
+            "total_tracks": len(mature_tracks_of(frame_element)),
         }
         return frame_element

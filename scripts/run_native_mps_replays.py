@@ -57,7 +57,7 @@ def source_catalog() -> dict[str, dict]:
 
 
 def resolve_replay_imgsz(requested: int | None, *, adaptive_imgsz: bool) -> int:
-    """Keep historical fixed replay at 640 and production adaptive fallback at 960."""
+    """Use the production 960 fallback unless fixed-size diagnostics are explicit."""
     if requested is not None:
         return int(requested)
     return 960 if adaptive_imgsz else 640
@@ -75,6 +75,22 @@ def video_fps(path: Path) -> float:
     if not fps or fps <= 0:
         raise RuntimeError(f"invalid video FPS: {path}")
     return fps
+
+
+def validate_source_time_stride(
+    frame_stride: int,
+    input_fps: float,
+    *,
+    max_frame_gap_sec: float = 0.5,
+) -> float:
+    """Reject replay sampling that would intentionally terminate every ID."""
+    source_gap_sec = float(frame_stride) / float(input_fps)
+    if source_gap_sec > max_frame_gap_sec:
+        raise ValueError(
+            f"frame stride creates {source_gap_sec:.6f}s source-time gap; "
+            f"tracker maximum is {max_frame_gap_sec:.6f}s"
+        )
+    return source_gap_sec
 
 
 def validate_source_assets(source: dict, digest_cache: dict[Path, str] | None = None) -> dict:
@@ -208,6 +224,125 @@ def inference_summary(messages: list[dict]) -> dict:
         "pipeline_processing_ms": distribution(pipeline_samples),
         "imgsz_counts": dict(sorted(imgsz_counts.items())),
         "fps_median": round(statistics.median(fps), 2) if fps else None,
+    }
+
+
+def recognition_summary(messages: list[dict]) -> dict:
+    """Aggregate detector/track coverage while keeping truth metrics explicit."""
+    samples = 0
+    samples_with_detections = 0
+    detected_total = 0
+    tracked_total = 0
+    unassociated_total = 0
+    invalid_geometry_total = 0
+    small_target_max_area_px2 = None
+    small_detected_total = 0
+    small_tracked_total = 0
+    yolo_classes: Counter[str] = Counter()
+    track_classes: Counter[str] = Counter()
+    small_yolo_classes: Counter[str] = Counter()
+    small_track_classes: Counter[str] = Counter()
+    for message in messages:
+        diagnostics = (message.get("data") or {}).get("recognition_diagnostics")
+        if not isinstance(diagnostics, dict):
+            continue
+        samples += 1
+        detected = int(diagnostics.get("valid_yolo_detection_count") or 0)
+        tracked = int(diagnostics.get("emitted_image_track_count") or 0)
+        detected_total += detected
+        tracked_total += tracked
+        if detected > 0:
+            samples_with_detections += 1
+        unassociated_total += int(
+            diagnostics.get("unassociated_detection_count")
+            or max(detected - tracked, 0)
+        )
+        invalid_geometry_total += int(
+            diagnostics.get("invalid_detector_geometry_count") or 0
+        )
+        threshold = diagnostics.get("small_target_max_area_px2")
+        if threshold is not None:
+            small_target_max_area_px2 = int(threshold)
+        small_detected_total += int(
+            diagnostics.get("small_yolo_detection_count") or 0
+        )
+        small_tracked_total += int(
+            diagnostics.get("small_emitted_track_count") or 0
+        )
+        yolo_classes.update(diagnostics.get("yolo_class_counts") or {})
+        track_classes.update(diagnostics.get("emitted_track_class_counts") or {})
+        small_yolo_classes.update(diagnostics.get("small_yolo_class_counts") or {})
+        small_track_classes.update(
+            diagnostics.get("small_emitted_track_class_counts") or {}
+        )
+    return {
+        "truth_status": "not_evaluated",
+        "truth_reason": "approved_external_truth_unavailable",
+        "samples": samples,
+        "samples_with_detections": samples_with_detections,
+        "detection_frame_coverage_ratio": round(
+            samples_with_detections / samples, 4
+        ) if samples else None,
+        "valid_yolo_detections": detected_total,
+        "emitted_image_tracks": tracked_total,
+        "unassociated_detections": unassociated_total,
+        "same_frame_track_to_detection_ratio": round(
+            tracked_total / detected_total, 4
+        ) if detected_total else None,
+        "invalid_detector_geometry_count": invalid_geometry_total,
+        "small_target_max_area_px2": small_target_max_area_px2,
+        "small_yolo_detections": small_detected_total,
+        "small_emitted_tracks": small_tracked_total,
+        "small_track_to_detection_ratio": round(
+            small_tracked_total / small_detected_total, 4
+        ) if small_detected_total else None,
+        "small_yolo_class_counts": dict(sorted(small_yolo_classes.items())),
+        "small_emitted_track_class_counts": dict(
+            sorted(small_track_classes.items())
+        ),
+        "yolo_class_counts": dict(sorted(yolo_classes.items())),
+        "emitted_track_class_counts": dict(sorted(track_classes.items())),
+        "formal_precision": "not_evaluated",
+        "formal_recall": "not_evaluated",
+    }
+
+
+def lifecycle_summary(messages: list[dict]) -> dict:
+    """Aggregate lifecycle continuity without treating observed IDs as truth."""
+    samples = 0
+    active_max = 0
+    mature_max = 0
+    candidate_max = 0
+    completed_total = 0
+    regression_max = 0
+    termination_reasons: Counter[str] = Counter()
+    for message in messages:
+        tracking = (message.get("data") or {}).get("tracking_diagnostics")
+        lifecycle = tracking.get("lifecycle") if isinstance(tracking, dict) else None
+        if not isinstance(lifecycle, dict):
+            continue
+        samples += 1
+        active_max = max(active_max, int(lifecycle.get("active_track_count") or 0))
+        mature_max = max(mature_max, int(lifecycle.get("mature_track_count") or 0))
+        candidate_max = max(
+            candidate_max, int(lifecycle.get("candidate_track_count") or 0)
+        )
+        completed_total += int(lifecycle.get("completed_track_count") or 0)
+        regression_max = max(
+            regression_max,
+            int(lifecycle.get("same_id_mature_to_candidate_count") or 0),
+        )
+        reason = lifecycle.get("termination_reason")
+        if reason:
+            termination_reasons[str(reason)] += 1
+    return {
+        "samples": samples,
+        "active_track_count_max": active_max,
+        "mature_track_count_max": mature_max,
+        "candidate_track_count_max": candidate_max,
+        "completed_track_count_total": completed_total,
+        "same_id_mature_to_candidate_count": regression_max,
+        "termination_reason_counts": dict(sorted(termination_reasons.items())),
     }
 
 
@@ -390,6 +525,22 @@ def formal_business_leakage(result: dict) -> dict:
 
 def source_result_passed(result: dict) -> bool:
     """Apply the per-source functional acceptance contract."""
+    recognition = result.get("recognition")
+    recognition_ok = True
+    if isinstance(recognition, dict):
+        recognition_ok = bool(
+            int(recognition.get("samples") or 0) > 0
+            and int(recognition.get("valid_yolo_detections") or 0) > 0
+            and int(recognition.get("small_yolo_detections") or 0) > 0
+            and int(recognition.get("invalid_detector_geometry_count") or 0) == 0
+        )
+    lifecycle = result.get("lifecycle")
+    lifecycle_ok = True
+    if isinstance(lifecycle, dict):
+        lifecycle_ok = bool(
+            int(lifecycle.get("samples") or 0) > 0
+            and int(lifecycle.get("same_id_mature_to_candidate_count") or 0) == 0
+        )
     base = bool(
         result.get("return_code") == 0
         and not result.get("error")
@@ -398,6 +549,8 @@ def source_result_passed(result: dict) -> bool:
         and int((result.get("tcc_diagnostics") or {}).get("samples") or 0) > 0
         and result.get("natural_eof", True)
         and (result.get("road9_reconciliation") or {"matched": True}).get("matched", False)
+        and recognition_ok
+        and lifecycle_ok
     )
     trajectory = result.get("trajectory_output")
     if trajectory is None:
@@ -508,6 +661,7 @@ class PlatformClient:
         video_port: int,
         runtime_bundle: dict | None,
         tracking_profile: str = "hover_cruise_v1",
+        frame_stride: int | None = None,
     ) -> dict:
         return self.request(
             "POST",
@@ -525,6 +679,7 @@ class PlatformClient:
                 "video_stream_url": f"http://127.0.0.1:{video_port}/video",
                 "topic_name": f"uav_statistics_{camera_id}",
                 "tracking_profile": tracking_profile,
+                "frame_stride": frame_stride,
                 "candidate_only": False,
             },
         )
@@ -590,6 +745,8 @@ def _capture_message(buckets: dict[str, list[dict]], message, pipeline_id: str) 
                     "inference_ms": data.get("inference_ms"),
                     "pipeline_processing_ms": data.get("pipeline_processing_ms"),
                     "inference_context": data.get("inference_context"),
+                    "recognition_diagnostics": data.get("recognition_diagnostics"),
+                    "tracking_diagnostics": data.get("tracking_diagnostics"),
                     "fps": data.get("fps"),
                     "active_tracks": data.get("eligible_active_tracks", data.get("active_tracks")),
                     "candidate_tracks": candidate["candidate_tracks"],
@@ -754,6 +911,7 @@ def run_source(
     source: dict,
     *,
     index: int,
+    camera_id_base: int,
     output_dir: Path,
     kafka_bootstrap: str,
     frame_stride: int,
@@ -766,7 +924,7 @@ def run_source(
     show_in_web: bool = False,
     save_video: bool = False,
 ) -> dict:
-    camera_id = 5700 + index
+    camera_id = camera_id_base + index
     video_port = 15700 + index
     configured_mode = source.get("acceptance_mode", "formal_world_trajectory")
     runtime_bundle = client.runtime_bundle(
@@ -783,6 +941,7 @@ def run_source(
         video_port,
         runtime_bundle,
         tracking_profile=tracking_profile,
+        frame_stride=frame_stride,
     )
     pipeline_id = registered["pipeline_id"]
     run_id = f"native-mps-{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}-{source['profile_id']}"
@@ -952,6 +1111,8 @@ def run_source(
         "eligible_completed_tracks": trajectory_output["eligible_completed_tracks"],
         "road9_reconciliation": road9,
         "performance": inference_summary(buckets["stats"]),
+        "recognition": recognition_summary(buckets["stats"]),
+        "lifecycle": lifecycle_summary(buckets["stats"]),
         "error": error,
     }
     result["formal_business_leakage"] = formal_business_leakage(result)
@@ -967,18 +1128,30 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--username", default=os.environ.get("PLATFORM_USERNAME", "admin"))
     parser.add_argument("--password", default=os.environ.get("PLATFORM_PASSWORD", "admin123"))
     parser.add_argument("--kafka-bootstrap", default="127.0.0.1:9092")
-    parser.add_argument("--frame-stride", type=int, help="fixed override; otherwise derived from --sample-fps")
-    parser.add_argument("--sample-fps", type=float, default=3.0)
+    sampling = parser.add_mutually_exclusive_group()
+    sampling.add_argument(
+        "--frame-stride",
+        type=int,
+        default=3,
+        help="process every Nth source frame (default: 3)",
+    )
+    sampling.add_argument(
+        "--sample-fps",
+        type=float,
+        default=None,
+        help="derive stride from a requested processed FPS instead",
+    )
     parser.add_argument(
         "--imgsz",
         type=int,
         default=None,
-        help="fixed size (default 640), or adaptive missing-telemetry fallback (default 960)",
+        help="adaptive missing-telemetry fallback (default 960), or explicit fixed diagnostic size",
     )
     parser.add_argument(
         "--adaptive-imgsz",
-        action="store_true",
-        help="enable production altitude-aware 640/960/1280 inference tiers; fixed --imgsz is the default",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="use production altitude-aware 640/960/1280 tiers (default enabled; --no-adaptive-imgsz is diagnostic-only)",
     )
     parser.add_argument(
         "--tracking-profile",
@@ -997,6 +1170,12 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="save the production ShowNode output beside the replay result",
     )
+    parser.add_argument(
+        "--camera-id-base",
+        type=int,
+        default=5700,
+        help="reserved camera/topic base; single-source default is 5701",
+    )
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--resume", action="store_true", help="reuse completed source artifacts")
     parser.add_argument("--skip-preflight", action="store_true", help=argparse.SUPPRESS)
@@ -1007,13 +1186,15 @@ def main() -> int:
     args = parse_args()
     if args.frame_stride is not None and args.frame_stride < 1:
         raise SystemExit("--frame-stride must be >= 1")
-    if args.sample_fps <= 0:
+    if args.sample_fps is not None and args.sample_fps <= 0:
         raise SystemExit("--sample-fps must be > 0")
     catalog = source_catalog()
     selected = args.source or list(catalog)
     unknown = [profile_id for profile_id in selected if profile_id not in catalog]
     if unknown:
         raise SystemExit(f"unknown source profile(s): {', '.join(unknown)}")
+    if args.camera_id_base < 0 or args.camera_id_base + len(selected) > 65535:
+        raise SystemExit("--camera-id-base must keep generated camera IDs in 1..65535")
     device = verify_native_mps() if not args.skip_preflight else {"skipped": True}
     digest_cache: dict[Path, str] = {}
     source_integrity = {}
@@ -1056,11 +1237,20 @@ def main() -> int:
                 continue
         print(f"[{index}/{len(selected)}] running {profile_id}", flush=True)
         input_fps = video_fps(ROOT / catalog[profile_id]["video"])
-        frame_stride = args.frame_stride or max(1, int(round(input_fps / args.sample_fps)))
+        frame_stride = (
+            max(1, int(round(input_fps / args.sample_fps)))
+            if args.sample_fps is not None
+            else args.frame_stride
+        )
+        try:
+            validate_source_time_stride(frame_stride, input_fps)
+        except ValueError as exc:
+            raise SystemExit(str(exc)) from exc
         result = run_source(
             client,
             catalog[profile_id],
             index=index,
+            camera_id_base=args.camera_id_base,
             output_dir=output_dir,
             kafka_bootstrap=args.kafka_bootstrap,
             frame_stride=frame_stride,

@@ -21,7 +21,7 @@
 `VideoReader` 从 MP4、RTSP 或摄像头读取原始帧，并按视频时间戳注入遥测数据。为兼顾离线全帧分析和实时预览速度，提供两类抽帧参数：
 
 - `video_reader.skip_secs`：按视频时间间隔抽帧，例如 `0.5` 表示相邻处理帧至少间隔 0.5 秒。
-- `video_reader.frame_stride`：按原始帧号抽帧，例如 `12` 表示每 12 帧处理 1 帧；`FrameElement.frame_num` 保留原始帧号，`timestamp` 仍来自视频时间轴。低 FPS 本机实时预览时可通过 `FRAME_STRIDE=10~12` 让画面中的车辆运动速度接近正常，只是运动会更跳跃。
+- `video_reader.frame_stride`：按原始帧号抽帧，例如 `3` 表示每 3 帧处理 1 帧；`FrameElement.frame_num` 保留原始帧号，`timestamp` 仍来自视频时间轴。交互式 Mission/Pipeline 默认 `3`，用户可在 Console2 启动前设置 `1–30`；30 FPS 源在 `stride=3` 时约处理 10 FPS。该值经 Mission snapshot 和 Pipeline response 回显后以 `FRAME_STRIDE` 注入检测子进程。批量验收可显式使用其他值，但高 stride 结果不得替代模型精度评估。
 
 ### 1. 车辆检测
 
@@ -42,6 +42,11 @@
   `height`，不得把绝对海拔当 AGL。
 - `DetectionNode` 与 `hover_only_legacy` 的 `DetectionTrackingNodes` 共用
   `AdaptiveImageSizePolicy`；尺寸只改变 YOLO 输入，不参与 ByteTrack、世界投影、道路或 TCC 资格。
+- 自适应策略是仓库配置、Platform 启动和原生 MPS 回放的全局默认。固定 `imgsz` 只保留给显式
+  `--no-adaptive-imgsz` 诊断，不允许通过 `ADAPTIVE_IMGSZ_ENABLED=false` 静默关闭生产默认。
+- `uav_stats.data.recognition_diagnostics` 在源画面坐标中报告合法 YOLO 框、当前输出图像轨迹、
+  未关联检测和面积 `<=4096px²` 的小目标分类计数/同帧转化率。该口径用于定位“YOLO 未检出”与
+  “已检出但 ByteTrack 尚未输出”，不是人工真值，precision/recall 继续为 `not_evaluated`。
 - NMS IOU 阈值 0.7 较高，允许更多重叠框通过
 - MPS 推理在初始化时强制 Ultralytics 使用非原地 bbox 裁剪；检测输出通过共享几何边界按行裁剪/校验。NaN/Inf、零/负宽高和字段错位不会进入 ByteTrack，并记录 `detection_diagnostics`；任一非法框会令该帧正式业务降级为 `invalid_detector_geometry`。
 
@@ -64,6 +69,8 @@ ByteTrack 的当前正式节点位于进程 2：`ImageMotionEstimationNode → G
 严格早于 Homography、ENU 和地图质量处理；世界投影由 `PostTrackingWorldProjectionNode` 在 ID 确定后完成。
 旧 `DetectionTrackingNodes` 仅由 `hover_only_legacy` 回滚 profile 使用。跟踪节点输出兼容的
 `tracked_xyxy/tracked_cls/tracked_conf/id_list`，因此下游统计节点不需要维护第二套接口。
+类别 ID→名称目录在节点生命周期内持久化；ByteTrack 类别切换尚未确认时即使当前检测帧没有旧类别，
+也必须输出原类别名，禁止退化为数字字符串并污染按类别诊断。
 
 **算法流程**（每帧执行）：
 ```
@@ -96,6 +103,8 @@ Step 6: 清理超时轨迹
   - lost 状态默认超过 2 秒的轨迹标记为 Removed，不依赖处理 FPS
   - 源时间间隔超过 0.5 秒或时间倒退时重置图像关联
   - 位姿、当前帧矩阵、地图或遥测质量变化不结束、不丢弃、不拆分仍连续的图像轨迹
+  - adaptive `imgsz` 只影响本帧检测分辨率；YOLO 框统一还原到源画面坐标，因此 640/960/1280
+    切换不改变 ByteTrack 坐标系。短时漏检在 2 秒窗口内恢复时沿用原 ID，超过窗口才明确完成。
 
 Step 7: 稳定轨迹生命周期与可选能力富化
   - 成熟 ByteTrack 关联立即获得稳定 `track_id`，并保留原始 `association_id`
@@ -130,7 +139,7 @@ Step 7: 稳定轨迹生命周期与可选能力富化
    - 创建 `shapely.geometry.Point(cx, cy)`
    - 遍历所有道路多边形，检查 `Polygon.contains(Point)`
    - 如果匹配，记录 `start_road` 和 `timestamp_init_road`
-5. 清理超过 `buffer_analytics` 时间的旧轨迹
+5. 保留所有生命周期尚未结束的轨迹；只在明确关联终止、源时间断点、关联超时或自然 EOF 时完成
 
 **道路多边形格式**：
 ```json
@@ -148,7 +157,7 @@ Step 7: 稳定轨迹生命周期与可选能力富化
 
 **cars_amount（车辆总数）**：
 ```python
-self.cars_buffer.append(len(frame_element.id_list))  # 当前帧检测到的车辆数
+self.cars_buffer.append(len(frame_element.mature_tracks))  # 当前成熟活动目标数
 info["cars_amount"] = round(np.mean(self.cars_buffer))  # 滑动窗口平均
 ```
 - 窗口大小：`count_cars_buffer_frames`（默认 25 帧）
@@ -157,18 +166,22 @@ info["cars_amount"] = round(np.mean(self.cars_buffer))  # 滑动窗口平均
 
 **roads_activity（道路活跃度）**：
 ```python
-for track_element in buffer_tracks.items():
-    if (track_element.timestamp_last - track_element.timestamp_init_road > min_time_life_track
-        and track_element.start_road is not None):
-        roads_activity[start_road] += 1
+for track_id, track_element in mature_tracks.items():
+    if track_id 未登记 and 道路存在时间 > min_time_life_track and start_road is not None:
+        road_entry_events.append((当前源时间, start_road, track_id))
+
+丢弃 30 秒窗口外的 road_entry_events；registered track_id 保留到 Pipeline 结束，禁止重新登记
+for event in road_entry_events:
+    roads_activity[event.start_road] += 1
 
 # 转换为 辆/分钟
 for key in roads_activity:
     roads_activity[key] /= buffer_analytics  # buffer_analytics = 0.5 分钟
 ```
-- 只统计存活时间超过 `min_time_life_track`（3 秒）且有明确起始道路的轨迹
+- 只登记已成熟、道路存在超过 `min_time_life_track`（3 秒）且有明确起始道路的轨迹；每个 ID 一次
 - 除以时间窗口得到"辆/分钟"单位
-- **为什么用 buffer_analytics 而不是实时窗口**：需要足够的时间窗口才能反映真实的交通流量
+- `buffer_analytics=0.5` 只定义 30 秒道路入口事件窗口；事件到期会降低流量，但不会删除、完成或降级轨迹
+- 约 33 秒预热由 30 秒完整窗口加 3 秒道路存在确认组成，只控制流量何时可输出
 
 ### 5. Kafka 消息发送（当前实现）
 
@@ -490,7 +503,7 @@ Console2 对新事件展示 `conflict_original_frame`“原始画面”和 `conf
 
 ## 统计数据的完整生命周期
 
-### 当前实现（待迁移）
+### 当前实现
 
 ```
 帧 N 进入 VideoReader
@@ -504,15 +517,16 @@ Console2 对新事件展示 `conflict_original_frame`“原始画面”和 `conf
 帧 N 进入 TrackerInfoUpdateNode
   → buffer_tracks 新增 ID 16,17
   → ID 3 首次进入道路 2 的多边形 → start_road=2
-  → 清理超过 33 秒的旧轨迹
+  → 输出 active/mature/candidate/completed 四个生命周期视图；统计窗口不清理轨迹
 帧 N 进入 LaneDetectionNode
   → 无人工标注 → YOLO 分割模型检测车道标线 → 膨胀为车道多边形
   → lane_source="model", lane_polygons={lane_1: Polygon, ...}
 帧 N 进入 LaneAnalysisNode
   → lane_polygons 存在 → 车辆分配到车道 → 计算车道级流量/排队/车头时距
 帧 N 进入 CalcStatisticsNode
-  → cars_amount = mean([15,14,16,...]) = 15
-  → roads_activity = {1: 8, 2: 12, 3: 6, 4: 4, 5: 2} / 0.5min
+  → cars_amount = mature_tracks 的平滑活动数量
+  → 每个成熟 ID 在道路存在 3 秒后只登记一次入口事件
+  → roads_activity = 最近 30 秒入口事件数 / 0.5min
 帧 N 进入 AutoLaneInferenceNode
   → lane_source="model" → 跳过（模型检测优先于轨迹推断）
 帧 N 进入 KafkaProducerNode
@@ -628,7 +642,7 @@ SourceProfile 启动抽帧。五项测绘预检必须由操作员逐项确认；
 移除。当前地图的 `geometry_enu_m` 车道面通过同一关键帧单应矩阵求逆后叠加为绿色虚线参考，
 仅用于选择和拟合，不成为新的真值；操作员可点击参考车道复制为影像草稿，再拖动单个顶点或
 整体平移，所有点都限制在自然影像边界内。`lane_verified` 等已发布版本必须先完整复制为新的
-`draft` 才能拟合，禁止就地修改。最终几何仍只由服务端转换并执行自交、重叠和质量门禁。
+`draft` 才能拟合，禁止就地修改。最终几何仍只由服务端转换并执行自交、同一 Link 内车道面重叠和质量门禁；不同 Link 的转向流在路口内部允许空间交叉，不能被一般重叠校验误判为非法。
 关键帧任务必须把 DJI WGS-84 位置先归一化为 GCJ-02，再相对地图 `anchor_gcj02` 求位移并与
 源影像 pixel→帧局部 ENU 单应矩阵相乘，形成 pixel→地图 ENU。源影像任务禁止再乘
 `BEV view_transform⁻¹`；后者只属于 BEV 画布，混用会同时改变比例和中心点。
@@ -684,3 +698,12 @@ Lane ID、Link ID 与匹配质量为不可用，不能用零值伪装；方向�
 # 路口项目与视频归属
 
 路口渠化支持视频优先和路口优先，两条路径执行同一套悬停定位与候选匹配。路口优先并不构成跳过校验的授权：检测到其他正式路口或最近候选距离超过 80m 时必须阻止 `bind_expected_project`，由管理员转绑、建新项目或取消。多悬停段分别保存视频起止偏移；中心相距超过 250m 的片段不得合并。无有效遥测可保存为 `manual_unverified`，但发布仍需已验证 RoadContext、视觉配准、检查通过及既有几何质量门禁。
+
+### 渠化编辑与发布边界（2026-08-03）
+
+- 全局配准只移动路网覆盖层，原始关键帧及其证据哈希不变；整体变换必须同时作用于所有 Lane/Link/Feature 并保持相对拓扑。
+- 已存在的 Lane/Link/顶点/曲线控制柄允许移出影像像素边界；画布只裁剪显示，不得把点夹在边界或改变多边形相对形状。新增自由绘制点仍限定在证据图内。
+- 参数变化实时重建模板几何。人工局部调整、曲线控制柄和特殊车道属性记录为 `manual_override`；模板刷新只能更新未覆盖对象。
+- 人行横道、渠化岛、待转区、停止线、车道边界和分段标线是正式 Feature。公交、潮汐等属性可逐车道记录，但在专用 Runtime 规则实现前必须明确显示“规则未实现”，不能伪装为运行支持。
+- 旧 `polygon_px` 草稿继续可保存；保存后以 `freeform` 编辑模型保留曲线与像素几何。已发布 `lane_verified` 不可修改，只能由服务端派生新草稿并记录来源版本。发布仍要求视觉配准、方向/停止线/拓扑检查和人工复核。
+- 配准残差和人工复核是精度证据；浏览器截图只证明工程与交互复现，不构成生产地图精度结论。

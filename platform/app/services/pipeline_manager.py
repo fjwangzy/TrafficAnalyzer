@@ -32,6 +32,7 @@ from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
 from app.core.config import settings
+from app.core.pipeline_options import resolve_frame_stride
 from app.models.drone_store import assign_drone_to_intersection
 from app.services.pipeline_executor import (
     LocalPipelineExecutor,
@@ -118,6 +119,7 @@ class PipelineInstance:
     road_context_status: str = "missing"
     quality_status: str = "unverified"
     tracking_profile: str = "hover_cruise_v1"
+    frame_stride: int | None = None
     map_version_id: str | None = None
     candidate_only: bool = False
     status: PipelineStatus = PipelineStatus.PENDING
@@ -149,6 +151,7 @@ class PipelineInstance:
             "capabilities": capabilities,
             "capability_reasons": capability_reasons,
             "tracking_profile": self.tracking_profile,
+            "frame_stride": self.frame_stride,
             "map_version_id": self.map_version_id,
             "candidate_only": self.candidate_only,
             "status": self.status.value,
@@ -198,7 +201,7 @@ class PipelineManager:
             self._root = _PROJECT_ROOT
         self._kafka_bootstrap = kafka_bootstrap
         self._pipeline_python = pipeline_python or os.environ.get("PIPELINE_PYTHON") or "python"
-        self._frame_stride = frame_stride
+        self._frame_stride = resolve_frame_stride(frame_stride)
         self._video_public_base = video_public_base or settings.pipeline_video_base
         self._executor = executor or LocalPipelineExecutor(
             self._root,
@@ -272,6 +275,7 @@ class PipelineManager:
         source_profile_id: str | None = None,
         inter_id: str | None = None,
         tracking_profile: str = "hover_cruise_v1",
+        frame_stride: int | None = None,
         candidate_only: bool = False,
         road_context_status: str | None = None,
         quality_status: str | None = None,
@@ -315,6 +319,9 @@ class PipelineManager:
             else detector_video_stream_url(port, self._video_public_base)
         )
 
+        registered_frame_stride = (
+            resolve_frame_stride(frame_stride) if frame_stride is not None else None
+        )
         pipeline = PipelineInstance(
             pipeline_id=pipeline_id,
             drone_id=drone_id,
@@ -329,6 +336,7 @@ class PipelineManager:
             status=PipelineStatus.RUNNING,
             map_version_id=map_version_id,
             tracking_profile=tracking_profile,
+            frame_stride=registered_frame_stride,
             started_at=time.time(),
             candidate_only=candidate_only,
             road_context_status=(
@@ -366,6 +374,7 @@ class PipelineManager:
         road_context_status: str = "missing",
         quality_status: str = "unverified",
         tracking_profile: str = "hover_cruise_v1",
+        frame_stride: int | None = None,
     ) -> PipelineInstance:
         """Start a new detection pipeline process.
 
@@ -384,6 +393,10 @@ class PipelineManager:
         self._ensure_capacity()
         if tracking_profile not in {"hover_cruise_v1", "hover_only_legacy"}:
             raise ValueError("unsupported tracking_profile")
+        resolved_frame_stride = resolve_frame_stride(
+            frame_stride,
+            fallback=self._frame_stride,
+        )
         video_src = self._validate_video_source(video_src)
         if runtime_map_bundle is not None and runtime_map_bundle.get("map_status") != "lane_verified":
             raise ValueError("runtime_map_bundle must be lane_verified when provided")
@@ -416,6 +429,7 @@ class PipelineManager:
             road_context_status=road_context_status,
             quality_status=quality_status,
             tracking_profile=tracking_profile,
+            frame_stride=resolved_frame_stride,
             map_version_id=(
                 runtime_map_bundle.get("map_version_id") if runtime_map_bundle else None
             ),
@@ -437,7 +451,7 @@ class PipelineManager:
             quality_status=quality_status,
             tracking_profile=tracking_profile,
             runtime_map_bundle=runtime_map_bundle,
-            frame_stride=self._frame_stride,
+            frame_stride=resolved_frame_stride,
             kafka_bootstrap=kafka_bootstrap or self._kafka_bootstrap,
             telemetry_source=telemetry_source,
             telemetry_file_path=telemetry_file_path,

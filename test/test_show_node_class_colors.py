@@ -1,5 +1,6 @@
 import copy
 import unittest
+from unittest import mock
 
 import cv2
 import numpy as np
@@ -137,6 +138,32 @@ class ShowNodeClassColorsTest(unittest.TestCase):
             np.any(amber_pixels),
             "candidate ID moved but the detector output contains no candidate trail",
         )
+
+    def test_explicit_mature_association_never_falls_back_to_candidate_rendering(self):
+        node = self._make_node()
+        frame_element = FrameElement(
+            source="mature-lifecycle-view",
+            frame=np.zeros((100, 160, 3), dtype=np.uint8),
+            timestamp=33.1,
+            frame_num=331,
+            roads_info={},
+            tracked_conf=[0.8],
+            tracked_cls=["car"],
+            tracked_xyxy=[[90, 50, 110, 70]],
+            id_list=[7],
+            buffer_tracks={},
+        )
+        frame_element.trajectory_association_ids = [7]
+        frame_element.mature_trajectory_association_ids = [7]
+        frame_element.track_id_by_association = {7: 70}
+        frame_element.formal_track_ids = []
+
+        with mock.patch.object(
+            node, "_draw_candidate_box", wraps=node._draw_candidate_box
+        ) as draw_candidate:
+            node.process(frame_element)
+
+        draw_candidate.assert_not_called()
 
     def test_mature_pixel_trajectory_renders_without_road_analytics_eligibility(self):
         node = self._make_node()

@@ -33,6 +33,7 @@ class GroundTrajectoryTrackerNode:
         self._last_timestamp: float | None = None
         self._next_track_id = 1
         self._next_shadow_track_id = 1
+        self._class_name_by_id: dict[int, str] = {}
         vehicle_cfg = config.get("vehicle_classification", {})
         self._non_motor_class_ids = {
             int(value)
@@ -354,17 +355,19 @@ class GroundTrajectoryTrackerNode:
             shadow_comparison = self._compare_shadow_tracks(tracks, legacy_tracks)
             self._append_shadow_report(frame_element, shadow_comparison)
 
-        class_names_by_id = {
-            int(class_id): frame_element.detected_cls[index]
-            for index, class_id in enumerate(class_ids)
-            if frame_element.detected_cls and index < len(frame_element.detected_cls)
-        }
+        for index, class_id in enumerate(class_ids):
+            if frame_element.detected_cls and index < len(frame_element.detected_cls):
+                self._class_name_by_id[int(class_id)] = str(
+                    frame_element.detected_cls[index]
+                )
         frame_element.id_list = [int(track.track_id) for track in tracks]
         frame_element.association_id_list = list(frame_element.id_list)
         frame_element.tracked_xyxy = [list(track.tlbr.astype(int)) for track in tracks]
         frame_element.tracked_cls_ids = [int(track.class_name) for track in tracks]
         frame_element.tracked_cls = [
-            class_names_by_id.get(int(track.class_name), str(int(track.class_name)))
+            self._class_name_by_id.get(
+                int(track.class_name), str(int(track.class_name))
+            )
             for track in tracks
         ]
         frame_element.tracked_conf = [float(track.score) for track in tracks]

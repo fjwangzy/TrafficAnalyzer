@@ -4,6 +4,7 @@ import numpy as np
 
 from elements.FrameElement import FrameElement
 from elements.TrackElement import TrackElement
+from nodes.LaneAnalysisNode import LaneAnalysisNode
 from nodes.RoadMapMatchingNode import RoadMapMatchingNode
 from utils_local.coordinates import enu_to_gcj02
 
@@ -22,6 +23,7 @@ def test_matches_bbox_ground_contact_to_lane(monkeypatch):
     monkeypatch.setenv("RUNTIME_MAP_BUNDLE_JSON", json.dumps(bundle))
     node = RoadMapMatchingNode({})
     track = TrackElement(7, 0)
+    track.trajectory_output_eligible = True
     track.current_position_enu_m = [5.0, 8.0]
     previous_gcj02 = enu_to_gcj02(4.0, 8.0, bundle["anchor_gcj02"])
     current_gcj02 = enu_to_gcj02(5.0, 8.0, bundle["anchor_gcj02"])
@@ -72,6 +74,7 @@ def test_lane_matching_ignores_source_visual_registration_matrices(monkeypatch):
     monkeypatch.setenv("RUNTIME_MAP_BUNDLE_JSON", json.dumps(bundle))
     node = RoadMapMatchingNode({})
     track = TrackElement(8, 0)
+    track.trajectory_output_eligible = True
     track.current_position_enu_m = [5.0, 8.0]
     track.trajectory_gcj02 = [enu_to_gcj02(5.0, 8.0, bundle["anchor_gcj02"])]
     frame = FrameElement("x", np.zeros((20, 20, 3)), 1, 1, {})
@@ -154,3 +157,22 @@ def test_unusable_lane_bundle_degrades_only_road_capability(monkeypatch):
     assert result.info["map_matching"]["map_status"] == "degraded"
     assert result.geo_analytics_eligible is True
     assert result.tcc_analytics_eligible is True
+
+
+def test_candidate_track_cannot_enter_channelized_lane_statistics():
+    candidate = TrackElement(11, 0)
+    candidate.trajectory_output_eligible = False
+    candidate.matched_lane_key = "lane-candidate"
+    candidate.avg_speed_kmh = 0.0
+    frame = FrameElement("x", np.zeros((20, 20, 3)), 1, 1, {})
+    frame.buffer_tracks = {11: candidate}
+    frame.active_tracks = {11: candidate}
+    frame.mature_tracks = {}
+    frame.runtime_map_bundle = {"map_status": "lane_verified"}
+    frame.map_version_id = "CMV-1"
+    frame.road_analytics_eligible = True
+
+    result = LaneAnalysisNode({}).process(frame)
+
+    assert result.lane_stats is None
+    assert result.lane_source == "channelized_map"

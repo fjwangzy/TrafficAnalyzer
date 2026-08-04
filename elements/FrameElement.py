@@ -46,7 +46,11 @@ class FrameElement:
         self.yolo_model_id: str | None = None  # 权重文件名 + 内容摘要
         self.inference_context: dict | None = None  # 单处理帧 YOLO 推理设备、精度与有效输入尺寸
         # 帧的后处理：
-        self.buffer_tracks = buffer_tracks  # 选定分析时间段内的活动跟踪缓冲区
+        # 图像轨迹生命周期视图。buffer_tracks 保留为兼容别名，但不再表示
+        # 统计窗口；它与 active_tracks 都只包含尚未终止的轨迹。
+        self.buffer_tracks = buffer_tracks
+        self.active_tracks: dict | None = buffer_tracks
+        self.mature_tracks: dict | None = None
         self.info = {}  # 结果统计字典（道路拥堵程度+车辆数量）
         self.send_info_of_frame_to_db = False  # 标志是否从该帧向数据库发送信息
 
@@ -91,6 +95,7 @@ class FrameElement:
         self.formal_analytics_eligible: bool = False
         self.association_id_list: list[int] | None = None
         self.trajectory_association_ids: list[int] | None = None
+        self.mature_trajectory_association_ids: list[int] | None = None
         self.track_id_by_association: dict[int, int] | None = None
         self.formal_track_ids: list[int] | None = None
         self.formal_track_id_by_association: dict[int, int] | None = None

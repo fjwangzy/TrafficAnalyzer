@@ -65,3 +65,54 @@ def test_road_context_only_controls_lane_link_matching_capability():
     assert roadless.info["roads_activity"] == with_road.info["roads_activity"]
     assert roadless.info["formal_analytics_eligible"] is False
     assert with_road.info["formal_analytics_eligible"] is True
+
+
+def test_flow_window_expires_without_re_registering_or_demoting_active_track():
+    node = CalcStatisticsNode(
+        {
+            "general": {
+                "buffer_analytics": 0.5,
+                "min_time_life_track": 3,
+                "count_cars_buffer_frames": 1,
+            }
+        }
+    )
+    mature = SimpleNamespace(
+        timestamp_last=3.1,
+        timestamp_init_road=0.0,
+        start_road=1,
+        trajectory_output_eligible=True,
+    )
+    candidate = SimpleNamespace(
+        timestamp_last=3.1,
+        timestamp_init_road=0.0,
+        start_road=1,
+        trajectory_output_eligible=False,
+    )
+
+    def process(timestamp):
+        frame = FrameElement(
+            "fixture.mp4",
+            np.zeros((8, 8, 3), dtype=np.uint8),
+            timestamp,
+            round(timestamp * 10),
+            {1: {}},
+        )
+        mature.timestamp_last = timestamp
+        candidate.timestamp_last = timestamp
+        frame.buffer_tracks = {1: mature, 2: candidate}
+        frame.active_tracks = frame.buffer_tracks
+        frame.mature_tracks = {1: mature}
+        return node.process(frame)
+
+    qualified = process(3.1)
+    assert qualified.info["cars_amount"] == 1
+    assert qualified.info["roads_activity"] == {1: 2.0}
+
+    expired = process(33.2)
+    assert expired.info["cars_amount"] == 1
+    assert expired.info["roads_activity"] == {1: 0.0}
+    assert list(expired.mature_tracks) == [1]
+
+    still_expired = process(35.0)
+    assert still_expired.info["roads_activity"] == {1: 0.0}

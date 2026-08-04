@@ -1,5 +1,13 @@
 # TASKS.md — TrafficAnalyzer 任务追踪
 
+## 2026-07-31 抽帧步长启动配置
+
+- [x] 统一检测器 `video_reader.frame_stride`、Platform `PIPELINE_FRAME_STRIDE` 和原生 MPS 批量回放入口默认值为 `3`；交互式范围固定为 `1–30`，批量入口继续拒绝超过 0.5 秒源时间间隔的破坏性采样。
+- [x] Mission/Pipeline API、Mission snapshot、PipelineManager、检测子进程 `FRAME_STRIDE` 和 Pipeline response 串成单一运行链路；外部原生 MPS 回放登记实际 stride，不再由 Platform 猜测。
+- [x] Console2 实时监测快速启动、路口检测卡片和手动 Mission 表单提供抽帧步长设置，并解释“每 N 帧处理 1 帧”；运行中卡片显示实际值。
+- [x] 后端默认/覆盖/越界和前端默认/提交测试已覆盖；`stride=3` 对 30 FPS 源约为 10 个处理帧/秒，并不表示 3 FPS。
+- [x] 浏览器启动新参数时若 Platform 仍是旧进程，FastAPI 会返回 `frame_stride/extra_forbidden`；已通过重启加载新 schema，并让 Console2 将验证数组显示为具体字段与“刷新版本或重启 Platform”提示，不再只显示 Axios `422`。
+
 ## 2026-07-30 停车车辆伪轨迹与能力边界修复
 
 - [x] 默认tracking profile固定为`hover_cruise_v1`，仅显式请求允许`hover_only_legacy`；删除“缺少独立注册自动回退legacy”的错误选择器。
@@ -425,6 +433,10 @@
 | T-499 | xqh 轨迹显示与道路资格解耦 | ✅ | 根因不是 YOLO 配置回退，而是 `ShowNode` 在四级能力契约落地后仍用道路资格筛选成熟像素尾迹；成熟但无道路资格的轨迹会退入缺少显示载荷的候选分支。现改用 `trajectory_association_ids + track_id_by_association + trajectory_output_eligible` 驱动像素显示，无道路资格标 `P`、真正未成熟标 `C`，低地理质量不显示历史速度；验收器升级为 v2，要求质量断点保持图像 ID、road/TCC 分别零越界。真实 xqh 840s–EOF 原生 MPS `25/25`：107603 检测、跨离场保留 41 ID、三类对齐失败 0、road/TCC 泄漏 0、生产尾迹 59572 像素；根 171、聚焦 60、xqh 56/0/0。未回退 7 月 15 日后的算法能力，精度仍 `not_evaluated`。证据见 `docs/test_report_xqh_trajectory_display_regression_20260728.md`。 |
 | T-500 | xqh ByteTrack 小目标 stride 硬门控回归 | ✅ | 7 月 28 日新增的固定 `dt=1` Mahalanobis 95% 硬门控与生产 `frame_stride=5` 不相容，10–15px 小目标正常位移会被拒绝并反复重建 ID。生产关联恢复为相机补偿后 IoU、置信度和类别软约束；Mahalanobis 仅在代价副本上写 shadow 诊断。`scripts/compare_xqh_bytetrack.py` 保证每个采样帧只跑一次 YOLO，再将同一检测输入喂给 7 月 15 日基线和当前 tracker。400–430s 原生 MPS 门禁 3/3：中心密度为基线 95.23%、碎片 ID 44、中位寿命 52；shadow 记录会拒绝 1080 个有效候选并使 671 条轨迹失去全部候选。完整 840s–EOF 25/25：1142 帧、109899 检测、61831 关联、自然 EOF、road/TCC 泄漏 0。无外部真值，精度仍 `not_evaluated`。 |
 | T-501 | AGL 三档 imgsz、能力感知运行档与性能/TCC 口径 | ✅ | 已实现共享`AdaptiveImageSizePolicy`（640/960/1280、5点中位数、5m滞回、5帧稳定、2秒缺失回退），接入新旧检测节点；历史profile自动选择规则已由2026-07-30修订为默认cruise、仅显式legacy。Stats分开YOLO与整帧耗时并扩充TCC漏斗。xqh自然EOF 27/27，1142帧全为960、零切档。按授权只清空历史`uav_track_points/uav_track_events/uav_conflict_events/uav_conflict_reviews`后，崇华路v3原生MPS自然EOF：1299 stats、6302完成轨迹、56条严格`path_intersection`TCC、`invalid_tcc_events=[]`，88个唯一受管JPEG的hash/size全通过；积压归零后Kafka/road9精确一致为`1299/6302/56/2407`。对齐视频的AGL实际为156.35–178.15m，因首帧初始化1280且下切阈值为`<152m`，全程合法保持1280；原计划引用104–222m是整个遥测文件而非视频对齐窗口，不能作为三档切换证据。1280档YOLO p50/p95/max为371.4/1554.0/3990.6ms；xqh 960 p50=165.8ms，均未过100ms性能门。Platform慢消息消费改为单条poll、30分钟处理窗口；生产性能仍未达标，精度继续`not_evaluated`。 |
+| T-502 | 悬停排队车辆轨迹生命周期与统计窗口解耦 | ✅ | 已删除 `TrackerInfoUpdateNode` 的 33 秒年龄淘汰，新增 active/mature/candidate/completed 显式视图、成熟单调诊断和 ShowNode 成熟 ID 直读；`CalcStatisticsNode` 用每 ID 一次的 30 秒道路入口事件窗口，候选已隔离于车辆数、速度、方向、车道、拥堵和 TCC。完成事件要求明确原因且按 `pipeline_id + track_id` 生成确定性消息 ID；legacy 超时也统一写入 `association_timeout` 帧级诊断并保持只完成一次。短时漏检、超过 2 秒关联丢失、源时间跳变、质量降级恢复、EOF、legacy 和候选业务隔离回归均通过；70 秒三车回归、根 `217 passed`、生命周期/业务专项 `85 passed`、Platform `233 passed / 5 skipped / 10 subtests`、Console2 `149/149` 与 build 已通过。新隔离 `pipe-fb1fa469` / Topic `6101` 原生 MPS 自然 EOF：881 stats、1210 完成、0 conflict、1964 telemetry 与 road9 精确一致，生命周期计数错位 0、成熟回候选 0、完成重复/缺原因/非确定性 ID 均为 0；33/35/66 秒有 61 个相同成熟 ID 连续存在。生产 ShowNode 成片和浏览器证据保存在 `output/playwright/xqh-*`。road9 只读审计另发现 6,403 个历史异常轨迹对（2,227 对重复、6,403 对至少一条缺终止原因），涉及 9 个旧 Pipeline，均不可用于正式统计且未回写。ADR-019 strict 的 9 项代码/拓扑检查通过，`local_runtime_evidence` 仍为外部门禁；精度指标无批准真值，继续 `not_evaluated`。 |
+| T-503 | adaptive imgsz 全局默认与 xqh 小目标/连续性验收 | ✅ | 仓库配置、Platform 子进程和原生 MPS runner 统一默认开启 640/960/1280 AGL 自适应，旧环境开关不能静默关闭，固定尺寸仅保留显式诊断。`uav_stats.recognition_diagnostics` 与回放汇总新增合法检测、当前图像轨迹、未关联检测、`<=4096px²` 小目标分类覆盖；生命周期汇总把成熟 ID 回候选设为失败。`pipe-467f219e` / Topic 6301 以 stride10、adaptive 960、生产 ShowNode 完整自然 EOF：2975 帧、1696 stats、1766 完成、6 conflict、2769 telemetry；road9 排空后精确一致。1696/1696 帧有检测，YOLO/轨迹为 243887/143612，小目标为 151874/66688，非法几何 0；成熟回候选 0，1766 个完成 pair 全唯一且终止原因完整。根 220、Platform 236/5 skipped/10 subtests、Console2 149+build、xqh 55/0/1、ruff 与 diff check 通过；无批准真值，precision/recall/IDF1/HOTA/正式 ID switch 仍 `not_evaluated`。 |
+| T-504 | xqh 检测-跟踪分层分析与小目标改进设计 | ✅ | 新增纯函数评估模块和只读 CLI，按类别、`<=4096px²`、飞行阶段、完整观测寿命和序列化点数生成 `uav.detection-tracking-evaluation/v1`。全量 xqh 表明稳定悬停总体/小目标工程覆盖为 60.50%/45.32%，离场降至 11.28%/4.77%；生命周期回退与重复完成均为 0，因此下一阶段聚焦检测关联 lineage、实际 dt/尺度软关联、高运动动态采样和预算受控 ROI 二次检测，不放宽全局阈值。修复类别切换待确认时逐帧类别名退化为数字的问题；旧产物的 11 个数字标签保留不回写。根测试 `223 passed`、专项 `49 passed`、xqh `55 PASS / 0 FAIL / 1 WARN`，Ruff 和 diff check 通过；ADR-019 九项代码/拓扑检查通过但既有 `local_runtime_evidence` 仍为 blocker。完整方案与验收矩阵见 `docs/ADAPTIVE_DETECTION_TRACKING_ANALYSIS_20260730.md`；正式精度继续 `not_evaluated`。 |
+| T-505 | 整体配准浮层遮挡修复 | ✅ | 渠化画布的整体配准面板默认折叠为单行位姿摘要，主动展开后才显示 X/Y、角度、缩放、透明度和复位；折叠态 244×34px、展开态 270px，保留全部编辑能力并减少正拍证据图遮挡。Console 交互测试覆盖默认收起与展开可访问性。 |
 | T-492 | BEV 轨迹覆盖物 SDK 引用修复 | ✅ | `MonitoringBevMap` 不再假设高德 Loader 会写入 `window.AMap`；地图初始化时保存 `loadAmap()` 实际返回的 SDK，并由轨迹覆盖物 effect 复用同一实例。回归测试精确覆盖“Loader 返回 SDK、全局变量缺失”时仍执行 `map.add`。用户停止检测器后保持停止；只读核对截图对应的 `pipe-a9d58965 / INT_camera_1 / SRC-E2BA6A8F6D0F` 为 `stopped` 且 `map_version_id=null`。最近统计中的 143 条活动轨迹具有 3,067 个有效 GCJ-02 点，但 `road_context_status=missing`、`quality_status=unverified`、0 条匹配车道，排除启用 `lane_verified` 路网参数。真实 XQH 历史切片 60 条轨迹已在高德底图可见。 |
 | T-493 | 轨迹研判质量提示下沉 | ✅ | `/gis` 的限量、空间覆盖、降级证据、未归因冲突和去重提示整体移动到研判内容最底部；顶部统计卡、地图/流向侧栏和轨迹证据保持原顺序。DOM 回归锁定 `trajectory-quality-notices` 为分析页最后一个子区块；真实页面确认顺序为统计卡 → 工作区 → 证据 → 质量提示。Console2 `17 files / 125 tests`、production build 与 `git diff --check` 通过。 |
 | T-438 | GIS 历史轨迹与冲突复盘 | ✅ | `traffic-fly-console/src/features/gis/index.tsx` — 选中路口后调用 `/api/v1/trajectories/{intersection_id}?period=1h&limit=200` 和 `/api/v1/trajectories/{intersection_id}/conflicts?period=1h&limit=200`，显示历史轨迹数量、Track ID、转向、车辆类型、均速、时长、轨迹点数，以及历史冲突 pair、TTC/PET、场景、证据和风险分；`traffic-fly-console/src/features/gis/index.test.tsx` 覆盖 `INT_camera_1` 历史轨迹与冲突证据复盘详情 |
@@ -621,3 +633,15 @@
 记录影像像素与已确认 GCJ-02 坐标，由服务端计算 pixel→ENU 单应矩阵并保存残差；不得从
 Google Earth/WGS84 直接抄取坐标、不得在浏览器二次转换，也不得恢复 `app_config.yaml`
 中的全局 `gcp.points` 兼容路径。
+
+### 参数化路网标注对标升级（2026-08-03）
+
+- [x] 固定正拍影像、统一覆盖层平移/旋转/等比缩放/透明度、数值复位和撤销重做。
+- [x] Link/单车道/顶点兼容编辑；边界段三次 Bézier 控制柄与确定性 polygon 采样。
+- [x] `registration_pose/v1` 服务端矩阵重算与漂移拒绝；旧 matrix-only/polygon 请求兼容。
+- [x] `editor_model/v1` 四进口参数生成、实时车道数/宽度/角度联动、人工覆盖保护和重开像素几何。
+- [x] `parameterized/freeform` 双模式；自由曲线和 Feature 保存后像素级复现，不虚构进口骨架。逐车道转向/公交/潮汐属性可编辑，专用 Runtime 规则仍明确未实现。
+- [x] crosswalk/channelizing_island/waiting_zone/stop_line/lane_boundary/lane_marking 正式 Feature，影像叠加/干净渠化图共用同一 SVG 视口；Runtime Bundle 剔除编辑元数据。
+- [x] 修复边缘车道只能向画面中间拖拽：现有 Lane/Link/顶点允许无损移出影像范围，新增绘制点仍受证据图约束；真实浏览器把右侧 Link 从 `maxX=3840` 拖到 `4731`，四点统一 `ΔX=891px/ΔY=0`。
+- [x] 已发布版本通过服务端 `derive-draft` 生成可编辑草稿并记录不可变来源；Console 不再自行复制。接口测试覆盖发布不可变、姿态漂移、自交、同 Link 重叠、跨 Link 交叉、Feature 与来源链。
+- [x] 崇华路 v2 候选以 23 条正式车道完成保存与同关键帧逐字符重载复现；页面保留残差字段、原始矩阵只读且视觉配准/人工复核未通过时发布按钮禁用。既有不可变 v1 `lane_verified` 仍为 23 条，Runtime Bundle 对账为 23 条且不含 `editor_model`；v2 为 `freeform` 且保存 23 条像素几何。控制点为空且无批准真值，未宣称生产精度（2026-08-03）。自动化门禁为 Console 166/166 + build、Platform 259 passed/5 skipped/10 subtests、相关根测试 42 passed、XQH 55 PASS/0 FAIL/1 WARN；ADR-019 仅保留既有 `local_runtime_evidence` 外部门禁。

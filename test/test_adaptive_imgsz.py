@@ -1,5 +1,12 @@
-from utils_local.adaptive_imgsz import AdaptiveImageSizePolicy
+from pathlib import Path
+
+from omegaconf import OmegaConf
 import pytest
+
+from utils_local.adaptive_imgsz import AdaptiveImageSizePolicy
+
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def _config() -> dict:
@@ -14,6 +21,14 @@ def _config() -> dict:
         "stable_frames": 5,
         "telemetry_hold_sec": 2.0,
     }
+
+
+def test_repository_runtime_config_keeps_adaptive_enabled_despite_legacy_env(monkeypatch):
+    monkeypatch.setenv("ADAPTIVE_IMGSZ_ENABLED", "false")
+
+    config = OmegaConf.load(ROOT / "configs/app_config.yaml")
+
+    assert config.detection_node.adaptive_imgsz.enabled is True
 
 
 def test_first_valid_130m_sample_selects_960_immediately():

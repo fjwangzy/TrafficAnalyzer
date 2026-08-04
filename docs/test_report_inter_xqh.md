@@ -1,11 +1,102 @@
 # 端到端测试报告：inter_xqh 视频 + SRT 遥测
 
-> **当前范围说明（2026-07-28）**：`56 PASS / 0 FAIL / 0 WARN` 是算法/管道防回退证据；xqh 840s–自然 EOF 的最新 `25/25` 是原生 MPS 工程验收；本机 `road9`、`uav_*`、TimescaleDB 与旧链路退役由 ADR-019 strict 证明。项目不建设人工轨迹标注工作包，因此当前口径是 `local_engineering_acceptance_passed / production_accuracy_not_claimed`。
+> **当前范围说明（2026-07-30）**：当前工作树的 xqh 前 100 帧算法/管道防回退证据为 `55 PASS / 0 FAIL / 1 WARN`；最新完整 992 秒 adaptive 原生 MPS 回放在 road9 排空后功能验收通过。ADR-019 strict 的 9 项代码/拓扑检查通过，但 `local_runtime_evidence` 仍为外部门禁。项目不建设人工轨迹标注工作包，因此当前口径是 `local_engineering_acceptance_passed / production_accuracy_not_claimed`。
 
-**最近复跑日期**: 2026-07-28
+按类别、尺寸、飞行阶段和轨迹寿命的可复现拆解见
+`docs/ADAPTIVE_DETECTION_TRACKING_ANALYSIS_20260730.md`。它确认稳定悬停小目标工程覆盖为 45.32%，
+离场高运动阶段为 4.77%；这不是 Precision/Recall。生命周期回退已经为 0，但不能据此宣称所有
+检测都保持身份。派生机器报告为同目录 `detection-tracking-analysis.json`。
+
+**最近复跑日期**: 2026-07-30
 **测试资产**: `test_videos/inter_xqh/`  
 - 视频: `DJI_20260403142902_0001_V小清河北路与水屯路路口.mp4` (5.4GB, 4K, 16.5min)  
 - 遥测: `telemetry.srt` (29,741 条记录, 逐帧@30fps)
+
+## 2026-07-30 adaptive 全局默认、小目标覆盖与轨迹连续性全流程
+
+仓库默认配置不再读取旧 `ADAPTIVE_IMGSZ_ENABLED=false` 环境变量；Platform 子进程启动与
+`scripts/run_native_mps_replays.py` 均显式默认开启 `detection_node.adaptive_imgsz.enabled=true`。
+只有 `--no-adaptive-imgsz` 可作为隔离的固定尺寸诊断。`uav_stats` 新增向后兼容
+`recognition_diagnostics`，按源画面统计合法 YOLO 框、当前 ByteTrack 输出、未关联检测，以及面积
+`<=4096px²` 的小目标检测/轨迹分类计数和同帧转化率；无批准真值时不把这些工程覆盖率称为
+precision/recall。
+
+完整隔离运行使用 `run_id=native-mps-20260730T135507Z-SRC-INTER-XQH-0403-PM`、
+`pipeline_id=pipe-467f219e`、camera/Topic 后缀 `6301`、`frame_stride=10`、原生 MPS、adaptive 与
+生产 ShowNode。真实 AGL 130m 使 1696/1696 个 Stats 样本均为 960 档；2975/2975 个抽样帧写入
+3840×2160 成片并自然 EOF。Kafka 捕获 `1696 stats / 1766 track_complete / 6 conflict / 2769 telemetry`，
+TCC schema 校验失败 0；publisher 覆盖 `6231/6231`、TCC evidence `6/6`，drop 均为 0。
+
+识别工程结果：1696/1696 统计采样帧有检测，合法 YOLO 检测 243,887、当前输出图像轨迹 143,612，
+同帧 detector-to-track 比例 0.5888；小目标 YOLO 检测 151,874、当前输出轨迹 66,688，同帧比例
+0.4391，非法检测几何 0。YOLO 的 `motor` 检测为 81,602，其中绝大部分属于小目标口径；该结果证明
+adaptive 960 下小目标检测链确实运行并可被跟踪器消费，但未关联数包含 ByteTrack 首帧确认、短时
+低分/遮挡和潜在假阳性，不能解释为漏检率或召回率。
+
+Kafka 生命周期只读后审计覆盖 1696 个 Stats：`same_id_mature_to_candidate_count=0`，active/mature
+峰值为 174/136；1766 个完成消息对应 1766 个唯一 `(pipeline_id, track_id)`，重复完成、重复消息 ID、
+缺终止原因均为 0，原因是 `association_ended=1762 / natural_eof=4`。单元回归另覆盖
+640→960→1280 切档并夹一次短时漏检，恢复后保持同一 ID 且无终止；超过 2 秒的真实关联丢失仍按
+契约结束，系统不承诺在没有检测证据时永久维持旧 ID。
+
+首轮 runner 在自然 EOF 后 30 秒观察点为 Kafka 1696 / road9 1485 stats，因落库积压保留
+`result.json: passed=false`；随后只读等待后 road9 追平为 `1696/1766/6/2769`，mismatch 为空，
+独立 `post-drain-result.json` 功能验收为 passed。原始时点证据未覆盖。机器产物位于
+`output/native-mps/xqh-adaptive-small-target-20260730/`，生产浏览器截图为
+`output/playwright/xqh-adaptive-small-target-console-live-6301.png`。
+
+性能仍不是生产通过项：YOLO 960 的 p50/p95/max 为 195.4/1128.8/2997.9ms，整帧 p50/p95/max 为
+9022.3/15656.9/22083.0ms，运行期间并发执行全量测试，不能据此宣称实时性能。自动化门禁为根
+`220 passed`、Platform `236 passed / 5 skipped / 10 subtests`、Console2 `149 passed` 与 build、
+xqh `55 PASS / 0 FAIL / 1 WARN`；ADR-019 strict 仍只有 `local_runtime_evidence` 外部门禁。
+IDF1/HOTA、正式 ID switch、位置 RMSE、速度 MAE、precision 和 recall 继续为 `not_evaluated`。
+
+---
+
+## 2026-07-30 排队车辆生命周期修复与历史只读审计
+
+最小复现固定为三辆稳定排队车：同一组 ID 在 2 秒成熟后，旧实现会在 33.0 秒被
+`buffer_analytics × 60 + min_time_life_track` 年龄清理，33.1 秒批量回到候选 `C`，约 35 秒再次
+成熟。修复后 `buffer_tracks/active_tracks` 只表示关联生命周期尚未结束的轨迹，另行输出
+`mature_tracks/candidate_trajectories/completed_tracks`；70 秒连续回归覆盖 33 秒和 66 秒两个统计
+窗口，成熟 ID 始终正式、完成事件为 0、`same_id_mature_to_candidate_count=0`。
+
+30 秒 `buffer_analytics` 已下沉为独立道路入口事件窗口。每个成熟 ID 首次满足道路归属和 3 秒
+存在要求时只登记一次；窗口到期只让 `roads[].activity` 下降，不影响活动车辆数、排队数、框型或
+尾迹。候选仅供预览，速度、方向、车道、流量、拥堵和 TCC 统一先应用成熟轨迹视图。
+
+`scripts/audit_track_lifecycle.py` 在 PostgreSQL read-only 事务中审计现有 road9，未执行删除、合并
+或回写。结果为 6,403 个异常 `(pipeline_id, track_id)` 对，其中 2,227 对重复完成、6,403 对至少
+一条完成记录缺少 `termination_reason`，涉及以下 9 个历史 Pipeline，全部不可用于正式统计：
+`pipe-23be5fff`、`pipe-362cddef`、`pipe-375d09f2`、`pipe-49dbecd8`、`pipe-5087e489`、
+`pipe-bbb756aa`、`pipe-bd38fc5b`、`pipe-ef4d85b1`、`pipe-f4473a81`。
+
+新增边界回归覆盖短时漏检、超过 2 秒关联丢失、源时间跳变、地图/地理降级恢复、自然 EOF 重复
+flush、legacy 超时和候选业务隔离。最后一项红测发现 legacy 超时虽完成轨迹，但帧级
+`tracking_diagnostics.lifecycle.termination_reason` 可能缺失；现已统一写入 `association_timeout`，
+且同一成熟轨迹重复处理仍只完成一次。
+
+代码门禁为根 `217 passed`、Platform `233 passed / 5 skipped / 1 warning / 10 subtests`、生命周期与
+业务隔离专项 `85 passed`、Console2 `149/149` 与 production build。`test/test_pipeline_inter_xqh.py` 在
+`.venv-mps` 为 `55 PASS / 0 FAIL / 1 WARN`，唯一警告是前 100 帧 `direction_stats` 为空，未冒充
+`56/0/0`。ADR-019 strict 的 9 项代码/拓扑检查通过，但现有 `local_runtime_evidence` 仍为 blocker。
+
+最终隔离回放使用 `run_id=native-mps-20260730T082259Z-SRC-INTER-XQH-0403-PM`、
+`pipeline_id=pipe-fb1fa469`、camera/Topic 后缀 `6101`、`frame_stride=14`（29.97fps 下源时间间隔
+0.467 秒）、固定 MPS 640，完整 992 秒素材自然 EOF，Runner `passed=true`。Kafka 与 road9 精确
+一致为 `881 stats / 1210 track_complete / 0 conflict / 1964 telemetry`；1210 个完成事实对应 1210
+个唯一 track ID 和 1210 个唯一确定性 message ID，缺终止原因、重复完成、错误确定性 ID 均为 0，
+终止原因为 `association_ended=1207 / natural_eof=3`。881 个统计样本中生命周期计数错位、
+active/candidate 载荷重叠、`same_id_mature_to_candidate_count` 非零样本均为 0。
+
+源时间 33.166 秒为 `active=109 / mature=102 / candidate=7`，35.035 秒为
+`105 / 102 / 3`，65.866 秒为 `77 / 76 / 1`；33/35/66 秒有 61 个相同成熟 ID 持续存在，完成
+事件仅来自明确 `association_ended`，没有统计窗口终止原因。生产 ShowNode 成片为
+`output/native-mps/xqh-lifecycle-6101-20260730/SRC-INTER-XQH-0403-PM/DJI_20260403142902_0001_V小清河北路与水屯路路口.mp4`；
+首轮浏览器整页证据为 `output/playwright/xqh-lifecycle-pipe-fb1fa469-source-33.png`，同一成片抽取的
+首次成熟、33、35、66 秒帧分别为 `output/playwright/xqh-show-node-source-2.png`、
+`xqh-show-node-source-33.png`、`xqh-show-node-source-35.png`、`xqh-show-node-source-66.png`。
+无外部批准真值，IDF1/HOTA、正式 ID switch、位置 RMSE 与速度 MAE继续为 `not_evaluated`。
 
 ---
 
@@ -639,3 +730,15 @@ build 成功；xqh 基线 `56 PASS / 0 FAIL / 0 WARN`。`git diff --check` 无�
 - `cd console2 && npm test -- --run`：`15` 个测试文件、`89` 个测试通过；`npm run build` 成功。
 - `python test/test_pipeline_inter_xqh.py`：`56 PASS / 0 FAIL / 0 WARN`；100/100 帧有检测和有效 H，90/100 帧有运动补偿，冲突为 0。
 - `python scripts/audit_adr019_retirement.py --scope local --strict`、`docker compose config --quiet`、`git diff --check`：全部通过。
+
+---
+
+## 2026-08-03 路网标注对标升级验收
+
+- Console2 新增固定正拍影像、整套路网平移/旋转/等比缩放/透明度、撤销重做、Link/单车道/顶点精调、三次 Bézier 边界控制柄、参数化四进口模板，以及影像叠加/干净渠化图双模式。
+- Platform 使用任务原始单应矩阵按 `H_task × inverse(T_pose)` 重算最终 pixel→ENU；拒绝客户端姿态与矩阵漂移。旧 matrix-only 与 polygon 请求保持兼容；`editor_model` 以 `parameterized|freeform` 存入 topology，Runtime Bundle 不输出编辑元数据。服务端 `derive-draft` 负责已发布版本的不可变派生与来源记录。
+- crosswalk、channelizing_island、waiting_zone、stop_line、lane_boundary、lane_marking 进入正式 Feature 契约。同一 Link 内车道面保持互斥，不同 Link 的合法转向流允许在路口内部空间交叉。
+- 崇华路项目 `IPR-2316df5aa119c35953467a12` 的 v2 candidate 保存 23 条车道并在同一关键帧逐字符重载恢复 23 条；v2 `editor_model.mode=freeform` 且保留 23 条像素几何。v1 `lane_verified` 未修改，Runtime Bundle 对账 23 条且不含 `editor_model`。页面发布按钮因视觉配准与人工复核未完成保持禁用。
+- 关键帧没有批准控制点真值，控制点 JSON 为空；残差输入只证明门禁接口和交互存在，不构成精度测量。地图精度、IDF1/HOTA、位置 RMSE 和速度 MAE继续为 `not_evaluated`。
+- 自动化门禁：Console2 19 个文件 166 passed、production build 成功；Platform 259 passed、5 skipped、10 subtests passed；相关根测试 42 passed。XQH 基线在本机需 `PYTORCH_ENABLE_MPS_FALLBACK=1` 才能执行 torchvision NMS，结果为 55 PASS / 0 FAIL / 1 WARN（前 100 帧方向统计为空）；未设置 fallback 时是当前 PyTorch/MPS 不支持 NMS 的环境失败。ADR-019 strict 代码项通过，`local_runtime_evidence` 仍是既有外部门禁。
+- 视觉证据与逐轮问题记录见仓库根 `design-qa.md`；最终浏览器截图为 `/private/tmp/trafficanalyzer-road-annotation-chonghua-after-reload.png`。

@@ -5,7 +5,10 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 from app.core.config import settings
+from app.core.pipeline_options import resolve_frame_stride
 from app.services.pipeline_manager import PipelineInstance, PipelineManager, PipelineStatus
 
 RUNTIME_MAP_BUNDLE = {
@@ -16,6 +19,14 @@ RUNTIME_MAP_BUNDLE = {
     "anchor_gcj02": [117.0, 36.7],
     "geometry_enu_m": {"lanes": {}},
 }
+
+
+def test_trusted_runtime_keeps_high_stride_eof_diagnostics_available():
+    assert resolve_frame_stride(300) == 300
+    with pytest.raises(ValueError, match="frame_stride"):
+        resolve_frame_stride(301)
+
+
 class _EmptyStream:
     async def read(self, _size):
         return b""
@@ -109,6 +120,7 @@ class PipelineManagerTest(unittest.IsolatedAsyncioTestCase):
                 "main_optimized.py",
                 "pipeline.send_info_kafka=True",
                 "hydra/job_logging=disabled",
+                "detection_node.adaptive_imgsz.enabled=true",
                 "telemetry.enabled=True",
                 "telemetry.source=srt",
                 f"telemetry.file_path='{telemetry_path.resolve()}'",
@@ -188,10 +200,51 @@ class PipelineManagerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(pipeline.status, PipelineStatus.RUNNING)
         self.assertIsNone(pipeline.map_version_id)
         self.assertEqual(pipeline.road_context_status, "missing")
+        self.assertEqual(pipeline.frame_stride, 3)
+        self.assertEqual(pipeline.to_dict()["frame_stride"], 3)
+        self.assertEqual(
+            create_subprocess.await_args.kwargs["env"]["FRAME_STRIDE"],
+            "3",
+        )
         self.assertNotIn(
             "RUNTIME_MAP_BUNDLE_JSON",
             create_subprocess.await_args.kwargs["env"],
         )
+
+    async def test_pipeline_start_accepts_a_per_mission_frame_stride(self):
+        temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_dir.cleanup)
+        project_root = Path(temp_dir.name)
+        video_path = project_root / "test_videos/demo.mp4"
+        video_path.parent.mkdir(parents=True)
+        video_path.write_bytes(b"test")
+        manager = PipelineManager(project_root=project_root, frame_stride=3)
+
+        with patch(
+            "app.services.pipeline_executor.asyncio.create_subprocess_exec",
+            return_value=_FakeProcess(),
+        ) as create_subprocess:
+            pipeline = await manager.start_pipeline(
+                drone_id="drone_1",
+                intersection_id="INT-1",
+                video_src="test_videos/demo.mp4",
+                frame_stride=6,
+            )
+        self._monitor_task = manager._monitor_task
+
+        self.assertEqual(pipeline.frame_stride, 6)
+        self.assertEqual(
+            create_subprocess.await_args.kwargs["env"]["FRAME_STRIDE"],
+            "6",
+        )
+
+        with self.assertRaisesRegex(ValueError, "frame_stride"):
+            await manager.start_pipeline(
+                drone_id="drone_2",
+                intersection_id="INT-2",
+                video_src="test_videos/demo.mp4",
+                frame_stride=0,
+            )
 
     async def test_pipeline_start_rejects_non_verified_runtime_map_bundle(self):
         temp_dir = tempfile.TemporaryDirectory()

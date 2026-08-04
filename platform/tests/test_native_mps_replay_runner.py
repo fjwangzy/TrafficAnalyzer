@@ -13,12 +13,16 @@ from scripts.run_native_mps_replays import (
     formal_business_leakage,
     hydra_string,
     inference_summary,
+    lifecycle_summary,
+    parse_args,
+    recognition_summary,
     resolve_replay_imgsz,
     source_catalog,
     source_result_passed,
     tcc_diagnostics_summary,
     telemetry_overrides,
     validate_source_assets,
+    validate_source_time_stride,
     validate_tcc_events,
 )
 
@@ -27,6 +31,26 @@ def test_replay_imgsz_defaults_preserve_fixed_history_and_production_fallback():
     assert resolve_replay_imgsz(None, adaptive_imgsz=False) == 640
     assert resolve_replay_imgsz(None, adaptive_imgsz=True) == 960
     assert resolve_replay_imgsz(1280, adaptive_imgsz=True) == 1280
+
+
+def test_native_mps_replay_defaults_to_adaptive_imgsz(monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["run_native_mps_replays.py"])
+
+    args = parse_args()
+
+    assert args.adaptive_imgsz is True
+    assert args.frame_stride == 3
+    assert args.sample_fps is None
+
+
+def test_replay_stride_cannot_cross_the_image_association_time_gap():
+    assert validate_source_time_stride(14, 29.97) < 0.5
+    try:
+        validate_source_time_stride(15, 29.97)
+    except ValueError as exc:
+        assert "source-time gap" in str(exc)
+    else:
+        raise AssertionError("stride 15 should be rejected for 29.97fps source")
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -145,6 +169,94 @@ def test_inference_summary_reports_distribution_without_warmup_assumptions():
     }
 
 
+def test_recognition_summary_reports_engineering_coverage_without_truth_claims():
+    messages = [
+        {
+            "data": {
+                "recognition_diagnostics": {
+                    "truth_status": "not_evaluated",
+                    "valid_yolo_detection_count": detected,
+                    "yolo_class_counts": yolo_classes,
+                    "emitted_image_track_count": tracked,
+                    "emitted_track_class_counts": track_classes,
+                    "unassociated_detection_count": detected - tracked,
+                    "invalid_detector_geometry_count": 0,
+                    "small_target_max_area_px2": 4096,
+                    "small_yolo_detection_count": small_detected,
+                    "small_emitted_track_count": small_tracked,
+                    "small_yolo_class_counts": small_yolo_classes,
+                    "small_emitted_track_class_counts": small_track_classes,
+                }
+            }
+        }
+        for detected, tracked, yolo_classes, track_classes,
+            small_detected, small_tracked, small_yolo_classes, small_track_classes in [
+            (4, 3, {"car": 2, "motor": 2}, {"car": 1, "motor": 2},
+             3, 2, {"car": 1, "motor": 2}, {"motor": 2}),
+            (6, 5, {"car": 3, "motor": 3}, {"car": 2, "motor": 3},
+             5, 4, {"car": 2, "motor": 3}, {"car": 1, "motor": 3}),
+        ]
+    ]
+
+    summary = recognition_summary(messages)
+
+    assert summary == {
+        "truth_status": "not_evaluated",
+        "truth_reason": "approved_external_truth_unavailable",
+        "samples": 2,
+        "samples_with_detections": 2,
+        "detection_frame_coverage_ratio": 1.0,
+        "valid_yolo_detections": 10,
+        "emitted_image_tracks": 8,
+        "unassociated_detections": 2,
+        "same_frame_track_to_detection_ratio": 0.8,
+        "invalid_detector_geometry_count": 0,
+        "small_target_max_area_px2": 4096,
+        "small_yolo_detections": 8,
+        "small_emitted_tracks": 6,
+        "small_track_to_detection_ratio": 0.75,
+        "small_yolo_class_counts": {"car": 3, "motor": 5},
+        "small_emitted_track_class_counts": {"car": 1, "motor": 5},
+        "yolo_class_counts": {"car": 5, "motor": 5},
+        "emitted_track_class_counts": {"car": 3, "motor": 5},
+        "formal_precision": "not_evaluated",
+        "formal_recall": "not_evaluated",
+    }
+
+
+def test_lifecycle_summary_rejects_mature_id_candidate_regression():
+    messages = [
+        {
+            "data": {
+                "tracking_diagnostics": {
+                    "lifecycle": {
+                        "active_track_count": active,
+                        "mature_track_count": mature,
+                        "candidate_track_count": candidate,
+                        "completed_track_count": completed,
+                        "same_id_mature_to_candidate_count": regressions,
+                        "termination_reason": reason,
+                    }
+                }
+            }
+        }
+        for active, mature, candidate, completed, regressions, reason in [
+            (5, 4, 1, 0, 0, None),
+            (6, 5, 1, 2, 1, "association_ended"),
+        ]
+    ]
+
+    assert lifecycle_summary(messages) == {
+        "samples": 2,
+        "active_track_count_max": 6,
+        "mature_track_count_max": 5,
+        "candidate_track_count_max": 1,
+        "completed_track_count_total": 2,
+        "same_id_mature_to_candidate_count": 1,
+        "termination_reason_counts": {"association_ended": 1},
+    }
+
+
 def test_tcc_diagnostics_summary_proves_the_detector_funnel_ran():
     messages = [
         {
@@ -198,6 +310,30 @@ def test_source_result_requires_tcc_funnel_observation_even_when_zero_events_are
     assert source_result_passed(result) is False
     result["tcc_diagnostics"] = {"samples": 4}
     assert source_result_passed(result) is True
+
+
+def test_source_result_rejects_missing_small_target_or_invalid_detection_evidence():
+    result = {
+        "return_code": 0,
+        "natural_eof": True,
+        "error": None,
+        "stats_count": 4,
+        "trajectory_count": 2,
+        "invalid_tcc_events": [],
+        "tcc_diagnostics": {"samples": 4},
+        "recognition": {
+            "samples": 4,
+            "valid_yolo_detections": 20,
+            "small_yolo_detections": 0,
+            "invalid_detector_geometry_count": 0,
+        },
+    }
+
+    assert source_result_passed(result) is False
+    result["recognition"]["small_yolo_detections"] = 8
+    assert source_result_passed(result) is True
+    result["recognition"]["invalid_detector_geometry_count"] = 1
+    assert source_result_passed(result) is False
 
 
 def test_each_road9_reconciliation_disposes_loop_bound_connections(monkeypatch):
@@ -415,6 +551,7 @@ def test_native_runner_registers_browser_reachable_detector_stream_address():
         video_port=15701,
         runtime_bundle={"map_version_id": "CMV-1", "road_data_version": "20260501"},
         tracking_profile="hover_only_legacy",
+        frame_stride=7,
     )
 
     assert result == {"pipeline_id": "pipe-native"}
@@ -423,6 +560,7 @@ def test_native_runner_registers_browser_reachable_detector_stream_address():
     assert captured["body"]["video_stream_url"] == "http://127.0.0.1:15701/video"
     assert captured["body"]["map_version_id"] == "CMV-1"
     assert captured["body"]["tracking_profile"] == "hover_only_legacy"
+    assert captured["body"]["frame_stride"] == 7
     assert captured["body"]["candidate_only"] is False
     assert captured["body"]["source_profile_id"] == "SRC-1"
     assert captured["body"]["inter_id"] == "INT-1"

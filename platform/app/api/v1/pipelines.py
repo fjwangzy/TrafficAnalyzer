@@ -4,6 +4,10 @@ import logging
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from app.core.pipeline_options import (
+    MAX_USER_FRAME_STRIDE,
+    MIN_FRAME_STRIDE,
+)
 from app.services.pipeline_manager import redact_video_source
 from app.services.runtime_capabilities import capability_report_from_runtime_quality
 
@@ -86,6 +90,12 @@ class PipelineCreateRequest(BaseModel):
     tracking_profile: str = Field(
         default="hover_cruise_v1", pattern="^(hover_cruise_v1|hover_only_legacy)$"
     )
+    frame_stride: int | None = Field(
+        default=None,
+        ge=MIN_FRAME_STRIDE,
+        le=MAX_USER_FRAME_STRIDE,
+        description="Process one out of every N source frames; Platform defaults to 3",
+    )
 
 
 class PipelineResponse(BaseModel):
@@ -108,6 +118,7 @@ class PipelineResponse(BaseModel):
     road_context_status: str = "missing"
     quality_status: str = "unverified"
     tracking_profile: str = "hover_cruise_v1"
+    frame_stride: int | None = None
     capabilities: dict[str, bool | None]
     capability_reasons: dict[str, list[str]]
     status: str
@@ -255,6 +266,7 @@ async def start_pipeline(body: PipelineCreateRequest, request: Request):
             ),
             quality_status="verified" if context else "degraded",
             tracking_profile=body.tracking_profile,
+            frame_stride=body.frame_stride,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -277,6 +289,11 @@ class PipelineRegisterRequest(BaseModel):
     video_stream_url: str | None = None
     tracking_profile: str = Field(
         default="hover_cruise_v1", pattern="^(hover_cruise_v1|hover_only_legacy)$"
+    )
+    frame_stride: int | None = Field(
+        default=None,
+        ge=MIN_FRAME_STRIDE,
+        le=MAX_USER_FRAME_STRIDE,
     )
     candidate_only: bool = False
 
@@ -345,6 +362,7 @@ async def register_pipeline(body: PipelineRegisterRequest, request: Request):
             source_profile_id=body.source_profile_id,
             inter_id=body.inter_id or body.intersection_id,
             tracking_profile=body.tracking_profile,
+            frame_stride=body.frame_stride,
             candidate_only=body.candidate_only,
             road_context_status=road_context_status,
             quality_status=quality_status,

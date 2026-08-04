@@ -78,15 +78,16 @@ function clamp(value, minimum, maximum) {
 
 export function dragImageGeometry(points, interaction, bounds) {
   const next = points.map((point) => [...point])
-  const width = Number.isFinite(bounds?.width) ? bounds.width : Number.POSITIVE_INFINITY
-  const height = Number.isFinite(bounds?.height) ? bounds.height : Number.POSITIVE_INFINITY
+  const constrained = Number.isFinite(bounds?.width) && Number.isFinite(bounds?.height)
+  const width = constrained ? bounds.width : Number.POSITIVE_INFINITY
+  const height = constrained ? bounds.height : Number.POSITIVE_INFINITY
   if (interaction?.type === 'vertex' && next[interaction.index]) {
-    next[interaction.index] = [
-      clamp(interaction.point[0], 0, width),
-      clamp(interaction.point[1], 0, height),
-    ]
+    next[interaction.index] = constrained
+      ? [clamp(interaction.point[0], 0, width), clamp(interaction.point[1], 0, height)]
+      : [...interaction.point]
   }
   if (interaction?.type === 'translate' && next.length) {
+    if (!constrained) return next.map(([x, y]) => [x + interaction.dx, y + interaction.dy])
     const xs = next.map(([x]) => x)
     const ys = next.map(([, y]) => y)
     const dx = clamp(interaction.dx, -Math.min(...xs), width - Math.max(...xs))

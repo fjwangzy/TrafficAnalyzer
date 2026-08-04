@@ -868,14 +868,18 @@ ImageMotionEstimationNode
 ### 决策
 
 - 图像轨迹是基础业务事实。ByteTrack 确认关联后立即分配稳定 `track_id`；只有关联消失、源时间断点、超时或自然 EOF 结束轨迹。
+- `TrackerInfoUpdateNode.buffer_tracks` 定义为生命周期尚未结束的轨迹仓库，不再按 `buffer_analytics × 60 + min_time_life_track` 年龄清理。成熟状态对同一 `track_id` 单调；达到最短 2 秒和最少点数后保持成熟直至终止。
+- `buffer_analytics=0.5` 只定义 30 秒道路入口事件窗口。成熟轨迹首次满足道路归属和 3 秒存在要求时登记一次；事件到期只影响辆/分钟，不得删除、完成、拆分或降级图像轨迹。
 - 能力拆为 `trajectory_output_eligible`、`geo_analytics_eligible`、`road_analytics_eligible` 与 `tcc_analytics_eligible`。兼容字段 `formal_analytics_eligible` 只表示完整道路分析能力，不控制轨迹缓冲或完成事件。
-- `uav_track_complete/v1` 不换 Topic 或版本。像素、源时间和帧号必填同索引；ENU/GCJ-02 等长且可逐点为 `null`。地图、车道、Link 与匹配置信度可空；Movement/方向属于轨迹自身世界运动事实，不由路网匹配赋值。
+- `uav_track_complete/v1` 不换 Topic 或版本，只在明确终止原因下产生。同一 `pipeline_id + track_id` 最多完成一次，消息 ID 由这两个字段确定性生成，使 inbox 拦截误重复。像素、源时间和帧号必填同索引；ENU/GCJ-02 等长且可逐点为 `null`。地图、车道、Link 与匹配置信度可空；Movement/方向属于轨迹自身世界运动事实，不由路网匹配赋值。
 - 世界坐标由视频尺寸、相机参数和同步遥测形成的当前帧矩阵决定；不得增加独立注册输入或让地图矩阵覆盖该结果。地图 Bundle 可选，只为Lane/Link匹配提供独立地图锚点与几何。
 - 速度/方向仅消费可信 ENU；road gate 只控制 Lane/Link ID 与匹配质量，且 RoadMapMatching 禁止创建或覆盖世界坐标和轨迹自身的方向/转向。通用车辆计数继续消费成熟图像轨迹；TCC 使用独立世界坐标、时间、跟踪和证据门禁。缺事实字段为空，禁止伪造零速度或零道路指标。
 
 ### 后果
 
 无地图仍必须输出成熟像素轨迹；当前帧矩阵和遥测质量合格时，无地图也输出世界轨迹、速度、方向和TCC。只有Lane/Link及匹配质量依赖地图。候选只表示未成熟关联。该变更恢复轨迹事件不等于生产跟踪精度验收；无外部真值时 IDF1/HOTA、ID switch、位置 RMSE 与速度 MAE 仍为 `not_evaluated`。
+
+`tracking_diagnostics.lifecycle` 向后兼容地报告 active/mature/candidate/completed 数量、终止原因和 `same_id_mature_to_candidate_count`；正常值必须为 0。历史 `road9` 只读审计发现的重复完成或缺少终止原因 Pipeline 只能保留为历史事实，不得用于正式统计，禁止自动清理或回写。
 
 ## ADR-026：固定时间步 Mahalanobis 门控退出生产关联（2026-07-29）
 
@@ -925,12 +929,18 @@ ImageMotionEstimationNode
 - `DetectionNode` 与 legacy `DetectionTrackingNodes` 共用一个只读遥测策略，只接受同步后的
   `altitude_agl` 或兼容 `height`。三档为 `<112m → 640`、`112–157m → 960`、`>=157m → 1280`；
   130m 的既有 928 实验归入 960。
+- 2026-07-30 起，自适应在仓库配置、Platform 子进程启动和原生 MPS 回放入口全局默认开启；
+  旧 `ADAPTIVE_IMGSZ_ENABLED=false` 不得静默改变生产配置。`--no-adaptive-imgsz` 只作为显式固定
+  尺寸诊断入口保留，必须与生产验收产物隔离。
 - 最近 5 个有效 AGL 取中位数，边界使用 5m 滞回，新档连续 5 个处理帧成立才切换；首帧立即选档。
   遥测缺失保持 2 秒源时间，之后回退固定 960。尺寸不得参与关联、世界坐标、道路或 TCC 门禁。
 - FlightPlan/Mission 未显式指定 tracking profile 时固定选择 `hover_cruise_v1`；仅显式请求可选择
   `hover_only_legacy`。Mission snapshot 固化最终档与选择原因，运行/恢复不重选。
 - `inference_ms` 定义为 YOLO 单处理帧耗时；另发 `pipeline_processing_ms` 和推理上下文。TCC 漏斗
   逐项记录过滤原因。`<100ms` 只能描述指定尺寸下的 YOLO 样本，不代表整帧 P95。
+- `uav_stats` 追加向后兼容的 `recognition_diagnostics`：源画面合法检测、输出轨迹、未关联检测和
+  `<=4096px²` 小目标覆盖分别计数。它只用于检测器→跟踪器工程归因；没有批准真值时不产生正式
+  precision/recall，也不能把同帧转化率冒充跟踪准确率。
 - Platform Kafka consumer 一次 poll 一条 canonical 消息，`max_poll_interval_ms=1800000`。这样密集
   Stats 在 Timescale 展开时不会因单条事务超过默认 5 分钟而触发 rebalance；数据库提交后再提交
   offset、inbox 幂等和消息契约均不改变。
@@ -942,3 +952,46 @@ ImageMotionEstimationNode
 
 崇华路这份素材不能作为自然三档切换样本；三档实景延迟/检测/轨迹对比仍需一段对齐 AGL 真正跨越
 107m、117m、152m、162m 滞回阈值的视频，不能通过修改阈值或使用未对齐遥测强行制造切档。
+
+## ADR-028：检测-跟踪工程覆盖与正式精度分层（2026-07-30）
+
+### 状态
+
+已实施评估边界与只读复现工具；小目标关联增强保持后续独立任务。
+
+### 决策
+
+- `utils_local/detection_tracking_evaluation.py` 作为纯函数评估边界，只消费已捕获的 canonical Stats、
+  Track Complete 和生命周期审计；`scripts/analyze_detection_tracking_coverage.py` 只负责文件适配。
+- 同帧 `emitted_image_track_count / valid_yolo_detection_count` 及小目标/类别分层只叫工程覆盖率。
+  ByteTrack 的确认、lost 保留和出画会改变分子，禁止称为 Precision、Recall 或正式跟踪率。
+- 完整观测数与消息内序列化轨迹点分开统计；数字类别名单列为数据质量问题，不静默映射或回写历史。
+- 没有批准外部真值时，Precision、Recall、IDF1、HOTA 和正式 ID switch 必须为
+  `not_evaluated`。改进比较先使用同一帧、同一检测输入的 shadow/A-B，再决定是否进入生产关联。
+- 小目标改进不得通过全局降低 YOLO/ByteTrack 阈值或放宽成熟门槛完成。优先补逐检测关联 lineage、
+  实际 `dt`/目标尺度软代价、高运动采样与预算受控 ROI 二次检测。
+
+### 后果
+
+xqh 全量 1696 帧可以用于定位稳定悬停与离场阶段的工程差异，但不能作为生产准确率证明。完整数据、
+根因树、分阶段实现和验收矩阵见 `docs/ADAPTIVE_DETECTION_TRACKING_ANALYSIS_20260730.md`。
+
+## ADR-029：固定影像的参数化渠化编辑模型（2026-08-03）
+
+### 状态
+
+已实施。
+
+### 决策
+
+- 正拍证据图固定，路网覆盖层统一平移、绕像素中心旋转并等比缩放；原始单应矩阵只读。
+- 服务端拥有最终矩阵组合权：`H_final = H_task × inverse(T_pose)`；携带姿态的客户端矩阵不一致即 422。旧矩阵-only请求继续有效。
+- `editor_model` 与 `registration_pose` 均显式版本化，复用既有 JSON 列，不增加数据库迁移。曲线保存前确定性采样为 polygon，运行时不解释 Bézier 或模板参数。
+- `editor_model.mode` 显式区分 `parameterized` 与 `freeform`；旧自由几何保存时不虚构进口骨架，但必须保留曲线控制点、人工要素和像素级重开状态。
+- 人行横道、渠化岛、待转区、停止线、车道边界和分段标线升级为正式 Feature；影像叠加和干净渠化图共享同一视口和几何。局部调整以 `manual_override` 保护。
+- 已发布地图只允许通过服务端 `derive-draft` 派生，来源版本写入 topology/quality，复核归零；Console 不拥有复制发布事实的权限。
+- Runtime Bundle 剔除编辑器元数据，路网仍只增强 Lane/Link/Feature 匹配，不改变 trajectory/geo/tcc 独立能力。
+
+### 后果
+
+旧草稿和自由绘制无需预迁移，首次再次保存即补齐 `freeform` 编辑模型；已发布地图仍需派生新草稿。截图只作交互证据；生产精度仍由控制点残差、拓扑检查和人工复核决定。

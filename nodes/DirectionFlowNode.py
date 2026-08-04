@@ -2,6 +2,7 @@ import logging
 
 from elements.FrameElement import FrameElement
 from elements.VideoEndBreakElement import VideoEndBreakElement
+from utils_local.track_lifecycle import active_tracks_of, mature_tracks_of
 from utils_local.trajectory_classifier import classify_direction, compute_heading
 from utils_local.utils import profile_time
 
@@ -47,12 +48,12 @@ class DirectionFlowNode:
         if not getattr(frame_element, "geo_analytics_eligible", False):
             frame_element.direction_stats = None
             frame_element.queue_count = 0
-            for track in (frame_element.buffer_tracks or {}).values():
+            for track in active_tracks_of(frame_element).values():
                 track.direction_class = None
             return frame_element
 
-        buffer_tracks = frame_element.buffer_tracks
-        if not buffer_tracks:
+        mature_tracks = mature_tracks_of(frame_element)
+        if not mature_tracks:
             frame_element.direction_stats = self._empty_stats()
             frame_element.queue_count = 0
             return frame_element
@@ -62,7 +63,7 @@ class DirectionFlowNode:
         direction_speeds: dict[str, list[float]] = {d: [] for d in direction_counts}
         queue_count = 0
 
-        for track in buffer_tracks.values():
+        for track in mature_tracks.values():
             # 排队检测：速度 < 阈值
             if (
                 track.speed_kmh is not None

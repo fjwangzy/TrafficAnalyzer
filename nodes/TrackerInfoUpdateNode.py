@@ -69,15 +69,10 @@ class TrackerInfoUpdateNode:
     """活动跟踪更新模块"""
 
     def __init__(self, config: dict) -> None:
-        config_general = config["general"]
-
-        self.size_buffer_analytics = (
-            config_general["buffer_analytics"] * 60
-        )  # 分析缓冲区中的秒数
-        # 添加最小生存时间，以便在计算统计信息时使用的是
-        # 最近buffer_analytics分钟内的车辆：
-        self.size_buffer_analytics += config_general["min_time_life_track"]
-        self.buffer_tracks = {}  # 活动跟踪缓冲区
+        self.buffer_tracks = {}  # 生命周期尚未结束的活动轨迹
+        self.legacy_max_lost_sec = float(
+            config.get("tracking_node", {}).get("max_lost_sec", 2.0)
+        )
 
         # 完成轨迹发射参数
         trajectory_cfg = config.get("trajectory", {})
@@ -87,6 +82,10 @@ class TrackerInfoUpdateNode:
         self.class_mapping_version = self.vehicle_classification_cfg.get(
             "mapping_version", "vehicle-classification/v1"
         )
+        self._ever_mature_track_ids: set[int] = set()
+        self._regressed_candidate_track_ids: set[int] = set()
+        self._same_id_mature_to_candidate_count = 0
+        self._completed_track_ids: set[int] = set()
         self._last_frame_element: FrameElement | None = None
 
     def flush(
@@ -402,20 +401,34 @@ class TrackerInfoUpdateNode:
                     self.buffer_tracks[id].timestamp_init_road = frame_element.timestamp
 
         for track in self.buffer_tracks.values():
-            track.trajectory_output_eligible = bool(
-                track.timestamp_last - track.timestamp_first >= self.min_track_duration
-                and len(track.trajectory_points) >= self.min_trajectory_points
-            )
+            if not track.trajectory_output_eligible:
+                track.trajectory_output_eligible = bool(
+                    track.timestamp_last - track.timestamp_first
+                    >= self.min_track_duration
+                    and len(track.trajectory_points) >= self.min_trajectory_points
+                )
+            if track.trajectory_output_eligible:
+                self._ever_mature_track_ids.add(int(track.id))
 
-        # 如果id的生存时间> size_buffer_analytics，则从字典中删除旧id
-        # 修复(TD-008): 不使用break，遍历所有元素，避免高ID新轨迹遮蔽低ID旧轨迹
+        # 统计窗口不得结束图像轨迹。新版链路只消费显式终止事实；legacy
+        # 回滚链路没有该事实，因此仅按最后观测时间清理已离开当前帧的轨迹。
         keys_to_remove = []
-        for key, track_element in self.buffer_tracks.items():
-            if frame_element.timestamp - track_element.timestamp_first >= self.size_buffer_analytics:
-                keys_to_remove.append(key)
-
-        tracking_diagnostics = getattr(frame_element, "tracking_diagnostics", None) or {}
         termination_reason = tracking_diagnostics.get("termination_reason")
+        if not post_tracking_world_projection:
+            current_ids = {
+                int(track_id_by_association.get(association_id, association_id))
+                for association_id in all_id_list
+            }
+            for key, track_element in self.buffer_tracks.items():
+                if (
+                    key not in current_ids
+                    and frame_element.timestamp - track_element.timestamp_last
+                    > self.legacy_max_lost_sec
+                ):
+                    track_element.termination_reason = "association_timeout"
+                    termination_reason = termination_reason or "association_timeout"
+                    keys_to_remove.append(key)
+
         terminated_track_ids = set(tracking_diagnostics.get("terminated_track_ids") or [])
         for key in terminated_track_ids:
             if key in self.buffer_tracks:
@@ -440,7 +453,12 @@ class TrackerInfoUpdateNode:
         for key in keys_to_remove:
             track = self.buffer_tracks[key]
             duration = track.timestamp_last - track.timestamp_first
-            if duration >= self.min_track_duration and len(track.trajectory_points) >= self.min_trajectory_points:
+            if (
+                duration >= self.min_track_duration
+                and len(track.trajectory_points) >= self.min_trajectory_points
+                and bool(track.termination_reason)
+                and int(track.id) not in self._completed_track_ids
+            ):
                 # 多帧分类投票：用轨迹生命周期内积累的类别历史重新判定最终分类
                 if track.class_id_history:
                     from collections import Counter
@@ -566,6 +584,7 @@ class TrackerInfoUpdateNode:
                         ]
 
                 completed_tracks.append(completed_track_data)
+                self._completed_track_ids.add(int(track.id))
             self.buffer_tracks.pop(key)  # 从字典中删除元素
             # A sparse replay can retire thousands of short-lived tracks at EOF.
             # Keep the per-track detail available for diagnostics without flooding
@@ -598,17 +617,53 @@ class TrackerInfoUpdateNode:
         eligible_active_tracks = sum(
             track.trajectory_output_eligible for track in self.buffer_tracks.values()
         )
+        candidate_track_ids = {
+            int(track.id)
+            for track in self.buffer_tracks.values()
+            if not track.trajectory_output_eligible
+        }
+        newly_regressed_ids = (
+            candidate_track_ids
+            & self._ever_mature_track_ids
+            - self._regressed_candidate_track_ids
+        )
+        if newly_regressed_ids:
+            self._same_id_mature_to_candidate_count += len(newly_regressed_ids)
+            self._regressed_candidate_track_ids.update(newly_regressed_ids)
+
+        mature_tracks = {
+            track_id: track
+            for track_id, track in self.buffer_tracks.items()
+            if track.trajectory_output_eligible
+        }
         frame_element.trajectory_output_eligible = bool(
             eligible_active_tracks or completed_tracks
         )
         frame_element.candidate_trajectories = candidate_trajectories
-        diagnostics = getattr(frame_element, "tracking_diagnostics", None)
-        if isinstance(diagnostics, dict):
-            diagnostics["trajectory_track_count"] = eligible_active_tracks
-            diagnostics["candidate_track_count"] = len(candidate_trajectories)
+        diagnostics = tracking_diagnostics
+        diagnostics["trajectory_track_count"] = eligible_active_tracks
+        diagnostics["candidate_track_count"] = len(candidate_trajectories)
+        diagnostics["lifecycle"] = {
+            "active_track_count": len(self.buffer_tracks),
+            "mature_track_count": len(mature_tracks),
+            "candidate_track_count": len(candidate_trajectories),
+            "completed_track_count": len(completed_tracks),
+            "same_id_mature_to_candidate_count": (
+                self._same_id_mature_to_candidate_count
+            ),
+            "termination_reason": termination_reason,
+        }
+        frame_element.tracking_diagnostics = diagnostics
 
         # 记录处理结果：
         frame_element.buffer_tracks = self.buffer_tracks
+        frame_element.active_tracks = self.buffer_tracks
+        frame_element.mature_tracks = mature_tracks
+        frame_element.mature_trajectory_association_ids = sorted(
+            int(track.association_id)
+            for track in mature_tracks.values()
+            if track.association_id is not None
+        )
         frame_element.completed_tracks = completed_tracks if completed_tracks else None
         self._last_frame_element = frame_element
 

@@ -81,6 +81,7 @@ class LocalPipelineExecutor:
         *,
         device: str | None = None,
         imgsz: int | None = None,
+        adaptive_imgsz: bool = True,
         extra_env: dict[str, str] | None = None,
         extra_overrides: tuple[str, ...] = (),
         video_ready_timeout_sec: float = 45.0,
@@ -89,6 +90,7 @@ class LocalPipelineExecutor:
         self._pipeline_python = pipeline_python
         self._device = device
         self._imgsz = imgsz
+        self._adaptive_imgsz = bool(adaptive_imgsz)
         self._extra_env = dict(extra_env or {})
         self._extra_overrides = tuple(extra_overrides)
         self._video_ready_timeout_sec = max(float(video_ready_timeout_sec), 0.1)
@@ -104,6 +106,10 @@ class LocalPipelineExecutor:
             command.append(f"detection_node.device={self._device}")
         if self._imgsz is not None:
             command.append(f"detection_node.imgsz={self._imgsz}")
+        command.append(
+            "detection_node.adaptive_imgsz.enabled="
+            f"{'true' if self._adaptive_imgsz else 'false'}"
+        )
         command.extend(self._extra_overrides)
         if spec.telemetry_source:
             command.extend(

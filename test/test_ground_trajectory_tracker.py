@@ -84,6 +84,22 @@ def _multi_frame(timestamp, boxes, projection):
     return frame
 
 
+def test_tracked_class_name_survives_current_frame_class_switch_pending():
+    tracker = GroundTrajectoryTrackerNode(_config())
+    first = _frame(0.0, [20, 20, 40, 40])
+    first.detected_cls = ["tricycle"]
+    first.detected_cls_ids = [6]
+    tracker.process(first)
+
+    second = _frame(0.1, [20, 20, 40, 40])
+    second.detected_cls = ["car"]
+    second.detected_cls_ids = [3]
+    result = tracker.process(second)
+
+    assert result.tracked_cls_ids == [6]
+    assert result.tracked_cls == ["tricycle"]
+
+
 def test_image_association_is_invariant_to_world_projection_jitter():
     """Changing only H must not change image identities or matched boxes."""
 
@@ -160,6 +176,35 @@ def test_small_stride_motion_reports_mahalanobis_shadow_without_splitting_id():
     assert gate["eligible_pair_count"] == 1
     assert gate["would_reject_eligible_pair_count"] == 1
     assert gate["would_strand_track_count"] == 1
+
+
+def test_adaptive_imgsz_switch_and_short_detection_gap_keep_same_image_id():
+    """Source-plane boxes make adaptive inference size invisible to association."""
+    BaseTrack._count = 0
+    node = _TrackingPipeline(_config())
+
+    first = _frame(0.0, [20, 20, 40, 40])
+    first.inference_context = {"effective_imgsz": 640}
+    first = node.process(first)
+
+    switched = _frame(0.1, [21, 20, 41, 40])
+    switched.inference_context = {"effective_imgsz": 960}
+    switched = node.process(switched)
+
+    missing = _multi_frame(0.2, [], np.eye(3))
+    missing.inference_context = {"effective_imgsz": 1280}
+    missing = node.process(missing)
+
+    recovered = _frame(0.3, [22, 20, 42, 40])
+    recovered.inference_context = {"effective_imgsz": 1280}
+    recovered = node.process(recovered)
+
+    assert first.id_list == [1]
+    assert switched.id_list == [1]
+    assert missing.id_list == []
+    assert missing.tracking_diagnostics["terminated_track_ids"] == []
+    assert recovered.id_list == [1]
+    assert recovered.tracking_diagnostics["terminated_track_ids"] == []
 
 
 def test_no_road_or_geo_still_emits_one_aligned_pixel_trajectory_at_eof():
@@ -521,6 +566,242 @@ def test_quality_recovery_keeps_one_output_track_in_same_image_family():
     assert len(formal_track.trajectory_points) == 3
 
 
+def test_mature_id_stays_mature_through_geo_and_road_degrade_recovery():
+    config = _config()
+    config["trajectory"]["min_track_duration_sec"] = 2.0
+    tracker = _TrackingPipeline(config)
+    accumulator = TrackerInfoUpdateNode(config)
+
+    for index in range(22):
+        accumulator.process(
+            tracker.process(_frame(index * 0.1, [20, 20, 40, 40]))
+        )
+
+    degraded = _frame(2.2, [20, 20, 40, 40])
+    degraded.geo_analytics_eligible = False
+    degraded.road_analytics_eligible = False
+    degraded.tcc_analytics_eligible = False
+    degraded.formal_analytics_eligible = False
+    degraded.geo_reference_quality = {
+        "status": "degraded",
+        "reasons": ["telemetry_unavailable", "lane_verified_map_required"],
+    }
+    degraded = accumulator.process(tracker.process(degraded))
+    assert degraded.id_list == [1]
+    assert list(degraded.mature_tracks) == [1]
+    assert degraded.candidate_trajectories == []
+    assert degraded.completed_tracks is None
+
+    recovered = accumulator.process(
+        tracker.process(_frame(2.3, [20, 20, 40, 40]))
+    )
+    assert recovered.id_list == [1]
+    assert list(recovered.mature_tracks) == [1]
+    assert recovered.candidate_trajectories == []
+    assert recovered.completed_tracks is None
+    assert (
+        recovered.tracking_diagnostics["lifecycle"]
+        ["same_id_mature_to_candidate_count"]
+        == 0
+    )
+
+
+def test_mature_hover_queue_tracks_do_not_reenter_candidate_state_at_statistics_windows():
+    """A statistics window must never restart an active image trajectory."""
+
+    config = _config()
+    config["general"] = {
+        "buffer_analytics": 0.5,
+        "min_time_life_track": 3,
+    }
+    config["trajectory"]["min_track_duration_sec"] = 2.0
+    accumulator = TrackerInfoUpdateNode(config)
+    association_ids = [1, 2, 3]
+    boxes = [[10, 20, 25, 45], [40, 20, 55, 45], [70, 20, 85, 45]]
+    completed_track_ids = []
+    candidate_counts_after_maturity = []
+
+    for index in range(701):
+        timestamp = round(index * 0.1, 3)
+        frame = _multi_frame(timestamp, boxes, np.eye(3))
+        frame.id_list = list(association_ids)
+        frame.association_id_list = list(association_ids)
+        frame.tracked_xyxy = [list(box) for box in boxes]
+        frame.tracked_cls = ["car"] * len(boxes)
+        frame.tracked_cls_ids = [3] * len(boxes)
+        frame.tracked_conf = [0.9] * len(boxes)
+        frame.trajectory_output_eligible = True
+        frame.trajectory_association_ids = list(association_ids)
+        frame.track_id_by_association = {value: value for value in association_ids}
+        frame.tracking_diagnostics = {
+            "tracking_method": "motion_compensated_image_v2",
+            "world_projection_stage": "post_bytetrack",
+            "association_state_ids": list(association_ids),
+            "terminated_track_ids": [],
+            "termination_reason": None,
+        }
+
+        result = accumulator.process(frame)
+        completed_track_ids.extend(
+            track["track_id"] for track in (result.completed_tracks or [])
+        )
+        if timestamp >= 2.1:
+            candidate_counts_after_maturity.append(
+                len(result.candidate_trajectories or [])
+            )
+            assert sorted(result.buffer_tracks) == association_ids
+            assert all(
+                track.trajectory_output_eligible
+                for track in result.buffer_tracks.values()
+            )
+
+    assert completed_track_ids == []
+    assert candidate_counts_after_maturity
+    assert max(candidate_counts_after_maturity) == 0
+
+
+def test_tracker_info_exposes_active_and_mature_lifecycle_views():
+    config = _config()
+    config["trajectory"]["min_track_duration_sec"] = 2.0
+    accumulator = TrackerInfoUpdateNode(config)
+
+    def process(timestamp):
+        frame = _frame(timestamp, [20, 20, 40, 40])
+        frame.id_list = [1]
+        frame.association_id_list = [1]
+        frame.tracked_xyxy = [[20, 20, 40, 40]]
+        frame.tracked_cls = ["car"]
+        frame.tracked_cls_ids = [3]
+        frame.tracked_conf = [0.9]
+        frame.trajectory_output_eligible = True
+        frame.trajectory_association_ids = [1]
+        frame.track_id_by_association = {1: 1}
+        frame.tracking_diagnostics = {
+            "tracking_method": "motion_compensated_image_v2",
+            "world_projection_stage": "post_bytetrack",
+            "association_state_ids": [1],
+            "terminated_track_ids": [],
+            "termination_reason": None,
+        }
+        return accumulator.process(frame)
+
+    candidate = process(0.0)
+    assert list(candidate.active_tracks) == [1]
+    assert candidate.mature_tracks == {}
+    assert candidate.mature_trajectory_association_ids == []
+    assert candidate.tracking_diagnostics["lifecycle"] == {
+        "active_track_count": 1,
+        "mature_track_count": 0,
+        "candidate_track_count": 1,
+        "completed_track_count": 0,
+        "same_id_mature_to_candidate_count": 0,
+        "termination_reason": None,
+    }
+
+    process(0.5)
+    process(1.0)
+    process(1.5)
+    mature = process(2.1)
+    assert list(mature.active_tracks) == [1]
+    assert list(mature.mature_tracks) == [1]
+    assert mature.mature_trajectory_association_ids == [1]
+    assert mature.tracking_diagnostics["lifecycle"]["mature_track_count"] == 1
+    assert mature.tracking_diagnostics["lifecycle"]["candidate_track_count"] == 0
+
+
+def test_short_detection_gap_preserves_mature_id_until_recovery():
+    config = _config()
+    config["trajectory"]["min_track_duration_sec"] = 2.0
+    tracker = _TrackingPipeline(config)
+    accumulator = TrackerInfoUpdateNode(config)
+
+    for index in range(22):
+        frame = _frame(index * 0.1, [20, 20, 40, 40])
+        mature = accumulator.process(tracker.process(frame))
+    assert list(mature.mature_tracks) == [1]
+
+    missing = _multi_frame(2.2, [], np.eye(3))
+    missing = accumulator.process(tracker.process(missing))
+    assert missing.id_list == []
+    assert list(missing.active_tracks) == [1]
+    assert list(missing.mature_tracks) == [1]
+    assert missing.candidate_trajectories == []
+    assert missing.completed_tracks is None
+
+    recovered = accumulator.process(
+        tracker.process(_frame(2.3, [20, 20, 40, 40]))
+    )
+    assert recovered.id_list == [1]
+    assert list(recovered.mature_tracks) == [1]
+    assert recovered.candidate_trajectories == []
+    assert recovered.completed_tracks is None
+    assert (
+        recovered.tracking_diagnostics["lifecycle"]
+        ["same_id_mature_to_candidate_count"]
+        == 0
+    )
+
+
+def test_association_lost_beyond_two_seconds_completes_new_path_once():
+    config = _config()
+    config["trajectory"]["min_track_duration_sec"] = 2.0
+    tracker = _TrackingPipeline(config)
+    accumulator = TrackerInfoUpdateNode(config)
+
+    for index in range(22):
+        accumulator.process(
+            tracker.process(_frame(index * 0.1, [20, 20, 40, 40]))
+        )
+
+    completion_frames = []
+    for timestamp in (2.5, 3.0, 3.5, 4.0, 4.5, 5.0):
+        result = accumulator.process(
+            tracker.process(_multi_frame(timestamp, [], np.eye(3)))
+        )
+        if result.completed_tracks:
+            completion_frames.append(result)
+
+    assert len(completion_frames) == 1
+    completed = completion_frames[0]
+    assert [track["track_id"] for track in completed.completed_tracks] == [1]
+    assert completed.completed_tracks[0]["termination_reason"] == "association_ended"
+    assert completed.tracking_diagnostics["lifecycle"]["completed_track_count"] == 1
+    assert (
+        completed.tracking_diagnostics["lifecycle"]["termination_reason"]
+        == "association_ended"
+    )
+    assert accumulator.buffer_tracks == {}
+
+
+def test_source_time_gap_completes_old_mature_id_once_and_starts_candidate():
+    config = _config()
+    config["trajectory"]["min_track_duration_sec"] = 2.0
+    tracker = _TrackingPipeline(config)
+    accumulator = TrackerInfoUpdateNode(config)
+
+    for index in range(22):
+        accumulator.process(
+            tracker.process(_frame(index * 0.1, [20, 20, 40, 40]))
+        )
+
+    jumped = accumulator.process(
+        tracker.process(_frame(3.0, [20, 20, 40, 40]))
+    )
+    assert jumped.id_list == [2]
+    assert [track["track_id"] for track in jumped.completed_tracks] == [1]
+    assert jumped.completed_tracks[0]["termination_reason"] == "source_time_gap"
+    assert list(jumped.active_tracks) == [2]
+    assert jumped.mature_tracks == {}
+    assert [track["track_id"] for track in jumped.candidate_trajectories] == [2]
+    assert jumped.tracking_diagnostics["lifecycle"]["completed_track_count"] == 1
+    assert jumped.tracking_diagnostics["lifecycle"]["termination_reason"] == "source_time_gap"
+
+    continued = accumulator.process(
+        tracker.process(_frame(3.1, [20, 20, 40, 40]))
+    )
+    assert continued.completed_tracks is None
+
+
 def test_telemetry_gap_never_resets_image_association_tracker():
     BaseTrack._count = 0
     tracker = _TrackingPipeline(_config())
@@ -607,3 +888,54 @@ def test_natural_eof_flushes_remaining_formal_track_with_aligned_points():
     assert len(completed["point_quality_lineage"]) == 5
     assert completed["trajectory_px"] == completed["ground_contact_points_px"]
     assert completed["trajectory_bbox_center_px"] != completed["trajectory_px"]
+    assert (
+        accumulator.flush(
+            timestamp=0.4,
+            reason="natural_eof",
+            terminated_track_ids=[1],
+        )
+        is None
+    )
+
+
+def test_legacy_timeout_reports_reason_and_completes_mature_track_once():
+    config = _config()
+    config["tracking_profile"] = "hover_only_legacy"
+    config["trajectory"]["min_track_duration_sec"] = 2.0
+    accumulator = TrackerInfoUpdateNode(config)
+
+    def legacy_frame(timestamp, present):
+        frame = FrameElement(
+            source="legacy-fixture",
+            frame=np.zeros((80, 120, 3), dtype=np.uint8),
+            timestamp=timestamp,
+            frame_num=round(timestamp * 10),
+            roads_info={},
+        )
+        frame.id_list = [1] if present else []
+        frame.tracked_xyxy = [[20, 20, 40, 40]] if present else []
+        frame.tracked_cls = ["car"] if present else []
+        frame.tracked_cls_ids = [3] if present else []
+        frame.tracked_conf = [0.9] if present else []
+        return frame
+
+    for timestamp in (0.0, 0.5, 1.0, 1.5, 2.1):
+        mature = accumulator.process(legacy_frame(timestamp, True))
+    assert list(mature.mature_tracks) == [1]
+
+    completed = None
+    for timestamp in (2.5, 3.0, 3.5, 4.0, 4.5):
+        result = accumulator.process(legacy_frame(timestamp, False))
+        if result.completed_tracks:
+            completed = result
+
+    assert completed is not None
+    assert [track["track_id"] for track in completed.completed_tracks] == [1]
+    assert completed.completed_tracks[0]["termination_reason"] == "association_timeout"
+    assert (
+        completed.tracking_diagnostics["lifecycle"]["termination_reason"]
+        == "association_timeout"
+    )
+
+    repeated = accumulator.process(legacy_frame(5.0, False))
+    assert repeated.completed_tracks is None

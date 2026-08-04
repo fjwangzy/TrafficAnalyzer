@@ -19,6 +19,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.config import settings
+from app.core.pipeline_options import DEFAULT_FRAME_STRIDE
 from app.models.mission import (
     DroneRecord,
     FlightPlanRecord,
@@ -589,6 +590,8 @@ class MissionOrchestrator:
             )
             snapshot["tracking_profile"] = tracking_profile
             snapshot["tracking_profile_selection_reason"] = selection_reason
+            if body.frame_stride is not None:
+                snapshot["frame_stride"] = body.frame_stride
             try:
                 runtime_context = await self._road_context.select_runtime(
                     body.inter_id,
@@ -827,6 +830,12 @@ class MissionOrchestrator:
                 return
             params = await self._runtime_params(session, mission)
             runtime = await self._pipeline.start(**params)
+            mission.context_snapshot = {
+                **mission.context_snapshot,
+                "frame_stride": runtime.get(
+                    "frame_stride", DEFAULT_FRAME_STRIDE
+                ),
+            }
             mission.pipeline_id = runtime["pipeline_id"]
             mission.actual_start_at = _now()
             if runtime.get("status") == "running":
@@ -924,6 +933,7 @@ class MissionOrchestrator:
             "tracking_profile": mission.context_snapshot.get(
                 "tracking_profile", "hover_cruise_v1"
             ),
+            "frame_stride": mission.context_snapshot.get("frame_stride"),
         }
 
     async def _validate_plan(self, session: AsyncSession, plan: FlightPlanRecord) -> None:

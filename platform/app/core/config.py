@@ -3,8 +3,14 @@ import time
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import model_validator
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from app.core.pipeline_options import (
+    DEFAULT_FRAME_STRIDE,
+    MAX_FRAME_STRIDE,
+    MIN_FRAME_STRIDE,
+)
 
 
 class Settings(BaseSettings):
@@ -70,7 +76,11 @@ class Settings(BaseSettings):
     pipeline_video_base: str = "http://127.0.0.1:{video_port}/video"
     pipeline_python: str = "python"
     pipeline_video_ready_timeout_sec: float = 45.0
-    pipeline_frame_stride: int | None = None
+    pipeline_frame_stride: int = Field(
+        default=DEFAULT_FRAME_STRIDE,
+        ge=MIN_FRAME_STRIDE,
+        le=MAX_FRAME_STRIDE,
+    )
     pipeline_max_active: int = 4
     pipeline_device: str | None = None
     pipeline_imgsz: int | None = None

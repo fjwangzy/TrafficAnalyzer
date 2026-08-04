@@ -6,12 +6,12 @@ import os
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from services.SrtTelemetryParser import SrtTelemetryParser
 from services.TelemetryFileReader import TelemetryFileReader
 from shapely.geometry import LineString, Polygon
@@ -37,6 +37,7 @@ from app.models.mission import (
 )
 from app.models.survey import SurveyCaptureBatch, SurveyFrame, SurveyTask
 from app.services.intersection_video_discovery import HoverIntersectionDiscovery
+from app.services.channelized_editor_geometry import overlap_must_be_disjoint, resolve_registration_homography
 from app.services.survey_geometry import align_homography_to_map_enu
 from app.services.survey_service import SurveyService
 from app.services.ycx_road_import import YcxRoadImporter
@@ -91,6 +92,15 @@ class ChannelizedMapPayload(BaseModel):
     lanes: list[ChannelizedLanePayload] = Field(default_factory=list)
 
 
+class RegistrationPoseV1(BaseModel):
+    schema_version: Literal["uav.channelized-editor/registration-pose/v1"]
+    fixed_surface: Literal["source_image"]
+    center_px: list[float] = Field(min_length=2, max_length=2)
+    translation_px: list[float] = Field(min_length=2, max_length=2)
+    rotation_deg: float = Field(ge=-180, le=180)
+    uniform_scale: float = Field(gt=0.1, le=10)
+
+
 class VisualRegistrationPayload(BaseModel):
     source_profile_id: str | None = Field(default=None, max_length=40)
     source_image_path: str = Field(min_length=1, max_length=500)
@@ -99,7 +109,7 @@ class VisualRegistrationPayload(BaseModel):
     homography_pixel_to_enu: list | None = None
     residuals: dict = Field(default_factory=dict)
     orthophoto_bounds_gcj02: list[list[float]] | None = None
-    registration_pose: dict = Field(default_factory=dict)
+    registration_pose: RegistrationPoseV1 | None = None
     camera_calibration: dict = Field(default_factory=dict)
     map_coverage_enu_m: dict = Field(default_factory=dict)
 
@@ -117,13 +127,58 @@ class ImageFittedLanePayload(BaseModel):
     source_lane_id: str | None = Field(default=None, max_length=100)
     link_id: str | None = Field(default=None, max_length=100)
     direction: str | None = Field(default=None, max_length=40)
+    special_lane_attribute: Literal["bus", "tidal"] | None = None
     polygon_px: list[list[float]] = Field(min_length=3)
+
+
+class EditorApproachV1(BaseModel):
+    approach_id: str = Field(min_length=1, max_length=100)
+    angle_deg: float = Field(ge=-360, le=360)
+    inbound_lane_count: int = Field(ge=1, le=12)
+    outbound_lane_count: int = Field(ge=1, le=12)
+    lane_width_px: float = Field(gt=1, le=200)
+    approach_length_px: float = Field(gt=10, le=5000)
+    flare_length_px: float = Field(default=0, ge=0, le=2000)
+    right_turn_lane: bool = False
+    turn_directions: list[Literal["left_turn", "straight", "right_turn", "u_turn"]] = Field(default_factory=list)
+    special_lane_attributes: dict[str, str] = Field(default_factory=dict)
+    manual_override: bool = False
+
+
+class EditorFeatureTemplateV1(BaseModel):
+    feature_id: str = Field(min_length=1, max_length=100)
+    feature_type: Literal["crosswalk", "channelizing_island", "waiting_zone", "stop_line", "lane_boundary", "lane_marking"]
+    approach_id: str | None = Field(default=None, max_length=100)
+    variant: Literal["standard", "right_turn"] = "standard"
+    width_px: float | None = Field(default=None, gt=0, le=1000)
+    setback_px: float = Field(default=0, ge=-1000, le=1000)
+    length_px: float | None = Field(default=None, gt=0, le=5000)
+    lateral_offset_px: float = Field(default=0, ge=-2000, le=2000)
+    color: Literal["white", "yellow", "blue"] = "white"
+    line_style: Literal["solid", "dashed"] = "solid"
+    manual_override: bool = False
+
+
+class EditorModelV1(BaseModel):
+    schema_version: Literal["uav.channelized-editor/model/v1"]
+    mode: Literal["parameterized", "freeform"] = "parameterized"
+    center_px: list[float] = Field(min_length=2, max_length=2)
+    approaches: list[EditorApproachV1] = Field(default_factory=list, max_length=12)
+    feature_templates: list[EditorFeatureTemplateV1] = Field(default_factory=list)
+    manual_overrides: list[str] = Field(default_factory=list)
+    pixel_geometry: dict[str, list[dict]] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def require_parameterized_approaches(self) -> "EditorModelV1":
+        if self.mode == "parameterized" and not self.approaches:
+            raise ValueError("parameterized editor_model requires at least one approach")
+        return self
 
 
 class ImageFittedFeaturePayload(BaseModel):
     feature_id: str = Field(min_length=1, max_length=100)
     feature_type: str = Field(
-        pattern="^(lane_boundary|stop_line|guide_zone|waiting_zone)$"
+        pattern="^(lane_boundary|stop_line|guide_zone|waiting_zone|crosswalk|channelizing_island|lane_marking)$"
     )
     points_px: list[list[float]] = Field(min_length=2)
     properties: dict = Field(default_factory=dict)
@@ -143,7 +198,8 @@ class ImageFitPayload(BaseModel):
     direction_checks_passed: bool = False
     stop_line_checks_passed: bool = False
     reviewed: bool = False
-    registration_pose: dict = Field(default_factory=dict)
+    registration_pose: RegistrationPoseV1 | None = None
+    editor_model: EditorModelV1 | None = None
     camera_calibration: dict = Field(default_factory=dict)
     map_coverage_enu_m: dict = Field(default_factory=dict)
 
@@ -1383,6 +1439,8 @@ async def get_channelized_map(map_version_id: str, db: AsyncSession = Depends(ge
             "id": registration.id,
             "source_profile_id": registration.source_profile_id,
             "status": registration.status,
+            "homography_pixel_to_enu": registration.homography_pixel_to_enu,
+            "control_points": registration.control_points,
             "residuals": registration.residuals,
             "registration_pose": registration.registration_pose,
             "camera_calibration": registration.camera_calibration,
@@ -1400,6 +1458,7 @@ async def get_channelized_map(map_version_id: str, db: AsyncSession = Depends(ge
             "id": item.id,
             "source_profile_id": item.source_profile_id,
             "status": item.status,
+            "homography_pixel_to_enu": item.homography_pixel_to_enu,
             "residuals": item.residuals,
             "registration_pose": item.registration_pose,
             "camera_calibration": item.camera_calibration,
@@ -1441,7 +1500,10 @@ async def get_runtime_map_bundle(
         "anchor_gcj02": row.anchor_gcj02,
         "geometry_gcj02": row.geometry_gcj02,
         "geometry_enu_m": row.geometry_enu_m,
-        "topology": row.topology,
+        "topology": {
+            key: value for key, value in (row.topology or {}).items()
+            if key != "editor_model"
+        },
         "quality": row.quality,
         "lanes": [
             {
@@ -1510,6 +1572,79 @@ async def create_channelized_map(
                 confirmed_by=_actor_id(request),
             )
         )
+    await db.commit()
+    return await get_channelized_map(row.id, db)
+
+
+@router.post("/channelized-maps/{map_version_id}/derive-draft", status_code=201)
+async def derive_channelized_map_draft(
+    map_version_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Create an editable draft with explicit immutable-version provenance."""
+    _require_admin(request)
+    source = await db.get(ChannelizedMapVersion, map_version_id)
+    if source is None:
+        raise HTTPException(status_code=404, detail="channelized map not found")
+    if source.status == "retired":
+        raise HTTPException(status_code=409, detail="retired channelized map cannot derive a draft")
+    await _lock_intersection(db, source.inter_id)
+    version_no = int(
+        await db.scalar(
+            select(func.coalesce(func.max(ChannelizedMapVersion.version_no), 0)).where(
+                ChannelizedMapVersion.inter_id == source.inter_id
+            )
+        )
+        or 0
+    ) + 1
+    topology = json.loads(json.dumps(source.topology or {}))
+    topology["derived_from_map_version_id"] = source.id
+    quality = json.loads(json.dumps(source.quality or {}))
+    quality.update({
+        "derived_from_map_version_id": source.id,
+        "reviewed": False,
+        "derived_from_status": source.status,
+    })
+    row = ChannelizedMapVersion(
+        id=f"CMV-{uuid.uuid4().hex[:24]}",
+        inter_id=source.inter_id,
+        road_data_version=source.road_data_version,
+        version_no=version_no,
+        status="draft",
+        coordinate_system=source.coordinate_system,
+        coordinate_transform_version=source.coordinate_transform_version,
+        anchor_gcj02=json.loads(json.dumps(source.anchor_gcj02)),
+        geometry_gcj02=json.loads(json.dumps(source.geometry_gcj02 or {})),
+        geometry_enu_m=json.loads(json.dumps(source.geometry_enu_m or {})),
+        topology=topology,
+        quality=quality,
+        source_checksum=source.source_checksum,
+        created_by=_actor_id(request),
+    )
+    db.add(row)
+    await db.flush()
+    lanes = (
+        await db.execute(
+            select(VisualLaneBinding).where(VisualLaneBinding.map_version_id == source.id)
+        )
+    ).scalars().all()
+    for lane in lanes:
+        db.add(VisualLaneBinding(
+            id=f"VLB-{uuid.uuid4().hex[:24]}",
+            inter_id=source.inter_id,
+            road_data_version=source.road_data_version,
+            map_version_id=row.id,
+            local_lane_id=lane.local_lane_id,
+            canonical_link_id=lane.canonical_link_id,
+            canonical_lane_id=lane.canonical_lane_id,
+            geometry_source=lane.geometry_source,
+            geometry_gcj02=json.loads(json.dumps(lane.geometry_gcj02)),
+            geometry_enu_m=json.loads(json.dumps(lane.geometry_enu_m)),
+            match_confidence=lane.match_confidence,
+            status="candidate",
+            confirmed_by=_actor_id(request),
+        ))
     await db.commit()
     return await get_channelized_map(row.id, db)
 
@@ -1588,12 +1723,25 @@ async def fit_channelized_map_from_image(
     if image_path is None:
         raise HTTPException(status_code=422, detail="annotation task has no retained source image")
 
+    registration_pose = (
+        payload.registration_pose.model_dump(mode="json")
+        if payload.registration_pose is not None else None
+    )
+    try:
+        effective_homography = resolve_registration_homography(
+            task.get("homography_pixel_to_enu"),
+            payload.homography_pixel_to_enu,
+            registration_pose,
+        )
+    except (TypeError, ValueError, np.linalg.LinAlgError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
     enu_lanes: dict[str, dict] = {}
     gcj_lanes: dict[str, dict] = {}
     fitted: list[tuple[ImageFittedLanePayload, dict, dict]] = []
-    polygons: list[tuple[str, Polygon]] = []
+    polygons: list[tuple[ImageFittedLanePayload, Polygon]] = []
     for lane in payload.lanes:
-        ring = [_pixel_to_enu(point, payload.homography_pixel_to_enu) for point in lane.polygon_px]
+        ring = [_pixel_to_enu(point, effective_homography) for point in lane.polygon_px]
         if ring[0] != ring[-1]:
             ring.append(ring[0])
         polygon = Polygon(ring)
@@ -1603,13 +1751,15 @@ async def fit_channelized_map_from_image(
                 detail=f"lane {lane.local_lane_id} has an invalid or self-intersecting polygon",
             )
         for other_lane, other in polygons:
+            if not overlap_must_be_disjoint(other_lane.link_id, lane.link_id):
+                continue
             overlap = polygon.intersection(other).area
             if overlap > min(polygon.area, other.area) * 0.05:
                 raise HTTPException(
                     status_code=422,
-                    detail=f"lanes {other_lane} and {lane.local_lane_id} overlap by more than 5%",
+                    detail=f"lanes {other_lane.local_lane_id} and {lane.local_lane_id} overlap by more than 5%",
                 )
-        polygons.append((lane.local_lane_id, polygon))
+        polygons.append((lane, polygon))
         enu_geometry = {"type": "Polygon", "coordinates": [ring]}
         gcj_ring = [list(enu_to_gcj02(point[0], point[1], row.anchor_gcj02)) for point in ring]
         gcj_geometry = {"type": "Polygon", "coordinates": [gcj_ring]}
@@ -1618,16 +1768,18 @@ async def fit_channelized_map_from_image(
         fitted.append((lane, gcj_geometry, enu_geometry))
 
     control_residuals = _control_point_residuals(
-        payload.control_points, payload.homography_pixel_to_enu
+        payload.control_points, effective_homography
     )
     enu_features: dict[str, dict] = {}
     gcj_features: dict[str, dict] = {}
     for feature in payload.features:
         points = [
-            _pixel_to_enu(point, payload.homography_pixel_to_enu)
+            _pixel_to_enu(point, effective_homography)
             for point in feature.points_px
         ]
-        is_area = feature.feature_type in {"guide_zone", "waiting_zone"}
+        is_area = feature.feature_type in {
+            "guide_zone", "waiting_zone", "crosswalk", "channelizing_island"
+        }
         if is_area:
             if len(points) < 3:
                 raise HTTPException(status_code=422, detail=f"{feature.feature_id} requires a polygon")
@@ -1684,11 +1836,14 @@ async def fit_channelized_map_from_image(
     topology["lane_properties"] = {
         lane.local_lane_id: {
             "direction": lane.direction,
+            "special_lane_attribute": lane.special_lane_attribute,
             "source_lane_id": lane.source_lane_id,
             "link_id": lane.link_id,
         }
         for lane in payload.lanes
     }
+    if payload.editor_model is not None:
+        topology["editor_model"] = payload.editor_model.model_dump(mode="json")
     row.topology = topology
     row.quality = quality
     row.status = "candidate"
@@ -1726,9 +1881,9 @@ async def fit_channelized_map_from_image(
             source_profile_id=payload.source_profile_id,
             source_image_path=str(image_path),
             control_points=payload.control_points,
-            homography_pixel_to_enu=payload.homography_pixel_to_enu,
+            homography_pixel_to_enu=effective_homography,
             residuals=control_residuals,
-            registration_pose=payload.registration_pose,
+            registration_pose=registration_pose or {},
             camera_calibration=payload.camera_calibration,
             map_coverage_enu_m=payload.map_coverage_enu_m,
             status="registered",
@@ -1738,9 +1893,9 @@ async def fit_channelized_map_from_image(
     else:
         registration.source_image_path = str(image_path)
         registration.control_points = payload.control_points
-        registration.homography_pixel_to_enu = payload.homography_pixel_to_enu
+        registration.homography_pixel_to_enu = effective_homography
         registration.residuals = control_residuals
-        registration.registration_pose = payload.registration_pose
+        registration.registration_pose = registration_pose or {}
         registration.camera_calibration = payload.camera_calibration
         registration.map_coverage_enu_m = payload.map_coverage_enu_m
         registration.status = "registered"
@@ -1784,7 +1939,7 @@ async def add_visual_registration(
             **({"orthophoto_bounds_gcj02": payload.orthophoto_bounds_gcj02}
                if payload.orthophoto_bounds_gcj02 else {}),
         },
-        registration_pose=payload.registration_pose,
+        registration_pose=(payload.registration_pose.model_dump(mode="json") if payload.registration_pose else {}),
         camera_calibration=payload.camera_calibration,
         map_coverage_enu_m=payload.map_coverage_enu_m,
         status="registered" if payload.homography_pixel_to_enu else "draft",

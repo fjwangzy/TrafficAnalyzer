@@ -6,6 +6,7 @@ from elements.FrameElement import FrameElement
 from elements.VideoEndBreakElement import VideoEndBreakElement
 from utils_local.coordinates import enu_to_gcj02
 from utils_local.homography import is_valid_homography
+from utils_local.track_lifecycle import active_track_for_association, mature_tracks_of
 from utils_local.utils import profile_time
 
 logger = logging.getLogger(__name__)
@@ -112,7 +113,7 @@ class ConflictDetectionNode:
         motor_tracks = []
         non_motor_tracks = []
         for i, track_id in enumerate(frame_element.id_list):
-            track = frame_element.buffer_tracks.get(track_id)
+            track = active_track_for_association(frame_element, track_id)
             if not track:
                 continue
             bbox = frame_element.tracked_xyxy[i]
@@ -183,7 +184,7 @@ class ConflictDetectionNode:
         # 冲突检测
         conflict_events = []
         now = frame_element.timestamp
-        live_track_ids = set(frame_element.buffer_tracks.keys())
+        live_track_ids = set(mature_tracks_of(frame_element))
         inactive_pairs = [
             k for k in self._reported_pairs
             if k[0] not in live_track_ids or k[1] not in live_track_ids

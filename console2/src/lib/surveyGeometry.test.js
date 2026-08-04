@@ -96,4 +96,15 @@ describe('survey measurement geometry', () => {
       { width: 100, height: 90 },
     )).toEqual([[80, 0], [100, 0], [100, 30], [80, 30]])
   })
+
+  it('allows channelized-editor geometry to move beyond the retained image boundary without distortion', () => {
+    expect(dragImageGeometry(
+      [[10, 20], [30, 20], [30, 50], [10, 50]],
+      { type: 'translate', dx: -40, dy: 70 },
+    )).toEqual([[-30, 90], [-10, 90], [-10, 120], [-30, 120]])
+    expect(dragImageGeometry(
+      [[10, 20], [30, 20], [30, 50]],
+      { type: 'vertex', index: 0, point: [-25, 110] },
+    )).toEqual([[-25, 110], [30, 20], [30, 50]])
+  })
 })

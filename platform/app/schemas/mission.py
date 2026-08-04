@@ -7,6 +7,11 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.core.pipeline_options import (
+    MAX_USER_FRAME_STRIDE,
+    MIN_FRAME_STRIDE,
+)
+
 
 class DroneCreate(BaseModel):
     id: str = Field(min_length=1, max_length=40)
@@ -136,6 +141,12 @@ class MissionCreate(BaseModel):
     road_data_version: str | None = Field(default=None, max_length=100)
     map_version_id: str | None = Field(default=None, max_length=40)
     tracking_profile: Literal["hover_cruise_v1", "hover_only_legacy"] | None = None
+    frame_stride: int | None = Field(
+        default=None,
+        ge=MIN_FRAME_STRIDE,
+        le=MAX_USER_FRAME_STRIDE,
+        description="Process one out of every N source frames; Platform defaults to 3",
+    )
     scheduled_end_at: datetime | None = None
 
     @model_validator(mode="after")

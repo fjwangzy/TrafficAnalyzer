@@ -348,6 +348,11 @@ Mac 开发机不得用 x86_64/Rosetta Python 承担 YOLO 推理。仓库通过
 切换运行拓扑时先以非破坏方式导入既有证据卷，不能只复用 road9 元数据。Platform 创建的检测器是同一
 macOS 环境中的进程组，因此 REST、Mission、MJPEG 与进程生命周期都保持本地回环，不需要
 agent、token、路径翻译或 `host.docker.internal`。`status|logs|stop|restart` 由同一脚本管理。
+Platform 全局 `PIPELINE_FRAME_STRIDE` 与检测器基础配置默认均为 `3`；每次交互式启动可由
+Mission/Pipeline 请求的 `frame_stride=1..30` 覆盖。显式值随请求进入 Mission snapshot；未显式
+指定时由 Platform 全局设置解析。`PipelineManager` 校验并注入子进程 `FRAME_STRIDE` 后，将实际值
+写回 Mission snapshot 并随 Pipeline 资源回显，Console2 不维护
+另一套运行默认值。30 FPS 源的 `stride=3` 表示约 10 个处理帧/秒，不表示 3 FPS。
 `run_platform.py` 使用 `os.execvpe` 原位替换为 uvicorn，使 launchd/Docker 直接拥有服务进程；
 不得恢复为 `subprocess.call` wrapper，否则 `launchctl remove` 只会终止外层进程并遗留多个连接
 同一 `road9` 的 Mission 调度器，进而把另一实例的存活 Pipeline 误判为
@@ -363,14 +368,25 @@ agent、token、路径翻译或 `host.docker.internal`。`status|logs|stop|resta
 原生 Platform 继续独立消费同一 Topic 并写入 `road9`。
 批处理显式关闭悬停车道标注快照，避免每秒把重复 JPEG 编入态势消息；真实 TCC 事件的
 证据快照仍保留。交互式 Mission 默认继续开启悬停快照，车道标注流程不变。
-批量入口默认 `frame_stride=10`（约 3Hz 视频时间采样），与既有连续轨迹验收口径一致；
-需要逐帧精度评估时可显式降低，但不得把高 stride 结果作为模型精度证明。
-批量入口默认关闭自适应并使用显式 `--imgsz=640`，用于 Apple Silicon 长时间回放的速度优先、
-可复现配置；`--adaptive-imgsz` 才启用生产的 AGL 三档 640/960/1280 策略。生产交互式检测默认
-启用自适应，130m 使用 960。固定尺寸与自适应结果不得直接作为同一精度基线比较。
+批量入口也默认 `frame_stride=3`；可显式传 `--frame-stride` 调整，或改用互斥的 `--sample-fps`
+按目标处理 FPS 推导。运行器拒绝会让相邻源时间超过 0.5 秒的采样配置，避免验收参数主动拆断图像关联；
+不得把高 stride 结果作为模型精度证明。
+批量入口与生产交互式检测均默认启用 AGL 三档 640/960/1280 自适应策略，130m 使用 960；
+Platform 启动子进程时也显式传入 `detection_node.adaptive_imgsz.enabled=true`，避免父进程遗留环境
+变量关闭生产策略。只有明确的诊断/基线复现才允许 `--no-adaptive-imgsz --imgsz=<size>`，且产物必须
+标记为 fixed diagnostic，不能作为生产默认或与自适应结果直接宣称精度优劣。
 每条 `uav_stats` 将 YOLO 单处理帧 `inference_ms` 与截至 Kafka 节点的
 `pipeline_processing_ms` 分开，并携带 device、precision、model、有效 imgsz、AGL 档位和
-frame_stride；验收报告分别汇总检测 p50/p95/max、整帧 p50/p95/max 和处理 FPS。
+frame_stride；同时携带 `recognition_diagnostics`，按源画面检测框统计 YOLO、当前输出轨迹、未关联
+检测以及面积不超过 4096px² 的小目标覆盖。验收报告分别汇总检测 p50/p95/max、整帧 p50/p95/max、
+处理 FPS 和 detector-to-track 工程覆盖；并汇总 `tracking_diagnostics.lifecycle`，任何
+`same_id_mature_to_candidate_count>0` 都使回放失败。这些计数没有外部真值时不能解释为
+precision/recall、IDF1/HOTA 或正式 ID switch。
+`utils_local/detection_tracking_evaluation.py` 在回放后以纯函数读取这些 Stats 和 Track Complete
+产物，按类别、小目标、源时间段和轨迹寿命生成 `uav.detection-tracking-evaluation/v1`；
+`scripts/analyze_detection_tracking_coverage.py` 只做本地文件适配，不访问或改写 Kafka/road9。
+工程覆盖仍不是逐检测关联 lineage 或正式精度，完整口径见
+`docs/ADAPTIVE_DETECTION_TRACKING_ANALYSIS_20260730.md`。
 高密度路口的 Stats 只提供实时渲染快照：active 与 candidate 合计最多 200 条，优先最新成熟轨迹，
 并显式报告截断数；完整轨迹仍走 `uav_track_complete_*`，避免自适应高档增加检测数后触发 Kafka
 默认 1MB `MessageSizeTooLargeError`。
@@ -892,9 +908,11 @@ Kalman/Mahalanobis 95% 门控不得作为当前生产关联的硬资格。固定
 
 `DetectionNode` 与 legacy `DetectionTrackingNodes` 共用 `utils_local/detection_geometry.py`。Apple MPS 在推理前强制 Ultralytics 选择非原地 bbox 裁剪，避免旧 PyTorch MPS 的 sliced `clamp_` 静默破坏边界框；输出再按同一行同时校验 bbox、置信度和类别，非有限值、零/负宽高或数组错位均被丢弃并写入 `detection_diagnostics`。检测几何诊断不替代当前帧矩阵与遥测质量门禁。
 
-`FlightGeoReferenceNode` 与 `PostTrackingWorldProjectionNode` 位于图像关联之后，但不再拥有轨迹生命周期。后者在成熟的 ByteTrack 关联首次出现时立即分配稳定 `track_id`，并保留原始 `association_id`；地图、地理投影或姿态质量变化只能改变逐帧能力与质量谱系，不能结束、丢弃或拆分图像轨迹。`TrackerInfoUpdateNode` 对所有成熟图像轨迹建立 `buffer_tracks`，关联消失、超时或自然 EOF 才生成一次完成事件。
+`FlightGeoReferenceNode` 与 `PostTrackingWorldProjectionNode` 位于图像关联之后，但不再拥有轨迹生命周期。后者在成熟的 ByteTrack 关联首次出现时立即分配稳定 `track_id`，并保留原始 `association_id`；地图、地理投影或姿态质量变化只能改变逐帧能力与质量谱系，不能结束、丢弃或拆分图像轨迹。`TrackerInfoUpdateNode` 对所有生命周期尚未结束的图像轨迹维护 `active_tracks/buffer_tracks` 兼容视图，并另外输出 `mature_tracks/candidate_trajectories/completed_tracks`。同一 ID 的成熟状态单调，只有关联消失、源时间断点、超时或自然 EOF 才生成一次带明确原因的完成事件。
 
 运行能力分为四层：`trajectory_output_eligible` 只取决于图像关联成熟度；`geo_analytics_eligible` 控制 ENU/GCJ-02、速度与方向；`road_analytics_eligible` 只控制 Lane/Link ID 及其匹配质量；`tcc_analytics_eligible` 由可信世界坐标、时间、跟踪质量和 TCC 证据单独决定。通用车辆计数、方向/转向和 TCC 不读取 road gate。旧字段 `formal_analytics_eligible` 继续表示 Lane/Link 匹配能力，仅用于兼容，不再控制其他能力。
+
+`CalcStatisticsNode` 独立维护道路入口事件窗口：成熟轨迹首次满足道路归属和 3 秒存在要求时登记一次，`buffer_analytics=0.5` 只让事件在 30 秒后退出辆/分钟窗口。该过期不写轨迹仓库，也不允许同一 ID 重新登记。`cars` 和 `queue_count` 只读取当前成熟轨迹；速度、方向、车道、拥堵和 TCC 也先应用成熟视图，再分别应用 geo/road/TCC 门禁。
 
 `uav_stats` 每帧携带四个独立布尔值；Platform 将它们和分层原因持久化到 Pipeline
 `runtime_quality.capabilities/capability_reasons`，Mission/Pipeline 详情原样返回。首个运行样本前状态
@@ -904,7 +922,7 @@ Kalman/Mahalanobis 95% 门控不得作为当前生产关联的硬资格。固定
 
 轨迹坐标分为三层且不得混用：`trajectory_px` 是每个源帧中的车辆地面接触点；`trajectory_display_px` 是用相邻背景视觉 `camera_motion_warp` 逐帧递推到当前画面的显示缓存；`trajectory_enu_m/trajectory_gcj02` 是 ByteTrack 分配 ID 后，用每个点所属源帧的绝对矩阵生成的世界事实。源像素、世界坐标、`trajectory_timestamps_sec/trajectory_frame_nums/point_quality_lineage` 按同一索引保留；旧 bbox 中心显式保留为 `trajectory_bbox_center_px`。ShowNode 禁止用当前 H 反投影整段历史，世界坐标也禁止反馈关联或修正显示 ID。
 
-进程 3 的 `ShowNode` 不再使用 `sv.TraceAnnotator` 的隐式跨帧 bbox-center 缓存。正式和候选尾迹都消费显式的当前帧图像坐标并使用同一个接地点锚点：正式轨迹绘制类别色实线，候选轨迹绘制最多30点的琥珀虚线；亚像素 bbox 往返抖动只在绘制副本中简化，不改写图像或世界轨迹事实。每车使用紧凑 `#ID class C` 标签，右上角只绘制一次 `AMBER DASHED = CANDIDATE / NO STATS-TCC` 图例。候选框、标签、尾迹的字号、线宽和虚线节距按源画面到1280×720交付视口的比例缩放，同时截断不连续跳变和过长尾迹。`trajectory_display_px` 在 Kafka 发布前剔除，不创建或补写 `buffer_tracks`，也不改变任何正式质量门禁。
+进程 3 的 `ShowNode` 不再使用 `sv.TraceAnnotator` 的隐式跨帧 bbox-center 缓存。正式和候选尾迹都消费显式的当前帧图像坐标并使用同一个接地点锚点：显式 `mature_trajectory_association_ids` 决定实线，真正未成熟关联才绘制最多30点的琥珀虚线；道路资格不足只追加 `P`，不得回退为 `C`。亚像素 bbox 往返抖动只在绘制副本中简化，不改写图像或世界轨迹事实。候选每车使用紧凑 `#ID class C` 标签，右上角只绘制一次 `AMBER DASHED = CANDIDATE / NO STATS-TCC` 图例。候选框、标签、尾迹的字号、线宽和虚线节距按源画面到1280×720交付视口的比例缩放，同时截断不连续跳变和过长尾迹。`trajectory_display_px` 在 Kafka 发布前剔除，不创建或补写 `buffer_tracks`，也不改变任何正式质量门禁。
 
 系统不接收独立SourceGeoRegistration输入，也不注入`RUNTIME_GEO_REGISTRATION_JSON`。当前帧世界矩阵只由视频尺寸、相机参数和同步遥测计算；Runtime Map Bundle保持可选，只携带Lane/Link几何、拓扑及地图锚点。`RoadMapMatchingNode`将已生成的GCJ-02车辆点转换到地图自身ENU后匹配，不能创建、覆盖或关闭世界坐标、速度、方向或TCC。
 
@@ -919,3 +937,15 @@ Console2 监控态分为历史 REST 与实时 WebSocket 两个状态层，展示
 ADR-023 已废止世界 Mahalanobis 关联：H 抖动不再能改变匹配结果，`pose_motion_warp` 只用于视觉/遥测一致性诊断。2026-07-24 同一真实 xqh 840s–EOF 原生 MPS 的 image-v2 复验结果记录在 `docs/generated/xqh-hover-departure-acceptance.json`；该证据只证明本机吞吐、双坐标对齐、显示和业务隔离，不替代 IDF1/HOTA/位置与速度真值验收。
 
 本项目不包含人工轨迹标注、AI预标注、标注任务分派或复核工作包。自动化验收只验证运行链、图像关联代理、坐标对齐、质量隔离、性能和EOF；没有外部已批准真值时，IDF1/HOTA、正式ID switch、位置RMSE和速度MAE不评估、不宣称。该边界不影响悬停关键帧上的车道/地图人工复核流程。
+
+## 参数化路口渠化编辑器（2026-08-03）
+
+渠化工作台以已留存、可度量的正拍关键帧作为不可修改固定面，Lane/Link、草稿车道和渠化要素组成统一覆盖层。覆盖层姿态固定为 `source_image`，由旋转中心、像素位移、旋转角和统一缩放描述；浏览器不再允许直接编辑单应矩阵。服务端以任务原始 `pixel_to_map_enu` 为基矩阵，按 `H_final = H_task × inverse(T_pose)` 重算最终矩阵，并拒绝客户端矩阵与姿态不一致的请求。
+
+版本化 `topology.editor_model` 以 `mode=parameterized|freeform` 区分参数骨架和旧式自由编辑。参数模式保存路口中心、进口方向、逐车道转向/特殊属性、进出口车道数、车道宽度、展宽长度、渠化模板和像素级重开状态；自由模式不伪造进口骨架，只保存曲线控制点、人工要素及完整像素几何。模板生成 Lane 面、Link 归属及 crosswalk/channelizing_island/waiting_zone/stop_line/lane_boundary/lane_marking 等正式 Feature；局部拖动或 Bézier 控制柄形成 `manual_override`，后续模板刷新不得覆盖。三次曲线只存在于编辑模型中，保存时确定性采样为既有 `polygon_px`，继续复用服务端自交、重叠、ENU 和 GCJ-02 校验。
+
+几何重叠校验以 Link 为拓扑域：同一 Link 内车道面必须互斥，不同 Link 的转向流允许在路口冲突区空间交叉；运行时仍消费各自独立的 Lane/Link 事实。
+
+Runtime Bundle 删除 `editor_model` 元数据，只携带已生成的 Lane/Link/Feature、地图锚点、质量和正式拓扑。编辑器姿态、曲线控制柄和模板参数不得进入检测、图像轨迹、世界投影、速度、方向或 TCC 门禁。
+
+已发布版本的再次编辑只能调用服务端 `derive-draft`。新版本显式记录来源版本并重置人工复核，Console 不再自行拼装复制请求；因此 `lane_verified` 源行及其绑定不会因后续拟合被就地更新。

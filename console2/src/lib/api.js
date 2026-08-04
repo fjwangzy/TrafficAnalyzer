@@ -137,6 +137,7 @@ export const platformApi = {
   channelizedMaps: (interId) => get('/calibration/channelized-maps', { params: interId ? { inter_id: interId } : {} }),
   channelizedMap: (mapVersionId) => get(`/calibration/channelized-maps/${encodeURIComponent(mapVersionId)}`),
   createChannelizedMap: (body) => post('/calibration/channelized-maps', body),
+  deriveChannelizedMapDraft: (mapVersionId) => post(`/calibration/channelized-maps/${encodeURIComponent(mapVersionId)}/derive-draft`),
   bootstrapChannelizedMap: (interId) => post(`/calibration/channelized-maps/bootstrap/${encodeURIComponent(interId)}`),
   fitChannelizedMapFromImage: (mapVersionId, body) => post(`/calibration/channelized-maps/${encodeURIComponent(mapVersionId)}/fit-from-image`, body),
   verifyVisualRegistration: (registrationId, verified = true) => post(`/calibration/visual-registrations/${encodeURIComponent(registrationId)}/verify`, { verified }),
@@ -173,5 +174,18 @@ export const platformApi = {
 
 export function apiErrorMessage(error, fallback = '请求失败，请稍后重试') {
   const detail = error?.response?.data?.detail
+  if (Array.isArray(detail)) {
+    const validation = detail.slice(0, 3).map((item) => {
+      if (!item || typeof item !== 'object') return String(item || '')
+      const location = Array.isArray(item.loc)
+        ? item.loc.filter((part) => part !== 'body').join('.')
+        : ''
+      const message = item.type === 'extra_forbidden'
+        ? '当前服务不支持该参数，请刷新版本或重启 Platform 后重试'
+        : item.msg || item.message || item.type || ''
+      return location && message ? `${location}：${message}` : message
+    }).filter(Boolean).join('；')
+    if (validation) return validation
+  }
   return (typeof detail === 'object' ? detail?.message || detail?.code : detail) || error?.message || fallback
 }

@@ -45,6 +45,9 @@ class Settings(BaseSettings):
     ycx_db_password: str = ""
     ycx_db_name: str = "ycx"
     ycx_db_schema: str = "road9"
+    ycx_metrics_schema: str = "xianchang"
+    dashboard_situation_cache_ttl_sec: float = 300.0
+    dashboard_situation_cache_limit: int = 64
 
     @property
     def database_url(self) -> str:

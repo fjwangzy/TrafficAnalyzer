@@ -12,6 +12,7 @@ import { aiEvents, intersections as prototypeIntersections } from '../data/mockD
 import { useAppState } from '../state/AppState'
 import { useAuth } from '../auth/AuthContext'
 import { apiErrorMessage, platformApi } from '../lib/api'
+import { readDemoSnapshots } from '../lib/demoSnapshots'
 
 const intersections = prototypeIntersections
 
@@ -549,7 +550,10 @@ export function AlertsPage() {
   const queryClient = useQueryClient()
   const initialParams = new URLSearchParams(location.search)
   const initialId = initialParams.get('event_id')
+  const initialSnapshotId = initialParams.get('snapshot_id')
   const [selected, setSelected] = useState(null)
+  const [selectedSnapshotId, setSelectedSnapshotId] = useState(initialSnapshotId)
+  const [demoSnapshots, setDemoSnapshots] = useState(() => readDemoSnapshots())
   const [actionError, setActionError] = useState('')
   const [severity, setSeverity] = useState(['critical', 'warning'].includes(initialParams.get('severity')) ? initialParams.get('severity') : 'all')
   const [eventType, setEventType] = useState(initialParams.get('event_type') || 'all')
@@ -559,6 +563,15 @@ export function AlertsPage() {
   const projectIntersections = (intersectionsQuery.data || []).map(mapIntersection)
   const eventsQuery = useQuery({ queryKey: ['i3-events'], queryFn: () => platformApi.events({ limit: 500 }), refetchInterval: 30_000 })
   const events = useMemo(() => (eventsQuery.data || []).map(unifiedEvent), [eventsQuery.data])
+  useEffect(() => {
+    const refresh = () => setDemoSnapshots(readDemoSnapshots())
+    window.addEventListener('storage', refresh)
+    window.addEventListener('uav-demo-snapshots-changed', refresh)
+    return () => {
+      window.removeEventListener('storage', refresh)
+      window.removeEventListener('uav-demo-snapshots-changed', refresh)
+    }
+  }, [])
   useEffect(() => {
     if (initialId && !selected) setSelected(events.find((item) => item.id === initialId) || null)
   }, [events, initialId, selected])
@@ -570,6 +583,7 @@ export function AlertsPage() {
   ), [events, severity, eventType, intersection, query])
   const eventDetailQuery = useQuery({ queryKey: ['i3-event-detail', selected?.id], queryFn: () => platformApi.event(selected.id), enabled: Boolean(selected?.id) })
   const selectedEvent = eventDetailQuery.data ? unifiedEvent(eventDetailQuery.data) : selected ? events.find((item) => item.id === selected.id) || selected : null
+  const selectedSnapshot = demoSnapshots.find((item) => item.id === selectedSnapshotId) || null
   const reviewMutation = useMutation({
     mutationFn: ({ event, reviewStatus }) => platformApi.reviewEvent(event.id, { review_status: reviewStatus, expected_revision: event.review_revision, reason: 'Console2 technical review' }),
     onSuccess: (value) => {
@@ -583,15 +597,27 @@ export function AlertsPage() {
   })
   const openEvent = (item) => {
     setSelected(item)
+    setSelectedSnapshotId(null)
     const params = new URLSearchParams(location.search)
-    if (item) params.set('event_id', item.id)
-    else params.delete('event_id')
+    params.delete('snapshot_id')
+    if (item) params.set('event_id', item.id); else params.delete('event_id')
+    navigate(`${location.pathname}${params.size ? `?${params.toString()}` : ''}`, { replace: true })
+  }
+  const openSnapshot = (snapshot) => {
+    setSelected(null)
+    setSelectedSnapshotId(snapshot?.id || null)
+    const params = new URLSearchParams(location.search)
+    params.delete('event_id')
+    if (snapshot) params.set('snapshot_id', snapshot.id); else params.delete('snapshot_id')
     navigate(`${location.pathname}${params.size ? `?${params.toString()}` : ''}`, { replace: true })
   }
   const loading = intersectionsQuery.isLoading || eventsQuery.isLoading
   const loadError = intersectionsQuery.error || eventsQuery.error
   return <AppShell pageTitle='AI 事件中心'>
-    <PageHeader eyebrow='S2 / S4 / S6' title='AI 事件中心' description='真实拥堵、质量下降、测绘成果与真实冲突统一查询；每类事件保留自己的指标与证据。' meta={`${events.length} 起真实事件 · ${events.filter((item) => item.review === 'pending').length} 起待复核`} />
+    <PageHeader eyebrow='S2 / S4 / S6' title='AI 事件中心' description='真实拥堵、质量下降、测绘成果与真实冲突统一查询；本机演示快照单独留档，不混入 road9 事实。' meta={`${events.length} 起真实事件 · ${demoSnapshots.length} 份本机快照`} />
+    <Panel title='本机演示分析快照' subtitle='同一路口与任务阶段覆盖更新 · 刷新后仍可恢复'>
+      {demoSnapshots.length ? <div className='demo-snapshot-ledger'>{demoSnapshots.map((snapshot) => <button key={snapshot.id} onClick={() => openSnapshot(snapshot)}><div><strong>{snapshot.intersection_name}</strong><span>{snapshot.mission_label} · {snapshot.source_mode === 'live' ? '实时数据截面' : '固定演示指标'}</span></div><small>目标 {snapshot.metrics?.vehicle_count ?? '—'} · 排队 {snapshot.metrics?.longest_queue_m ?? '—'}m · 风险 {snapshot.metrics?.conflict_count ?? 0}</small><b>饱和度 {snapshot.metrics?.max_saturation == null ? '—' : Number(snapshot.metrics.max_saturation).toFixed(2)}</b></button>)}</div> : <div className='demo-snapshot-empty'><strong>尚未保存演示快照</strong><span>从实时监测页保存事件与交通流后，可在这里进行事后分析。</span></div>}
+    </Panel>
     <FilterBar result={`显示 ${rows.length} / ${events.length} 起`} onReset={() => { setSeverity('all'); setEventType('all'); setIntersection('all'); setQuery('') }}><Segmented value={severity} onChange={setSeverity} options={[{ value: 'all', label: '全部' }, { value: 'critical', label: '高风险' }, { value: 'warning', label: '关注' }, { value: 'info', label: '成果' }]} /><label>事件类型<select aria-label='事件类型' value={eventType} onChange={(event) => setEventType(event.target.value)}><option value='all'>全部类型</option><option value='congestion'>持续拥堵</option><option value='quality_degradation'>质量下降</option><option value='survey_result'>测绘成果</option><option value='conflict'>真实冲突</option></select></label><label>路口<select aria-label='事件路口' value={intersection} onChange={(event) => setIntersection(event.target.value)}><option value='all'>全部项目路口</option>{projectIntersections.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label className='search-field'><Funnel size={15} /><input aria-label='事件搜索' value={query} onChange={(event) => setQuery(event.target.value)} placeholder='事件 ID / 标题' /></label></FilterBar>
     {loading && <QualityNotice tone='info' title='正在恢复事件台账'>从 road9 加载冲突事实与告警。</QualityNotice>}
     {loadError && <QualityNotice tone='warning' title='事件台账不可用'>{apiErrorMessage(loadError)}</QualityNotice>}
@@ -604,6 +630,13 @@ export function AlertsPage() {
       {selectedEvent.related_tracks?.length > 0 && <Panel title='关联轨迹' subtitle={`同任务/事件窗口 ${selectedEvent.related_tracks.length} 条`}><div className='related-track-list'>{selectedEvent.related_tracks.slice(0, 8).map((track) => <button key={track.id} className='compact-event' onClick={() => navigate(`/gis?intersection_id=${selectedEvent.intersectionId}&mission_id=${track.mission_id || ''}&track_id=${track.id}`)}><StatusBadge value={track.quality_status || 'unverified'} /><div><strong>Track #{track.track_id}</strong><span>{track.vehicle_class || 'unknown'} · {track.turn_behavior || '未分类'} · {track.duration_sec ?? '—'}s</span></div></button>)}</div></Panel>}
       <Panel title='事实状态时间线'><div className='state-timeline'>{[`事实入库 ${selectedEvent.occurredAt}`, selectedEvent.delivery === 'not_queued' ? '主平台投递未启用' : `投递：${selectedEvent.delivery}`, selectedEvent.review === 'pending' ? '等待技术复核' : `技术复核：${selectedEvent.review}`].map((item, index) => <div key={item} className={index === 2 ? 'current' : ''}><i /><span>{item}</span></div>)}</div></Panel>
       <QualityNotice tone='warning' title='责任边界'>“确认/驳回”仅表示 AI 识别结果技术或业务复核，不生成派警、处罚或案件办结状态。</QualityNotice>
+    </DetailDrawer>}
+    {selectedSnapshot && <DetailDrawer wide title='事件与交通流事后分析' subtitle={`${selectedSnapshot.mission_label} · ${selectedSnapshot.id}`} onClose={() => openSnapshot(null)} footer={<span className='muted'>本机演示存档 · 不写入 road9 事实表</span>}>
+      <div className='event-primary-metrics demo-snapshot-metrics'><div><span>目标车辆</span><strong>{selectedSnapshot.metrics?.vehicle_count ?? '—'}<small> 辆</small></strong></div><div><span>最长排队</span><strong>{selectedSnapshot.metrics?.longest_queue_m ?? '—'}<small> m</small></strong></div><div><span>平均车速</span><strong>{selectedSnapshot.metrics?.avg_speed_kmh ?? '—'}<small> km/h</small></strong></div><div><span>最高饱和度</span><strong>{selectedSnapshot.metrics?.max_saturation == null ? '—' : Number(selectedSnapshot.metrics.max_saturation).toFixed(2)}</strong></div></div>
+      <div className='detail-two-col'><Panel title='快照来源'><InfoRow label='路口' value={selectedSnapshot.intersection_name} /><InfoRow label='视频源' value={selectedSnapshot.source_profile_id || '固定演示源'} /><InfoRow label='任务阶段' value={selectedSnapshot.mission_label} /><InfoRow label='数据类型' value={selectedSnapshot.source_mode === 'live' ? '实时数据截面' : '固定演示指标'} badge={selectedSnapshot.source_mode === 'live' ? 'good' : 'degraded'} /></Panel><Panel title='事件留档'><InfoRow label='关联事件' value={`${selectedSnapshot.events?.length || 0} 起`} /><InfoRow label='机非冲突' value={`${selectedSnapshot.metrics?.conflict_count || 0} 起`} /><InfoRow label='流量窗口' value={`${selectedSnapshot.traffic_flow?.length || 0} 个 5 分钟切片`} /><InfoRow label='保存键' value={selectedSnapshot.id} /></Panel></div>
+      <Panel title='车道饱和度诊断' subtitle='< 0.85 良好 · 0.85–0.95 接近饱和 · > 0.95 过饱和'><div className='demo-snapshot-lanes'>{(selectedSnapshot.lane_stats || []).map((lane) => <div key={lane.lane}><strong>{lane.lane}</strong><span>排队 {lane.queue_length_m ?? '—'}m</span><b className={lane.saturation > 0.95 ? 'critical' : lane.saturation >= 0.85 ? 'warning' : 'good'}>{lane.saturation == null ? '—' : lane.saturation.toFixed(2)}</b></div>)}</div></Panel>
+      <Panel title='关联事件'>{selectedSnapshot.events?.length ? <div className='demo-snapshot-events'>{selectedSnapshot.events.map((event) => <div key={event.id}><StatusBadge value={event.level || 'info'} /><div><strong>{event.title}</strong><span>{event.detail}</span></div><b>{event.metric}</b></div>)}</div> : <div className='demo-snapshot-empty'>本快照没有关联事件</div>}</Panel>
+      <Panel title='治理前后同口径对比'><div className='demo-snapshot-comparison'>{(selectedSnapshot.comparison || []).map((item) => <div key={item.label}><span>{item.label}</span><small>{item.before}</small><strong>{item.after}</strong><b>{item.delta}</b></div>)}</div></Panel>
     </DetailDrawer>}
   </AppShell>
 }

@@ -2,6 +2,7 @@
 
 from typing import Literal
 
+import asyncpg
 from fastapi import APIRouter, HTTPException, Query, Request
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -33,7 +34,7 @@ def _parse_bbox(value: str | None) -> tuple[float, float, float, float] | None:
 async def _invoke(awaitable):
     try:
         return await awaitable
-    except (TimeoutError, OSError, SQLAlchemyError) as exc:
+    except (TimeoutError, OSError, SQLAlchemyError, asyncpg.PostgresError) as exc:
         raise HTTPException(
             status_code=503,
             detail={"code": "dashboard_dependency_unavailable", "message": "road9 聚合依赖暂不可用，请保留当前页面并重试"},
@@ -64,6 +65,18 @@ async def intersections(
         query=q,
         offset=offset,
         limit=limit,
+    ))
+
+
+@router.get("/situation")
+async def situation(
+    request: Request,
+    day_of_week: int = Query(ge=1, le=7),
+    step_index: int = Query(ge=0, le=287),
+):
+    return await _invoke(_service(request).situation(
+        day_of_week=day_of_week,
+        step_index=step_index,
     ))
 
 

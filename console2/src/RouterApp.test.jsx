@@ -53,6 +53,15 @@ vi.mock('./lib/api', async (importOriginal) => {
         { id: 'INT-I5', inter_id: 'INT-I5', name: 'I5 未验证路口', lat: null, lon: null, map_eligible: false, map_exclusion_reason: 'road_context_unverified', road_data_version: 'ROAD-I5', monitor: 'standby', risk: 'unknown', quality: 'unverified', last_metric_at: null, metric: {}, mission_id: null, drone_id: null, pipeline_id: null, events: [], conflict_count: 0 },
       ] }),
       dashboardDrones: vi.fn().mockResolvedValue({ schema_version: 'uav.dashboard/v1', items: [{ id: 'UAV-I5', name: 'I5 drone', enabled: true, status: 'offline', telemetry_quality: 'missing' }] }),
+      dashboardSituation: vi.fn().mockResolvedValue({
+        schema_version: 'uav.dashboard-situation/v1',
+        source: { database: 'ycx', road_schema: 'road9', metrics_schema: 'xianchang', road_version: '20260501', read_mode: 'readonly' },
+        time_profile: { kind: 'typical_5min', timezone: 'Asia/Shanghai', day_of_week: 2, step_index: 120, start_time: '10:00', available_days: [1, 2, 5] },
+        cache: { status: 'miss', stale: false },
+        summary: { intersections_total: 1, good: 0, near_saturated: 0, oversaturated: 1, missing: 0, segments_total: 1, smooth_segments: 0, slow_segments: 0, congested_segments: 1, missing_segments: 0 },
+        intersections: [{ inter_id: 'INT_camera_1', name: '小清河北路 × 水屯路', lon: 117.0223, lat: 36.7029, saturation_max: 0.98, saturation_avg: 0.83, unbalance_index: 0.17, level_of_service: 'E', status: 'oversaturated' }],
+        segments: [{ id: 'INT_camera_1:LINK-1', inter_id: 'INT_camera_1', link_id: 'LINK-1', name: '小清河北路东进口', direction: '东进口', delay_index: 2.2, avg_nostop_speed: 18.4, queue_len_est_m: 96, status: 'congested', paths_gcj02: [[[117.01, 36.7], [117.03, 36.705]]] }],
+      }),
       trajectories: vi.fn().mockResolvedValue([{ id: 'TRK-1', track_id: 7, trajectory_gcj02: [[117, 36.7], [117.0001, 36.7001]], quality_status: 'unverified' }]),
       trajectoryAnalysis: vi.fn().mockResolvedValue({
         query: { intersection_id: 'INT-I5', period: 'all', start_at: '2026-07-21T08:00:00Z', end_at: '2026-07-21T08:00:20Z', slice_start_at: '2026-07-21T08:00:10Z', slice_end_at: '2026-07-21T08:00:20Z', bucket_sec: 10 },
@@ -129,14 +138,16 @@ vi.mock('./lib/api', async (importOriginal) => {
 })
 
 vi.mock('./components/CityMap', () => ({
-  CityMap: ({ offline = false, onSelect, points = [] }) => <div data-testid='city-map'>
+  CityMap: ({ offline = false, onSelect, onSourceSelect, points = [], sourcePoints = [] }) => <div data-testid='city-map'>
     {offline ? '城市底图服务不可用' : '演示地图'}
     {points[0] && <button aria-label={`打开路口 ${points[0].id}`} onClick={() => onSelect?.(points[0])}>路口点位</button>}
+    {sourcePoints[0] && <button aria-label={`打开无人机 ${sourcePoints[0].id}`} onClick={() => onSourceSelect?.(sourcePoints[0])}>无人机点位</button>}
   </div>,
 }))
 
 import { RouterApp } from './RouterApp'
 import { platformApi } from './lib/api'
+import { buildDemoAnalysisSnapshot, upsertDemoSnapshot } from './lib/demoSnapshots'
 import { firstPlayableSliceIndex, nextPlayableSliceIndex } from './pages/InsightPages'
 
 function open(path) {
@@ -149,6 +160,7 @@ function open(path) {
 
 describe('Console2 full prototype', () => {
   beforeEach(() => {
+    window.localStorage.clear()
     Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: vi.fn(() => 'blob:event-evidence') })
     Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: vi.fn() })
     Object.assign(authState, {
@@ -174,7 +186,7 @@ describe('Console2 full prototype', () => {
     expect(nextPlayableSliceIndex(timeline, 3)).toBe(-1)
   })
 
-  it('renders the S8 city overview at the root route', async () => {
+  it('renders the fixed UAV governance story at the root route', async () => {
     const { container } = open('/')
     expect(await screen.findByRole('heading', { name: '无人机交通态势工作台' })).toHaveClass('sr-only')
     expect(container.querySelector('.page-heading')).not.toBeInTheDocument()
@@ -182,15 +194,32 @@ describe('Console2 full prototype', () => {
     expect(screen.queryByText('I5 内部工程口径')).not.toBeInTheDocument()
     expect(screen.queryByText('无人机路口态势纵览')).not.toBeInTheDocument()
     expect(container.querySelector('.map-master-panel > .panel-title')).not.toBeInTheDocument()
-    expect(screen.getByText('待办任务')).toBeInTheDocument()
-    expect(await screen.findByText('road_context_unverified')).toBeInTheDocument()
-    expect(screen.queryAllByText('待冻结')).toHaveLength(0)
-    expect(screen.queryByText('重点风险路口')).not.toBeInTheDocument()
-    expect(screen.queryByText(/coverage 未冻结/)).not.toBeInTheDocument()
+    expect(screen.getByText('发现态势')).toBeInTheDocument()
+    expect(screen.getAllByText('调度无人机')).not.toHaveLength(0)
+    expect(screen.getByText('机非冲突风险升高')).toBeInTheDocument()
+    expect(screen.getByText('轻微事故等待测绘')).toBeInTheDocument()
+    expect(screen.getByText('治理前后复盘')).toBeInTheDocument()
+    expect(screen.getByText('服务器典型时段态势')).toBeInTheDocument()
+    expect(screen.getByText('拥堵路段')).toBeInTheDocument()
+    expect(screen.getByText('延误指数 > 2.0')).toBeInTheDocument()
+    expect(container.querySelector('.situation-map-detail')).not.toBeInTheDocument()
     await waitFor(() => expect(platformApi.dashboardIntersections).toHaveBeenCalledWith({ limit: 500 }))
     expect(screen.getByRole('navigation', { name: '全域态势二级导航' })).toHaveTextContent('工作台首屏实时监测')
     expect(screen.getByRole('navigation', { name: '全域态势二级导航' })).not.toHaveTextContent('轨迹研判')
     expect(screen.getByRole('complementary', { name: '一级业务域' })).toBeInTheDocument()
+  })
+
+  it('requests the selected weekday and exact five-minute situation slot', async () => {
+    platformApi.dashboardSituation.mockClear()
+    open('/')
+
+    await screen.findByRole('heading', { name: '无人机交通态势工作台' })
+    fireEvent.change(screen.getByLabelText('星期'), { target: { value: '5' } })
+    fireEvent.change(screen.getByLabelText('时间'), { target: { value: '95' } })
+
+    await waitFor(() => expect(platformApi.dashboardSituation).toHaveBeenCalledWith(5, 95))
+    expect(screen.getByLabelText('星期')).toHaveValue('5')
+    expect(screen.getByLabelText('时间')).toHaveValue('95')
   })
 
   it('opens the selected intersection monitoring screen from a dashboard map marker', async () => {
@@ -200,12 +229,21 @@ describe('Console2 full prototype', () => {
     platformApi.dashboardIntersections.mockResolvedValueOnce({ schema_version: 'uav.dashboard/v1', total: 1, map_eligible: 1, isolated: 0, items: [
       { id: 'INT-MAP-1', inter_id: 'INT-MAP-1', name: '地图监测路口', center_gcj02: { latitude: 36.67, longitude: 116.99 }, coordinate_system: 'GCJ02', map_eligible: true, map_coordinate_status: 'test', road_data_version: 'ROAD-MAP', monitor: 'running', risk: 'normal', quality: 'unverified', metric: {}, events: [], conflict_count: 0 },
     ] })
+    platformApi.dashboardSituation.mockResolvedValueOnce({
+      schema_version: 'uav.dashboard-situation/v1',
+      source: { road_version: '20260501' },
+      time_profile: { kind: 'typical_5min', timezone: 'Asia/Shanghai', available_days: [1, 2, 5] },
+      cache: { status: 'miss', stale: false },
+      summary: { intersections_total: 1, good: 1, near_saturated: 0, oversaturated: 0, segments_total: 0 },
+      intersections: [{ inter_id: 'INT-MAP-1', name: '地图监测路口', lon: 116.99, lat: 36.67, saturation_max: 0.72 }],
+      segments: [],
+    })
     platformApi.sources.mockResolvedValueOnce([source]).mockResolvedValueOnce([source])
     platformApi.drones.mockResolvedValueOnce([drone]).mockResolvedValueOnce([drone])
     platformApi.pipelines.mockResolvedValueOnce([pipeline]).mockResolvedValueOnce([pipeline])
 
     open('/')
-    fireEvent.click(await screen.findByRole('button', { name: '打开路口 SRC-MAP-1' }))
+    fireEvent.click(await screen.findByRole('button', { name: '打开无人机 INT-MAP-1' }))
 
     await waitFor(() => expect(window.location.pathname).toBe('/monitoring'))
     expect(new URLSearchParams(window.location.search).get('intersection_id')).toBe('INT-MAP-1')
@@ -214,6 +252,20 @@ describe('Console2 full prototype', () => {
     await waitFor(() => expect(sourceSelector).toHaveDisplayValue('地图监测视频源 · 地图监测无人机'))
     expect(await screen.findByAltText('检测器输出视频流', {}, { timeout: 10_000 })).toHaveAttribute('src', expect.stringMatching(/^http:\/\/127\.0\.0\.1:8127\/video\?retry=/))
     expect(await screen.findByLabelText('飞行姿态数据')).toBeInTheDocument()
+  })
+
+  it('redispatches the drone into the governance review stage from the dashboard', async () => {
+    open('/')
+
+    const redispatch = await screen.findByRole('button', { name: '再次调度无人机复盘' })
+    await waitFor(() => expect(redispatch).not.toBeDisabled())
+    fireEvent.click(redispatch)
+
+    await waitFor(() => expect(window.location.pathname).toBe('/monitoring'))
+    expect(new URLSearchParams(window.location.search).get('stage')).toBe('review')
+    const reviewButton = await screen.findByRole('button', { name: '治理复盘' })
+    expect(reviewButton).toHaveClass('active')
+    expect(screen.getByText('复用同一指标口径，对比治理前后效果', { exact: false })).toBeInTheDocument()
   })
 
   it('uses the same first-level rail and domain secondary navigation on monitoring', async () => {
@@ -352,10 +404,11 @@ describe('Console2 full prototype', () => {
     await waitFor(() => expect(screen.queryByText('加载下一片…')).not.toBeInTheDocument())
   })
 
-  it('uses the server dashboard scope instead of URL prototype labels', async () => {
+  it('keeps the fixed demo context independent from URL prototype labels', async () => {
     open('/?scope=priority&window=1h')
-    expect(await screen.findByRole('button', { name: /local_road9_authorized_scope/ })).toBeDisabled()
-    expect(screen.getByRole('button', { name: /最近 30 分钟 · 固定工程窗口/ })).toBeDisabled()
+    expect(await screen.findByRole('button', { name: /服务器态势 1 路口/ })).toBeDisabled()
+    expect(screen.getByRole('button', { name: /典型时段/ })).toBeDisabled()
+    expect(screen.queryByText('priority')).not.toBeInTheDocument()
   })
 
   it('restores intersection and drone selections from deep links', async () => {
@@ -459,6 +512,31 @@ describe('Console2 full prototype', () => {
     fireEvent.click(screen.getByRole('button', { name: '技术确认' }))
     expect(await screen.findByText('AI 结果已技术确认')).toBeInTheDocument()
     expect(platformApi.reviewEvent).toHaveBeenCalledWith('UAV-EVT-20260713-001', expect.objectContaining({ review_status: 'confirmed', expected_revision: 1 }))
+  })
+
+  it('restores a saved demo snapshot for post-event traffic analysis', async () => {
+    const snapshot = buildDemoAnalysisSnapshot({
+      intersectionId: 'INT-I5',
+      intersectionName: '小清河北路 × 水屯路',
+      sourceProfileId: 'SRC-LOCAL-XQH',
+      missionMode: 'review',
+      stats: { cars: 68, avg_speed_kmh: 18.6, lane_stats: [{ lane: '南进口直行', queue_length_m: 186, saturation: 1.04 }] },
+      trend: [{ time: '10:55', congestion_index: 7.4, cars: 68, direction_flow: { straight: 46 } }],
+      events: [{ id: 'E-DEMO-1', type: 'conflict', level: 'critical', title: '机非冲突风险升高', detail: '机动车与非机动车预测交汇', metric: 'TTC 1.2s' }],
+      comparison: [{ label: '路口饱和度', before: '0.98', after: '0.76', delta: '-22%' }],
+      capturedAt: '2026-08-04T02:55:28.000Z',
+      savedAt: '2026-08-04T03:00:00.000Z',
+    })
+    upsertDemoSnapshot(snapshot)
+
+    open(`/events?snapshot_id=${snapshot.id}`)
+
+    expect(await screen.findByRole('dialog', { name: '事件与交通流事后分析' })).toBeInTheDocument()
+    expect(screen.getByText('治理后复盘 · DEMO-SNAPSHOT-INT-I5-review')).toBeInTheDocument()
+    expect(screen.getByText('南进口直行')).toBeInTheDocument()
+    expect(screen.getByText('机动车与非机动车预测交汇')).toBeInTheDocument()
+    expect(screen.getByText('治理前后同口径对比')).toBeInTheDocument()
+    expect(screen.getByText('0.76')).toBeInTheDocument()
   })
 
   it('opens event evidence in a fullscreen preview and closes without dismissing the event', async () => {
@@ -653,11 +731,20 @@ describe('Console2 full prototype', () => {
     expect(new URLSearchParams(window.location.search).get('redirect')).toBe('/monitoring?intersection_id=INT_camera_1&view=bev')
   })
 
-  it('isolates unverified coordinates instead of plotting demo points', async () => {
+  it('does not invent fixed demo points when the selected server slot has no mappable intersections', async () => {
+    platformApi.dashboardSituation.mockResolvedValueOnce({
+      schema_version: 'uav.dashboard-situation/v1',
+      source: { road_version: '20260501' },
+      time_profile: { kind: 'typical_5min', timezone: 'Asia/Shanghai', available_days: [1, 2, 5] },
+      cache: { status: 'miss', stale: false },
+      summary: { intersections_total: 0, good: 0, near_saturated: 0, oversaturated: 0, segments_total: 0 },
+      intersections: [],
+      segments: [],
+    })
     open('/')
-    expect(await screen.findByText('暂无可上图的无人机视频源')).toBeInTheDocument()
-    expect(await screen.findByText('已登记视频源尚未绑定可用 GCJ-02 路口或遥测坐标。')).toBeInTheDocument()
-    expect(screen.queryByText('演示地图')).not.toBeInTheDocument()
+    expect(await screen.findByText('当前典型时槽暂无态势数据。')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /SRC-DEMO-XQH/ })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '再次调度无人机复盘' })).toBeDisabled()
   })
 
   it('does not invent global exceptions or a fixed freshness timestamp', () => {

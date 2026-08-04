@@ -31,6 +31,7 @@ from app.middleware.auth import AuthMiddleware
 from app.services.alert_engine import AlertEngine, SqlAlertStore
 from app.services.audit_service import AuditService
 from app.services.dashboard_read_model import DashboardReadModel
+from app.services.dashboard_situation import DashboardSituationReadModel
 from app.services.enforcement_service import EnforcementService
 from app.services.event_center import EventCenter
 from app.services.lane_annotation_store import LaneAnnotationStore
@@ -80,7 +81,15 @@ async def lifespan(app: FastAPI):
     metric_store = PostgresMetricStoreAdapter(async_session_maker) if db_available else None
     audit_service = AuditService(async_session_maker) if db_available else None
     enforcement_service = EnforcementService(async_session_maker) if db_available else None
-    dashboard_read_model = DashboardReadModel(async_session_maker) if db_available else None
+    situation_reader = DashboardSituationReadModel(
+        settings,
+        cache_ttl_sec=settings.dashboard_situation_cache_ttl_sec,
+        cache_limit=settings.dashboard_situation_cache_limit,
+    )
+    dashboard_read_model = (
+        DashboardReadModel(async_session_maker, situation_reader=situation_reader)
+        if db_available else None
+    )
 
     # Kafka consumer (optional — graceful fallback if unavailable)
     kafka_service = None

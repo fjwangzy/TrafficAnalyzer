@@ -571,18 +571,26 @@ PipelineManager → main_optimized.py → Kafka uav_* → road9/TimescaleDB + We
 
 ```text
 Console2 /
-  → GET /api/v1/dashboard/{overview,intersections,intersections/{id},drones}
+  → GET /api/v1/dashboard/{overview,intersections,intersections/{id},drones,situation}
   → DashboardReadModel（无写操作、无独立真源）
      ├── RoadContextSnapshot / Mission / Pipeline / Drone
      ├── TimescaleDB traffic/conflict/telemetry facts
      └── AiEvent / SurveyTask / EventDelivery 状态
   → uav.dashboard/v1 + as_of/window/quality/reason
+
+Console2 /（典型时段地图）
+  → GET /api/v1/dashboard/situation?day_of_week=1..7&step_index=0..287
+  → DashboardSituationReadModel（独立只读连接、transaction_read_only=on）
+     ├── ycx.road9：启用道路版本、路口与 Link 几何
+     └── ycx.xianchang：路口评价与 Link 状态典型 5 分钟矩阵
+  → uav.dashboard-situation/v1（5 分钟缓存；同槽失败时 stale）
 ```
 
 - DashboardReadModel 只在查询时聚合现有事实，不创建 Dashboard 业务表。后续缓存、物化视图或连续聚合必须以 `uav_` 命名、可重建且不得复制事件/任务状态机。
 - S8 口径未批准时 KPI 值为 null，同时返回事实分子/分母和阻断原因；主任首屏不展示无值或未验证的 KPI 卡片，也不把缺失解释为 0。阻断详情只保留在 API 和口径治理材料中。
 - 当前唯一活动底图是高德 JS API 2.0，Dashboard 路口、无人机、路网和轨迹坐标全部使用经服务端一次转换的 GCJ-02。只有 `lane_verified` 地图或可追溯的 GCJ-02 测试点位进入地图；缺坐标或未验证记录进入隔离计数/配置待办。
 - 正式首页顶部范围、窗口和 `as_of` 来自聚合响应，不再使用 AppState 中的试点原型常量。I5-B 内部查询已支持风险/监测/质量、GCJ-02 bbox、搜索和 offset/limit，并将 road9 超时统一为 503；Console2 保留上一成功快照和有限重试，高德加载失败时降级为列表/KPI。项目范围/权限、点位聚合/zoom、全局增量/断线 REST 缺口回补和容量仍属后续或外部门禁。
+- `situation` 是首页专用的外部读模型例外，不参与 Pipeline、Mission、Kafka、无人机统计或本地 `road9` 写链路，也不复制服务器数据。服务端按启用 `road_version + day_of_week + step_index` 缓存 5 分钟、最多 64 个时槽；首次依赖失败返回结构化 503，有同槽成功缓存时才允许返回 `stale=true`。地图用全量态势路口/路段范围与本地项目路口做并集，无当槽指标的对象保持灰色。
 
 ### I6 本机纯净目标栈与恢复边界
 

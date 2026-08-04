@@ -120,6 +120,52 @@ prior result: conditional pass; production acceptance blocked by P1 Kafka health
 
 final result: passed
 
+## 2026-08-04 无人机治理演示故事线
+
+### Comparison target
+
+- Source visual truth：既有 Console2 首页视觉基线 `.design-qa/2026-07-19-dashboard-after-fill.png`。
+- Implementation screenshot：`.design-qa/2026-08-04-demo-dashboard-1357x912.png`。
+- Combined comparison：`.design-qa/2026-08-04-demo-dashboard-comparison.jpg`。
+- Monitoring evidence：`.design-qa/2026-08-04-demo-monitoring-1357x912.png`。
+- Viewport/state：1357 × 912，CSS 视口 1357 × 912，device pixel ratio 1；管理员登录、本机普通模式、无运行中 Pipeline、已有 SourceProfile 列表。
+- Full-view comparison：首页沿用既有深色态势控制台、顶部导航、地图主画布和玻璃卡片体系，新增五步故事引导、固定 KPI、重点路口、事件和治理前后对比。
+- Focused comparison：首页右侧业务卡片和监测页双侧栏在全尺寸截图中保持可读，因此未额外裁切；监测画面明确显示固定指标来源、任务模式、车道饱和度、交通流趋势和事件操作。
+
+### Findings and fixes
+
+- 首次截图时高德地图瓦片尚未完成加载，主画布短暂为空白；等待瓦片完成后按相同视口重新截图并生成最终对比图，不属于 UI 代码缺陷。
+- 最终未发现 P0、P1、P2 或 P3 视觉问题；首页与监测页均无横向或纵向页面溢出。
+- 任务模式按钮已验证“路段航拍”文案切换；“保存事件与流量快照”已验证写入本机浏览器台账，并可从事件中心恢复当前事件与六个 5 分钟流量桶；事故测绘入口保持可达。
+- 治理前复盘快照与治理后复盘快照使用不同稳定主键；重复保存同一阶段覆盖原记录，不随演示次数重复生成。
+
+### Visual fidelity review
+
+- 字体与排版：沿用既有字号、字重、数字字形和信息层级；五步引导使用同一标题/辅助文字体系。
+- 间距与布局：保持 16px 主栅格和既有面板圆角，新增信息收纳在首屏可见范围；1357 × 912 下页面无溢出。
+- 色彩与资产：沿用深色背景、青色主强调及红/橙/绿状态语义；使用真实高德地图和既有 Phosphor 图标，无占位图片。
+- 文案与内容：饱和度阈值、机非冲突、事故测绘、保存快照和治理复盘与演示故事一致；无 Pipeline 时明确标记“固定演示指标”。
+- 事后分析：从监测页保存后进入 `/events?snapshot_id=...`，刷新该地址仍能恢复快照；事件、车道、流量及治理前后指标与 road9 真实事件分区显示。
+- 复盘调度：首页“再次调度无人机复盘”进入监测页后保持“治理后复盘”任务阶段，保存后事件中心同时显示治理前与治理后两条台账记录。
+- 测绘入口：监测页事件卡的“事故测绘”进入正式 `/survey` 任务页，未另造演示页面。
+- Console：最终首页、监测页和事件中心均为 0 error / 0 warning。
+
+### Verification
+
+- [x] 1357 × 912 同视口设计基线与实现并排比较。
+- [x] 首页五步故事、KPI、无人机地图点位、重点路口、事件和前后对比可见。
+- [x] 监测页三种任务模式、固定指标、车道饱和度、趋势、事件保存和事故测绘入口可见。
+- [x] 保存快照、事件中心深链、刷新恢复、治理后再次调度与双阶段台账闭环可操作。
+- [x] 1280 × 720 下事件分析抽屉无页面级横向/纵向溢出，长内容仅在抽屉内部滚动。
+- [x] 首页与监测页 DOM 尺寸量测无页面溢出。
+- [x] 浏览器 Console 0 error / 0 warning。
+
+### Follow-up polish
+
+- 无阻断性或延后项。
+
+final result: passed
+
 ---
 
 # Design QA · 历史轨迹研判升级（2026-07-21）

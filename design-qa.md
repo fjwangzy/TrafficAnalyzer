@@ -44,6 +44,63 @@ final result: passed
 
 ---
 
+# 首页路口与路段态势地图 Design QA（2026-08-04）
+
+## Source truth
+
+- 参考图：`/var/folders/pn/nqzgl4zn26v8_864_4nws7_r0000gn/T/codex-clipboard-d94ad4e2-f822-4ff2-8adc-60033a4b533f.png`（2546 × 1674）
+- 用户标注前：`console2/.design-qa/2026-08-04-dashboard-situation-final-kpi-1357x912.png`（1357 × 912，包含待删除的路口态势详情面板）
+- 最终实现：`console2/.design-qa/2026-08-04-dashboard-without-situation-detail-1357x912.png`（1357 × 912）
+- 稳定四色默认态：`console2/.design-qa/2026-08-04-dashboard-stable-color-grading-1168x912.png`（1168 × 912）
+- 面板删除前后对照：`console2/.design-qa/2026-08-04-dashboard-detail-removal-comparison-2714x912.png`
+- 全屏并排对照：`console2/.design-qa/2026-08-04-dashboard-situation-comparison-kpi-final.png`
+- 地图聚焦对照：`console2/.design-qa/2026-08-04-dashboard-situation-map-focus-kpi-final.png`
+
+## Environment and state
+
+- route: `/`
+- browser: Codex in-app Browser
+- final viewport: 1357 × 912 CSS px，截图 1357 × 912，device pixel ratio 1；上一轮另保留 1965 × 1280 宽屏证据。
+- state: authenticated admin，周五 07:55 典型时段，92 个服务器态势路口、147 条态势路段、1 个服务器匹配无人机覆盖路口、3 路视频源
+- comparison: 参考图与实现图先分别等比缩放并置于同尺寸 1273 × 837 面板，再做同一输入下的全屏与地图聚焦对照；未把参考产品的左侧诊断栏强行复制到既有工作台，因为确认方案要求保留现有 KPI、地图和右侧业务卡片布局。
+
+## Full-view comparison
+
+实现沿用既有云瞳暗色工作台、顶部故事线、KPI 和右侧业务卡片，将中央地图升级为三层态势。视觉中心仍是地图；路网采用低亮度蓝黑底，路口按绿/黄/红/灰状态分级，项目路口保留外圈，无人机覆盖以独立蓝色 Phosphor Drone 图标和聚合数量置于最高图层。与参考图共同保持了高密度路网、状态色标识、暗色诊断语义和地图主导的信息层级。
+
+周五 07:55 的前三个 KPI 均由服务器响应汇总；本轮实际响应为 92 个态势路口、33 个过饱和路口、22 条拥堵路段。机非冲突与治理提升继续明确标记为演示数据。无人机覆盖数量保留在地图标注中，不混入服务器态势 KPI。
+
+## Focused comparison
+
+- 路口层：95 个可见路口标记（92 个服务器态势路口与缺少态势的项目路口并集），颜色边界对应饱和度规则；项目路口外圈不覆盖指标色。
+- 路段层：147 条服务器路段按延误指数绘制，LineString 与 MultiLineString 都转换为可交互路径，层级低于路口和无人机。
+- 无人机层：只有能对应服务器态势路口的 1 个路口上图，聚合 3 路视频源；本地项目坐标仍可灰显，但不能让走廊或测试源伪装成服务器覆盖。
+- 地图叠层：保留星期与 5 分钟时槽选择器以及状态图例；按用户标注删除路口名称、最大饱和度、服务水平、最差路段、速度、排队和监控按钮组成的 `.situation-map-detail`，地图不再被该面板遮挡。
+
+## Interaction and browser checks
+
+- 星期切换为周五、时间切换为 07:55 后，控件值稳定为 `day_of_week=5`、`step_index=95`，地图为 95 个路口标记、1 个服务器匹配无人机标记。
+- 第一轮发现原生 `type=time` 在切换时可能短暂产生 `NaN` 并发出无效请求（P2）；已改为固定 288 项、每 5 分钟一步的选择器，复测通过。
+- 点击普通路口后只更新地图选中态，URL 保持 `/`；`.situation-map-detail` 节点始终为 0，不再显示指标详情面板。
+- 点击地图无人机图标后进入 `/monitoring?intersection_id=INT_MP4728_JINGSHI_CORRIDOR&source_profile_id=SRC-MP4729-JS-0729-3MS`，验证了聚合后的运行中/有效源选择与监控跳转。
+- 删除详情面板后，时段工具条、状态图例、路口/路段/无人机图层均保持原布局与层级。
+- 页面 `scrollWidth === innerWidth`、`scrollHeight === innerHeight`，同视口无横向或纵向溢出。
+- 最终浏览器 Console 为 0 error / 0 warning。
+
+## Findings and fixes
+
+- P2 fixed：时间输入的瞬态空值会产生 `NaN`；替换为确定性的 5 分钟时槽选择器。
+- P2 fixed：早期加载阶段项目路口和无人机覆盖数会暂时显示 0；最终状态随查询完成收敛为项目 4、服务器匹配覆盖 1、视频源 3，并保持服务器态势不回退 mock。
+- P1 fixed：本地项目/测试坐标原可让未匹配服务器态势路口的视频源上图；现在路口并集显式保留 `has_server_situation` 来源标记，无人机层只接受服务器匹配路口。
+- P2 historical：早期详情面板曾遮挡最西侧无人机标记，地图自动取景因此保留左侧安全区；当前详情面板已按新反馈删除。
+- P2 fixed：用户标注的路口态势详情面板遮挡地图；已删除面板 JSX、专用样式和冗余路段计算，浏览器验证节点数为 0。
+- P2 fixed：按当前上海时间进入周二 23:10 时，服务器数据只有绿色与灰色，视觉上像未分级；默认时段现固定为周五 07:55，同一服务器典型矩阵稳定呈现 56 绿、2 黄、33 红、4 灰。
+- P3 accepted：参考图使用另一套左侧诊断信息架构；按已确认范围保留本项目顶部 KPI 与右侧演示卡片，仅复用地图密度、状态色、时段控制、图例与无人机叠加表达。
+
+final result: passed
+
+---
+
 # Design QA · 路口项目工作台 B 方案（2026-07-22）
 
 - source visual truth path: `/var/folders/pn/nqzgl4zn26v8_864_4nws7_r0000gn/T/codex-clipboard-7ea7bb8c-94bb-441b-a0b3-0456016637c5.png`

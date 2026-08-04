@@ -72,6 +72,7 @@ export const platformApi = {
   dashboardIntersections: (params = {}) => get('/dashboard/intersections', { params }),
   dashboardIntersection: (interId) => get(`/dashboard/intersections/${encodeURIComponent(interId)}`),
   dashboardDrones: () => get('/dashboard/drones'),
+  dashboardSituation: (dayOfWeek, stepIndex) => get('/dashboard/situation', { params: { day_of_week: dayOfWeek, step_index: stepIndex } }),
 
   drones: () => get('/drones'),
   createDrone: (body) => post('/drones', body),

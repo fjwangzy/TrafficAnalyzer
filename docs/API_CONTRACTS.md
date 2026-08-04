@@ -217,7 +217,7 @@ WebSocket 推送沿用 `{channel, type, data, ts}` 外壳，但 `type` 和 UAV �
 
 ### 0.9 全域态势工作台读契约（S8 I5-A 与内部查询契约已实现）
 
-首屏 Dashboard 以交通指挥中心主任为第一用户。`DashboardReadModel` 已实现下列 4 个只读接口，只聚合现有 RoadContext、任务/设备、时序指标、AI 事件、测绘、投递和系统健康事实，不新增第二套事件或处置真源。当前内部 schema 为 `uav.dashboard/v1`；正式 SLA、缓存、全局增量和回补仍由 S8-TBD-006 冻结：
+首屏 Dashboard 以交通指挥中心主任为第一用户。`DashboardReadModel` 已实现下列 5 个只读接口，不新增第二套事件或处置真源。项目事实接口使用 `uav.dashboard/v1`；服务器典型矩阵使用独立的 `uav.dashboard-situation/v1`：
 
 | 方法与候选路径 | 用途 | 最小返回边界 |
 | --- | --- | --- |
@@ -225,12 +225,17 @@ WebSocket 推送沿用 `{channel, type, data, ts}` 外壳，但 `type` 和 UAV �
 | `GET /api/v1/dashboard/intersections` | 按权限、bbox 和筛选返回路口摘要 | 已支持单值 `risk/monitor/quality`、GCJ-02 `bbox=min_lon,min_lat,max_lon,max_lat`、`q`、`offset/limit`；返回 `project_total/total/has_more/filters`。未实现聚合簇/zoom，不允许一次无限拉取 |
 | `GET /api/v1/dashboard/intersections/{inter_id}` | 选中路口详情 | 任务、无人机、管道、态势、事件、路网版本、质量及专业页面稳定深链参数 |
 | `GET /api/v1/dashboard/drones` | 当前视野/任务关联的无人机保障摘要 | `drone_id`、任务/路口、位置、遥测时间、定位质量和授权后的状态摘要 |
+| `GET /api/v1/dashboard/situation?day_of_week=1..7&step_index=0..287` | 首页服务器典型时段路口/路段态势 | `time_profile/source/cache/summary/intersections/segments`；坐标和 `paths_gcj02` 可直接进入高德地图 |
 
 接口路径不属于消息/自建表 `uav_` 前缀规则，但响应中的业务消息类型、事件引用和后端自建物理对象仍须遵守第 0 节 canonical 契约。overview 与地图摘要必须在同一权限和可比较时间口径下返回；缺失数据使用明确的 `stale/missing/unknown`，不得以 `0` 代替。S8-TBD-001/005 未关闭时，覆盖、拥堵、保障和综合可信度使用 `value=null + numerator/denominator + unverified reason`。
 
 高德地图只接受 GCJ-02 坐标。正式 `RoadContext` 必须绑定 `lane_verified` 地图；本机验收点位必须明确登记 `status=test + usage=local_acceptance_only` 和 GCJ-02 来源。其他未验证或缺坐标记录进入 `isolated/map_exclusion_reason`。浏览器不得执行 WGS84 转换，也不得回退其他底图。
 
 `bbox` 非 4 个数、经纬度越界或最小值不小于最大值返回 `422 invalid_bbox`。`limit` 为 1～1000，默认 200；`offset` 不小于 0。road9 查询超时或 SQLAlchemy 依赖异常返回 `503 dashboard_dependency_unavailable`，前端可保留最后成功快照并重试，不得回退 Mock。此内部查询契约解决实现者选择项，但正式项目范围、权限过滤、点位聚合/zoom、缓存、SLA 和错误预算仍由 S8-TBD-002/006/007/009 书面冻结。
+
+`situation` 连接 PostgreSQL database=`ycx`，只读联结 `road9.dim_data_version/dim_inter_info/dim_link_info` 与 `xianchang.dws_inter_evaluation_5min_mm/dws_inter_link_status_5min_mm`。查询只使用启用道路版本，过滤删除态、无效坐标、空或无法转换的几何；LineString 和 MultiLineString 统一返回 `paths_gcj02`。路口范围取指标表全部有效 `inter_id`，路段范围取全部有效 `inter_id + link_id`，所选时槽无指标时仍返回范围对象并将状态置为 `missing`。`summary` 同时提供路口 `good/near_saturated/oversaturated/missing` 与路段 `smooth_segments/slow_segments/congested_segments/missing_segments` 汇总，首页前三个 KPI 直接读取该响应。
+
+缓存键为 `road_version + day_of_week + step_index`，TTL 300 秒，LRU 上限 64。命中返回 `cache.status=hit`；外部连接失败且同一星期/时槽存在最近成功值时返回 `cache.status=stale/stale=true`；无缓存返回 `503 dashboard_dependency_unavailable`。该接口只用于首页态势展示，不允许写服务器、不写本地库，也不改变 Mission、检测、无人机统计或事件事实。
 
 主任首屏默认只订阅 `uav_alerts` 和 `uav_system`；选中路口后订阅 `uav_intersection:{intersection_id}`，需要无人机实时详情时再订阅 `uav_telemetry:{drone_id}`。禁止同时订阅城市全部路口明细频道。若未来新增全局路口状态增量，channel 和 `type` 必须以 `uav_` 开头并经过容量、恢复和幂等评审。
 

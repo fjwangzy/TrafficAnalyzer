@@ -39,8 +39,17 @@ class DashboardReadModel:
     window = timedelta(minutes=30)
     freshness = timedelta(minutes=2)
 
-    def __init__(self, session_factory):
+    def __init__(self, session_factory, *, situation_reader=None):
         self._session_factory = session_factory
+        self._situation_reader = situation_reader
+
+    async def situation(self, *, day_of_week: int, step_index: int) -> dict:
+        if self._situation_reader is None:
+            raise OSError("YCX situation read model is not configured")
+        return await self._situation_reader.situation(
+            day_of_week=day_of_week,
+            step_index=step_index,
+        )
 
     async def _facts(self, as_of: datetime | None = None) -> dict:
         now = _utc(as_of) or datetime.now(UTC)

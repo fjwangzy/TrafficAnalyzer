@@ -7,6 +7,7 @@ from app.api.v1 import dashboard
 class FakeDashboardReadModel:
     def __init__(self):
         self.intersection_filters = None
+        self.situation_slot = None
 
     async def overview(self):
         return {"schema_version": "uav.dashboard/v1", "coverage_ratio": None}
@@ -20,6 +21,10 @@ class FakeDashboardReadModel:
 
     async def drones(self):
         return {"items": []}
+
+    async def situation(self, *, day_of_week, step_index):
+        self.situation_slot = (day_of_week, step_index)
+        return {"schema_version": "uav.dashboard-situation/v1", "intersections": [], "segments": []}
 
 
 def app_for(service=True):
@@ -85,3 +90,40 @@ def test_dashboard_maps_database_connection_refusal_to_structured_503():
 
     assert response.status_code == 503
     assert response.json()["detail"]["code"] == "dashboard_dependency_unavailable"
+
+
+def test_dashboard_situation_validates_and_forwards_typical_slot():
+    app = app_for()
+    with TestClient(app) as client:
+        response = client.get("/api/v1/dashboard/situation", params={"day_of_week": 2, "step_index": 120})
+        assert response.status_code == 200
+        assert response.json()["schema_version"] == "uav.dashboard-situation/v1"
+        assert app.state.dashboard_read_model.situation_slot == (2, 120)
+
+        assert client.get("/api/v1/dashboard/situation", params={"day_of_week": 0, "step_index": 120}).status_code == 422
+        assert client.get("/api/v1/dashboard/situation", params={"day_of_week": 2, "step_index": 288}).status_code == 422
+
+        assert client.get("/api/v1/dashboard/situation", params={"day_of_week": 1, "step_index": 0}).status_code == 200
+        assert app.state.dashboard_read_model.situation_slot == (1, 0)
+        assert client.get("/api/v1/dashboard/situation", params={"day_of_week": 7, "step_index": 287}).status_code == 200
+        assert app.state.dashboard_read_model.situation_slot == (7, 287)
+
+
+def test_dashboard_situation_first_dependency_failure_is_structured_503():
+    app = app_for()
+
+    async def timeout(*, day_of_week, step_index):
+        raise TimeoutError(f"slot {day_of_week}/{step_index} timed out")
+
+    app.state.dashboard_read_model.situation = timeout
+    with TestClient(app) as client:
+        response = client.get(
+            "/api/v1/dashboard/situation",
+            params={"day_of_week": 5, "step_index": 95},
+        )
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == {
+        "code": "dashboard_dependency_unavailable",
+        "message": "road9 聚合依赖暂不可用，请保留当前页面并重试",
+    }

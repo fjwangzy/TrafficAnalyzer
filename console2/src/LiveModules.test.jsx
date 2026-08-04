@@ -81,6 +81,7 @@ vi.mock('./components/MonitoringBevMap', () => ({
 }))
 
 import { RouterApp } from './RouterApp'
+import { readDemoSnapshots } from './lib/demoSnapshots'
 
 function open(path) {
   window.history.pushState({}, '', path)
@@ -169,6 +170,7 @@ function mockSuccessfulApis() {
 
 describe('Console2 live module migration', () => {
   beforeEach(() => {
+    window.localStorage.clear()
     Object.values(liveMocks.api).forEach((mock) => mock.mockReset())
     liveMocks.wsCallback = null
     liveMocks.wsChannels = []
@@ -473,6 +475,24 @@ describe('Console2 live module migration', () => {
     })
     expect(screen.getByText('BEV 历史轨迹回放 · 2 TRACKS')).toBeInTheDocument()
     expect(screen.queryByText(/数据质量 ·/)).not.toBeInTheDocument()
+  })
+
+  it('persists the current event and traffic-flow snapshot for later analysis', async () => {
+    liveMocks.api.pipelines.mockResolvedValue([])
+    open('/monitoring?intersection_id=INT-1&source_profile_id=SRC-1')
+
+    fireEvent.click(await screen.findByRole('button', { name: '保存事件与流量快照' }))
+
+    expect(readDemoSnapshots()).toHaveLength(1)
+    expect(readDemoSnapshots()[0]).toMatchObject({
+      id: 'DEMO-SNAPSHOT-INT-1-hover',
+      intersection_id: 'INT-1',
+      source_profile_id: 'SRC-1',
+      mission_mode: 'hover',
+      source_mode: 'fixed_demo',
+    })
+    expect(screen.getByRole('button', { name: '重新保存当前快照' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '查看已保存快照' })).toBeInTheDocument()
   })
 
   it('shows explanatory TCC and WebSocket downgrade states', async () => {

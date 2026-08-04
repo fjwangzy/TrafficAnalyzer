@@ -1,5 +1,20 @@
 # TASKS.md — TrafficAnalyzer 任务追踪
 
+## 2026-08-04 首页路口与路段典型态势地图
+
+- [x] 新增 `/api/v1/dashboard/situation`，只读联结服务器 database=`ycx` 的 `road9`/`xianchang`，按启用道路版本、星期和 5 分钟时槽返回全量态势路口与 Link 范围。
+- [x] 实现 5 分钟、64 时槽缓存；首次依赖失败结构化 503，同槽有成功值时才返回 stale；schema 标识符、坐标和 GeoJSON 均做输入边界处理。
+- [x] 首页改为路段、路口、无人机视频源三层地图；项目路口外圈强调，无时槽指标灰显，多源按路口聚合并按运行中/有效/降级优先进入监控。
+- [x] 首页前三个 KPI 来自服务器响应；机非冲突、事故测绘和治理复盘固定样例继续明确标记为演示数据，不生成场次 mock。
+- [x] 完成真实只读探针与同视口 Design QA：当前服务器返回 92 个路口、147 条路段且字段完整；本地项目路口仍参与灰态并集，但无人机层只接受服务器态势路口匹配，当前为 1 个覆盖路口聚合 3 路视频源；地图为左上浮层保留 300px 自动取景安全区。最终门禁为 Platform `270 passed / 5 skipped / 10 subtests`、Console2 `180 passed`、Vite production build、`git diff --check`、浏览器 0 error/warning，证据见根 `design-qa.md`。
+
+## 2026-08-04 交通轨迹真实复盘与存储治理（计划已保存，未实施）
+
+- [ ] 按 [`交通轨迹真实复盘与存储治理计划`](superpowers/plans/2026-08-04-trajectory-replay-storage-model.md) 建设 Mission 相对时钟、事件保真 TrackPoint、版本化速度封存及 Motion/Queue/Maneuver 事实。
+- [ ] 将 `uav_traffic_metrics` 收敛为独立计算的实际日期 5 分钟 DWS，并新增本地典型时段矩阵；首页展示已按 ADR-030 增加隔离的服务器只读模型，但检测、Mission、Kafka、统计事实和本地写链路仍不得建立跨库依赖或复制数据。
+- [ ] 清除 Stats/Kafka/PG 的轨迹尾迹与完整 payload 重复，启用稳定 Source Topic、Zstd、Timescale 列存/压缩及分环境保留策略。
+- [ ] 在隔离新栈中从五个业务位置原素材重建，完成自然 EOF、Kafka/road9 对账、真实回放、场景模型和容量门禁后再评审切换；旧数据删除须另行授权。
+
 ## 2026-07-31 抽帧步长启动配置
 
 - [x] 统一检测器 `video_reader.frame_stride`、Platform `PIPELINE_FRAME_STRIDE` 和原生 MPS 批量回放入口默认值为 `3`；交互式范围固定为 `1–30`，批量入口继续拒绝超过 0.5 秒源时间间隔的破坏性采样。

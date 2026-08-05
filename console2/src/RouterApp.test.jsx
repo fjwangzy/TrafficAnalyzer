@@ -72,6 +72,29 @@ vi.mock('./lib/api', async (importOriginal) => {
         slice_tracks: [{ id: 'TRK-1', track_id: '7', mission_id: 'MSN-1', pipeline_id: 'PIPE-1', source_profile_id: 'SRC-1', movement_key: 'entry:1|exit:2', movement_label: '东进口 → 西出口', trajectory_enu_m: [[0, 0], [1, 1]], trajectory_gcj02: [[117, 36.7], [117.0001, 36.7001]], anchor_gcj02: [117, 36.7], vehicle_class: 'motor', yolo_class_id: 3, yolo_class_name: 'car', yolo_model_id: 'yolo11s.pt@abc123', class_mapping_version: 'visdrone-business/v1', quality_status: 'verified', avg_speed_kmh: 31.5, max_speed_kmh: 42, started_at: '2026-07-21T08:00:00Z', ended_at: '2026-07-21T08:00:20Z' }],
         conflicts: [{ id: 'C-1', occurred_at: '2026-07-21T08:00:15Z', severity: 'warning', ttc_sec: 1.2, attributed_movements: ['entry:1|exit:2'] }],
       }),
+      replayMissions: vi.fn().mockResolvedValue({ schema_version: 'uav.replay-missions/v1', items: [
+        { mission_id: 'MSN-1', source_profile_id: 'SRC-1', status: 'sealed', duration_ms: 20000, coordinate_coverage_ratio: 1, journey_count: 1, behavior_count: 1, algorithm_versions: { sampling: 'event-faithful/v1' }, accuracy: { idf1: 'not_evaluated', hota: 'not_evaluated', id_switch: 'not_evaluated', position_rmse: 'not_evaluated', speed_mae: 'not_evaluated', reid_accuracy: 'not_evaluated' } },
+      ] }),
+      trajectoryReplay: vi.fn().mockResolvedValue({
+        schema_version: 'uav.trajectory-replay/v1',
+        mission: { mission_id: 'MSN-1', source_profile_id: 'SRC-1', pipeline_id: 'PIPE-1', status: 'sealed', duration_ms: 20000, coordinate_coverage_ratio: 1, journey_count: 1, behavior_count: 1, accuracy: { idf1: 'not_evaluated' } },
+        cursor: { offset_ms: 0, window_start_ms: 0, window_end_ms: 0, duration_ms: 20000 },
+        coordinate_mode: 'gcj02',
+        tracks: [{ track_id: '7', source_runtime_track_ids: ['17'], source_point_count: 3, retained_point_count: 3, sampling: { algorithm_version: 'event-faithful/v1' }, vehicle_class: 'motor', yolo_class_id: 3, yolo_class_name: 'car', movement_key: 'entry:1|exit:2', movement_label: '东进口 → 西出口', episodes: [{ kind: 'stopped', start_offset_ms: 8000, end_offset_ms: 12000 }], maneuvers: [], points: [
+          { offset_ms: 0, frame_num: 1, pixel: [10, 20], enu_m: [0, 0], gcj02: [117, 36.7], speed: { instant_kmh: 10, ema_kmh: 9, enu_vector_mps: [2.5, 0], quality: 'reconstructed_from_full_sequence' }, quality: {}, sampling_boundary: ['journey_start'] },
+          { offset_ms: 5000, frame_num: 2, pixel: [12, 20], enu_m: [1, 0], gcj02: [117.0001, 36.7001], speed: { instant_kmh: 8, ema_kmh: 8.5, enu_vector_mps: [2, 0], quality: 'reconstructed_from_full_sequence' }, quality: {}, sampling_boundary: [] },
+          { offset_ms: 10000, frame_num: 3, pixel: [13, 20], enu_m: [2, 0], gcj02: [117.0002, 36.7002], speed: { instant_kmh: 1, ema_kmh: 2, enu_vector_mps: [0.2, 0], quality: 'reconstructed_from_full_sequence' }, quality: {}, sampling_boundary: ['stopped', 'quality_gap_start'] },
+        ] }],
+        analysis: {
+          quality: { total_tracks: 1, replayable_tracks: 1, truncated: false, unattributed_conflicts: 0, spatial_coverage_ratio: 1, status: 'complete' },
+          movement_ranking: [{ movement_key: 'entry:1|exit:2', movement_label: '东进口 → 西出口', movement_source: 'road_context', vehicle_count: 2, avg_speed_kmh: 31.5, p85_speed_kmh: 38, conflict_count: 1 }],
+          class_summary: { business: [{ class_name: 'motor', count: 1 }], yolo: [{ class_id: 3, class_name: 'car', model_id: 'yolo11s.pt@abc123', count: 1 }], unknown_yolo_name_count: 0 },
+          conflicts: [{ id: 'C-1', offset_ms: 10000, severity: 'warning', ttc_sec: 1.2 }],
+        },
+        conflicts: [{ id: 'C-1', offset_ms: 10000, severity: 'warning', ttc_sec: 1.2 }],
+        truncated: false,
+        next_cursor_ms: null,
+      }),
       conflicts: vi.fn().mockResolvedValue([
         { id: 'UAV-EVT-20260713-001', inter_id: 'INT-I5', conflict_scene: '机非冲突风险升高', severity: 'critical', ttc_sec: 1.2, pet_sec: 0.8, distance_m: 0, risk_score: 86, evidence: ['path_intersection'], occurred_at: '2026-07-15T02:52:16Z', quality_status: 'unverified', time_quality: 'reconstructed', review_status: 'pending', review_revision: 1 },
       ]),
@@ -286,10 +309,141 @@ describe('Console2 full prototype', () => {
     expect(screen.getByLabelText('时间窗口')).toHaveValue('latest30m')
   })
 
+  it('plays only a sealed Mission on a continuous T+ clock', async () => {
+    platformApi.sources.mockClear()
+    open('/gis')
+
+    await waitFor(() => expect(screen.getByLabelText('轨迹任务')).toHaveValue('MSN-1'))
+    expect(screen.getByLabelText('任务回放时间')).toHaveAttribute('max', '20000')
+    expect(screen.getAllByText('T+00:00.000').length).toBeGreaterThan(0)
+    expect(platformApi.replayMissions).toHaveBeenCalledWith('INT-I5')
+    expect(platformApi.sources).not.toHaveBeenCalled()
+    expect(platformApi.trajectoryReplay).toHaveBeenCalledWith('INT-I5', expect.objectContaining({
+      mission_id: 'MSN-1', cursor_sec: 0,
+    }))
+    expect(screen.getByTitle('quality_gap')).toBeInTheDocument()
+    expect(screen.getByTitle('conflict')).toBeInTheDocument()
+    expect(screen.getByText('瞬时 / EMA 速度')).toBeInTheDocument()
+    expect(screen.getByText('1 / 2 km/h')).toBeInTheDocument()
+    expect(screen.getByText('原始 / 保留点数')).toBeInTheDocument()
+    expect(screen.getByText('Runtime segments（1）')).toBeInTheDocument()
+
+    fireEvent.change(screen.getByLabelText('任务回放时间'), { target: { value: '12000' } })
+    await waitFor(() => expect(platformApi.trajectoryReplay).toHaveBeenCalledWith('INT-I5', expect.objectContaining({ cursor_sec: 12 })))
+
+    fireEvent.change(screen.getByLabelText('轨迹任务'), { target: { value: 'all' } })
+    await waitFor(() => expect(screen.getByRole('button', { name: '播放历史回放' })).toBeDisabled())
+    expect(await screen.findByText('请选择单个封存 Mission')).toBeInTheDocument()
+    expect(screen.queryByText('Track #7 识别与运行证据')).not.toBeInTheDocument()
+  })
+
+  it('keeps the default Mission replay unfiltered until a representative track is chosen', async () => {
+    platformApi.trajectoryReplay.mockClear()
+    open('/gis?intersection_id=INT-I5&mission_id=MSN-1')
+
+    expect(await screen.findByText('Track #7 识别与运行证据')).toBeInTheDocument()
+    await waitFor(() => expect(platformApi.trajectoryReplay).toHaveBeenCalled())
+
+    expect(new URLSearchParams(window.location.search).get('track_id')).toBeNull()
+    expect(platformApi.trajectoryReplay.mock.calls.every(([, options]) => !Object.hasOwn(options, 'track_id'))).toBe(true)
+  })
+
+  it('keeps replay queries on a bounded window as the Mission cursor advances', async () => {
+    open('/gis?intersection_id=INT-I5&mission_id=MSN-1')
+
+    await waitFor(() => expect(screen.getByLabelText('轨迹任务')).toHaveValue('MSN-1'))
+    const slider = await screen.findByLabelText('任务回放时间')
+    await waitFor(() => expect(slider).toHaveAttribute('max', '20000'))
+    platformApi.trajectoryReplay.mockClear()
+    fireEvent.change(slider, { target: { value: '18000' } })
+
+    await waitFor(() => expect(platformApi.trajectoryReplay).toHaveBeenLastCalledWith(
+      'INT-I5', expect.objectContaining({ cursor_sec: 18, window_sec: 10 }),
+    ))
+  })
+
+  it('does not overlap replay requests while continuous playback advances', async () => {
+    const baseReplay = await platformApi.trajectoryReplay('INT-I5', {})
+    let releaseReplay
+    platformApi.trajectoryReplay.mockImplementation((_intersectionId, options = {}) => (
+      Number(options.cursor_sec || 0) > 0
+        ? new Promise((resolve) => { releaseReplay = () => resolve(baseReplay) })
+        : Promise.resolve(baseReplay)
+    ))
+    open('/gis?intersection_id=INT-I5&mission_id=MSN-1')
+
+    const play = await screen.findByRole('button', { name: '播放历史回放' })
+    await waitFor(() => expect(screen.getByLabelText('任务回放时间')).toHaveAttribute('max', '20000'))
+    expect(await screen.findByText('1 条轨迹 · 1 个行为')).toBeInTheDocument()
+    platformApi.trajectoryReplay.mockClear()
+    fireEvent.click(play)
+    await new Promise((resolve) => setTimeout(resolve, 1200))
+
+    expect(platformApi.trajectoryReplay).toHaveBeenCalledTimes(1)
+    await new Promise((resolve) => setTimeout(resolve, 1200))
+    expect(platformApi.trajectoryReplay).toHaveBeenCalledTimes(1)
+    releaseReplay?.()
+  })
+
+  it('clears focused track and stale replay data when switching Missions', async () => {
+    const previousReplayImplementation = platformApi.trajectoryReplay.getMockImplementation()
+    platformApi.replayMissions.mockResolvedValueOnce({ items: [
+      { mission_id: 'MSN-1', source_profile_id: 'SRC-1', status: 'sealed', duration_ms: 20000, journey_count: 1, behavior_count: 1 },
+      { mission_id: 'MSN-2', source_profile_id: 'SRC-2', status: 'sealed', duration_ms: 30000, journey_count: 0, behavior_count: 0 },
+    ] })
+    platformApi.trajectoryReplay.mockImplementation((_intersectionId, options) => Promise.resolve(
+      options.mission_id === 'MSN-2'
+        ? { mission: { mission_id: 'MSN-2', source_profile_id: 'SRC-2' }, cursor: { offset_ms: 0, duration_ms: 30000 }, tracks: [], analysis: { quality: {}, movement_ranking: [], class_summary: { business: [], yolo: [] }, conflicts: [] }, conflicts: [] }
+        : { mission: { mission_id: 'MSN-1', source_profile_id: 'SRC-1' }, cursor: { offset_ms: 0, duration_ms: 20000 }, tracks: [{ track_id: '7', source_runtime_track_ids: ['17'], source_point_count: 1, retained_point_count: 1, episodes: [], maneuvers: [], points: [{ offset_ms: 0, pixel: [1, 1], gcj02: null, speed: { instant_kmh: null, ema_kmh: null }, quality: {} }] }], analysis: { quality: {}, movement_ranking: [], class_summary: { business: [], yolo: [] }, conflicts: [] }, conflicts: [] }
+    ))
+    open('/gis?mission_id=MSN-1&track_id=7')
+
+    expect(await screen.findByText('Track #7 识别与运行证据')).toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText('轨迹任务'), { target: { value: 'MSN-2' } })
+
+    await waitFor(() => expect(new URLSearchParams(window.location.search).get('mission_id')).toBe('MSN-2'))
+    expect(new URLSearchParams(window.location.search).get('track_id')).toBeNull()
+    await waitFor(() => expect(screen.queryByText('Track #7 识别与运行证据')).not.toBeInTheDocument())
+    expect(await screen.findByText('当前时间片没有轨迹。')).toBeInTheDocument()
+    platformApi.trajectoryReplay.mockImplementation(previousReplayImplementation)
+  })
+
+  it('binds the source and trajectory filters to the sealed Mission replay request', async () => {
+    platformApi.replayMissions.mockResolvedValueOnce({ items: [
+      { mission_id: 'MSN-1', source_profile_id: 'SRC-1', status: 'sealed', duration_ms: 20000, journey_count: 1 },
+      { mission_id: 'MSN-2', source_profile_id: 'SRC-2', status: 'sealed', duration_ms: 30000, journey_count: 1 },
+    ] })
+    open('/gis?intersection_id=INT-I5&source_profile_id=SRC-2')
+
+    await waitFor(() => expect(screen.getByLabelText('轨迹任务')).toHaveValue('MSN-2'))
+    await waitFor(() => expect(platformApi.trajectoryReplay).toHaveBeenLastCalledWith(
+      'INT-I5', expect.objectContaining({ mission_id: 'MSN-2' }),
+    ))
+
+    fireEvent.change(screen.getByLabelText('车辆类型'), { target: { value: 'non_motor' } })
+    await waitFor(() => expect(platformApi.trajectoryReplay).toHaveBeenLastCalledWith(
+      'INT-I5', expect.objectContaining({ mission_id: 'MSN-2', vehicle_class: 'non_motor' }),
+    ))
+    fireEvent.change(screen.getByLabelText('转向类型'), { target: { value: 'left_turn' } })
+    await waitFor(() => expect(platformApi.trajectoryReplay).toHaveBeenLastCalledWith(
+      'INT-I5', expect.objectContaining({ mission_id: 'MSN-2', vehicle_class: 'non_motor', turn_behavior: 'left_turn' }),
+    ))
+  })
+
+  it('never requests sealed Mission replay from realtime monitoring', async () => {
+    platformApi.replayMissions.mockClear()
+    platformApi.trajectoryReplay.mockClear()
+
+    open('/monitoring')
+    expect(await screen.findByLabelText('飞行姿态数据')).toBeInTheDocument()
+    expect(platformApi.replayMissions).not.toHaveBeenCalled()
+    expect(platformApi.trajectoryReplay).not.toHaveBeenCalled()
+  })
+
   it('places trajectory quality indicators at the bottom of the analysis page', async () => {
     const { container } = open('/gis')
 
-    expect(await screen.findByText('部分流向使用降级证据')).toBeInTheDocument()
+    expect(await screen.findByText('正式精度尚未评估')).toBeInTheDocument()
     expect(container.querySelector('.trajectory-analysis-page')?.lastElementChild)
       .toHaveClass('trajectory-quality-notices')
   })
@@ -302,20 +456,20 @@ describe('Console2 full prototype', () => {
     fireEvent.click(screen.getByRole('tab', { name: /原始分类/ }))
     expect(await screen.findByText('YOLO car')).toBeInTheDocument()
     expect(screen.getByText('yolo11s.pt@abc123')).toBeInTheDocument()
-    expect(screen.getByLabelText('历史时间片')).toHaveAttribute('max', '1')
+    expect(screen.getByLabelText('任务回放时间')).toHaveAttribute('max', '20000')
     fireEvent.click(screen.getByRole('tab', { name: '代表轨迹' }))
     expect(await screen.findByText('源 SRC-1 · 任务 MSN-1 · 管道 PIPE-1')).toBeInTheDocument()
   })
 
   it('sorts flow ranking accessibly and preserves the analysis state in the URL', async () => {
-    const baseAnalysis = await platformApi.trajectoryAnalysis('INT-I5', {})
-    platformApi.trajectoryAnalysis.mockClear()
-    platformApi.trajectoryAnalysis.mockResolvedValueOnce({
-      ...baseAnalysis,
-      movement_ranking: [
+    const baseReplay = await platformApi.trajectoryReplay('INT-I5', {})
+    platformApi.trajectoryReplay.mockClear()
+    platformApi.trajectoryReplay.mockResolvedValueOnce({
+      ...baseReplay,
+      analysis: { ...baseReplay.analysis, movement_ranking: [
         { movement_key: 'entry:1|exit:2', movement_label: '东进口 → 西出口', movement_source: 'road_context', vehicle_count: 2, share: 0.25, avg_speed_kmh: 31.5, p85_speed_kmh: 38, conflict_count: 1 },
         { movement_key: 'entry:3|exit:4', movement_label: '北进口 → 南出口', movement_source: 'road_context', vehicle_count: 6, share: 0.75, avg_speed_kmh: 18, p85_speed_kmh: 24, conflict_count: 0 },
-      ],
+      ] },
     })
 
     open('/gis?intersection_id=INT-I5&period=all&movement_sort=avg_speed&start_at=2026-07-21T08%3A00%3A00Z&end_at=2026-07-21T08%3A00%3A20Z&slice_start_at=2026-07-21T08%3A00%3A10Z&slice_end_at=2026-07-21T08%3A00%3A20Z')
@@ -332,8 +486,8 @@ describe('Console2 full prototype', () => {
     fireEvent.click(screen.getByRole('button', { name: '东进口 → 西出口 2 辆' }))
     await waitFor(() => expect(new URLSearchParams(window.location.search).get('movement_key')).toBe('entry:1|exit:2'))
 
-    await waitFor(() => expect(platformApi.trajectoryAnalysis).toHaveBeenLastCalledWith('INT-I5', expect.not.objectContaining({
-      slice_start_at: expect.anything(),
+    await waitFor(() => expect(platformApi.trajectoryReplay).toHaveBeenLastCalledWith('INT-I5', expect.objectContaining({
+      movement_key: 'entry:1|exit:2',
     })))
     expect(screen.getByRole('tab', { name: '流向排名' })).toHaveAttribute('aria-selected', 'true')
   })
@@ -355,53 +509,36 @@ describe('Console2 full prototype', () => {
       ],
     })
 
-    await waitFor(() => expect(screen.getByText('1 个路口 · 2 条轨迹')).toBeInTheDocument())
-    expect(platformApi.trajectoryAnalysis).toHaveBeenCalledWith('INT-I5', expect.objectContaining({ period: 'latest30m', bucket_sec: 10, track_limit: 60 }))
+    await waitFor(() => expect(screen.getByText('1 个路口 · 1 条轨迹')).toBeInTheDocument())
+    expect(platformApi.replayMissions).toHaveBeenCalledWith('INT-I5')
   })
 
   it('keeps the current trajectory frame visible while the next replay slice loads', async () => {
-    const baseAnalysis = await platformApi.trajectoryAnalysis('INT-I5', {})
-    const firstSlice = {
-      ...baseAnalysis,
-      query: {
-        ...baseAnalysis.query,
-        start_at: '2026-07-21T08:00:00Z',
-        end_at: '2026-07-21T08:00:20Z',
-        slice_start_at: '2026-07-21T08:00:00Z',
-        slice_end_at: '2026-07-21T08:00:10Z',
-      },
-      conflicts: [],
-    }
-    const secondSlice = {
-      ...firstSlice,
-      query: {
-        ...firstSlice.query,
-        slice_start_at: '2026-07-21T08:00:10Z',
-        slice_end_at: '2026-07-21T08:00:20Z',
-      },
-    }
+    const firstSlice = await platformApi.trajectoryReplay('INT-I5', {})
+    const secondSlice = { ...firstSlice, cursor: { ...firstSlice.cursor, offset_ms: 4000, window_end_ms: 4000 } }
     let resolveSecondSlice
-    platformApi.trajectoryAnalysis
-      .mockResolvedValueOnce(firstSlice)
-      .mockImplementationOnce(() => new Promise((resolve) => { resolveSecondSlice = resolve }))
-
-    open('/gis?intersection_id=INT-I5&period=all&playback_speed=4&start_at=2026-07-21T08%3A00%3A00Z&end_at=2026-07-21T08%3A00%3A20Z&slice_start_at=2026-07-21T08%3A00%3A00Z&slice_end_at=2026-07-21T08%3A00%3A10Z')
-
-    expect(await screen.findByText('1 条轨迹 · 0 个冲突', {}, { timeout: 10_000 })).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: '播放历史回放' }))
-    await waitFor(() => expect(platformApi.trajectoryAnalysis).toHaveBeenCalledWith(
-      'INT-I5',
-      expect.objectContaining({ slice_start_at: '2026-07-21T08:00:10Z' }),
+    platformApi.trajectoryReplay.mockImplementation((_intersectionId, options = {}) => (
+      Number(options.cursor_sec || 0) > 0
+        ? new Promise((resolve) => { resolveSecondSlice = resolve })
+        : Promise.resolve(firstSlice)
     ))
-    await waitFor(() => expect(new URLSearchParams(window.location.search).get('slice_start_at'))
-      .toBe('2026-07-21T08:00:10Z'))
 
-    expect(screen.getByText('1 条轨迹 · 0 个冲突')).toBeInTheDocument()
-    expect(screen.queryByText('当前时间片无可回放轨迹')).not.toBeInTheDocument()
-    expect(screen.getByText('加载下一片…')).toBeInTheDocument()
+    open('/gis?intersection_id=INT-I5&period=all&playback_speed=4')
+
+    expect(await screen.findByText('1 条轨迹 · 1 个行为', {}, { timeout: 10_000 })).toBeInTheDocument()
+    platformApi.trajectoryReplay.mockClear()
+    fireEvent.click(screen.getByRole('button', { name: '播放历史回放' }))
+    await waitFor(() => expect(platformApi.trajectoryReplay).toHaveBeenCalledWith(
+      'INT-I5',
+      expect.objectContaining({ cursor_sec: 4 }),
+    ), { timeout: 2500 })
+    await waitFor(() => expect(new URLSearchParams(window.location.search).get('cursor_ms')).toBe('4000'))
+
+    expect(screen.getByText('1 条轨迹 · 1 个行为')).toBeInTheDocument()
+    expect(screen.queryByText('当前 T+时刻无可回放轨迹')).not.toBeInTheDocument()
 
     resolveSecondSlice(secondSlice)
-    await waitFor(() => expect(screen.queryByText('加载下一片…')).not.toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText('1 条轨迹 · 1 个行为')).toBeInTheDocument())
   })
 
   it('keeps the fixed demo context independent from URL prototype labels', async () => {
@@ -416,7 +553,7 @@ describe('Console2 full prototype', () => {
     await waitFor(() => expect(screen.getByLabelText('路口')).toHaveValue('INT-I5'))
     expect(screen.getByLabelText('时间窗口')).toHaveValue('24h')
     expect(screen.getByText('坐标尚未冻结')).toBeInTheDocument()
-    expect(platformApi.trajectoryAnalysis).toHaveBeenCalledWith('INT-I5', expect.objectContaining({ period: '24h', bucket_sec: 10, track_limit: 60 }))
+    expect(platformApi.replayMissions).toHaveBeenCalledWith('INT-I5')
   })
 
   it('restores the fleet tab and selected drone from a deep link', async () => {

@@ -28,6 +28,7 @@ class KafkaConsumerService:
         alert_engine: Any = None,
         lane_annotation_store: Any = None,
         metric_store: MetricStorePort | None = None,
+        dispatch_realtime: bool = True,
     ):
         self._bootstrap = bootstrap_servers
         self._group_id = group_id
@@ -36,6 +37,7 @@ class KafkaConsumerService:
         self._alert_engine = alert_engine
         self._lane_annotation_store = lane_annotation_store
         self._metric_store = metric_store
+        self._dispatch_realtime = dispatch_realtime
         self._consumer: AIOKafkaConsumer | None = None
         self._task: asyncio.Task | None = None
         self._running = False
@@ -222,6 +224,12 @@ class KafkaConsumerService:
         if result.dispatch_status == "dispatched":
             return
         normalized = result.normalized_payload
+        if not self._dispatch_realtime:
+            await self._metric_store.mark_dispatched(
+                normalized.get("source_system", "uav_traffic_analyzer_ai"),
+                result.message_id,
+            )
+            return
         business_data = normalized.get("data")
         if isinstance(business_data, dict):
             data = {

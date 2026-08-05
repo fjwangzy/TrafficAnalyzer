@@ -1,6 +1,6 @@
 # PROJECT_STRUCTURE.md — TrafficAnalyzer 当前项目结构
 
-> 当前状态：2026-07-28。本文只描述 ADR-019、ADR-023、ADR-024 与 ADR-025 之后的 canonical 运行代码；已退役资产仅在“历史与保留边界”中列出。
+> 当前状态：2026-08-05。本文描述 canonical 运行代码及 ADR-031 隔离的 Replay V2 shadow；已退役资产仅在“历史与保留边界”中列出。
 
 ## 1. 顶层结构
 
@@ -79,8 +79,11 @@ VideoReader
 | `nodes/RoadMapMatchingNode.py` | 基于 `lane_verified` 车道面、航向、拓扑和连续性的正式匹配 |
 | `nodes/Lane*`、`nodes/AutoLaneInferenceNode.py` | 视觉/自动候选，仅辅助质量检查，不覆盖已发布地图 |
 | `nodes/ConflictDetectionNode.py` | 路径交点 TTC/PET、同一时空占用与证据评分 |
-| `nodes/KafkaProducerNode.py` | 只生成 canonical `uav_*` Topic 与 `msg_type` |
-| `nodes/TccEvidencePublisherNode.py` | 等待真实 `ShowNode.frame_result`，固化原图/检测器输出后可靠发布 TCC；证据侧禁止重绘 |
+| `nodes/KafkaProducerNode.py` | live 生成 canonical Topic；`replay_v2` 生成稳定 SourceProfile-scoped V2 Topic、瘦 Stats 与封存 journey |
+| `nodes/TccEvidencePublisherNode.py` | 等待真实 `ShowNode.frame_result`，固化原图/检测器输出后按同一 live/V2 profile Topic 选择器可靠发布 TCC；证据侧禁止重绘 |
+| `services/MissionTrajectoryArchive.py` | 外部 durable segment spool、自然 EOF 原子封存、保守 ReID、冻结速度、行为派生和事件保真采样 |
+| `utils_local/replay_topics.py` | V2 稳定 Topic、消费者正则和消费者组唯一命名边界 |
+| `scripts/run_replay_v2_acceptance.py` | 五源原生 MPS 串行验收、自然 EOF、Kafka/V2 PG 对账、canonical offset 防串线与容量/延迟盘点 |
 | `scripts/accept_xqh_hover_departure.py` | xqh MPS全尾段、检测几何、三类轨迹对齐、坐标残差、显示和EOF工程门禁 |
 | `scripts/compare_xqh_bytetrack.py` | xqh 400–430s 同检测输入的新旧 ByteTrack 关联密度、碎片 ID、寿命与 Mahalanobis shadow 门禁 |
 | `scripts/build_xqh_trajectory_comparison.py` | 从历史异常帧与最终生产ShowNode帧生成确定性前后对比图 |
@@ -94,6 +97,7 @@ VideoReader
 platform/
 ├── alembic/
 │   └── versions/                  # 当前唯一 head：20260728_0020
+├── alembic_replay_v2/             # 独立版本表/迁移轨道，当前 head：20260805_rv2_0003
 ├── app/
 │   ├── main.py                    # lifespan、路由、strict readiness、HLS 受控挂载、WebSocket
 │   ├── core/
@@ -109,6 +113,8 @@ platform/
 │   ├── schemas/                   # Pydantic 输入/输出合同
 │   └── services/
 │       ├── metric_store.py        # inbox、事实、死信、dispatch 状态机
+│       ├── replay_v2_metric_store.py # 只写 uav_replay_v2_* 的事务消费适配器
+│       ├── replay_repository.py   # sealed Mission 列表与 T+ 窗口查询
 │       ├── audit_service.py       # `uav_audit_logs` 持久审计
 │       ├── pipeline_manager.py    # 子进程/端口/资产/RTSP allowlist 与生命周期
 │       ├── runtime_capabilities.py# trajectory/geo/road/tcc 四层运行能力与原因规范化
@@ -138,6 +144,7 @@ console2/
     ├── lib/amap.js                # 高德 JS API 2.0 Loader 与运行时配置
     ├── config/features.js         # UAT 默认关闭 Demo 治理
     ├── components/                # AppShell、地图、共享可访问组件
+    │   └── ReplayStage.jsx        # sealed Mission 的地图/像素平面、sample-and-hold 与 gap 隐藏
     └── pages/                     # dashboard、survey、mission、insight、enforcement、admin
 ```
 
@@ -171,6 +178,7 @@ console2/
 | `scripts/validate_adr019_local_retirement.py` | canonical 容器、road9、Topic、旧存储隔离与恢复/soak 证据 |
 | `test/test_pipeline_inter_xqh.py` | 真实 4K MP4 + DJI SRT 的 56 项管道回归 |
 | `scripts/run_native_mps_replays.py` | Apple Silicon 原生 MPS 多源检测、Kafka 直采、轨迹/TCC 诊断与断点续跑 |
+| `scripts/run_replay_v2_acceptance.py` | 隔离 Replay V2 五源回放、稳定 Topic、PG/Kafka/canonical offset、消息/存储/延迟门禁 |
 | `scripts/analyze_detection_tracking_coverage.py` | 只读分析既有回放 JSON，生成 `uav.detection-tracking-evaluation/v1` |
 | `platform/scripts/inventory_trajectory_replay.py` | 清理前按固定 SourceProfile 只读盘点 canonical 轨迹、统计、冲突、遥测、证据和 Inbox 影响范围 |
 | `platform/scripts/build_demo_channelized_maps.py` | YCX 按需只读导入、九源影像配准、四路口质量门禁和不可变地图发布 |

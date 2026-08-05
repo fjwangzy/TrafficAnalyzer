@@ -597,3 +597,26 @@ geo_reference_quality/road_match_quality/quality_reasons/geo_registration_id`。
 ### 10.8 参数化渠化编辑模型（2026-08-03，无迁移）
 
 本次不新增表或 Alembic revision。`uav_channelized_map_versions.topology.editor_model` 保存 `parameterized|freeform` 版本模型及可重开像素几何；服务端派生草稿同时在 topology/quality 写 `derived_from_map_version_id` 并把 `reviewed` 归零。`uav_visual_registrations.registration_pose` 保存固定影像/移动路网的版本化姿态。正式 ENU/GCJ-02 Lane/Feature 仍写既有 geometry JSON，`uav_visual_lane_bindings` 仍是候选/发布车道绑定事实。`lane_verified` 行和绑定保持不可变，编辑器元数据不进入 Runtime Bundle。
+
+### 10.9 Replay V2 shadow 表与迁移轨道（2026-08-04）
+
+V2 与 canonical 共享 connection database=`road9`，但只写 `uav_replay_v2_*` 表，迁移版本表为
+`uav_replay_v2_alembic_version`，当前 head `20260805_rv2_0003`；启动 V2 不执行或推进
+`uav_alembic_version`。表族包括 Mission、inbox/dead-letter、track event/point、episode/maneuver、conflict、telemetry、秒级 metric sample、intersection/link/lane/turn 5 分钟聚合与独立典型矩阵。
+
+`20260805_rv2_0003` 为 link/lane/turn 聚合补齐包含 Mission、来源、路口、时间桶及各道路维度的
+业务唯一键。sealed Mission 只有在声明的 journey 全部到达后才重建四类真实聚合和独立典型矩阵；
+重复 sealed 消息用于幂等修复，不累加重复事实。
+
+`uav_replay_v2_traffic_metric_samples` 以 `sampled_at` 分区，是 V2 独立 Timescale hypertable；主键包含 `(id, sampled_at)`，全局消息幂等仍由 `uav_replay_v2_message_inbox.message_id` 保证。shadow 策略为 7 天后压缩、90 天后保留清理。Mission journey、行为、冲突和 lineage 不套用该秒级样本保留策略，正式切换前也不自动删除 canonical 数据。
+
+2026-08-05 五源验收后 V2 public relation 约 201,400,320 bytes；canonical 六项事实行数仍为 `292244/19493/902896/102406/36245/103`，`pipeline_id LIKE 'pipe-rv2-%'` 的 canonical conflict 为 0。该容量是本机 shadow 快照，不是生产容量承诺。
+
+同日 XQH 全长 Mission 封存并完成四类聚合后，V2 public relation 为 250,388,480 bytes；canonical
+六项事实行数仍精确为 `292244/19493/902896/102406/36245/103`，misrouted Replay V2 conflict 为 0。
+迁移版本保持 canonical `20260728_0020` / V2 `20260805_rv2_0003`。证据：
+`/private/tmp/traffic-analyzer-replay-v2-xqh-full-20260805-v4/isolation-after.json`。
+
+本机实迁移验证：canonical revision 保持 `20260728_0020`；迁移前后
+`uav_message_inbox=292244`、`uav_track_events=19493`、`uav_track_points=902896`、
+`uav_telemetry_metrics=102406`、`uav_traffic_metrics=36245`、`uav_conflict_events=103`，canonical schema MD5 均为 `db2efdf31521eb04f08ab109820bc2c7`。这些数字是 2026-08-04 本机隔离证据，不是生产容量承诺。

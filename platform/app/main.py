@@ -2,8 +2,9 @@
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.api.v1 import (
@@ -24,7 +25,7 @@ from app.api.v1.drones import router as drones_router
 from app.api.v1.drones import telemetry_router
 from app.api.v1.pipelines import router as pipelines_router
 from app.core.config import settings
-from app.core.database import async_session_maker, close_db, init_db
+from app.core.database import async_session_maker, close_db, init_db, init_replay_v2_db
 from app.kafka.consumer import KafkaConsumerService
 from app.kafka.ws_manager import WSManager
 from app.middleware.auth import AuthMiddleware
@@ -36,6 +37,8 @@ from app.services.enforcement_service import EnforcementService
 from app.services.event_center import EventCenter
 from app.services.lane_annotation_store import LaneAnnotationStore
 from app.services.metric_store import PostgresMetricStoreAdapter
+from app.services.replay_repository import PostgresReplayRepository
+from app.services.replay_v2_metric_store import ReplayV2MetricStoreAdapter
 from app.services.mission_orchestrator import MissionOrchestrator, PipelineManagerAdapter
 from app.services.pipeline_manager import PipelineManager
 from app.services.road_context import (
@@ -51,10 +54,13 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan manager."""
+    replay_profile = settings.app_runtime_profile == "replay_v2"
     # ── Initialize database ──
     db_available = False
     try:
-        db_available = await init_db()
+        db_available = (
+            await init_replay_v2_db() if replay_profile else await init_db()
+        )
         if not db_available:
             raise RuntimeError("database initialization failed")
         logger.info(f"Database initialized: {settings.db_host}:{settings.db_port}")
@@ -63,12 +69,21 @@ async def lifespan(app: FastAPI):
 
     # ── Initialize components ──
     ws_manager = WSManager()
-    event_center = EventCenter(async_session_maker) if db_available else None
-    alert_store = SqlAlertStore(async_session_maker) if db_available else None
+    event_center = (
+        EventCenter(async_session_maker)
+        if db_available and not replay_profile
+        else None
+    )
+    alert_store = (
+        SqlAlertStore(async_session_maker)
+        if db_available and not replay_profile
+        else None
+    )
     alert_engine = AlertEngine(
         ws_manager, settings, alert_store=alert_store, event_center=event_center
     )
-    await alert_engine.load_persisted_alerts()
+    if not replay_profile:
+        await alert_engine.load_persisted_alerts()
     if event_center:
         await event_center.sync_alerts()
         await event_center.sync_survey_reports()
@@ -78,9 +93,28 @@ async def lifespan(app: FastAPI):
         hover_radius_m=settings.lane_annotation_hover_radius_m,
     )
 
-    metric_store = PostgresMetricStoreAdapter(async_session_maker) if db_available else None
-    audit_service = AuditService(async_session_maker) if db_available else None
-    enforcement_service = EnforcementService(async_session_maker) if db_available else None
+    metric_store = (
+        ReplayV2MetricStoreAdapter(async_session_maker)
+        if db_available and replay_profile
+        else PostgresMetricStoreAdapter(async_session_maker)
+        if db_available
+        else None
+    )
+    replay_repository = (
+        PostgresReplayRepository(async_session_maker)
+        if db_available and replay_profile
+        else None
+    )
+    audit_service = (
+        AuditService(async_session_maker)
+        if db_available and not replay_profile
+        else None
+    )
+    enforcement_service = (
+        EnforcementService(async_session_maker)
+        if db_available and not replay_profile
+        else None
+    )
     situation_reader = DashboardSituationReadModel(
         settings,
         cache_ttl_sec=settings.dashboard_situation_cache_ttl_sec,
@@ -106,6 +140,7 @@ async def lifespan(app: FastAPI):
                 lane_annotation_store if settings.lane_annotation_auto_tasks_enabled else None
             ),
             metric_store=metric_store,
+            dispatch_realtime=not replay_profile,
         )
         await kafka_service.start()
         if kafka_service._consumer is not None:
@@ -124,7 +159,7 @@ async def lifespan(app: FastAPI):
     )
     mission_orchestrator = None
     road_context = None
-    if db_available:
+    if db_available and not replay_profile:
         road_context = RoadContext(Road9RoadContextAdapter(async_session_maker))
         mission_orchestrator = MissionOrchestrator(
             async_session_maker,
@@ -132,8 +167,8 @@ async def lifespan(app: FastAPI):
             road_context,
             poll_sec=settings.mission_scheduler_poll_sec,
         )
-    survey_worker = SurveyWorker()
-    if db_available:
+    survey_worker = SurveyWorker() if not replay_profile else None
+    if db_available and not replay_profile:
         await survey_worker.start()
         await mission_orchestrator.start()
 
@@ -142,6 +177,7 @@ async def lifespan(app: FastAPI):
     app.state.alert_engine = alert_engine
     app.state.lane_annotation_store = lane_annotation_store
     app.state.metric_store = metric_store
+    app.state.replay_repository = replay_repository
     app.state.audit_service = audit_service
     app.state.enforcement_service = enforcement_service
     app.state.dashboard_read_model = dashboard_read_model
@@ -166,7 +202,8 @@ async def lifespan(app: FastAPI):
     if mission_orchestrator:
         await mission_orchestrator.stop()
     await pipeline_manager.stop_all()
-    await survey_worker.stop()
+    if survey_worker:
+        await survey_worker.stop()
     if kafka_service:
         await kafka_service.stop()
     await ws_manager.close_all()
@@ -193,6 +230,24 @@ app.add_middleware(
 
 # Add authentication middleware
 app.add_middleware(AuthMiddleware)
+
+
+@app.middleware("http")
+async def replay_v2_read_only_control_plane(request: Request, call_next):
+    """Keep the shadow Platform from mutating canonical control-plane state."""
+    if (
+        settings.app_runtime_profile == "replay_v2"
+        and request.method not in {"GET", "HEAD", "OPTIONS"}
+        and not request.url.path.startswith("/api/v1/auth/")
+    ):
+        return JSONResponse(
+            status_code=405,
+            content={
+                "detail": "replay_v2 runtime is read-only outside authentication",
+                "runtime_profile": "replay_v2",
+            },
+        )
+    return await call_next(request)
 
 # Include API routers
 app.include_router(auth.router, prefix="/api/v1")

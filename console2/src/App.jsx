@@ -297,19 +297,6 @@ export function App() {
     enabled: Boolean(selectedId && selectedSource?.profile_id),
     refetchInterval: 10_000,
   })
-  const trajectoriesQuery = useQuery({
-    queryKey: ['monitoring-trajectories', selectedId, selectedSource?.profile_id],
-    queryFn: () => platformApi.trajectories(selectedId, {
-      period: '24h',
-      limit: 500,
-      source_profile_id: selectedSource.profile_id,
-      spatial_ready: true,
-      min_gcj02_points: 2,
-    }),
-    enabled: Boolean(selectedId && selectedSource?.profile_id),
-    refetchInterval: 30_000,
-  })
-
   useEffect(() => {
     if (selectedSource && (sourceProfileId !== selectedSource.profile_id || intersectionId !== selectedId)) {
       const next = new URLSearchParams(location.search)
@@ -510,11 +497,7 @@ export function App() {
     )
     return [...olderBackfill, ...recentCompleted, ...candidates, ...active]
   }, [activeTrajectories, candidateTrajectories, completedTrajectories, now])
-  const historicalTrajectories = useMemo(
-    () => projectableTrajectories(Array.isArray(trajectoriesQuery.data) ? trajectoriesQuery.data : []),
-    [trajectoriesQuery.data],
-  )
-  const worldTrajectories = streamActive ? liveWorldTrajectories : historicalTrajectories
+  const worldTrajectories = liveWorldTrajectories
   const cars = asNumber(metricStats?.cars ?? metricStats?.total_vehicles ?? metricStats?.cars_amount)
   const avgSpeed = asNumber(metricStats?.avg_speed_kmh ?? metricStats?.average_speed)
   const laneStats = Array.isArray(metricStats?.lane_stats) ? metricStats.lane_stats : Array.isArray(metricStats?.lanes) ? metricStats.lanes : []
@@ -545,7 +528,7 @@ export function App() {
       : unprojectedCandidateCount
         ? `候选目标 ${unprojectedCandidateCount} · 地理投影不可用`
       : '等待 GCJ-02 实时轨迹'
-    : '暂无可回放的 GCJ-02 历史轨迹'
+    : '等待实时 Pipeline 轨迹投放'
   const realtimeStatus = usingDemoMetrics ? '固定演示指标已加载' : wsStatus === 'connected'
     ? '实时链路已连接'
     : wsStatus === 'connecting'
@@ -649,7 +632,7 @@ export function App() {
       <div className='context-meta'><span>{realtimeStatus}</span><i /><span role='status'>{tccStatus}</span><i /><span>{statsStale ? '数据过期' : `YOLO 单处理帧 ${inferenceMs ?? '—'}ms${inferenceImgSize ? ` · ${inferenceImgSize}` : ''}`}</span></div>
     </section>
 
-    <div className={`main-feed-status ${primaryView} ${leftPanelOpen || leftPanelPinned ? '' : 'side-collapsed'}`}>{mainIsVideo ? <VideoCamera size={14} weight='fill' /> : <Crosshair size={14} weight='fill' />}<span>{primaryView === 'bev' ? (streamActive ? 'BEV 鸟瞰轨迹 · ENU / GCJ02' : `BEV 历史轨迹回放 · ${historicalTrajectories.length} TRACKS`) : primaryView === 'raw' ? '原始视频流' : '检测器输出 · YOLO11 → 位姿感知 ByteTrack'}</span><small><i />{streamActive ? ` LIVE · ${displayNumber(fps, 1)} FPS` : ' DEMO DATA'}</small></div>
+    <div className={`main-feed-status ${primaryView} ${leftPanelOpen || leftPanelPinned ? '' : 'side-collapsed'}`}>{mainIsVideo ? <VideoCamera size={14} weight='fill' /> : <Crosshair size={14} weight='fill' />}<span>{primaryView === 'bev' ? (streamActive ? 'BEV 鸟瞰轨迹 · ENU / GCJ02' : 'BEV 实时轨迹投放 · 等待 Pipeline') : primaryView === 'raw' ? '原始视频流' : '检测器输出 · YOLO11 → 位姿感知 ByteTrack'}</span><small><i />{streamActive ? ` LIVE · ${displayNumber(fps, 1)} FPS` : ' OFFLINE'}</small></div>
 
     <section
       className={`left-panel monitoring-side-panel ${leftPanelOpen || leftPanelPinned ? 'expanded' : 'collapsed'} ${leftPanelPinned ? 'pinned' : ''}`}
@@ -699,7 +682,7 @@ export function App() {
     >
       <button className='side-panel-edge' aria-label={rightPanelOpen || rightPanelPinned ? '收缩BEV与实时事件面板' : '展开BEV与实时事件面板'} onClick={() => { setRightPanelPinned(false); setRightPanelOpen((value) => !value) }}>{rightPanelOpen || rightPanelPinned ? <CaretRight size={17} /> : <CaretLeft size={17} />}</button>
       {(rightPanelOpen || rightPanelPinned) && <button className='side-panel-pin' aria-label={rightPanelPinned ? '取消锁定BEV与实时事件面板' : '锁定BEV与实时事件面板'} aria-pressed={rightPanelPinned} onClick={() => { setRightPanelPinned((value) => !value); setRightPanelOpen(true) }}>{rightPanelPinned ? <PushPinSlash size={16} /> : <PushPin size={16} />}</button>}
-      <article className='camera-card'><div className='camera-head'><span>{primaryView === 'bev' ? <VideoCamera size={16} weight='fill' /> : <Crosshair size={16} weight='fill' />}{primaryView === 'bev' ? '检测器输出' : 'BEV 轨迹投放'}</span><small><i />{primaryView === 'bev' ? `${displayNumber(fps, 1)} FPS` : `${worldTrajectories.length} TRACKS`}</small></div>{primaryView === 'bev' ? <div className='detector-preview'>{streamActive && videoStreamAvailable && !videoError ? <img ref={videoRef} src={mjpegSrc} alt='检测器输出视频流预览' onLoad={() => { setVideoError(false); setVideoRetry(0) }} onError={() => setVideoError(true)} /> : <div className='monitor-empty'>{streamActive && !videoStreamAvailable ? '检测器未登记直连地址' : '检测流不可用'}</div>}</div> : <div className='bev-preview'><MonitoringBevMap compact centerLat={mapCenterLat} centerLon={mapCenterLon} trajectories={worldTrajectories} activeCount={streamActive ? activeTrajectories.length : 0} emptyMessage={bevEmptyMessage} label='BEV 地图轨迹投放图' /><span className='bev-origin'><Crosshair size={13} weight='bold' /> ENU 0,0</span></div>}<div className='camera-foot'><span>{primaryView === 'bev' ? (streamActive && videoStreamAvailable ? '检测器直连输出' : '检测器离线') : streamActive ? (worldTrajectories.length ? `空间轨迹 ${worldTrajectories.length} · GCJ-02 投放` : bevEmptyMessage) : `历史回放 ${historicalTrajectories.length} · GCJ-02 投放`}</span><button className='swap-view' onClick={() => selectView(primaryView === 'bev' ? 'detector' : 'bev')}><ArrowsClockwise size={14} weight='bold' />切为主视图</button></div></article>
+      <article className='camera-card'><div className='camera-head'><span>{primaryView === 'bev' ? <VideoCamera size={16} weight='fill' /> : <Crosshair size={16} weight='fill' />}{primaryView === 'bev' ? '检测器输出' : 'BEV 轨迹投放'}</span><small><i />{primaryView === 'bev' ? `${displayNumber(fps, 1)} FPS` : `${worldTrajectories.length} TRACKS`}</small></div>{primaryView === 'bev' ? <div className='detector-preview'>{streamActive && videoStreamAvailable && !videoError ? <img ref={videoRef} src={mjpegSrc} alt='检测器输出视频流预览' onLoad={() => { setVideoError(false); setVideoRetry(0) }} onError={() => setVideoError(true)} /> : <div className='monitor-empty'>{streamActive && !videoStreamAvailable ? '检测器未登记直连地址' : '检测流不可用'}</div>}</div> : <div className='bev-preview'><MonitoringBevMap compact centerLat={mapCenterLat} centerLon={mapCenterLon} trajectories={worldTrajectories} activeCount={streamActive ? activeTrajectories.length : 0} emptyMessage={bevEmptyMessage} label='BEV 地图轨迹投放图' /><span className='bev-origin'><Crosshair size={13} weight='bold' /> ENU 0,0</span></div>}<div className='camera-foot'><span>{primaryView === 'bev' ? (streamActive && videoStreamAvailable ? '检测器直连输出' : '检测器离线') : streamActive ? (worldTrajectories.length ? `空间轨迹 ${worldTrajectories.length} · GCJ-02 投放` : bevEmptyMessage) : '等待实时 Pipeline 轨迹'}</span><button className='swap-view' onClick={() => selectView(primaryView === 'bev' ? 'detector' : 'bev')}><ArrowsClockwise size={14} weight='bold' />切为主视图</button></div></article>
       <div className='events-head'><div><strong>近期事件</strong><span>{displayedEvents.length}</span></div><button onClick={() => navigate('/events')}><ListBullets size={16} />全部事件</button></div>
       <div className='event-filters'>{[['all','全部'],['critical','高风险'],['warning','关注']].map(([id,label]) => <button key={id} className={eventFilter === id ? 'active' : ''} onClick={() => setEventFilter(id)}>{label}</button>)}</div>
       <div className='event-list'>{filteredEvents.length ? filteredEvents.map((event) => <button key={event.id} className={`event-card ${event.level} ${selectedEvent?.id === event.id ? 'selected' : ''}`} onClick={() => setSelectedEvent(event)}><span className='event-icon'><EventIcon type={event.type} /></span><span className='event-copy'><strong>{event.title}</strong><small>{event.detail}</small><span>{event.metric}</span></span><time>{event.time}</time></button>) : <div className='monitor-empty'>当前视频源暂无近期事件</div>}</div>

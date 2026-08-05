@@ -1643,3 +1643,29 @@ canonical Topic、`msg_type`、WebSocket channel 和 `*/v1` schema 版本保持�
 影像拟合继续拒绝单车道自交和同一 Link 内车道面重叠；不同 Link 的合法转向流可在路口内部交叉。该 Link 域规则避免把十字路口的穿越关系误判成几何重叠错误。
 
 Mission 启动使用的 `RoadContext.runtime_map_bundle` 与校准 runtime-bundle API 必须返回完全相同的 Lane/Link 地图字段；漏传或版本不一致只关闭 road 能力。衍生的 imagery-fit 地图若自身 `source_checksum` 为空，只允许沿 `quality.source_map_version_id` 追溯其父地图的不可变 checksum；不得按版本名猜测或回退到任意最新 snapshot。
+
+## Replay V2 shadow 契约（2026-08-04）
+
+V2 开发隔离 Topic 为：
+
+- `uav_replay_v2_statistics_{source_key}` / `uav_stats`
+- `uav_replay_v2_track_complete_{source_key}` / `uav_track_complete`
+- `uav_replay_v2_conflicts_{source_key}` / `uav_conflict`
+- `uav_replay_v2_telemetry_{source_key}` / `uav_telemetry`
+- `uav_replay_v2_mission_{source_key}` / `uav_replay_mission`
+
+消费者组固定 `uav-platform-replay-v2`，订阅表达式固定为
+`^uav_replay_v2_(statistics|track_complete|conflicts|telemetry|mission)_.+$`。旧 canonical 正则不得匹配这些 Topic。Stats 禁止携带完整 active/candidate 尾迹；最终 journey 只在 Mission sealed 后发布。
+
+`GET /api/v1/trajectories/{intersection_id}/replay-missions` 默认返回 sealed Mission，结构版本
+`uav.replay-missions/v1`；`include_incomplete=true` 仅管理员可用于诊断，普通用户请求返回 403。摘要包含 SourceProfile、Pipeline/Run、开始时间、T+时长、坐标覆盖率、journey/行为数量、算法版本和统一 `not_evaluated` 准确率字段。
+
+`GET /api/v1/trajectories/{intersection_id}/replay` 必须提供 `mission_id`，可选
+`cursor_sec/window_sec/max_points/page_after/track_id/behavior/vehicle_class/yolo_class_id/turn_behavior/movement_key`。`page_after` 是服务端签发的 opaque 锚点；响应 `pagination.next_page_after` 以稳定 `(track_id, point_seq)` 顺序继续，页间不得重复点。响应版本为 `uav.trajectory-replay/v1`，返回连续 Mission T+ cursor、像素与可空 ENU/GCJ-02、冻结速度、质量、sampling boundary、episodes、maneuvers 和 Runtime segment 引用。接口不插值，不跨明确 quality gap 连线；已经离开时间窗的 journey 不得用最后一点持续钉到 Mission 结束；非 sealed Mission 返回 404。
+
+`analysis.movement_ranking` 与返回的每条 track 必须包含一致的
+`movement_key/movement_label/movement_source`。sealed event 缺少正式 `movement_key` 时，服务端从
+完整 journey 的 ENU 首尾象限及冻结转向恢复 `approach:{cardinal}|exit:{cardinal}`，标签使用
+“东进口 → 西出口”格式且 `movement_source=trajectory_quadrant_inferred`；无法确定进口时才返回
+`turn:{turn_behavior}` 与“直行（进口未知）”。`movement_key` 过滤必须使用同一有效流向，不能只与
+数据库中的可空原始字段比较。

@@ -83,6 +83,19 @@ def test_publishes_tcc_only_after_saving_exact_show_output(tmp_path):
     assert np.array_equal(frame_element.frame_result, detector_output)
 
 
+def test_replay_v2_tcc_uses_shadow_conflict_topic(tmp_path, monkeypatch):
+    monkeypatch.setenv("TRAJECTORY_STORAGE_PROFILE", "replay_v2")
+    monkeypatch.setenv("SOURCE_PROFILE_ID", "SRC-REPLAY-1")
+
+    node = TccEvidencePublisherNode(
+        _config(),
+        publisher=RecordingPublisher(),
+        storage_root=tmp_path,
+    )
+
+    assert node.conflicts_topic == "uav_replay_v2_conflicts_SRC-REPLAY-1"
+
+
 def test_publishes_incomplete_tcc_when_event_output_write_fails(tmp_path):
     frame_element = FrameElement(
         "fixture.mp4",

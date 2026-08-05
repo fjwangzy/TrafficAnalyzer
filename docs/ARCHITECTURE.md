@@ -409,9 +409,9 @@ precision/recall、IDF1/HOTA 或正式 ID switch。
 正样本，必须再通过正常 Mission 验证 `path_intersection + distance_m≈0` 及固定两图文件证据包，
 不能把“0 事件”误报为链路未执行，也不能通过降低门槛制造事件。
 
-Console2 Monitoring 在存在运行中 Pipeline 时只投放当前会话 active/completed 世界轨迹；离线时按
-当前 SourceProfile 查询 24 小时内最多 500 条 `spatial_ready` 历史轨迹并标记为“BEV 历史轨迹回放”。
-页面上限用于保护高德地图轨迹图层渲染，不替代 Road9 总量对账。
+Console2 Monitoring 只投放当前 Pipeline 的 active/completed/candidate 实时轨迹和当前尾迹。
+离线时保持等待/空态，不读取 canonical 或 Replay V2 历史 journey，不加载 Mission，也不建立回放时钟；
+历史复盘只能进入“智能研判 → 轨迹研判”页面。
 
 ### 检测器 MJPEG 地址登记与浏览器直连
 
@@ -815,7 +815,7 @@ Platform 的历史 API 直接查询 PostgreSQL/TimescaleDB；仓库不保留旧�
 
 I3 的 `MetricStore` 是 Kafka 与存储之间的深模块边界：消费者只提交 canonical 信封，模块内部完成 schema/业务时间校验、payload hash、`uav_message_inbox` 判重、事实展开和同事务提交。旧信封直接拒绝并进入 dead letter。数据库成功后才手动提交 Kafka offset；瞬态失败 seek 回原 offset，成功重放由 inbox 返回既有事实引用且不重复广播。可变冲突复核单独进入 `uav_conflict_reviews`，不修改 `uav_conflict_events` 追加事实。
 
-冲突视觉证据跨越两个进程边界：`KafkaProducerNode` 只冻结 canonical TCC 信封并随 `FrameElement` 传给显示进程，`ShowNode` 在真实原帧上产生实际 `frame_result`，随后 `TccEvidencePublisherNode → utils_local.event_evidence` 才写盘并发布 Kafka。证据模块不允许重绘框、标签、轨迹或冲突标记；它仅保存 `ShowNode` 就地绘制前的原帧副本和绘制后的原尺寸 `frame_result`。`VideoSaverNode` 依旧保留原有 `conflict_*.jpg` 输出，managed `conflict_detector_frame` 是同一输出的内容寻址副本。两项 JPEG 按 SHA-256 写入 `SURVEY_STORAGE_DIR`，事件只携带相对 `storage_key`、哈希、大小和尺寸，不携带 Base64 或本机绝对路径。`MetricStore` 只校验并登记一个 `EvidencePackage` 与两项 `EvidenceItem`，不复制文件；Console2 通过鉴权证据接口读取。
+冲突视觉证据跨越两个进程边界：`KafkaProducerNode` 只冻结当前 storage profile 的 TCC 信封并随 `FrameElement` 传给显示进程，`ShowNode` 在真实原帧上产生实际 `frame_result`，随后 `TccEvidencePublisherNode → utils_local.event_evidence` 才写盘并发布 Kafka。两个发布节点必须共享同一 live/V2 Topic 选择器，Replay V2 冲突只能进入 `uav_replay_v2_conflicts_{source_key}`。证据模块不允许重绘框、标签、轨迹或冲突标记；它仅保存 `ShowNode` 就地绘制前的原帧副本和绘制后的原尺寸 `frame_result`。`VideoSaverNode` 依旧保留原有 `conflict_*.jpg` 输出，managed `conflict_detector_frame` 是同一输出的内容寻址副本。两项 JPEG 按 SHA-256 写入 `SURVEY_STORAGE_DIR`，事件只携带相对 `storage_key`、哈希、大小和尺寸，不携带 Base64 或本机绝对路径。`MetricStore` 只校验并登记一个 `EvidencePackage` 与两项 `EvidenceItem`，不复制文件；Console2 通过鉴权证据接口读取。
 
 ### 关键设计决策
 
@@ -957,3 +957,19 @@ ADR-023 已废止世界 Mahalanobis 关联：H 抖动不再能改变匹配结果
 Runtime Bundle 删除 `editor_model` 元数据，只携带已生成的 Lane/Link/Feature、地图锚点、质量和正式拓扑。编辑器姿态、曲线控制柄和模板参数不得进入检测、图像轨迹、世界投影、速度、方向或 TCC 门禁。
 
 已发布版本的再次编辑只能调用服务端 `derive-draft`。新版本显式记录来源版本并重置人工复核，Console 不再自行拼装复制请求；因此 `lane_verified` 源行及其绑定不会因后续拟合被就地更新。
+
+## 轨迹 Replay V2 shadow 架构（2026-08-04）
+
+Replay V2 是同一 `road9` 和 Kafka 集群内的物理隔离 shadow，不是 canonical 兼容层。检测器在
+`TRAJECTORY_STORAGE_PROFILE=replay_v2` 时把终止的 Runtime Track 写入外部
+`MissionTrajectoryArchive` durable spool；只有自然 EOF 才执行保守 ReID、全序列速度冻结、行为派生与事件保真抽样，随后发布最终 journey 和 sealed Mission。异常退出保留 incomplete spool，默认读模型不可见。
+
+V2 Topic 固定为 `uav_replay_v2_{statistics|track_complete|conflicts|telemetry|mission}_{source_key}`，
+`source_key` 稳定绑定 SourceProfile/Camera；V2 consumer group 为 `uav-platform-replay-v2`，只订阅锚定的 V2 正则。Platform `APP_RUNTIME_PROFILE=replay_v2` 只执行独立迁移与 V2 消费，不启动 MissionOrchestrator、survey worker、告警同步或实时 WebSocket 派发；除认证外的变更接口只读拒绝。
+
+V2 consumer 在 Mission sealed 且声明的 journey 已全部幂等入库后，才从同一 Mission 事实重建
+intersection/link/lane/turn 四类真实 5 分钟聚合和独立典型矩阵；跨 Topic 乱序只延迟聚合，不生成半成品。
+这些派生写入仍完全位于 `uav_replay_v2_*`，不触碰 canonical DWS。
+
+产品读路径严格分叉：`/monitoring` 的 `MonitoringBevMap` 只读当前 Pipeline 的实时 WebSocket 轨迹；
+`/gis` 只读 sealed Mission 的 ReplayRepository，使用 Mission T+ 时钟。两者不共享历史 journey、Mission 选择或播放状态。ReplayRepository 对质量 gap 断线、不插值，世界坐标不足时返回像素平面。

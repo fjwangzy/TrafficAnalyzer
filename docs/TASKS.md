@@ -8,12 +8,17 @@
 - [x] 首页前三个 KPI 来自服务器响应；机非冲突、事故测绘和治理复盘固定样例继续明确标记为演示数据，不生成场次 mock。
 - [x] 完成真实只读探针与同视口 Design QA：当前服务器返回 92 个路口、147 条路段且字段完整；本地项目路口仍参与灰态并集，但无人机层只接受服务器态势路口匹配，当前为 1 个覆盖路口聚合 3 路视频源；地图为左上浮层保留 300px 自动取景安全区。最终门禁为 Platform `270 passed / 5 skipped / 10 subtests`、Console2 `180 passed`、Vite production build、`git diff --check`、浏览器 0 error/warning，证据见根 `design-qa.md`。
 
-## 2026-08-04 交通轨迹真实复盘与存储治理（计划已保存，未实施）
+## 2026-08-04 交通轨迹真实复盘与存储治理（V2 shadow 已验收，未切换）
 
-- [ ] 按 [`交通轨迹真实复盘与存储治理计划`](superpowers/plans/2026-08-04-trajectory-replay-storage-model.md) 建设 Mission 相对时钟、事件保真 TrackPoint、版本化速度封存及 Motion/Queue/Maneuver 事实。
-- [ ] 将 `uav_traffic_metrics` 收敛为独立计算的实际日期 5 分钟 DWS，并新增本地典型时段矩阵；首页展示已按 ADR-030 增加隔离的服务器只读模型，但检测、Mission、Kafka、统计事实和本地写链路仍不得建立跨库依赖或复制数据。
-- [ ] 清除 Stats/Kafka/PG 的轨迹尾迹与完整 payload 重复，启用稳定 Source Topic、Zstd、Timescale 列存/压缩及分环境保留策略。
-- [ ] 在隔离新栈中从五个业务位置原素材重建，完成自然 EOF、Kafka/road9 对账、真实回放、场景模型和容量门禁后再评审切换；旧数据删除须另行授权。
+- [x] 按 [`交通轨迹真实复盘与存储治理计划`](superpowers/plans/2026-08-04-trajectory-replay-storage-model.md) 建设 `MissionTrajectoryArchive`、Mission T+ 时钟、事件保真 TrackPoint、版本化冻结速度及 stopped/releasing/queue/geometric U-turn 事实。
+- [x] 建立独立 `uav_replay_v2_*` Mission、inbox/dead-letter、轨迹、行为、冲突、遥测、秒级样本、四类 5 分钟聚合和典型矩阵表；V2 migration head 为 `20260805_rv2_0003`，不推进 canonical head。sealed Mission 的聚合以 journey count 为收敛屏障；turn 维度在 movement 缺失时显式降级为冻结的 `turn_behavior:*`，不丢失转向事实。
+- [x] V2 Stats 清除完整轨迹尾迹，Topic 稳定绑定 SourceProfile、启用 Zstd；秒级 metric sample 已启用 Timescale 压缩和 90 天 shadow 保留策略。
+- [x] `/gis` 改为 sealed Mission 单任务回放并支持像素降级、quality gap、倍速与行为筛选；`/monitoring` 增加防串线测试并保持纯实时 BEV。
+- [x] 本机 V2 Platform `8200` / Console `5273`、canonical 数据不变、API/只读控制面和真实浏览器业务边界已完成 shadow 验证。
+- [x] 在隔离新栈中完成五个业务位置原素材重建：5/5 自然 EOF，1,966 Stats / 6,539 journey / 6,088 telemetry / 5 sealed Mission，Kafka/V2 PG 精确对账且点对齐失败 0；25 个稳定 V2 Topic 复跑不增长。串线审计发现并修复 TCC 证据发布器的 canonical Topic 绕行，精确回收 5 条误写事实后 canonical 六项计数恢复基线，实际冲突探针只进入 V2 Topic/表。容量、消息大小、查询延迟和浏览器回放证据见 `/private/tmp/traffic-analyzer-replay-v2-five-source-batched-20260805/summary.json`。
+- [x] XQH 全长原生 MPS shadow 回归自然 EOF：Mission `MSN-RV2-a863b59ca9f1`，源时长 `992.325s`，1,443 runtime segment / 64,444 原始点封存为 1,427 journey；Kafka/PG 为 700 Stats、1,427 journey、3 conflict、2,372 telemetry、1 sealed Mission，点对齐失败 0。首次聚合门禁正确发现收敛等待不足及 turn 维度缺失，原 FAIL 证据保留；修复后同 Mission 重建为 intersection/link/lane/turn=`10/32/114/23`、典型矩阵 `10` 并通过复验，见 `/private/tmp/traffic-analyzer-replay-v2-xqh-full-20260805-v4/postfix-reconciliation.json`。
+- [x] 最终门禁：根测试 `241 passed`、Platform `291 passed / 6 skipped / 10 subtests`、显式 PG/Timescale 集成 `1 passed`、Console2 `185 passed`、生产构建通过；XQH 专项原生 MPS 回归为 `55 PASS / 0 FAIL / 1 WARN`（既有空方向统计告警）。ADR-019 严格审计九项代码/拓扑检查通过且仅保留既有 `local_runtime_evidence` 外部门禁，`git diff --check` 通过。真实浏览器证明 `/gis` sealed Mission、T+、代表轨迹和“全部 Mission 禁播”；工作树监控前端配 live Platform 显示“等待实时 Pipeline 轨迹”，且 live 日志没有任何 replay API 请求。
+- [ ] 全量验收后停在切换门，等待单独批准 canonical 改名/迁回；不得自动覆盖现有表、Topic、offset 或演示实例。
 
 ## 2026-07-31 抽帧步长启动配置
 

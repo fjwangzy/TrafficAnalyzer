@@ -3,6 +3,7 @@ from unittest.mock import patch
 
 from app.kafka.consumer import KafkaConsumerService
 from app.services.alert_engine import AlertEngine
+from app.services.metric_store import PersistResult
 
 
 class _RecordingWS:
@@ -54,7 +55,54 @@ class _StartingKafkaConsumer:
         self.stopped = True
 
 
+class _ReplayStore:
+    def __init__(self):
+        self.dispatched = []
+
+    async def persist(self, envelope):
+        return PersistResult(
+            False,
+            envelope.payload["message_id"],
+            envelope.payload["msg_type"],
+            envelope.payload,
+            ("replay:1",),
+            "pending",
+        )
+
+    async def mark_dispatched(self, source_system, message_id):
+        self.dispatched.append((source_system, message_id))
+
+
 class KafkaConsumerStatsTest(unittest.IsolatedAsyncioTestCase):
+    async def test_replay_consumer_persists_without_broadcasting_into_live_monitoring(self):
+        ws = _RecordingWS()
+        store = _ReplayStore()
+        service = KafkaConsumerService(
+            bootstrap_servers="localhost:9092",
+            group_id="uav-platform-replay-v2",
+            topics_pattern=r"uav_replay_v2_.*",
+            ws_manager=ws,
+            metric_store=store,
+            dispatch_realtime=False,
+        )
+        payload = {
+            "message_id": "replay-track-1",
+            "msg_type": "uav_track_complete",
+            "schema_version": "uav_track_complete/replay-v2",
+            "source_system": "uav_traffic_analyzer_ai",
+            "data": {"mission_id": "MSN-1", "track_id": "J-1"},
+        }
+
+        await service._process_message(
+            payload,
+            "uav_replay_v2_track_complete_SRC-1",
+            0,
+            1,
+        )
+
+        self.assertEqual(ws.messages, [])
+        self.assertEqual(store.dispatched, [("uav_traffic_analyzer_ai", "replay-track-1")])
+
     def test_extract_intersection_rejects_legacy_topic(self):
         service = KafkaConsumerService(
             bootstrap_servers="localhost:9092",

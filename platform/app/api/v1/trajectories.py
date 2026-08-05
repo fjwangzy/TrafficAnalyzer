@@ -15,6 +15,71 @@ class ConflictReviewRequest(BaseModel):
     reason: str | None = Field(default=None, max_length=1000)
 
 
+@router.get("/{intersection_id}/replay-missions")
+async def get_replay_missions(
+    intersection_id: str,
+    request: Request,
+    include_incomplete: bool = Query(False),
+):
+    """List sealed replay-v2 Missions; incomplete runs are diagnostic-only."""
+    if include_incomplete:
+        user = getattr(request.state, "user", None)
+        if not user or user.get("role") != "admin":
+            raise HTTPException(
+                status_code=403,
+                detail="Administrator role required for incomplete Mission diagnostics",
+            )
+    repository = getattr(request.app.state, "replay_repository", None)
+    if repository is None:
+        raise HTTPException(status_code=503, detail="ReplayRepository unavailable")
+    items = await repository.list_missions(
+        intersection_id,
+        include_incomplete=include_incomplete,
+    )
+    return {"schema_version": "uav.replay-missions/v1", "items": items}
+
+
+@router.get("/{intersection_id}/replay")
+async def get_trajectory_replay(
+    intersection_id: str,
+    request: Request,
+    mission_id: str = Query(..., min_length=1),
+    cursor_sec: float = Query(0.0, ge=0.0),
+    window_sec: float = Query(10.0, gt=0.0, le=300.0),
+    max_points: int = Query(5000, ge=1, le=20000),
+    page_after: str | None = Query(None),
+    track_id: str | None = Query(None),
+    behavior: str | None = Query(None),
+    vehicle_class: str | None = None,
+    yolo_class_id: int | None = None,
+    turn_behavior: str | None = None,
+    movement_key: str | None = None,
+):
+    """Return event-faithful points on one sealed Mission-relative clock."""
+    repository = getattr(request.app.state, "replay_repository", None)
+    if repository is None:
+        raise HTTPException(status_code=503, detail="ReplayRepository unavailable")
+    try:
+        return await repository.replay(
+            intersection_id,
+            mission_id=mission_id,
+            cursor_ms=round(cursor_sec * 1000),
+            window_ms=round(window_sec * 1000),
+            max_points=max_points,
+            page_after=page_after,
+            track_id=track_id,
+            behavior=behavior,
+            vehicle_class=vehicle_class,
+            yolo_class_id=yolo_class_id,
+            turn_behavior=turn_behavior,
+            movement_key=movement_key,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 @router.get("/{intersection_id}")
 async def get_trajectories(
     intersection_id: str,

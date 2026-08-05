@@ -28,6 +28,7 @@ os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")  # MPS设备NMS等操�
 from time import sleep, time
 from multiprocessing import Process, Queue, shared_memory, resource_tracker
 from queue import Empty
+import signal
 import numpy as np
 
 import hydra
@@ -133,6 +134,18 @@ def _is_pid_alive(pid: int) -> bool:
         return True
     except OSError:
         return False
+
+
+def _terminate_tracker_with_incomplete(kafka_producer_node, signum: int) -> None:
+    """Durably expose an interrupted replay before the tracker exits."""
+
+    try:
+        signal_name = signal.Signals(signum).name.lower()
+        kafka_producer_node.mark_replay_mission_incomplete(
+            failure_reason=f"signal_{signal_name}"
+        )
+    finally:
+        raise SystemExit(128 + signum)
 
 
 def _close_shared_memory_consumer(shm: shared_memory.SharedMemory) -> None:
@@ -255,6 +268,12 @@ def proc_tracker_update_and_calc(
     send_info_kafka = config["pipeline"]["send_info_kafka"]
     if send_info_kafka:
         kafka_producer_node = KafkaProducerNode(config)
+        signal.signal(
+            signal.SIGTERM,
+            lambda signum, _frame: _terminate_tracker_with_incomplete(
+                kafka_producer_node, signum
+            ),
+        )
     while True:
         ts0 = time()
         try:
@@ -262,6 +281,10 @@ def proc_tracker_update_and_calc(
         except Empty:
             if not _is_pid_alive(reader_pid):
                 print("[proc_tracker] reader process died, stopping")
+                if send_info_kafka:
+                    kafka_producer_node.mark_replay_mission_incomplete(
+                        failure_reason="reader_process_died"
+                    )
                 break
             continue
         ts1 = time()
@@ -306,15 +329,23 @@ def proc_tracker_update_and_calc(
                 if post_tracking_world_projection_node is not None
                 else None
             ) or {}
+            termination_reason = projection_flush.get(
+                "termination_reason", "natural_eof"
+            )
             flush_frame = tracker_info_update_node.flush(
                 timestamp=frame_element.timestamp,
-                reason=projection_flush.get("termination_reason", "natural_eof"),
+                reason=termination_reason,
                 terminated_track_ids=projection_flush.get("terminated_track_ids"),
             )
             if flush_frame is not None:
                 geojson_export_node.process(flush_frame)
                 if send_info_kafka:
                     kafka_producer_node.publish_completed_tracks(flush_frame)
+            if send_info_kafka:
+                kafka_producer_node.seal_replay_mission(
+                    frame_element,
+                    termination_reason=termination_reason,
+                )
         frame_element = geojson_export_node.process(frame_element)
         if send_info_kafka:
             frame_element = kafka_producer_node.process(frame_element)

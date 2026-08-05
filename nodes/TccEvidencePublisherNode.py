@@ -24,7 +24,13 @@ class TccEvidencePublisherNode:
     def __init__(self, config: dict, *, publisher=None, storage_root=None) -> None:
         kafka_config = config["kafka_producer_node"]
         camera_id = kafka_config["camera_id"]
-        self.conflicts_topic = KafkaProducerNode._canonical_topics(camera_id)[2]
+        storage_profile = os.environ.get("TRAJECTORY_STORAGE_PROFILE", "live")
+        source_profile_id = os.environ.get("SOURCE_PROFILE_ID")
+        self.conflicts_topic = KafkaProducerNode._topics_for_profile(
+            storage_profile,
+            source_profile_id,
+            camera_id,
+        )[2]
         self.storage_root = storage_root or os.environ.get(
             "SURVEY_STORAGE_DIR", ".runtime/survey"
         )
@@ -40,6 +46,7 @@ class TccEvidencePublisherNode:
             value_serializer=lambda value: dumps(value).encode("utf-8"),
             retries=3,
             request_timeout_ms=5000,
+            compression_type="zstd" if storage_profile == "replay_v2" else None,
         )
         pipeline_id = os.environ.get("PIPELINE_ID")
         spool_name = re.sub(
@@ -114,4 +121,3 @@ class TccEvidencePublisherNode:
 
         frame_element.pending_tcc_envelopes = []
         return frame_element
-

@@ -29,6 +29,7 @@ class Settings(BaseSettings):
     service_port: int = 8000
     cors_origins: list[str] = ["*"]
     deployment_mode: Literal["local", "uat", "production"] = "local"
+    app_runtime_profile: Literal["live", "replay_v2"] = "live"
 
     # ── PostgreSQL Database ──
     db_host: str = "localhost"
@@ -126,8 +127,21 @@ class Settings(BaseSettings):
     def survey_upload_max_bytes(self) -> int:
         return self.survey_max_upload_mb * 1024 * 1024
 
+    @property
+    def control_plane_writes_enabled(self) -> bool:
+        return self.app_runtime_profile == "live"
+
     @model_validator(mode="after")
     def reject_insecure_deployment_defaults(self):
+        if self.app_runtime_profile == "replay_v2":
+            if self.db_name != "road9":
+                raise ValueError("replay_v2 must use the canonical road9 database")
+            self.kafka_consumer_group = "uav-platform-replay-v2"
+            self.kafka_topics_pattern = (
+                r"^uav_replay_v2_(?:statistics|track_complete|conflicts|telemetry|mission)_"
+                r"[A-Za-z0-9._-]+$"
+            )
+            self.lane_annotation_auto_tasks_enabled = False
         if self.deployment_mode in {"uat", "production"}:
             insecure_jwt = {
                 "",

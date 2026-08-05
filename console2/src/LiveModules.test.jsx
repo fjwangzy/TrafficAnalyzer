@@ -461,19 +461,14 @@ describe('Console2 live module migration', () => {
     expect(screen.getAllByText('历史路径交点事件')).toHaveLength(1)
   })
 
-  it('loads source-scoped historical trajectories for offline BEV replay', async () => {
+  it('keeps realtime monitoring BEV free of historical Mission replay', async () => {
     liveMocks.api.pipelines.mockResolvedValue([])
+    liveMocks.api.trajectories.mockClear()
     open('/monitoring?intersection_id=INT-1&source_profile_id=SRC-1&view=bev')
 
-    await waitFor(() => expect(screen.getByRole('img', { name: 'BEV 地图轨迹主视图' })).toHaveAttribute('data-trajectory-count', '2'))
-    expect(liveMocks.api.trajectories).toHaveBeenCalledWith('INT-1', {
-      period: '24h',
-      limit: 500,
-      source_profile_id: 'SRC-1',
-      spatial_ready: true,
-      min_gcj02_points: 2,
-    })
-    expect(screen.getByText('BEV 历史轨迹回放 · 2 TRACKS')).toBeInTheDocument()
+    await waitFor(() => expect(screen.getByRole('img', { name: 'BEV 地图轨迹主视图' })).toHaveAttribute('data-trajectory-count', '0'))
+    expect(liveMocks.api.trajectories).not.toHaveBeenCalled()
+    expect(screen.getByText('BEV 实时轨迹投放 · 等待 Pipeline')).toBeInTheDocument()
     expect(screen.queryByText(/数据质量 ·/)).not.toBeInTheDocument()
   })
 

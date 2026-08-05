@@ -47,7 +47,9 @@ def test_restore_drill_refuses_to_touch_docker_without_explicit_guard():
 
 def test_mac_local_platform_uses_persistent_evidence_storage():
     script = (ROOT / "scripts" / "mac_local_platform.sh").read_text(encoding="utf-8")
-    assert 'LOCAL_SURVEY_STORAGE_DIR="${SURVEY_STORAGE_DIR:-$PROJECT_ROOT/.runtime/survey}"' in script
+    assert 'DEFAULT_SURVEY_STORAGE_DIR="/private/tmp/traffic-analyzer-replay-v2-survey"' in script
+    assert 'DEFAULT_SURVEY_STORAGE_DIR="$PROJECT_ROOT/.runtime/survey"' in script
+    assert 'LOCAL_SURVEY_STORAGE_DIR="${SURVEY_STORAGE_DIR:-$DEFAULT_SURVEY_STORAGE_DIR}"' in script
     assert 'mkdir -p "$LOCAL_SURVEY_STORAGE_DIR"' in script
     assert 'SURVEY_STORAGE_DIR="$LOCAL_SURVEY_STORAGE_DIR"' in script
 
@@ -63,3 +65,11 @@ def test_mac_local_platform_fails_closed_on_duplicate_uvicorn_instances():
     assert "launchd_platform_pid" in script
     assert "assert_single_platform" in script
     assert "Platform single-instance check failed" in script
+
+
+def test_mac_local_platform_supports_a_named_replay_v2_instance_without_replacing_live_demo():
+    script = (ROOT / "scripts" / "mac_local_platform.sh").read_text(encoding="utf-8")
+    assert 'PLATFORM_INSTANCE="${PLATFORM_INSTANCE:-live}"' in script
+    assert 'traffic-analyzer-local-platform-${PLATFORM_INSTANCE}-${UID}' in script
+    assert 'com.traffic-analyzer.local-platform-${PLATFORM_INSTANCE}-${UID}' in script
+    assert 'APP_RUNTIME_PROFILE="${APP_RUNTIME_PROFILE:-live}"' in script

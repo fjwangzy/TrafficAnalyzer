@@ -1,6 +1,7 @@
 import numpy as np
 import unittest
 import json
+from unittest.mock import Mock
 
 from elements.FrameElement import FrameElement
 from elements.TrackElement import TrackElement
@@ -586,6 +587,38 @@ class KafkaActiveTrajectoriesTest(unittest.TestCase):
         self.assertEqual(len(stats["data"]["active_trajectories"]), 200)
         self.assertEqual(stats["data"]["active_trajectories_truncated"], 200)
         self.assertLess(len(json.dumps(stats).encode("utf-8")), 1_000_000)
+
+    def test_replay_v2_stats_never_carry_realtime_trajectory_tails(self):
+        frame_element = FrameElement(
+            "test", np.zeros((20, 20, 3), dtype=np.uint8), 2.0, 1, {}
+        )
+        frame_element.info = {"cars_amount": 1, "roads_activity": {}}
+        track = TrackElement(id=88, timestamp_first=0.0)
+        track.timestamp_last = 2.0
+        track.trajectory_output_eligible = True
+        track.trajectory_points = [(1.0, 2.0), (3.0, 4.0)]
+        frame_element.buffer_tracks = {88: track}
+        frame_element.candidate_trajectories = [
+            {"track_id": 89, "trajectory_px": [[5.0, 6.0]]}
+        ]
+
+        producer = self._producer_without_kafka()
+        producer.storage_profile = "replay_v2"
+        producer.trajectory_archive = Mock()
+        producer.mission_id = "MSN-1"
+        producer.source_profile_id = "SRC-1"
+        producer.topic_name = "uav_replay_v2_statistics_SRC-1"
+        sent = []
+        producer._enqueue = lambda topic, data, **_kwargs: sent.append((topic, data))
+
+        producer.process(frame_element)
+
+        stats = sent[0][1]["data"]
+        self.assertNotIn("active_trajectories", stats)
+        self.assertNotIn("candidate_trajectories", stats)
+        self.assertNotIn("road_polygons", stats)
+        self.assertEqual(stats["eligible_active_tracks"], 1)
+        self.assertEqual(stats["candidate_tracks"], 1)
 
     def test_build_active_trajectories_limits_realtime_payload_to_tail_points(self):
         frame = np.zeros((100, 100, 3), dtype=np.uint8)

@@ -44,6 +44,56 @@ final result: passed
 
 ---
 
+# Design QA · 轨迹回放物理流向排名（2026-08-05）
+
+## Source truth
+
+- 原版流向排名：`/var/folders/pn/nqzgl4zn26v8_864_4nws7_r0000gn/T/codex-clipboard-f2769209-dc36-49ef-b67e-076c90e07cb4.png`（672 × 904）。
+- V2 实现全页：`/private/tmp/traffic-analyzer-replay-v2-flow-ranking-full.png`（1280 × 720，CSS viewport 1280 × 720，device scale 1）。
+- V2 实现聚焦区域：`/private/tmp/traffic-analyzer-replay-v2-flow-ranking-crop.png`（355 × 595）。
+- 同一输入的归一化并排对照：`/private/tmp/traffic-analyzer-replay-v2-flow-ranking-comparison.png`（1211 × 904）；实现区域等比缩放到 904px 高后与原版并排，不用密度差异判断字号。
+- 状态：authenticated admin，XQH sealed Mission `MSN-RV2-a863b59ca9f1`，业务优先排序，未选择单一流向。
+
+## Full-view comparison
+
+现有 `/gis` 布局、标签页、排序按钮、排名序号、颜色条、车辆数和冲突标记均保持不变。修复前主标题只有
+`straight/unknown/left_turn/right_turn/u_turn`；修复后前五组为“西进口 → 东出口”“东进口 → 西出口”
+“南进口 → 北出口”“北进口 → 南出口”“东进口 → 南出口”，恢复了原版以物理进口/出口作为第一信息层的业务语义。
+
+## Focused comparison
+
+并排对照确认两侧均使用“物理进口 → 物理出口”主标题、“轨迹方位推断 · 均速 · P85”副标题、右侧车辆数和
+下方冲突数。实现沿用当前 Console2 的紧凑密度和既有颜色令牌，没有为了匹配截图改变整个侧栏视觉。
+
+## Interaction and browser checks
+
+- 点击“西进口 → 东出口 237 辆”后 URL 写入
+  `movement_key=approach:west|exit:east`，回放返回对应物理流向且无错误横幅。
+- 再次点击可清除聚焦并恢复 21 个流向；物理方向组优先，444 条“未知方向（进口未知）”降级组排在其后。
+- 1427 条 journey、96% 空间覆盖、Mission T+ 时钟和地图回放边界保持不变。
+
+## Findings
+
+- P1 fixed：V2 聚合器把转向行为当成流向标题，物理进口/出口完全丢失。
+- P2 fixed：物理流向筛选曾只比较数据库中可空的原始 `movement_key`；现在排名、track 和筛选共用同一有效流向。
+- 字体与排版：沿用既有 Console2 中文无衬线层级，物理方向作为加粗主标题，来源与速度保持辅助层级。
+- 间距与布局节奏：未改动侧栏宽度、卡片间距、排序栏或地图比例。
+- 色彩与视觉令牌：复用蓝/珊瑚/薄荷/紫/黄色流向色，不新增视觉令牌。
+- 图片与资产：本次不涉及图片资产；参考截图只用于信息层级对照。
+- 文案与内容：主标题恢复物理方向；`straight/left_turn/right_turn/u_turn` 只保留为推断证据或筛选条件。
+- P3 accepted：原版截图为已选择首行的状态，最终验收图为未选择状态；点击聚焦交互已单独验证。
+- P3 accepted：V2 当前未冻结流向速度 P85，因此按事实显示 `P85 —`，不从旧页面或其他 Mission 搬用数值。
+
+## Comparison history
+
+1. 初始：五个英文转向行为占据流向主标题，无法判断车辆从哪个进口驶向哪个出口。
+2. 修复：由完整 journey 的 ENU 首尾象限与冻结转向生成物理流向；真实 XQH 页面显示 16 个物理方向组和 5 个明确降级组。
+3. 复核：归一化并排对照通过，物理方向标题、证据来源、均速、车辆数和冲突层级与原版一致，无剩余 P0/P1/P2。
+
+final result: passed
+
+---
+
 # 首页路口与路段态势地图 Design QA（2026-08-04）
 
 ## Source truth

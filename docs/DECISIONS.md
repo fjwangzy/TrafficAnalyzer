@@ -1013,3 +1013,21 @@ xqh 全量 1696 帧可以用于定位稳定悬停与离场阶段的工程差异�
 ### 后果
 
 首页前三个 KPI、路口颜色和路段颜色来自服务器典型矩阵；机非冲突、事故测绘及治理复盘固定样例继续明确标记为演示数据。外部连接配置缺失或首次不可达时地图保留项目灰点和错误说明，不伪造生产态势。
+
+## ADR-031：轨迹回放采用 Replay V2 shadow namespace（2026-08-04）
+
+### 状态
+
+已实施 shadow，五源工程基线与 XQH 全长自然 EOF/聚合/浏览器复验已完成；正式切换尚未批准。
+
+### 决策
+
+- 产品链路硬隔离：`实时监测 → BEV` 继续投放当前 Pipeline 的实时轨迹；`智能研判 → 轨迹回放` 只读取自然 EOF 后 sealed 的 Mission。监控页不得请求回放 API、建立回放时钟或混入历史 journey。
+- 在线 ByteTrack ID 不变。终止 segment 先写外部 durable spool，Mission 自然 EOF 后才执行保守唯一 ReID、全序列速度冻结、行为派生和事件保真抽样；异常退出保持 incomplete，默认不进入回放。
+- 同一 `road9` 内使用 `uav_replay_v2_*` 表和独立 `uav_replay_v2_alembic_version`；Kafka 使用 `uav_replay_v2_*_{source_key}` Topic 和独立消费者组。V2 Platform profile 只做 V2 迁移/消费并拒绝控制面写入。
+- `/gis` 保留现有布局，但只按单 Mission T+ 时钟播放；“全部 Mission”只能汇总。无世界坐标时使用像素平面，明确质量 gap 不插值、不连线。
+- shadow 默认端口为 Platform `8200`、Console `5273`、视频服务 `18101+`；大文件直接引用主工作树，spool、缓存、输出和证据写 `/private/tmp`。
+
+### 后果
+
+开发验证不会改写当前 `8000/5173` 演示实例、canonical 表、Topic 或 offset。所有 Kafka 发布节点（包括跨 Show 进程的 TCC 证据发布器）必须使用同一个 profile Topic 选择器；验收运行器要以前后 offset 捕获任何绕行，并等待 declared journey 与全部实际/典型聚合同时收敛。`uav_replay_v2_*` 是开发隔离命名，不是永久生产命名；五源基线及 XQH 全长自然 EOF、Kafka/PG 对账、容量/延迟、浏览器和既有回归已完成，但仍只有获得单独破坏性批准后才能暂停旧写入并评审迁回 canonical。没有批准真值时所有正式跟踪、位置、速度和 ReID 准确率保持 `not_evaluated`。

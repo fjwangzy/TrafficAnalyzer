@@ -1,6 +1,9 @@
+import base64
 import copy
 import logging
+import os
 
+import cv2
 import numpy as np
 
 from elements.FrameElement import FrameElement
@@ -261,6 +264,30 @@ class TrackerInfoUpdateNode:
             self.buffer_tracks[id].trajectory_points.append((cx, cy))
             self.buffer_tracks[id].trajectory_timestamps_sec.append(frame_element.timestamp)
             self.buffer_tracks[id].trajectory_frame_nums.append(int(frame_element.frame_num))
+            if (
+                os.environ.get("TRAJECTORY_STORAGE_PROFILE") == "replay_v2"
+                and frame_element.frame is not None
+            ):
+                confidence = float(
+                    frame_element.tracked_conf[i]
+                    if getattr(frame_element, "tracked_conf", None) and i < len(frame_element.tracked_conf)
+                    else 0.0
+                )
+                if confidence > track.appearance_crop_confidence:
+                    height, width = frame_element.frame.shape[:2]
+                    x1 = max(0, min(width, int(round(bbox[0]))))
+                    y1 = max(0, min(height, int(round(bbox[1]))))
+                    x2 = max(0, min(width, int(round(bbox[2]))))
+                    y2 = max(0, min(height, int(round(bbox[3]))))
+                    if x2 > x1 and y2 > y1:
+                        ok, encoded = cv2.imencode(
+                            ".jpg",
+                            frame_element.frame[y1:y2, x1:x2],
+                            [int(cv2.IMWRITE_JPEG_QUALITY), 80],
+                        )
+                        if ok:
+                            track.appearance_crop_jpeg = base64.b64encode(encoded).decode("ascii")
+                            track.appearance_crop_confidence = confidence
             track.point_quality_lineage.append(
                 {
                     "timestamp_sec": frame_element.timestamp,
@@ -531,6 +558,8 @@ class TrackerInfoUpdateNode:
                     ),
                     "formal_analytics_eligible": track.road_analytics_eligible,
                 }
+                if track.appearance_crop_jpeg:
+                    completed_track_data["appearance_crop_jpeg"] = track.appearance_crop_jpeg
                 if track.association_id is not None:
                     completed_track_data["association_id"] = int(
                         track.association_id

@@ -1,6 +1,6 @@
 # 交通轨迹真实复盘与存储治理计划
 
-> 状态：方案基线已保存，尚未实施。本文记录 2026-08-04 已确认的领域边界、接口方向、存储策略与验收门禁；后续讨论以本文为基线修订。
+> 状态：Replay V2 shadow 实现与五源原生 MPS 工程验收已完成，仍停在正式切换门前；未获单独批准前不改名、不覆盖 canonical 表/Topic。本文记录 2026-08-04 至 2026-08-05 已确认的领域边界、接口、存储策略、实现结果与验收证据。
 
 ## 1. 目标与当前证据
 
@@ -96,10 +96,17 @@
 
 ## 4. API 与 Console 契约
 
-- 新增 `GET /api/v1/trajectories/{intersection_id}/replay`，要求 `pipeline_id` 或可唯一解析的 Mission；支持 `cursor_sec`、`window_sec`、`max_points` 和 `track_id`。
+- 新增 `GET /api/v1/trajectories/{intersection_id}/replay-missions`，默认只列 sealed Mission；`include_incomplete=true` 只用于管理员诊断。
+- 新增 `GET /api/v1/trajectories/{intersection_id}/replay`，强制要求 `mission_id`；支持 `cursor_sec`、`window_sec`、`max_points`、`track_id` 和行为/分类/流向筛选。
 - 响应版本为 `uav.trajectory-replay/v1`，返回任务时长、T+游标、最终 `track_id`、内部可审计 Runtime Track 引用、逐点 offset/frame/位置/速度/质量、Episode/Maneuver、抽样信息和截断信息。
 - Console 使用单一事件时钟推进全任务轨迹；不自行计算速度、世界坐标、停车、排队或掉头，不跨缺口绘线。
 - DWS API 查询实际 5 分钟窗口；典型时段 API 单独查询 `*_5min_mm`，不得把典型值伪装成当前实况。
+
+### 4.1 产品链路硬隔离
+
+- `实时监测 → BEV` 只消费当前 Pipeline 的实时 active/completed/candidate 轨迹；不请求 Replay V2 API、不选择 Mission、不创建回放时钟，也不读取 sealed journey。
+- `智能研判 → 轨迹回放` 只消费自然 EOF 后 sealed 的 Mission。默认选择最新 sealed Mission；“全部 Mission”只做汇总，播放和时间轴禁用，禁止跨任务伪回放。
+- `/gis` 保留原有页面结构。世界坐标存在时走现有高德地图；否则切换像素平面，仍计为可回放，空间覆盖率单独显示。
 
 ## 5. 实施顺序与验收
 
@@ -124,3 +131,22 @@
 - 不用插值点或稀疏点二次重算替代完整序列速度。
 - 不把 `stopped` 自动等同于 Queue，不把推断红灯等同于权威信号相位。
 - 不在无真值条件下宣称生产身份、位置、速度或掉头准确率。
+
+## 7. 2026-08-04 至 2026-08-05 shadow 实现与门禁状态
+
+- 工作树/分支：`/Users/yaoyao/.codex/worktrees/611d/TrafficAnalyzer` / `codex/trajectory-replay-v2`；大文件只引用主工作树绝对路径，spool/证据写 `/private/tmp/traffic-analyzer-replay-v2-*`。
+- Kafka：使用 `uav_replay_v2_{statistics|track_complete|conflicts|telemetry|mission}_{source_key}`，消费者组固定 `uav-platform-replay-v2`；旧 canonical 正则不匹配。
+- PostgreSQL：独立 `uav_replay_v2_alembic_version`，当前 head `20260805_rv2_0003`；V2 秒级指标为 Timescale hypertable，7 天后压缩、90 天后保留清理。sealed Mission 完整到达后幂等重建 intersection/link/lane/turn 真实 5 分钟聚合和独立典型矩阵；canonical revision、核心事实表行数和 schema checksum 在迁移前后未变。
+- 本机 shadow：Platform `8200`、Console `5273`、视频端口从 `18101` 起；`replay_v2` profile 不启动 Mission 调度、survey、告警同步等控制面写入，非认证变更接口返回 405。
+- 五个 SourceProfile 已以 `frame_stride=14`、`imgsz=640`、独立 Mission/Run/Pipeline 串行跑到自然 EOF：合计 1,966 条 Stats、6,539 条最终 journey、6,088 条遥测和 5 条 sealed Mission，294,387 个源点/保留点的字段对齐失败为 0；每源 Kafka 与 V2 PG 均精确对账，Stats 未携带完整轨迹尾迹。
+- V2 表当前约 201,400,320 bytes；消息 P95 分别为 Stats 14,083 bytes、journey 50,845 bytes、telemetry 1,473 bytes。15 次 `30s/20,000 points` 回放查询中位数 1,767.700ms、P95 2,769.671ms；这是本机 shadow 容量/延迟证据，不是生产 SLA。
+- 五个稳定来源共 25 个 V2 Topic；重复 `ensure_topics` 两次均返回空，复跑不增加 Topic。验收中发现并修复 `TccEvidencePublisherNode` 曾绕过 V2 选择器写入 5 条 canonical conflict 的问题；精确保留清理 manifest 后回收 5 条 conflict/inbox 和两个仅由 V2 创建的错误 Topic，实际探针已证明冲突进入 V2 Topic/表。最终 canonical 仍为 `292244/19493/902896/102406/36245/103`，`pipe-rv2-*` canonical conflict 为 0，五个预留 canonical Topic 为 0。
+- 完整证据为 `/private/tmp/traffic-analyzer-replay-v2-five-source-batched-20260805/summary.json`。Shadow 工程门禁已通过；正式精度仍统一为 `not_evaluated`，正式切换仍须单独破坏性批准。
+- 最终自动化门禁为根测试 `235 passed`、Platform `280 passed / 5 skipped / 10 subtests`、Console2 `184 passed`、XQH `55 PASS / 0 FAIL / 1 WARN`、Console production build 与 `git diff --check` 通过；ADR-019 strict 仅保留既有 `local_runtime_evidence` 外部门禁。
+
+### 2026-08-05 XQH 全长补充验收
+
+- Mission `MSN-RV2-a863b59ca9f1` 使用主工作树绝对视频/权重、`frame_stride=10`、原生 MPS 跑到自然 EOF；992.325 秒源时间、1,443 runtime segment、64,444 原始点封存为 1,427 journey，正式精度继续全部 `not_evaluated`。
+- Kafka/PG 精确对账为 700 Stats、1,427 journey、3 conflict、2,372 telemetry、1 sealed Mission；Stats 无完整尾迹、点数组对齐失败 0、canonical Topic 写入为空。四类实际聚合为 `10/32/114/23`，典型矩阵 10。
+- 首次运行器汇总因只等待消息而未等待聚合事务，并发现无 movement key 时 turn 粒度为空，正确判 FAIL；修复为聚合收敛等待并用 `turn_behavior:*` 显式降级后，同一 sealed Mission 复验通过。原 FAIL 与 postfix PASS 分文件保留在 `/private/tmp/traffic-analyzer-replay-v2-xqh-full-20260805-v4`。
+- 当前门禁为根 `241 passed`、Platform `291 passed / 6 skipped / 10 subtests`、PG 集成 `1 passed`、Console `185 passed`、XQH `55 PASS / 0 FAIL / 1 WARN` 和 production build；ADR-019 strict 仍只有既有外部 `local_runtime_evidence` blocker。正式切换未执行。

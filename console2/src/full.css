@@ -87,6 +87,14 @@
 .source-disabled { background: #8290aa; }
 
 /* Historical trajectory analysis: time slice first, movement and detector evidence second. */
+.replay-pixel-stage { position: relative; width: 100%; height: 100%; min-height: 320px; overflow: hidden; background: #07101b; }
+.replay-pixel-stage canvas { display: block; width: 100%; height: 100%; }
+.replay-pixel-stage > span { position: absolute; right: 10px; bottom: 8px; padding: 4px 7px; border: 1px solid #2a3a52; border-radius: 5px; background: rgba(7,16,27,.86); color: #8ba0bd; font-size: 8px; }
+.timeline-bars.replay-events { position: relative; overflow: visible; height: 16px; }
+.timeline-bars.replay-events .replay-event { position: absolute; bottom: 0; width: 3px; height: 12px; border-radius: 2px; background: #70a2ff; }
+.timeline-bars.replay-events .replay-event.stopped,.timeline-bars.replay-events .replay-event.standing_queue { background: #ffca67; }
+.timeline-bars.replay-events .replay-event.queue_release,.timeline-bars.replay-events .replay-event.releasing { background: #58d6b0; }
+.timeline-bars.replay-events .replay-event.geometric_u_turn { background: #c792ff; }
 .trajectory-analysis-page { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
 .trajectory-analysis-kpis { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 10px; }
 .trajectory-analysis-kpis > div { min-height: 78px; display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 3px 10px; padding: 12px 14px; border: 1px solid #202f44; border-radius: 9px; background: linear-gradient(145deg,#101a2a,#0b1421); }

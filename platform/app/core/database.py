@@ -95,6 +95,25 @@ def _alembic_head() -> str:
     return head
 
 
+def _replay_v2_alembic_config() -> Config:
+    platform_dir = Path(__file__).resolve().parents[2]
+    config = Config(str(platform_dir / "alembic_replay_v2.ini"))
+    config.set_main_option("script_location", str(platform_dir / "alembic_replay_v2"))
+    config.set_main_option("sqlalchemy.url", settings.database_url)
+    return config
+
+
+def _replay_v2_alembic_head() -> str:
+    head = ScriptDirectory.from_config(_replay_v2_alembic_config()).get_current_head()
+    if head is None:
+        raise RuntimeError("Replay-v2 Alembic migration head is missing")
+    return head
+
+
+def _run_replay_v2_alembic_upgrade() -> None:
+    command.upgrade(_replay_v2_alembic_config(), "head")
+
+
 async def database_revision() -> str | None:
     """Return the installed UAV migration revision without invoking Alembic."""
     conn = await asyncpg.connect(**_connection_kwargs(settings.db_name))
@@ -105,6 +124,42 @@ async def database_revision() -> str | None:
         return await conn.fetchval("SELECT version_num FROM uav_alembic_version LIMIT 1")
     finally:
         await conn.close()
+
+
+async def replay_v2_database_revision() -> str | None:
+    conn = await asyncpg.connect(**_connection_kwargs(settings.db_name))
+    try:
+        exists = await conn.fetchval(
+            "SELECT to_regclass('public.uav_replay_v2_alembic_version')"
+        )
+        if not exists:
+            return None
+        return await conn.fetchval(
+            "SELECT version_num FROM uav_replay_v2_alembic_version LIMIT 1"
+        )
+    finally:
+        await conn.close()
+
+
+async def init_replay_v2_db() -> bool:
+    """Migrate only replay-v2 tables after asserting canonical road9 is current."""
+    try:
+        installed_canonical = await database_revision()
+        canonical_head = await asyncio.to_thread(_alembic_head)
+        if installed_canonical != canonical_head:
+            raise RuntimeError(
+                "canonical road9 schema must already be at head; replay_v2 will not upgrade it"
+            )
+        installed_replay = await replay_v2_database_revision()
+        replay_head = await asyncio.to_thread(_replay_v2_alembic_head)
+        if installed_replay != replay_head:
+            await asyncio.to_thread(_run_replay_v2_alembic_upgrade)
+        else:
+            logger.info("Replay-v2 schema already at Alembic head %s", replay_head)
+        return True
+    except Exception as exc:
+        logger.warning("Replay-v2 database initialization failed: %s", exc)
+        return False
 
 
 async def init_db() -> bool:

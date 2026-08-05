@@ -22,7 +22,9 @@ from kafka import KafkaProducer
 from elements.FrameElement import FrameElement
 from elements.VideoEndBreakElement import VideoEndBreakElement
 from nodes.ReliableKafkaPublisher import ReliableKafkaPublisher
+from services.MissionTrajectoryArchive import MissionTrajectoryArchive
 from utils_local.coordinates import enu_to_gcj02, normalize_telemetry_position
+from utils_local.replay_topics import build_replay_v2_topics
 from utils_local.track_lifecycle import active_tracks_of, mature_tracks_of
 from utils_local.utils import profile_time
 
@@ -46,8 +48,18 @@ class KafkaProducerNode:
         bootstrap_servers = config_kafka["bootstrap_servers"]
         self.camera_id = config_kafka["camera_id"]
         self.drone_id = config_kafka.get("drone_id") or os.environ.get("DRONE_ID") or f"drone_{self.camera_id}"
-        self.topic_name, self.track_complete_topic, self.conflicts_topic, self.telemetry_topic = (
-            self._canonical_topics(self.camera_id)
+        self.storage_profile = os.environ.get("TRAJECTORY_STORAGE_PROFILE", "live")
+        self.source_profile_id = os.environ.get("SOURCE_PROFILE_ID")
+        (
+            self.topic_name,
+            self.track_complete_topic,
+            self.conflicts_topic,
+            self.telemetry_topic,
+            self.mission_topic,
+        ) = self._topics_for_profile(
+            self.storage_profile,
+            self.source_profile_id,
+            self.camera_id,
         )
         self.how_often_sec = config_kafka["how_often_sec"]
         self.last_send_time = None
@@ -57,12 +69,12 @@ class KafkaProducerNode:
             # 增加重试和超时配置以提高可靠性
             retries=3,
             request_timeout_ms=5000,
+            compression_type="zstd" if self.storage_profile == "replay_v2" else None,
         )
 
         self.mission_id = os.environ.get("MISSION_ID")
         self.pipeline_id = os.environ.get("PIPELINE_ID")
         self.run_id = os.environ.get("RUN_ID") or self.pipeline_id
-        self.source_profile_id = os.environ.get("SOURCE_PROFILE_ID")
         self.inter_id = os.environ.get("INTER_ID") or os.environ.get("INTERSECTION_ID")
         self.road_data_version = os.environ.get("ROAD_DATA_VERSION")
         self.road_context_status = os.environ.get("ROAD_CONTEXT_STATUS", "missing")
@@ -76,6 +88,23 @@ class KafkaProducerNode:
             os.path.join(spool_dir, spool_name),
             queue_size=int(config_kafka.get("send_queue_size", 200)),
         )
+        self.trajectory_archive = None
+        self._last_replay_frame = None
+        if self.storage_profile == "replay_v2":
+            if not self.mission_id:
+                raise ValueError("MISSION_ID is required for replay_v2 trajectory archive")
+            archive_root = os.environ.get(
+                "TRAJECTORY_ARCHIVE_SPOOL_DIR",
+                "/private/tmp/traffic-analyzer-replay-v2-spool",
+            )
+            detector_config = config.get("detection_node", {})
+            self.trajectory_archive = MissionTrajectoryArchive(
+                archive_root,
+                appearance_model_path=(
+                    os.environ.get("REPLAY_V2_APPEARANCE_MODEL_PATH")
+                    or detector_config.get("weight_pth")
+                ),
+            )
 
         self.buffer_analytics_sec = (
             config["general"]["buffer_analytics"] * 60 + config["general"]["min_time_life_track"]
@@ -153,6 +182,26 @@ class KafkaProducerNode:
             f"uav_conflicts_{value}",
             f"uav_telemetry_{value}",
         )
+
+    @staticmethod
+    def _topics_for_profile(
+        storage_profile: str,
+        source_profile_id: str | None,
+        camera_id,
+    ) -> tuple[str, str, str, str, str | None]:
+        if storage_profile == "replay_v2":
+            if not source_profile_id:
+                raise ValueError("SOURCE_PROFILE_ID is required for replay_v2 Kafka Topics")
+            topics = build_replay_v2_topics(source_profile_id)
+            return (
+                topics.statistics,
+                topics.track_complete,
+                topics.conflicts,
+                topics.telemetry,
+                topics.mission,
+            )
+        canonical = KafkaProducerNode._canonical_topics(camera_id)
+        return (*canonical, None)
 
     def _canonical_envelope(
         self,
@@ -594,6 +643,20 @@ class KafkaProducerNode:
     def publish_completed_tracks(self, frame_element: FrameElement) -> int:
         """Publish completed tracks before a terminal sentinel closes the publisher."""
         completed_tracks = getattr(frame_element, "completed_tracks", None) or []
+        if getattr(self, "storage_profile", "live") == "replay_v2":
+            if not completed_tracks:
+                return 0
+            archive = getattr(self, "trajectory_archive", None)
+            if archive is None:
+                raise RuntimeError("replay_v2 trajectory archive is not configured")
+            for track in completed_tracks:
+                archive.record_segment(
+                    mission_id=self.mission_id,
+                    source_profile_id=self.source_profile_id,
+                    intersection_id=self.intersection_id,
+                    segment=track,
+                )
+            return 0
         published = 0
         for track in completed_tracks:
             termination_reason = track.get("termination_reason")
@@ -627,6 +690,125 @@ class KafkaProducerNode:
             )
         return published
 
+    def seal_replay_mission(
+        self,
+        frame_element: FrameElement,
+        *,
+        termination_reason: str,
+    ) -> int:
+        """Publish final journeys exactly once after a natural EOF seal."""
+        if getattr(self, "storage_profile", "live") != "replay_v2":
+            return 0
+        archive = getattr(self, "trajectory_archive", None)
+        if archive is None or not self.mission_topic:
+            raise RuntimeError("replay_v2 mission publisher is not configured")
+        archive.begin_mission(
+            mission_id=self.mission_id,
+            source_profile_id=self.source_profile_id,
+            intersection_id=self.intersection_id,
+            source_timestamp_sec=frame_element.timestamp,
+        )
+        sealed = archive.seal_mission(
+            self.mission_id,
+            termination_reason=termination_reason,
+        )
+        for journey in sealed["journeys"]:
+            deterministic_id = str(
+                uuid.uuid5(
+                    uuid.NAMESPACE_URL,
+                    "traffic-analyzer:uav-replay-v2:"
+                    f"{self.mission_id}:{journey['track_id']}",
+                )
+            )
+            message = self._canonical_envelope(
+                "uav_track_complete",
+                {
+                    "intersection_id": self.intersection_id,
+                    "archive_schema_version": sealed["schema_version"],
+                    **journey,
+                },
+                frame_element,
+                message_id=deterministic_id,
+            )
+            message["schema_version"] = "uav_track_complete/replay-v2"
+            self._enqueue(self.track_complete_topic, message, durable=True)
+        mission_message = self._canonical_envelope(
+            "uav_replay_mission",
+            {
+                key: value
+                for key, value in sealed.items()
+                if key not in {"journeys"}
+            },
+            frame_element,
+            message_id=str(
+                uuid.uuid5(
+                    uuid.NAMESPACE_URL,
+                    f"traffic-analyzer:uav-replay-v2-mission:{self.mission_id}:sealed",
+                )
+            ),
+        )
+        mission_message["schema_version"] = "uav_replay_mission/v2"
+        self._enqueue(self.mission_topic, mission_message, durable=True)
+        return len(sealed["journeys"])
+
+    def mark_replay_mission_incomplete(self, *, failure_reason: str) -> int:
+        """Persist and publish a diagnosable incomplete Mission when EOF is lost."""
+
+        if getattr(self, "storage_profile", "live") != "replay_v2":
+            publisher = getattr(self, "publisher", None)
+            if publisher is not None:
+                publisher.close()
+            return 0
+        archive = getattr(self, "trajectory_archive", None)
+        frame = getattr(self, "_last_replay_frame", None)
+        if archive is None or frame is None or not self.mission_topic:
+            return 0
+        manifest = archive.mark_incomplete(
+            self.mission_id,
+            failure_reason=failure_reason,
+        )
+        start = float(manifest.get("observed_start_source_sec") or frame.timestamp)
+        end = float(manifest.get("observed_end_source_sec") or frame.timestamp)
+        mission_message = self._canonical_envelope(
+            "uav_replay_mission",
+            {
+                "schema_version": manifest.get("schema_version"),
+                "mission_id": self.mission_id,
+                "source_profile_id": self.source_profile_id,
+                "pipeline_id": self.pipeline_id,
+                "run_id": self.run_id,
+                "status": "incomplete",
+                "duration_sec": max(0.0, end - start),
+                "source_point_count": int(manifest.get("recorded_point_count") or 0),
+                "retained_point_count": 0,
+                "journey_count": 0,
+                "behavior_count": 0,
+                "coordinate_coverage_ratio": 0.0,
+                "failure_reason": failure_reason,
+                "algorithm_versions": {},
+                "accuracy": {
+                    key: "not_evaluated"
+                    for key in (
+                        "idf1", "hota", "id_switch", "position_rmse",
+                        "speed_mae", "reid_accuracy",
+                    )
+                },
+            },
+            frame,
+            message_id=str(
+                uuid.uuid5(
+                    uuid.NAMESPACE_URL,
+                    f"traffic-analyzer:uav-replay-v2-mission:{self.mission_id}:incomplete",
+                )
+            ),
+        )
+        mission_message["schema_version"] = "uav_replay_mission/v2"
+        self._enqueue(self.mission_topic, mission_message, durable=True)
+        publisher = getattr(self, "publisher", None)
+        if publisher is not None:
+            publisher.close()
+        return 1
+
     @profile_time
     def process(self, frame_element: FrameElement):
         # 如果是VideoEndBreakElement而不是FrameElement则退出处理
@@ -636,6 +818,18 @@ class KafkaProducerNode:
                 final_delivery = publisher.close()
                 logger.info("Kafka publisher closed: %s", final_delivery)
             return frame_element
+
+        if getattr(self, "storage_profile", "live") == "replay_v2":
+            archive = getattr(self, "trajectory_archive", None)
+            if archive is None:
+                raise RuntimeError("replay_v2 trajectory archive is not configured")
+            archive.begin_mission(
+                mission_id=self.mission_id,
+                source_profile_id=self.source_profile_id,
+                intersection_id=self.intersection_id,
+                source_timestamp_sec=frame_element.timestamp,
+            )
+            self._last_replay_frame = frame_element
 
         current_time = time.time()
         timestamp = frame_element.timestamp
@@ -748,6 +942,17 @@ class KafkaProducerNode:
                 ),
                 **self._delivery_snapshot(),
             }
+            if getattr(self, "storage_profile", "live") == "replay_v2":
+                # V2 statistics are compact metric samples.  Historical points
+                # have exactly one durable path: segment spool -> sealed journey.
+                for key in (
+                    "active_trajectories",
+                    "candidate_trajectories",
+                    "road_polygons",
+                    "active_trajectories_truncated",
+                    "candidate_trajectories_truncated",
+                ):
+                    data.pop(key, None)
             snapshot_threshold = getattr(self, "_event_snapshot_congestion_threshold", 4.0)
             snapshot_samples = getattr(self, "_event_snapshot_consecutive_samples", 30)
             if congestion_index is not None and congestion_index > snapshot_threshold:

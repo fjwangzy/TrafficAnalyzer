@@ -2,6 +2,8 @@ from elements.VideoEndBreakElement import VideoEndBreakElement
 from elements.FrameElement import FrameElement
 import main_optimized
 import numpy as np
+import signal
+import pytest
 
 
 class RecordingQueue:
@@ -94,6 +96,10 @@ def test_tracker_process_flushes_completed_tracks_before_terminal_outputs(monkey
             assert frame_element is flushed_frame
             events.append("kafka_completed")
 
+        def seal_replay_mission(self, frame_element, *, termination_reason):
+            assert frame_element is sentinel
+            events.append(("kafka_sealed", termination_reason))
+
         def process(self, frame_element):
             events.append("kafka_eof")
             return frame_element
@@ -138,10 +144,75 @@ def test_tracker_process_flushes_completed_tracks_before_terminal_outputs(monkey
         ("flush", 4.2, "natural_eof", [7]),
         "geojson_completed",
         "kafka_completed",
+        ("kafka_sealed", "natural_eof"),
         "geojson_eof",
         "kafka_eof",
     ]
     assert queue_out.items == [sentinel]
+
+
+def test_tracker_marks_replay_mission_incomplete_when_reader_dies_without_eof(monkeypatch):
+    events = []
+
+    class EmptyInputQueue:
+        def get(self, timeout):
+            raise main_optimized.Empty
+
+    class PassthroughNode:
+        def __init__(self, _config):
+            pass
+
+        def process(self, frame_element):
+            return frame_element
+
+    class FakeKafka(PassthroughNode):
+        def mark_replay_mission_incomplete(self, *, failure_reason):
+            events.append(("incomplete", failure_reason))
+
+    for name in (
+        "ImageMotionEstimationNode", "GroundTrajectoryTrackerNode",
+        "HomographyCalibrationNode", "MotionCompensationNode",
+        "FlightGeoReferenceNode", "PostTrackingWorldProjectionNode",
+        "TrackerInfoUpdateNode", "SpeedEstimationNode", "DirectionFlowNode",
+        "LaneDetectionNode", "TrajectoryNode", "RoadMapMatchingNode",
+        "LaneAnalysisNode", "AutoLaneInferenceNode", "ConflictDetectionNode",
+        "CalcStatisticsNode", "GeoJsonExportNode",
+    ):
+        monkeypatch.setattr(main_optimized, name, PassthroughNode)
+    monkeypatch.setattr(main_optimized, "KafkaProducerNode", FakeKafka)
+    monkeypatch.setattr(main_optimized, "_setup_logging_in_subprocess", lambda: None)
+    monkeypatch.setattr(main_optimized, "_is_pid_alive", lambda _pid: False)
+
+    main_optimized.proc_tracker_update_and_calc(
+        EmptyInputQueue(),
+        RecordingQueue(),
+        {
+            "tracking_profile": "hover_cruise_v1",
+            "pipeline": {"send_info_kafka": True},
+        },
+        reader_pid=123,
+    )
+
+    assert events == [("incomplete", "reader_process_died")]
+
+
+def test_tracker_sigterm_marks_incomplete_before_process_exit():
+    events = []
+    kafka = type(
+        "Kafka",
+        (),
+        {
+            "mark_replay_mission_incomplete": lambda self, *, failure_reason: events.append(
+                failure_reason
+            )
+        },
+    )()
+
+    with pytest.raises(SystemExit) as exited:
+        main_optimized._terminate_tracker_with_incomplete(kafka, signal.SIGTERM)
+
+    assert events == ["signal_sigterm"]
+    assert exited.value.code == 128 + signal.SIGTERM
 
 
 def test_tracker_process_associates_image_ids_before_world_projection(monkeypatch):

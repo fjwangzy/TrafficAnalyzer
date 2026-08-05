@@ -483,7 +483,7 @@ near-miss 证据：
 
 `ttc_sec` 表示预测冲突时间；`pet_sec` 表示双方到达冲突点的时间差近似值；路径交叉点场景下同时输出 `motor_arrival_ttc_sec` / `non_motor_arrival_ttc_sec` 和 `arrival_time_delta_sec`。事件附加输出 `conflict_scene`、`conflict_angle_deg`、`evidence`、`risk_score`。`motor_id` / `non_motor_id` 轨迹对同级别事件不重复上报，但允许从 `warning` 升级为 `critical` 再次上报；直到任一轨迹从 `buffer_tracks` 清理后释放状态。
 
-冲突事件不在 `KafkaProducerNode` 阶段生成图片。该节点只冻结待发布信封；显示进程保留 `ShowNode` 就地绘制前的原始帧，再以 `ShowNode.frame_result` 作为唯一检测器 TCC 画面，交给 `TccEvidencePublisherNode` 写盘后发布。`utils_local/event_evidence.py` 严禁重绘目标框、类别、轨迹 ID 或冲突标记，也不缩放新证据；`conflict_detector_frame` 必须与检测器原有 `conflict_*.jpg` 使用同一个真实 `frame_result`。两图以 SHA-256 内容地址原子写入检测任务继承的 `SURVEY_STORAGE_DIR`，事件只发布相对存储键、哈希、大小和尺寸。Platform 完整校验两项后登记证据包并由检测图回指原图；写入或校验失败时冲突事实仍入库，但必须标记 `evidence_status=incomplete` 且不伪造引用。
+冲突事件不在 `KafkaProducerNode` 阶段生成图片。该节点只冻结待发布信封；显示进程保留 `ShowNode` 就地绘制前的原始帧，再以 `ShowNode.frame_result` 作为唯一检测器 TCC 画面，交给 `TccEvidencePublisherNode` 写盘后发布。后者必须复用 `KafkaProducerNode._topics_for_profile()`，live 发布 canonical conflict，Replay V2 只发布 `uav_replay_v2_conflicts_{source_key}`；不得按 camera id 另行推导 Topic。`utils_local/event_evidence.py` 严禁重绘目标框、类别、轨迹 ID 或冲突标记，也不缩放新证据；`conflict_detector_frame` 必须与检测器原有 `conflict_*.jpg` 使用同一个真实 `frame_result`。两图以 SHA-256 内容地址原子写入检测任务继承的 `SURVEY_STORAGE_DIR`，事件只发布相对存储键、哈希、大小和尺寸。Platform 完整校验两项后登记证据包并由检测图回指原图；写入或校验失败时冲突事实仍入库，但必须标记 `evidence_status=incomplete` 且不伪造引用。
 
 Console2 对新事件展示 `conflict_original_frame`“原始画面”和 `conflict_detector_frame`“检测器输出的 TCC 画面帧”，两项均通过鉴权内容接口读取并支持全屏。历史事件已有的 `conflict_trajectory_reconstruction` 或单项 `conflict_keyframe` 保持可读，不迁移、不删除，也不会为新事件继续生成。
 
@@ -612,6 +612,13 @@ Console2 实时监测的 BEV 采用“最近 5 分钟或至少 150 条”的混�
 3. 只有入口道路和转向：`entry:{start_road_id}|turn:{turn_behavior}`；
 4. 只有转向：`turn:{turn_behavior}`；没有足够证据时进入 `unmapped`。
 
+Replay V2 的 sealed journey 同样必须保留上述物理方向语义。若封存事件没有正式
+`movement_key`，但 journey 存在 ENU 点列，则以首个有效点相对路口中心的象限作为进口、以末个
+有效点象限作为出口；首尾仍在同一象限时，可结合已冻结的 `straight/left_turn/right_turn/u_turn`
+推断出口，生成 `approach:{cardinal}|exit:{cardinal}` 和“东进口 → 西出口”类中文标签，来源固定标记
+为 `trajectory_quadrant_inferred`。只有 ENU 与进口均不可判定时才退化为“直行（进口未知）”等
+`turn:*` 分组。该结果用于测试质量的 Mission 复盘和筛选，不冒充 `lane_verified` 正式路网流向。
+
 “流向排名”优先展示完整且可解释的流向，不简单按全表车辆数让 `unknown` 组占据榜首；同一
 证据等级内再按车辆数、冲突数排序。车辆数按 lineage 去重后的 canonical 完成轨迹计数，业务车型、
 YOLO、转向和质量筛选在去重后应用；速度只聚合非空有效值。冲突只在
@@ -720,3 +727,12 @@ Console2 普通模式使用服务器典型时段读模型与固定演示样例�
 - “路口悬停”“路段航拍”“治理复盘”切换当前演示任务叙事；“保存事件与流量快照”会把当前车辆、排队、速度、饱和度、车道、事件、近六个 5 分钟流量桶和治理前后对比写入浏览器本地台账 `uav.console.demo-analysis-snapshots.v1`。同一路口与任务阶段使用稳定主键覆盖保存，刷新后可从事件中心继续打开，避免每次演示重新生成数据。
 - 本地演示台账与 road9 真实事件列表分区展示，不写入 `uav_*` 业务表，也不构成服务端、跨浏览器或生产持久化承诺；需要生产留档时应另行接入正式事件/指标持久化 API。
 - 固定事件与复盘值只用于功能演示，不作为生产现状、模型精度或治理效果证据；服务器典型矩阵只证明数据读取和展示口径，也不构成实时运行或生产效果声明。
+
+## Replay V2 Mission 复盘规则（2026-08-04）
+
+- 在线 ByteTrack ID 和实时 BEV 行为不因 V2 改变。Runtime segment 只在 Mission 自然 EOF 后参与离线归并；同时满足时间/空间门限、外观唯一性和 mutual-best margin 才合并，缺失或歧义证据保持分段。
+- 速度在完整点序列上以最多 15 点线性回归并做 EMA5，封存后不得由回放稀疏点重算。保留首尾、状态/质量/坐标边界，运动最长 500ms、位移 0.5m 或转向 10°保点，停止态最长 2 秒心跳。
+- `stopped` 使用 2 秒/1.5m/2km/h 进入与 5km/h 释放迟滞；`standing_queue/queue_release` 只有在 `road_analytics_eligible=true` 且 Lane/Link 可信时成立，字符串 ID 本身不构成道路证据；`geometric_u_turn` 要求无显式质量 gap、世界坐标覆盖至少 80%、累计与净转向均至少 135°、前后腿各至少 3m、反向保持至少 1 秒且总路径至少 6m。
+- 回放不插值。窗口开始可 sample-and-hold 最近实采点，明确 tracking/trajectory quality gap 的进入和离开都断线；road/geo 降级本身不能切断仍可信的像素轨迹。
+- `/monitoring` 是实时轨迹投放，不能请求 V2 Mission API；`/gis` 是估计复盘业务视图，只分析当前 sealed Mission。“全部 Mission”只汇总，不播放。
+- 没有批准真值时，IDF1、HOTA、正式 ID switch、位置 RMSE、速度 MAE 与 ReID 准确率统一为 `not_evaluated`。

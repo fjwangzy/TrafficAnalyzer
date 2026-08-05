@@ -77,7 +77,10 @@ vi.mock('./components/CityMap', () => ({
 }))
 
 vi.mock('./components/MonitoringBevMap', () => ({
-  MonitoringBevMap: ({ compact, emptyMessage, label, trajectories = [] }) => <div role='img' aria-label={label} data-compact={compact ? 'true' : 'false'} data-trajectory-count={trajectories.length} data-track-ids={trajectories.map((item) => item.track_id).join(',')}>高德 GCJ-02 轨迹地图{!trajectories.length && emptyMessage ? <span>{emptyMessage}</span> : null}</div>,
+  MonitoringBevMap: ({ compact, emptyMessage, label, trajectories = [], pixelTrajectories = [] }) => {
+    const displayed = trajectories.length ? trajectories : pixelTrajectories.filter((item) => Array.isArray(item?.trajectory_px) && item.trajectory_px.length >= 2)
+    return <div role='img' aria-label={label} data-compact={compact ? 'true' : 'false'} data-trajectory-count={displayed.length} data-track-ids={displayed.map((item) => item.track_id).join(',')}>{trajectories.length ? '高德 GCJ-02 轨迹地图' : displayed.length ? `像素坐标实时轨迹 世界坐标不可用 · ${displayed.length} 条` : '高德 GCJ-02 轨迹地图'}{!displayed.length && emptyMessage ? <span>{emptyMessage}</span> : null}</div>
+  },
 }))
 
 import { RouterApp } from './RouterApp'
@@ -225,13 +228,15 @@ describe('Console2 live module migration', () => {
 
     expect(screen.getByText('转向流量')).toBeInTheDocument()
     expect(screen.getByText('直行')).toBeInTheDocument()
+    const qualityCard = screen.getByLabelText('巡航与悬停融合质量状态')
+    expect(qualityCard.parentElement.lastElementChild).toBe(qualityCard)
     expect(liveMocks.api.alerts).not.toHaveBeenCalled()
 
     fireEvent.click(screen.getByRole('button', { name: /历史路径交点事件/ }))
     expect(screen.queryByText('AI 事件研判')).not.toBeInTheDocument()
   })
 
-  it('shows cruise quality gates and keeps degraded trajectories candidate-only', async () => {
+  it('shows cruise quality gates and renders a legacy candidate payload compatibly', async () => {
     open('/monitoring?intersection_id=INT-1&source_profile_id=SRC-1')
     expect(await screen.findByText('历史路径交点事件')).toBeInTheDocument()
 
@@ -267,7 +272,8 @@ describe('Console2 live module migration', () => {
 
     expect(screen.getByText('近正射巡航')).toBeInTheDocument()
     expect(screen.getByText('路网能力降级')).toBeInTheDocument()
-    expect(screen.getByText('仅候选，不进入统计/TCC')).toBeInTheDocument()
+    expect(screen.getByText('目标轨迹暂不可用')).toBeInTheDocument()
+    expect(screen.getByText(/兼容候选轨迹 1 条/)).toBeInTheDocument()
     expect(screen.getByText(/遥测短缺或超出同步窗口/)).toBeInTheDocument()
     expect(screen.getByRole('img', { name: 'BEV 地图轨迹投放图' })).toHaveAttribute('data-trajectory-count', '1')
   })
@@ -331,7 +337,7 @@ describe('Console2 live module migration', () => {
     expect(screen.getByText(/Lane ID、Link ID 与匹配质量不可用/)).toBeInTheDocument()
     expect(screen.getByText(/世界坐标、速度、方向、统计和 TCC 使用各自独立门禁/)).toBeInTheDocument()
     expect(screen.queryByText('仅候选，不进入统计/TCC')).not.toBeInTheDocument()
-    expect(screen.getByRole('img', { name: 'BEV 地图轨迹投放图' })).toHaveTextContent('像素轨迹 1 条 · 地理投影不可用')
+    expect(screen.getByRole('img', { name: '像素坐标实时轨迹投放图' })).toHaveTextContent('世界坐标不可用 · 1 条')
     expect(screen.getByText('实时轨迹数量').closest('.congestion-card')).toHaveTextContent('1')
   })
 
@@ -417,9 +423,9 @@ describe('Console2 live module migration', () => {
       },
     }))
 
-    const map = screen.getByRole('img', { name: 'BEV 地图轨迹投放图' })
-    expect(map).toHaveAttribute('data-trajectory-count', '0')
-    expect(map).toHaveTextContent('候选目标 1 · 地理投影不可用')
+    const map = screen.getByRole('img', { name: '像素坐标实时轨迹投放图' })
+    expect(map).toHaveAttribute('data-trajectory-count', '1')
+    expect(map).toHaveTextContent('世界坐标不可用 · 1 条')
     expect(screen.getByText('实时轨迹数量').closest('.congestion-card')).toHaveTextContent('0')
   })
 

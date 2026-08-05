@@ -47,8 +47,8 @@ def test_restore_drill_refuses_to_touch_docker_without_explicit_guard():
 
 def test_mac_local_platform_uses_persistent_evidence_storage():
     script = (ROOT / "scripts" / "mac_local_platform.sh").read_text(encoding="utf-8")
-    assert 'DEFAULT_SURVEY_STORAGE_DIR="/private/tmp/traffic-analyzer-replay-v2-survey"' in script
     assert 'DEFAULT_SURVEY_STORAGE_DIR="$PROJECT_ROOT/.runtime/survey"' in script
+    assert "/private/tmp/traffic-analyzer-replay-v2-survey" not in script
     assert 'LOCAL_SURVEY_STORAGE_DIR="${SURVEY_STORAGE_DIR:-$DEFAULT_SURVEY_STORAGE_DIR}"' in script
     assert 'mkdir -p "$LOCAL_SURVEY_STORAGE_DIR"' in script
     assert 'SURVEY_STORAGE_DIR="$LOCAL_SURVEY_STORAGE_DIR"' in script
@@ -57,6 +57,20 @@ def test_mac_local_platform_uses_persistent_evidence_storage():
 def test_mac_local_platform_defaults_detector_frame_stride_to_three():
     script = (ROOT / "scripts" / "mac_local_platform.sh").read_text(encoding="utf-8")
     assert 'PIPELINE_FRAME_STRIDE="${PIPELINE_FRAME_STRIDE:-3}"' in script
+
+
+def test_mac_local_platform_does_not_override_platform_dotenv_with_empty_ycx_values():
+    script = (ROOT / "scripts" / "mac_local_platform.sh").read_text(encoding="utf-8")
+    for key in (
+        "YCX_DB_HOST",
+        "YCX_DB_PORT",
+        "YCX_DB_USER",
+        "YCX_DB_PASSWORD",
+        "YCX_DB_NAME",
+        "YCX_DB_SCHEMA",
+        "YCX_METRICS_SCHEMA",
+    ):
+        assert f'{key}="${{{key}:-}}"' not in script
 
 
 def test_mac_local_platform_fails_closed_on_duplicate_uvicorn_instances():

@@ -244,7 +244,9 @@ class KafkaConsumerService:
                 "time_quality": normalized.get("time_quality") or business_data.get("time_quality"),
             }
         msg_type = result.msg_type
-        intersection_id = data.get("inter_id") or data.get("intersection_id") or self._extract_intersection(topic)
+        intersection_id = data.get("inter_id") or data.get("intersection_id")
+        if not intersection_id and msg_type != "uav_replay_mission":
+            intersection_id = self._extract_intersection(topic)
 
         try:
             if msg_type == "uav_stats":
@@ -261,6 +263,10 @@ class KafkaConsumerService:
                 await self._handle_system_metrics(data)
             elif msg_type == "uav_telemetry":
                 await self._handle_telemetry(data)
+            elif msg_type == "uav_replay_mission":
+                # Mission lifecycle messages are durable control-plane facts.
+                # They intentionally have no realtime monitoring projection.
+                pass
             else:
                 raise ValueError(f"Unsupported persisted msg_type: {msg_type}")
         except Exception as error:

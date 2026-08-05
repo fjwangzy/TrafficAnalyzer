@@ -125,8 +125,8 @@ CREATE EXTENSION IF NOT EXISTS timescaledb;
 
 | 领域 | 规划物理表 | 形态候选 | 与 canonical 基线的关系 | DDL 待冻结重点 |
 | --- | --- | --- | --- | --- |
-| 事故测绘 | `uav_survey_tasks` | 普通表 | 测绘任务主对象；结果事件统一关联 `uav_ai_events(event_type=survey_result)` | 状态机、任务分配、任务/事件唯一关系、软删除 |
-| 事故测绘 | `uav_capture_batches` | 普通表 | 隶属测绘任务，`source_profile_id` 关联目录来源并组织视频/帧引用、遥测、标定和质量检查 | batch 唯一键、时间范围、coverage、版本、内容哈希 |
+| 事故测绘 | `uav_survey_tasks` | 普通表 | 测绘任务主对象；结果事件统一关联 `uav_ai_events(event_type=survey_result)`；事件测绘使用 `source=event`、`external_task_id=event_id` 和审计幂等键复用任务 | 状态机、任务分配、任务/事件数据库唯一约束、软删除 |
+| 事故测绘 | `uav_capture_batches` | 普通表 | 隶属测绘任务，`source_profile_id` 关联目录来源并组织视频/帧引用、遥测、标定和质量检查；`source_type=event_keyframe` 表示事件原始帧派生的 selected 单帧批次 | batch 唯一键、时间范围、coverage、版本、内容哈希 |
 | 事故测绘 | `uav_capture_frames` | 普通表 | 已实现的关键帧事实，关联原始帧/BEV 证据、遥测、质量和帧变换 | 帧号与 batch 唯一、派生证据完整性 |
 | 事故测绘 | `uav_capture_ingestion_jobs` | 普通表 | 已实现的 MP4+DJI SRT/Cloud JSON 后台处理任务 | batch 唯一、状态、attempt/max_attempts、错误与完成时间 |
 | 事故测绘 | `uav_survey_measurements` | 普通表候选 | 隶属 `uav_survey_tasks`，保存点/线/面量算值和误差 | 几何/数值类型、坐标系、单位、修订版本、唯一键 |
@@ -608,7 +608,7 @@ V2 与 canonical 共享 connection database=`road9`，但只写 `uav_replay_v2_*
 业务唯一键。sealed Mission 只有在声明的 journey 全部到达后才重建四类真实聚合和独立典型矩阵；
 重复 sealed 消息用于幂等修复，不累加重复事实。
 
-`uav_replay_v2_traffic_metric_samples` 以 `sampled_at` 分区，是 V2 独立 Timescale hypertable；主键包含 `(id, sampled_at)`，全局消息幂等仍由 `uav_replay_v2_message_inbox.message_id` 保证。shadow 策略为 7 天后压缩、90 天后保留清理。Mission journey、行为、冲突和 lineage 不套用该秒级样本保留策略，正式切换前也不自动删除 canonical 数据。
+`uav_replay_v2_traffic_metric_samples` 以 `sampled_at` 分区，是 V2 独立 Timescale hypertable；主键包含 `(id, sampled_at)`，全局消息幂等仍由 `uav_replay_v2_message_inbox.message_id` 保证。V2 数据面策略为 7 天后压缩、90 天后保留清理。Mission journey、行为、冲突和 lineage 不套用该秒级样本保留策略；本机完整运行模式也不自动删除 canonical 数据。
 
 2026-08-05 五源验收后 V2 public relation 约 201,400,320 bytes；canonical 六项事实行数仍为 `292244/19493/902896/102406/36245/103`，`pipeline_id LIKE 'pipe-rv2-%'` 的 canonical conflict 为 0。该容量是本机 shadow 快照，不是生产容量承诺。
 

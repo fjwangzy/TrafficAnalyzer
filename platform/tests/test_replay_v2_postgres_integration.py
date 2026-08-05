@@ -10,6 +10,7 @@ from sqlalchemy import delete, func, select, text
 from app.core.database import async_session_maker, init_replay_v2_db
 from app.models.replay_v2 import (
     ReplayV2Episode,
+    ReplayV2ConflictEvent,
     ReplayV2InterEvaluation5MinMM,
     ReplayV2IntersectionMetric5Min,
     ReplayV2LaneMetric5Min,
@@ -23,6 +24,7 @@ from app.models.replay_v2 import (
     ReplayV2TurnMetric5Min,
 )
 from app.services.metric_store import MessageEnvelope
+from app.services.replay_repository import PostgresReplayRepository
 from app.services.replay_v2_metric_store import ReplayV2MetricStoreAdapter
 
 
@@ -89,6 +91,27 @@ async def test_sealed_mission_transactionally_converges_all_dws_grains_without_c
             "cars": 1,
             "avg_speed_kmh": 15.0,
             "coverage_ratio": 0.8,
+            "active_trajectories": [
+                {
+                    "track_id": "RT-1",
+                    "trajectory_px": [[10.0, 20.0]],
+                    "trajectory_gcj02": [[117.0, 36.0]],
+                }
+            ],
+            "candidate_trajectories": [],
+        },
+        marker,
+    )
+    conflict = _envelope(
+        "uav_conflict",
+        f"conflict-{marker}",
+        {
+            "mission_id": mission_id,
+            "source_profile_id": source_id,
+            "offset_ms": 10_000,
+            "severity": "warning",
+            "prediction_type": "crossing",
+            "ttc_sec": 3.2,
         },
         marker,
     )
@@ -98,6 +121,7 @@ async def test_sealed_mission_transactionally_converges_all_dws_grains_without_c
         {
             "mission_id": mission_id,
             "source_profile_id": source_id,
+            "pipeline_id": f"pipe-{marker}",
             "track_id": "J-1",
             "source_runtime_track_ids": ["RT-1"],
             "matched_link_id": "LINK-1",
@@ -145,6 +169,7 @@ async def test_sealed_mission_transactionally_converges_all_dws_grains_without_c
         {
             "mission_id": mission_id,
             "source_profile_id": source_id,
+            "pipeline_id": f"pipe-{marker}",
             "status": "sealed",
             "duration_sec": 120.0,
             "journey_count": 1,
@@ -187,7 +212,38 @@ async def test_sealed_mission_transactionally_converges_all_dws_grains_without_c
             MessageEnvelope(track, f"uav_replay_v2_track_complete_{topic_suffix}", 0, 0)
         )
         await store.persist(
+            MessageEnvelope(conflict, f"uav_replay_v2_conflicts_{topic_suffix}", 0, 0)
+        )
+        await store.persist(
             MessageEnvelope(mission, f"uav_replay_v2_mission_{topic_suffix}", 0, 1)
+        )
+
+        traffic_rows = await store.query_traffic(
+            inter_id,
+            "all",
+            grain_type="intersection",
+            source_profile_id=source_id,
+        )
+        conflict_rows = await store.query_conflicts(
+            inter_id,
+            "all",
+            10,
+            source_profile_id=source_id,
+            pipeline_id=f"pipe-{marker}",
+        )
+        replay = await PostgresReplayRepository(async_session_maker).replay(
+            inter_id,
+            mission_id=mission_id,
+            cursor_ms=120_000,
+            window_ms=120_000,
+            max_points=100,
+            page_after=None,
+            track_id=None,
+            behavior=None,
+            vehicle_class=None,
+            yolo_class_id=None,
+            turn_behavior=None,
+            movement_key=None,
         )
 
         async with async_session_maker() as session:
@@ -217,6 +273,17 @@ async def test_sealed_mission_transactionally_converges_all_dws_grains_without_c
         assert intersection.avg_speed_kmh == 15.0
         assert intersection.stopped_count == 1
         assert intersection.release_count == 1
+        assert traffic_rows[0]["total_vehicles"] == 1
+        assert traffic_rows[0]["pipeline_id"] == f"pipe-{marker}"
+        assert conflict_rows[0]["prediction_type"] == "crossing"
+        assert replay["mission"]["mission_id"] == mission_id
+        assert [track["track_id"] for track in replay["tracks"]] == ["J-1"]
+        assert replay["cursor"] == {
+            "offset_ms": 120_000,
+            "window_start_ms": 0,
+            "window_end_ms": 120_000,
+            "duration_ms": 120_000,
+        }
         assert await _canonical_snapshot() == canonical_before
     finally:
         async with async_session_maker() as session:
@@ -231,6 +298,11 @@ async def test_sealed_mission_transactionally_converges_all_dws_grains_without_c
             for model in (ReplayV2Episode, ReplayV2Maneuver, ReplayV2TrackPoint, ReplayV2TrackEvent):
                 await session.execute(delete(model).where(model.mission_id == mission_id))
             await session.execute(
+                delete(ReplayV2ConflictEvent).where(
+                    ReplayV2ConflictEvent.mission_id == mission_id
+                )
+            )
+            await session.execute(
                 delete(ReplayV2TrafficMetricSample).where(
                     ReplayV2TrafficMetricSample.mission_id == mission_id
                 )
@@ -239,7 +311,12 @@ async def test_sealed_mission_transactionally_converges_all_dws_grains_without_c
             await session.execute(
                 delete(ReplayV2MessageInbox).where(
                     ReplayV2MessageInbox.message_id.in_(
-                        [f"stats-{marker}", f"track-{marker}", f"mission-{marker}"]
+                        [
+                            f"stats-{marker}",
+                            f"track-{marker}",
+                            f"conflict-{marker}",
+                            f"mission-{marker}",
+                        ]
                         + [f"mission-incomplete-{marker}"]
                     )
                 )

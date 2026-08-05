@@ -42,9 +42,11 @@ class EventCenter:
         session_factory: async_sessionmaker[AsyncSession],
         *,
         quality_gap_threshold_sec: float = 5.0,
+        materialize_on_list: bool = True,
     ) -> None:
         self._sessions = session_factory
         self._quality_gap_threshold_sec = quality_gap_threshold_sec
+        self._materialize_on_list = materialize_on_list
 
     async def sync_alerts(self) -> int:
         """Materialize persisted current alerts as replayable event facts."""
@@ -304,9 +306,10 @@ class EventCenter:
         source_profile_id: str | None = None,
         mission_id: str | None = None,
         review_status: str | None = None,
-        limit: int = 200,
+        limit: int = 150,
     ) -> list[dict]:
-        await self.materialize_quality_events()
+        if self._materialize_on_list:
+            await self.materialize_quality_events()
         async with self._sessions() as session:
             ai_rows = (
                 await session.execute(select(AiEvent).order_by(AiEvent.occurred_at.desc()).limit(limit * 2))

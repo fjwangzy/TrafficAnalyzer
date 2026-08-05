@@ -21,6 +21,11 @@ ADR-019 已在本机开发环境完成纯净切换：
 并已按 `scripts/bootstrap_native_mps.sh` 准备 `.venv-mps`。本机开发不要使用 Docker Platform；
 Platform 必须作为原生 macOS 进程运行，检测器子进程才能使用 Metal/MPS。
 
+服务器典型时段态势还需要在 Git 忽略的 `platform/.env` 中配置只读 YCX 连接：
+`YCX_DB_HOST`、`YCX_DB_PORT`、`YCX_DB_USER`、`YCX_DB_PASSWORD`、
+`YCX_DB_NAME`、`YCX_DB_SCHEMA` 和 `YCX_METRICS_SCHEMA`。该文件必须保持 `chmod 600`；
+`mac_local_platform.sh` 不得用空环境变量覆盖它，也不得在日志中输出连接值。
+
 终端 1：在仓库根目录启动后端 Platform：
 
 ```bash

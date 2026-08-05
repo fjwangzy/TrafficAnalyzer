@@ -4,7 +4,9 @@ import {
   geometrySegments,
   dragImageGeometry,
   imageContainViewport,
+  metricPolygonAreaLabel,
   metricSegmentLabel,
+  polygonCentroid,
   projectMetricPolygonToImage,
   projectPoint,
 } from './surveyGeometry'
@@ -19,6 +21,13 @@ describe('survey measurement geometry', () => {
   it('projects BEV pixels into metric coordinates and formats a live edge length', () => {
     expect(projectPoint([20, 10], metricTransform)).toEqual([0, 4])
     expect(metricSegmentLabel([20, 10], [50, 50], metricTransform)).toBe('5.00 m')
+  })
+
+  it('computes a metric polygon area and its visual center for an in-canvas label', () => {
+    const polygon = [[20, 10], [50, 10], [50, 50], [20, 50]]
+
+    expect(metricPolygonAreaLabel(polygon, metricTransform)).toBe('12.00 m²')
+    expect(polygonCentroid(polygon)).toEqual([35, 30])
   })
 
   it('returns every visible edge and closes saved polygonal annotations', () => {

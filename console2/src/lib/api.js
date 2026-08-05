@@ -65,6 +65,7 @@ export const platformApi = {
   events: (params = {}) => get('/events', { params }),
   event: (eventId) => get(`/events/${encodeURIComponent(eventId)}`),
   reviewEvent: (eventId, body) => post(`/events/${encodeURIComponent(eventId)}/review`, body),
+  createEventSurvey: (eventId, idempotencyKey) => post(`/events/${encodeURIComponent(eventId)}/survey`, {}, { headers: { 'Idempotency-Key': idempotencyKey } }),
   alerts: (params = {}) => get('/alerts', { params }),
   acknowledgeAlert: (id) => post(`/alerts/${encodeURIComponent(id)}/acknowledge`),
   pipelines: () => get('/pipelines'),

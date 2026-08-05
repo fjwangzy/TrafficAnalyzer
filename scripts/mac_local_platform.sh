@@ -6,6 +6,7 @@ PROJECT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MPS_PYTHON="${MPS_VENV_DIR:-$PROJECT_ROOT/.venv-mps}/bin/python"
 PLATFORM_INSTANCE="${PLATFORM_INSTANCE:-live}"
 APP_RUNTIME_PROFILE="${APP_RUNTIME_PROFILE:-live}"
+DEFAULT_SURVEY_STORAGE_DIR="$PROJECT_ROOT/.runtime/survey"
 if [[ ! "$PLATFORM_INSTANCE" =~ ^[A-Za-z0-9_-]+$ ]]; then
   echo "PLATFORM_INSTANCE contains unsupported characters." >&2
   exit 2
@@ -14,7 +15,6 @@ if [[ "$APP_RUNTIME_PROFILE" == "replay_v2" ]]; then
   PLATFORM_PORT="${PLATFORM_PORT:-8200}"
   PIPELINE_CAMERA_ID_START="${PIPELINE_CAMERA_ID_START:-18101}"
   REPLAY_V2_PYTHON_DEPS="${REPLAY_V2_PYTHON_DEPS:-/private/tmp/traffic-analyzer-replay-v2-python}"
-  DEFAULT_SURVEY_STORAGE_DIR="/private/tmp/traffic-analyzer-replay-v2-survey"
   if [[ -d "$REPLAY_V2_PYTHON_DEPS" ]]; then
     PLATFORM_PYTHONPATH="$REPLAY_V2_PYTHON_DEPS${PYTHONPATH:+:$PYTHONPATH}"
   else
@@ -24,7 +24,6 @@ else
   PLATFORM_PORT="${PLATFORM_PORT:-8000}"
   PIPELINE_CAMERA_ID_START="${PIPELINE_CAMERA_ID_START:-$(date +%s)}"
   PLATFORM_PYTHONPATH="${PYTHONPATH:-}"
-  DEFAULT_SURVEY_STORAGE_DIR="$PROJECT_ROOT/.runtime/survey"
 fi
 RUNTIME_DIR="${TMPDIR:-/tmp}/traffic-analyzer-local-platform-${PLATFORM_INSTANCE}-${UID}"
 LOG_FILE="$RUNTIME_DIR/platform.log"
@@ -111,13 +110,6 @@ start_platform() {
     DB_USER="${DB_USER:-traffic}" \
     DB_PASSWORD="${DB_PASSWORD:-traffic123}" \
     DB_NAME="${DB_NAME:-road9}" \
-    YCX_DB_HOST="${YCX_DB_HOST:-}" \
-    YCX_DB_PORT="${YCX_DB_PORT:-5432}" \
-    YCX_DB_USER="${YCX_DB_USER:-}" \
-    YCX_DB_PASSWORD="${YCX_DB_PASSWORD:-}" \
-    YCX_DB_NAME="${YCX_DB_NAME:-ycx}" \
-    YCX_DB_SCHEMA="${YCX_DB_SCHEMA:-road9}" \
-    YCX_METRICS_SCHEMA="${YCX_METRICS_SCHEMA:-xianchang}" \
     KAFKA_BOOTSTRAP="${KAFKA_BOOTSTRAP:-127.0.0.1:9092}" \
     KAFKA_CONSUMER_GROUP="${KAFKA_CONSUMER_GROUP:-uav-platform-local}" \
     SURVEY_STORAGE_DIR="$LOCAL_SURVEY_STORAGE_DIR" \

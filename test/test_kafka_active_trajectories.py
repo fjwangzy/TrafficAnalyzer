@@ -588,7 +588,7 @@ class KafkaActiveTrajectoriesTest(unittest.TestCase):
         self.assertEqual(stats["data"]["active_trajectories_truncated"], 200)
         self.assertLess(len(json.dumps(stats).encode("utf-8")), 1_000_000)
 
-    def test_replay_v2_stats_never_carry_realtime_trajectory_tails(self):
+    def test_replay_v2_stats_keep_bounded_trajectory_tails_for_live_bev(self):
         frame_element = FrameElement(
             "test", np.zeros((20, 20, 3), dtype=np.uint8), 2.0, 1, {}
         )
@@ -614,9 +614,10 @@ class KafkaActiveTrajectoriesTest(unittest.TestCase):
         producer.process(frame_element)
 
         stats = sent[0][1]["data"]
-        self.assertNotIn("active_trajectories", stats)
-        self.assertNotIn("candidate_trajectories", stats)
-        self.assertNotIn("road_polygons", stats)
+        self.assertEqual(stats["active_trajectories"][0]["track_id"], 88)
+        self.assertEqual(stats["candidate_trajectories"][0]["track_id"], 89)
+        self.assertIn("road_polygons", stats)
+        self.assertIn("active_trajectories_truncated", stats)
         self.assertEqual(stats["eligible_active_tracks"], 1)
         self.assertEqual(stats["candidate_tracks"], 1)
 

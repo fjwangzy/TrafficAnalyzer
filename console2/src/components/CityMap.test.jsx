@@ -56,7 +56,9 @@ describe('CityMap GCJ-02 AMap rendering', () => {
     render(<CityMap coordinateLabel='GCJ-02' sourcePoints={[{ id: 'INT-1', lat: 36.7, lon: 117, source_status: 'running', source_count: 2 }]} />)
     await waitFor(() => expect(mapMocks.markers).toHaveLength(1))
     expect(mapMocks.markers[0].options.content).toContain('#58d6b0')
+    expect(mapMocks.markers[0].options.content).toContain('amap-drone-marker-face')
     expect(mapMocks.markers[0].options.content).toContain('2')
+    expect(mapMocks.markers[0].options.zIndex).toBe(300)
   })
 
   it('renders a project intersection without situation metrics as a gray emphasized marker', async () => {

@@ -40,6 +40,7 @@ from app.services.pipeline_executor import (
     PipelineLaunchSpec,
 )
 from app.services.runtime_capabilities import pending_capability_report
+from utils_local.replay_topics import build_replay_v2_topics
 
 logger = logging.getLogger(__name__)
 
@@ -203,17 +204,18 @@ class PipelineManager:
         self._pipeline_python = pipeline_python or os.environ.get("PIPELINE_PYTHON") or "python"
         self._frame_stride = resolve_frame_stride(frame_stride)
         self._video_public_base = video_public_base or settings.pipeline_video_base
+        executor_env = {}
+        if settings.pipeline_device == "mps":
+            executor_env["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
+        if settings.app_runtime_profile == "replay_v2":
+            executor_env["TRAJECTORY_STORAGE_PROFILE"] = "replay_v2"
         self._executor = executor or LocalPipelineExecutor(
             self._root,
             self._pipeline_python,
             video_ready_timeout_sec=settings.pipeline_video_ready_timeout_sec,
             device=settings.pipeline_device,
             imgsz=settings.pipeline_imgsz,
-            extra_env=(
-                {"PYTORCH_ENABLE_MPS_FALLBACK": "1"}
-                if settings.pipeline_device == "mps"
-                else None
-            ),
+            extra_env=executor_env or None,
         )
         self._pipelines: dict[str, PipelineInstance] = {}
         if camera_id_start < 1:
@@ -260,6 +262,22 @@ class PipelineManager:
         if self.get_active_count() >= settings.pipeline_max_active:
             raise ValueError("pipeline concurrency limit reached")
 
+    @staticmethod
+    def _topic_for_runtime(
+        topic_name: str | None, camera_id: int, source_profile_id: str | None
+    ) -> str:
+        if settings.app_runtime_profile == "replay_v2":
+            if not source_profile_id:
+                raise ValueError("source_profile_id is required for replay_v2 pipelines")
+            expected = build_replay_v2_topics(source_profile_id).statistics
+            if topic_name is not None and topic_name != expected:
+                raise ValueError("topic_name must match the replay_v2 SourceProfile topic")
+            return expected
+        topic = topic_name or f"uav_statistics_{camera_id}"
+        if re.fullmatch(r"uav_statistics_[A-Za-z0-9._-]+", topic) is None:
+            raise ValueError("topic_name must be a canonical uav_statistics topic")
+        return topic
+
     # ── Public API ──
 
     def register_pipeline(
@@ -296,8 +314,6 @@ class PipelineManager:
             raise ValueError("camera_id must be between 1 and 65535")
         if video_port is not None and not 1024 <= video_port <= 65535:
             raise ValueError("video_port must be between 1024 and 65535")
-        if topic_name is not None and not re.fullmatch(r"uav_statistics_[A-Za-z0-9._-]+", topic_name):
-            raise ValueError("topic_name must be a canonical uav_statistics topic")
         if any(
             (camera_id is not None and item.camera_id == camera_id)
             or (video_port is not None and item.video_port == video_port)
@@ -312,7 +328,7 @@ class PipelineManager:
         port = video_port if video_port is not None else self._next_video_port
         if video_port is None:
             self._next_video_port += 1
-        topic = topic_name or f"uav_statistics_{cid}"
+        topic = self._topic_for_runtime(topic_name, cid, source_profile_id)
         registered_stream_url = (
             validate_detector_video_stream_url(video_stream_url)
             if video_stream_url
@@ -410,7 +426,9 @@ class PipelineManager:
         self._next_camera_id += 1
         video_port = self._next_video_port
         self._next_video_port += 1
-        topic_name = topic_name or f"uav_statistics_{camera_id}"
+        topic_name = self._topic_for_runtime(
+            topic_name, camera_id, source_profile_id
+        )
         video_stream_url = detector_video_stream_url(video_port, self._video_public_base)
 
         pipeline = PipelineInstance(

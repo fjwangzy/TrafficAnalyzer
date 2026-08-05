@@ -942,17 +942,10 @@ class KafkaProducerNode:
                 ),
                 **self._delivery_snapshot(),
             }
-            if getattr(self, "storage_profile", "live") == "replay_v2":
-                # V2 statistics are compact metric samples.  Historical points
-                # have exactly one durable path: segment spool -> sealed journey.
-                for key in (
-                    "active_trajectories",
-                    "candidate_trajectories",
-                    "road_polygons",
-                    "active_trajectories_truncated",
-                    "candidate_trajectories_truncated",
-                ):
-                    data.pop(key, None)
+            # The V2 metric store persists only scalar samples, while these bounded
+            # tails stay on Kafka/WebSocket for the current Pipeline's live BEV.
+            # Sealed historical points still have one durable path through the
+            # MissionTrajectoryArchive.
             snapshot_threshold = getattr(self, "_event_snapshot_congestion_threshold", 4.0)
             snapshot_samples = getattr(self, "_event_snapshot_consecutive_samples", 30)
             if congestion_index is not None and congestion_index > snapshot_threshold:

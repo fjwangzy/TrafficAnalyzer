@@ -99,6 +99,13 @@ button:focus-visible { outline: 2px solid #82adff; outline-offset: 2px; }
 .map-image.bev { filter: brightness(.6) saturate(.76) contrast(1.12); }
 .monitoring-bev-map { position: absolute; inset: 0; overflow: hidden; background: #07101a; }
 .monitoring-bev-map-canvas { position: absolute; inset: 0; }
+.monitoring-bev-pixel-stage { position: absolute; inset: 0; width: 100%; height: 100%; background: radial-gradient(circle at 50% 50%, rgba(22,55,82,.38), rgba(4,12,21,.96)); }
+.monitoring-bev-map.pixel-mode .monitoring-bev-grid { opacity: .32; }
+.monitoring-bev-legend { position: absolute; z-index: 4; top: 9px; right: 9px; display: flex; gap: 9px; padding: 4px 7px; border: 1px solid rgba(92,139,204,.25); border-radius: 5px; background: rgba(7,14,24,.82); color: #9bb0ca; font-size: 7px; pointer-events: none; }
+.monitoring-bev-legend span { display: inline-flex; align-items: center; gap: 4px; }
+.monitoring-bev-legend i { width: 15px; height: 0; border-top: 2px solid #63b3ff; }
+.monitoring-bev-legend i.candidate { border-top-color: #ffb454; border-top-style: dashed; }
+.monitoring-bev-map.compact .monitoring-bev-legend { top: 5px; right: 5px; gap: 5px; padding: 3px 4px; font-size: 6px; }
 .monitoring-bev-map .monitoring-map-tiles { filter: invert(92%) hue-rotate(175deg) brightness(42%) saturate(65%) contrast(125%); }
 .monitoring-bev-grid { position: absolute; inset: 0; pointer-events: none; opacity: .18; background-image: linear-gradient(rgba(93,163,226,.12) 1px, transparent 1px), linear-gradient(90deg, rgba(93,163,226,.12) 1px, transparent 1px); background-size: 64px 64px; mix-blend-mode: screen; }
 .monitoring-bev-source,.monitoring-bev-attribution { position: absolute; z-index: 3; padding: 4px 7px; border: 1px solid rgba(92,139,204,.25); border-radius: 5px; background: rgba(7,14,24,.82); color: #7f9abd; font-size: 7px; letter-spacing: .06em; pointer-events: none; }

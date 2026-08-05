@@ -109,6 +109,43 @@ export function metricSegmentLabel(start, end, metricTransform) {
   return Number.isFinite(length) ? `${length.toFixed(2)} m` : ''
 }
 
+export function polygonArea(points = []) {
+  if (points.length < 3 || points.some((point) => !Array.isArray(point) || !point.every(Number.isFinite))) return null
+  const twiceSignedArea = points.reduce((sum, [x, y], index) => {
+    const [nextX, nextY] = points[(index + 1) % points.length]
+    return sum + x * nextY - nextX * y
+  }, 0)
+  return Math.abs(twiceSignedArea) / 2
+}
+
+export function metricPolygonAreaLabel(points = [], metricTransform) {
+  const metricPoints = points.map((point) => projectPoint(point, metricTransform))
+  if (metricPoints.some((point) => !point)) return ''
+  const area = polygonArea(metricPoints)
+  return Number.isFinite(area) ? `${area.toFixed(2)} m²` : ''
+}
+
+export function polygonCentroid(points = []) {
+  if (points.length < 3 || points.some((point) => !Array.isArray(point) || !point.every(Number.isFinite))) return null
+  let crossSum = 0
+  let weightedX = 0
+  let weightedY = 0
+  points.forEach(([x, y], index) => {
+    const [nextX, nextY] = points[(index + 1) % points.length]
+    const cross = x * nextY - nextX * y
+    crossSum += cross
+    weightedX += (x + nextX) * cross
+    weightedY += (y + nextY) * cross
+  })
+  if (Math.abs(crossSum) < 1e-12) {
+    return [
+      points.reduce((sum, [x]) => sum + x, 0) / points.length,
+      points.reduce((sum, [, y]) => sum + y, 0) / points.length,
+    ]
+  }
+  return [weightedX / (3 * crossSum), weightedY / (3 * crossSum)]
+}
+
 export function geometrySegments(points = [], geometryType, closed = false) {
   const segments = points.slice(1).map((point, index) => [points[index], point])
   if (closed && ['area', 'object'].includes(geometryType) && points.length > 2) {

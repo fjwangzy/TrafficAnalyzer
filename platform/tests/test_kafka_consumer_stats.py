@@ -74,6 +74,35 @@ class _ReplayStore:
 
 
 class KafkaConsumerStatsTest(unittest.IsolatedAsyncioTestCase):
+    async def test_replay_mission_is_marked_dispatched_without_realtime_projection(self):
+        ws = _RecordingWS()
+        store = _ReplayStore()
+        service = KafkaConsumerService(
+            bootstrap_servers="localhost:9092",
+            group_id="uav-platform-replay-v2",
+            topics_pattern=r"uav_replay_v2_.*",
+            ws_manager=ws,
+            metric_store=store,
+            dispatch_realtime=True,
+        )
+        payload = {
+            "message_id": "replay-mission-1",
+            "msg_type": "uav_replay_mission",
+            "schema_version": "uav_replay_mission/replay-v2",
+            "source_system": "uav_traffic_analyzer_ai",
+            "data": {"mission_id": "MSN-1", "status": "sealed"},
+        }
+
+        await service._process_message(
+            payload,
+            "uav_replay_v2_mission_SRC-1",
+            0,
+            1,
+        )
+
+        self.assertEqual(ws.messages, [])
+        self.assertEqual(store.dispatched, [("uav_traffic_analyzer_ai", "replay-mission-1")])
+
     async def test_replay_consumer_persists_without_broadcasting_into_live_monitoring(self):
         ws = _RecordingWS()
         store = _ReplayStore()

@@ -103,6 +103,7 @@ vi.mock('./lib/api', async (importOriginal) => {
       events: vi.fn().mockResolvedValue([conflictEvent, congestionEvent, surveyEvent]),
       event: vi.fn().mockImplementation((eventId) => Promise.resolve({ ...(eventId === conflictEvent.id ? conflictEvent : congestionEvent), related_tracks: [] })),
       reviewEvent: vi.fn().mockImplementation((_eventId, body) => Promise.resolve({ ...conflictEvent, review_status: body.review_status, review_revision: 2 })),
+      createEventSurvey: vi.fn().mockResolvedValue({ task: { ...task, id: 'SVY-EVENT-001', title: '机非冲突风险升高事件测绘' }, frame: { ...frame, id: 'FRM-EVENT-001', task_id: 'SVY-EVENT-001' } }),
       surveyTask: vi.fn().mockResolvedValue(task),
       surveyBatches: vi.fn().mockResolvedValue([{ id: 'BATCH-01', status: 'ready', telemetry_coverage: 0.94, quality_checks: { keyframes_extracted: 1, homography_available: 1 } }]),
       surveyFrames: vi.fn().mockResolvedValue([frame]),
@@ -225,6 +226,8 @@ describe('Console2 full prototype', () => {
     expect(screen.getByText('服务器典型时段态势')).toBeInTheDocument()
     expect(screen.getByText('拥堵路段')).toBeInTheDocument()
     expect(screen.getByText('延误指数 > 2.0')).toBeInTheDocument()
+    expect(container.querySelector('.dashboard-kpis')).not.toHaveTextContent('机非冲突')
+    expect(container.querySelector('.dashboard-kpis')).not.toHaveTextContent('治理提升')
     expect(container.querySelector('.situation-map-detail')).not.toBeInTheDocument()
     await waitFor(() => expect(platformApi.dashboardIntersections).toHaveBeenCalledWith({ limit: 500 }))
     expect(screen.getByRole('navigation', { name: '全域态势二级导航' })).toHaveTextContent('工作台首屏实时监测')
@@ -303,7 +306,7 @@ describe('Console2 full prototype', () => {
   it('moves trajectory analysis into the intelligent-insight navigation domain', async () => {
     const { container } = open('/gis')
     const navigation = await screen.findByRole('navigation', { name: '智能研判二级导航' })
-    expect(navigation).toHaveTextContent('AI 事件中心轨迹研判')
+    expect(navigation).toHaveTextContent('轨迹研判AI 事件中心')
     expect(screen.getByRole('link', { name: '轨迹研判' })).toHaveClass('active')
     expect(container.querySelector('.page-heading')).not.toBeInTheDocument()
     expect(screen.getByLabelText('时间窗口')).toHaveValue('latest30m')
@@ -358,8 +361,135 @@ describe('Console2 full prototype', () => {
     fireEvent.change(slider, { target: { value: '18000' } })
 
     await waitFor(() => expect(platformApi.trajectoryReplay).toHaveBeenLastCalledWith(
-      'INT-I5', expect.objectContaining({ cursor_sec: 18, window_sec: 10 }),
+      'INT-I5', expect.objectContaining({ cursor_sec: 18, window_sec: 18 }),
     ))
+  })
+
+  it('requests only the final replay cursor after timeline dragging stops', async () => {
+    open('/gis?intersection_id=INT-I5&mission_id=MSN-1&cursor_ms=0')
+
+    const slider = await screen.findByLabelText('任务回放时间')
+    await waitFor(() => expect(slider).toHaveAttribute('max', '20000'))
+    platformApi.trajectoryReplay.mockClear()
+
+    fireEvent.pointerDown(slider)
+    fireEvent.change(slider, { target: { value: '4000' } })
+    fireEvent.change(slider, { target: { value: '9000' } })
+
+    expect(slider).toHaveValue('9000')
+    expect(platformApi.trajectoryReplay).not.toHaveBeenCalled()
+
+    fireEvent.pointerUp(slider)
+
+    await waitFor(() => expect(platformApi.trajectoryReplay).toHaveBeenCalledTimes(1))
+    expect(platformApi.trajectoryReplay).toHaveBeenLastCalledWith(
+      'INT-I5', expect.objectContaining({ cursor_sec: 9, window_sec: 9 }),
+    )
+  })
+
+  it('supports dragging the replay window start back to the Mission origin', async () => {
+    open('/gis?intersection_id=INT-I5&mission_id=MSN-1&cursor_ms=12000')
+
+    const slider = await screen.findByLabelText('回放窗口开始时间')
+    await waitFor(() => expect(slider).toHaveValue('2000'))
+    expect(slider).toHaveStyle({ zIndex: '4' })
+    platformApi.trajectoryReplay.mockClear()
+
+    fireEvent.pointerDown(slider)
+    fireEvent.change(slider, { target: { value: '0' } })
+
+    expect(slider).toHaveValue('0')
+    expect(platformApi.trajectoryReplay).not.toHaveBeenCalled()
+
+    fireEvent.pointerUp(slider)
+
+    await waitFor(() => expect(platformApi.trajectoryReplay).toHaveBeenCalledTimes(1))
+    expect(platformApi.trajectoryReplay).toHaveBeenLastCalledWith(
+      'INT-I5', expect.objectContaining({ cursor_sec: 12, window_sec: 12 }),
+    )
+    await waitFor(() => expect(new URLSearchParams(window.location.search).get('window_start_ms')).toBe('0'))
+  })
+
+  it('keeps the replay window start draggable when the URL has no cursor', async () => {
+    open('/gis?intersection_id=INT-I5&mission_id=MSN-1')
+
+    const start = await screen.findByLabelText('回放窗口开始时间')
+    const end = screen.getByLabelText('任务回放时间')
+    await waitFor(() => expect(end).toHaveValue('10000'))
+    platformApi.trajectoryReplay.mockClear()
+
+    fireEvent.pointerDown(start)
+    fireEvent.change(start, { target: { value: '5000' } })
+
+    expect(start).toHaveValue('5000')
+    expect(platformApi.trajectoryReplay).not.toHaveBeenCalled()
+
+    fireEvent.pointerUp(start)
+
+    await waitFor(() => expect(platformApi.trajectoryReplay).toHaveBeenCalledTimes(1))
+    expect(platformApi.trajectoryReplay).toHaveBeenLastCalledWith(
+      'INT-I5', expect.objectContaining({ cursor_sec: 10, window_sec: 5 }),
+    )
+  })
+
+  it('refreshes the displayed trajectory statistics from the committed replay window', async () => {
+    const baseReplay = await platformApi.trajectoryReplay('INT-I5', {})
+    const secondTrack = {
+      ...structuredClone(baseReplay.tracks[0]),
+      track_id: '8',
+      movement_key: 'entry:2|exit:3',
+      movement_label: '南进口 → 北出口',
+      points: baseReplay.tracks[0].points.map((point) => ({ ...point, enu_m: null, gcj02: null })),
+    }
+    const initialReplay = {
+      ...structuredClone(baseReplay),
+      tracks: [...structuredClone(baseReplay.tracks), secondTrack],
+      conflicts: [
+        { id: 'C-IN', offset_ms: 5000, severity: 'warning', ttc_sec: 1.2 },
+        { id: 'C-OUT', offset_ms: 15000, severity: 'warning', ttc_sec: 2.4 },
+      ],
+    }
+    const expandedReplay = {
+      ...structuredClone(baseReplay),
+      conflicts: [],
+    }
+    platformApi.trajectoryAnalysis.mockClear()
+    platformApi.trajectoryReplay.mockImplementation((_intersectionId, options = {}) => {
+      const response = Number(options.window_sec) >= 12 ? expandedReplay : initialReplay
+      const windowEndMs = Number(options.cursor_sec || 0) * 1000
+      return Promise.resolve({
+        ...structuredClone(response),
+        cursor: {
+          ...response.cursor,
+          offset_ms: windowEndMs,
+          window_start_ms: windowEndMs - Number(options.window_sec || 0) * 1000,
+          window_end_ms: windowEndMs,
+        },
+      })
+    })
+
+    open('/gis?intersection_id=INT-I5&mission_id=MSN-1&cursor_ms=12000')
+
+    const statistics = await screen.findByLabelText('当前回放窗口轨迹统计')
+    await waitFor(() => expect(statistics).toHaveTextContent('分析轨迹2'))
+    expect(statistics).toHaveTextContent('可回放轨迹2')
+    expect(statistics).toHaveTextContent('空间覆盖 50%')
+    expect(statistics).toHaveTextContent('识别流向2')
+    expect(statistics).toHaveTextContent('当前窗口冲突1')
+
+    const start = screen.getByLabelText('回放窗口开始时间')
+    fireEvent.pointerDown(start)
+    fireEvent.change(start, { target: { value: '0' } })
+    expect(statistics).toHaveTextContent('分析轨迹2')
+    fireEvent.pointerUp(start)
+
+    await waitFor(() => expect(statistics).toHaveTextContent('分析轨迹1'))
+    expect(statistics).toHaveTextContent('可回放轨迹1')
+    expect(statistics).toHaveTextContent('空间覆盖 100%')
+    expect(statistics).toHaveTextContent('识别流向1')
+    expect(statistics).toHaveTextContent('当前窗口冲突0')
+    expect(platformApi.trajectoryAnalysis).not.toHaveBeenCalled()
+    platformApi.trajectoryReplay.mockResolvedValue(baseReplay)
   })
 
   it('does not overlap replay requests while continuous playback advances', async () => {
@@ -370,7 +500,7 @@ describe('Console2 full prototype', () => {
         ? new Promise((resolve) => { releaseReplay = () => resolve(baseReplay) })
         : Promise.resolve(baseReplay)
     ))
-    open('/gis?intersection_id=INT-I5&mission_id=MSN-1')
+    open('/gis?intersection_id=INT-I5&mission_id=MSN-1&cursor_ms=0')
 
     const play = await screen.findByRole('button', { name: '播放历史回放' })
     await waitFor(() => expect(screen.getByLabelText('任务回放时间')).toHaveAttribute('max', '20000'))
@@ -523,7 +653,7 @@ describe('Console2 full prototype', () => {
         : Promise.resolve(firstSlice)
     ))
 
-    open('/gis?intersection_id=INT-I5&period=all&playback_speed=4')
+    open('/gis?intersection_id=INT-I5&period=all&playback_speed=4&cursor_ms=0')
 
     expect(await screen.findByText('1 条轨迹 · 1 个行为', {}, { timeout: 10_000 })).toBeInTheDocument()
     platformApi.trajectoryReplay.mockClear()
@@ -645,10 +775,25 @@ describe('Console2 full prototype', () => {
 
   it('supports event deep links and persistent technical review', async () => {
     open('/events?event_id=UAV-EVT-20260713-001')
+    await waitFor(() => expect(platformApi.events).toHaveBeenCalledWith({ limit: 150 }))
     expect(await screen.findByRole('dialog', { name: '机非冲突风险升高' })).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: '技术确认' }))
     expect(await screen.findByText('AI 结果已技术确认')).toBeInTheDocument()
     expect(platformApi.reviewEvent).toHaveBeenCalledWith('UAV-EVT-20260713-001', expect.objectContaining({ review_status: 'confirmed', expected_revision: 1 }))
+  })
+
+  it('creates an event survey from the current keyframe and opens its measurement page', async () => {
+    platformApi.surveyTask.mockResolvedValueOnce({ ...await platformApi.surveyTask(), id: 'SVY-EVENT-001', title: '机非冲突风险升高事件测绘' })
+    open('/events?event_id=UAV-EVT-20260713-001')
+
+    fireEvent.click(await screen.findByRole('button', { name: '事件测绘' }))
+
+    await waitFor(() => expect(platformApi.createEventSurvey).toHaveBeenCalledWith(
+      'UAV-EVT-20260713-001',
+      expect.stringMatching(/^event-survey-/),
+    ))
+    await waitFor(() => expect(platformApi.surveyTask).toHaveBeenCalledWith('SVY-EVENT-001'))
+    expect(await screen.findByRole('heading', { name: '点线面量算' })).toBeInTheDocument()
   })
 
   it('restores a saved demo snapshot for post-event traffic analysis', async () => {
@@ -668,6 +813,7 @@ describe('Console2 full prototype', () => {
 
     open(`/events?snapshot_id=${snapshot.id}`)
 
+    expect(screen.queryByText('本机演示分析快照')).not.toBeInTheDocument()
     expect(await screen.findByRole('dialog', { name: '事件与交通流事后分析' })).toBeInTheDocument()
     expect(screen.getByText('治理后复盘 · DEMO-SNAPSHOT-INT-I5-review')).toBeInTheDocument()
     expect(screen.getByText('南进口直行')).toBeInTheDocument()
@@ -811,6 +957,34 @@ describe('Console2 full prototype', () => {
     expect(await screen.findByRole('heading', { name: '技术复核' })).toBeInTheDocument()
   })
 
+  it('announces the automatically calculated area while an area polygon is being drawn', async () => {
+    const context = {
+      scale: vi.fn(), beginPath: vi.fn(), moveTo: vi.fn(), lineTo: vi.fn(), closePath: vi.fn(),
+      fill: vi.fn(), stroke: vi.fn(), arc: vi.fn(), fillRect: vi.fn(), strokeRect: vi.fn(), fillText: vi.fn(), strokeText: vi.fn(),
+      measureText: vi.fn(() => ({ width: 48 })),
+    }
+    const getContext = vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(context)
+    open('/survey/SVY-20260713-006/measure')
+    const image = await screen.findByRole('img', { name: '由真实关键帧生成的正射量算底图' })
+    Object.defineProperties(image, {
+      naturalWidth: { configurable: true, value: 1000 },
+      naturalHeight: { configurable: true, value: 600 },
+      clientWidth: { configurable: true, value: 1000 },
+      clientHeight: { configurable: true, value: 600 },
+    })
+    image.getBoundingClientRect = () => ({ left: 0, top: 0, width: 1000, height: 600, right: 1000, bottom: 600 })
+    fireEvent.load(image)
+    fireEvent.click(screen.getByRole('button', { name: '面积' }))
+    fireEvent.click(image, { clientX: 20, clientY: 10 })
+    fireEvent.click(image, { clientX: 50, clientY: 10 })
+    fireEvent.mouseMove(image, { clientX: 50, clientY: 50 })
+
+    expect(await screen.findByText('当前面积 6.00 m²')).toBeInTheDocument()
+    expect(context.fillRect).not.toHaveBeenCalled()
+    expect(context.strokeText).toHaveBeenCalledWith('6.00 m²', expect.any(Number), expect.any(Number))
+    getContext.mockRestore()
+  })
+
   it('renders a generated survey report without requiring a page reload', async () => {
     open('/survey/SVY-20260713-006/report')
     expect(await screen.findByText('测绘标注图')).toBeInTheDocument()
@@ -819,6 +993,31 @@ describe('Console2 full prototype', () => {
     fireEvent.click(generate)
     expect(await screen.findByRole('button', { name: '打开真实 PDF' })).toBeInTheDocument()
     expect(screen.getByText(/aaaaaaaaaaaaaaaa/)).toBeInTheDocument()
+  })
+
+  it('shows an actionable error instead of an endless loader when survey evidence cannot be read', async () => {
+    platformApi.surveyReports.mockResolvedValueOnce([{
+      id: 'RPT-EVIDENCE-ERROR',
+      task_id: 'SVY-20260713-006',
+      version: 2,
+      status: 'generated',
+      schema_version: 'uav.survey-result.v1',
+      content_hash: 'b'.repeat(64),
+      payload: {},
+      pdf_url: '/api/v1/survey-evidence/EVI-PDF/content',
+      annotated_images: [{ evidence_id: 'EVI-MISSING', frame_id: 'FRM-01', frame_number: 18236, measurement_count: 1, url: '/api/v1/survey-evidence/EVI-MISSING/content' }],
+    }])
+    platformApi.surveyEvidence
+      .mockRejectedValueOnce({ response: { data: { detail: 'evidence reference is missing' } } })
+      .mockResolvedValueOnce(new Blob(['image']))
+
+    open('/survey/SVY-20260713-006/report')
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('evidence reference is missing')
+    expect(screen.queryByText('正在校验证据哈希并读取图像…')).not.toBeInTheDocument()
+    const evidenceReadsBeforeRetry = platformApi.surveyEvidence.mock.calls.length
+    fireEvent.click(screen.getByRole('button', { name: '重试图片' }))
+    await waitFor(() => expect(platformApi.surveyEvidence).toHaveBeenCalledTimes(evidenceReadsBeforeRetry + 1))
   })
 
   it('persists enforcement clue technical confirmation through the I4 API', async () => {

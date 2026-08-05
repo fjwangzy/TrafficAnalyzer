@@ -1,7 +1,11 @@
 """Unified Event Center endpoints."""
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.database import get_db
+from app.services.survey_service import SurveyService
 
 router = APIRouter(prefix="/events", tags=["events"])
 
@@ -19,6 +23,17 @@ def _center(request: Request):
     return center
 
 
+def _actor(request: Request) -> tuple[int | None, str, str]:
+    user = getattr(request.state, "user", None)
+    if not user:
+        raise HTTPException(status_code=401, detail="authenticated event survey identity required")
+    try:
+        actor_id = int(user.get("sub")) if user.get("sub") is not None else None
+    except (TypeError, ValueError):
+        actor_id = None
+    return actor_id, user.get("username", "unknown"), user.get("role", "viewer")
+
+
 @router.get("")
 async def list_events(
     request: Request,
@@ -27,7 +42,7 @@ async def list_events(
     source_profile_id: str | None = None,
     mission_id: str | None = None,
     review_status: str | None = None,
-    limit: int = Query(default=200, ge=1, le=1000),
+    limit: int = Query(default=150, ge=1, le=150),
 ):
     return await _center(request).list_events(
         event_type=event_type,
@@ -45,6 +60,32 @@ async def get_event(event_id: str, request: Request):
         return await _center(request).get_event(event_id)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
+
+
+@router.post("/{event_id}/survey", status_code=status.HTTP_201_CREATED)
+async def create_event_survey(
+    event_id: str,
+    request: Request,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    db: AsyncSession = Depends(get_db),
+):
+    actor_id, actor_name, role = _actor(request)
+    request_id = idempotency_key or request.headers.get("X-Request-ID")
+    if request_id and len(request_id) > 80:
+        raise HTTPException(status_code=422, detail="request identifier exceeds 80 characters")
+    try:
+        event = await _center(request).get_event(event_id)
+        return await SurveyService(db).create_from_event(
+            event, actor_id, actor_name, role, request_id
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
 
 
 @router.post("/{event_id}/review")

@@ -123,9 +123,10 @@ class STrack(BaseTrack):
 
         self.tracklet_len = 0
         self.state = TrackState.Tracked
-        if frame_id == 1:
-            self.is_activated = True
-        # self.is_activated = True
+        # Realtime policy: a detection that starts a valid ByteTrack association
+        # is immediately an active target.  Do not hide later-born tracks behind
+        # the historical one-frame confirmation/cooldown gate.
+        self.is_activated = True
         self.frame_id = frame_id
         self.start_frame = frame_id
         self.last_seen_timestamp = timestamp

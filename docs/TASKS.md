@@ -10,6 +10,9 @@
 
 ## 2026-08-04 交通轨迹真实复盘与存储治理（V2 shadow 已验收，未切换）
 
+- [x] 修复 `/gis` 时间轴拖动导致 Platform 假死：窗口开始/结束双游标均可拖动，拖动中零请求、释放后单次提交；PostgreSQL 回放由全量 64,444 点装载改为首尾分析点与窗口/锚点 SQL 查询。XQH 真实 Mission 的同一 10 秒窗口从约 2.8s / 319MB 降至约 0.56s / 28MB，四个时间点、分页和五类筛选与旧响应逐字段一致。
+- [x] `/gis` 顶部轨迹统计随已提交回放窗口刷新：直接投影 replay 响应中的窗口轨迹、空间覆盖、流向和冲突；拖动预览期保持旧值，不新增 `/analysis` 指标重算，Mission 级流向排名、行为总数和时间轴事件标记口径不变。
+- [x] 修复 `/gis` 未带游标参数时双游标重合在 `T+0`：默认建立 `T+0 ～ T+10s` 回放窗口（短 Mission 取实际总长），开始游标进入页面即可拖动，显式深链游标保持不变。
 - [x] 按 [`交通轨迹真实复盘与存储治理计划`](superpowers/plans/2026-08-04-trajectory-replay-storage-model.md) 建设 `MissionTrajectoryArchive`、Mission T+ 时钟、事件保真 TrackPoint、版本化冻结速度及 stopped/releasing/queue/geometric U-turn 事实。
 - [x] 建立独立 `uav_replay_v2_*` Mission、inbox/dead-letter、轨迹、行为、冲突、遥测、秒级样本、四类 5 分钟聚合和典型矩阵表；V2 migration head 为 `20260805_rv2_0003`，不推进 canonical head。sealed Mission 的聚合以 journey count 为收敛屏障；turn 维度在 movement 缺失时显式降级为冻结的 `turn_behavior:*`，不丢失转向事实。
 - [x] V2 Stats 清除完整轨迹尾迹，Topic 稳定绑定 SourceProfile、启用 Zstd；秒级 metric sample 已启用 Timescale 压缩和 90 天 shadow 保留策略。

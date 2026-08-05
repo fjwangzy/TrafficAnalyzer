@@ -968,8 +968,10 @@ ImageMotionEstimationNode
 - 完整观测数与消息内序列化轨迹点分开统计；数字类别名单列为数据质量问题，不静默映射或回写历史。
 - 没有批准外部真值时，Precision、Recall、IDF1、HOTA 和正式 ID switch 必须为
   `not_evaluated`。改进比较先使用同一帧、同一检测输入的 shadow/A-B，再决定是否进入生产关联。
-- 小目标改进不得通过全局降低 YOLO/ByteTrack 阈值或放宽成熟门槛完成。优先补逐检测关联 lineage、
-  实际 `dt`/目标尺度软代价、高运动采样与预算受控 ROI 二次检测。
+- 小目标改进不得通过全局降低 YOLO/ByteTrack 检测/关联阈值完成。2026-08-05 用户明确选择的
+  “发现即目标”实时生命周期已由 ADR-032 取代此处原有成熟等待；它是产品响应策略，不得包装为
+  小目标精度提升。优先补逐检测关联 lineage、实际 `dt`/目标尺度软代价、高运动采样与预算受控
+  ROI 二次检测。
 
 ### 后果
 
@@ -1007,27 +1009,45 @@ xqh 全量 1696 帧可以用于定位稳定悬停与离场阶段的工程差异�
 - Platform 允许首页 `GET /api/v1/dashboard/situation` 通过独立连接只读访问 database=`ycx` 下的 `road9` 与 `xianchang` schema。每次查询必须处于 read-only transaction，不能执行 DDL/DML、复制服务器数据或写本地 `road9`。
 - 该接口使用启用道路版本，将全量有效态势路口/Link 范围与所选星期、5 分钟时槽左联结；当槽缺指标仍返回灰色范围对象。响应明确标记 `typical_5min` 与 `Asia/Shanghai`，不得称为实时数据。
 - 缓存键固定为道路版本、星期和时槽，TTL 为 5 分钟、最多 64 槽。只有同槽存在最近成功响应时，依赖失败才可返回 `stale=true`；首次失败必须结构化 503，Console 不回退态势 mock。
-- 本地项目路口与服务器范围在 Console 合并，项目身份只增加外圈。启用视频源仅按真实 `inter_id` 匹配并按路口聚合；点击优先运行中 Pipeline，其次有效源、最后降级源。
+- 本地项目路口与服务器范围在 Console 合并，项目身份只增加外圈。启用视频源仅按真实 `inter_id` 匹配并按路口聚合；已验证项目坐标即使当前服务器典型矩阵没有同路口指标，也必须显示无人机源标记，态势颜色保持灰色。缺少项目/服务器坐标的源不伪造点位。点击优先运行中 Pipeline，其次有效源、最后降级源。
 - 此例外不改变 ADR-019 的 canonical 业务存储，也不扩大 ADR-020 的路网导入职责。检测管线、Mission、Kafka、无人机统计、事件、测绘和本地写事实继续只使用既有 canonical 链路。
 
 ### 后果
 
 首页前三个 KPI、路口颜色和路段颜色来自服务器典型矩阵；机非冲突、事故测绘及治理复盘固定样例继续明确标记为演示数据。外部连接配置缺失或首次不可达时地图保留项目灰点和错误说明，不伪造生产态势。
 
-## ADR-031：轨迹回放采用 Replay V2 shadow namespace（2026-08-04）
+## ADR-031：轨迹回放采用 Replay V2 独立 namespace（2026-08-04，2026-08-05 修订）
 
 ### 状态
 
-已实施 shadow，五源工程基线与 XQH 全长自然 EOF/聚合/浏览器复验已完成；正式切换尚未批准。
+已实施并完成本机单运行时切换；五源工程基线与 XQH 全长自然 EOF/聚合/浏览器复验已完成。生产切换仍需独立批准。
 
 ### 决策
 
 - 产品链路硬隔离：`实时监测 → BEV` 继续投放当前 Pipeline 的实时轨迹；`智能研判 → 轨迹回放` 只读取自然 EOF 后 sealed 的 Mission。监控页不得请求回放 API、建立回放时钟或混入历史 journey。
 - 在线 ByteTrack ID 不变。终止 segment 先写外部 durable spool，Mission 自然 EOF 后才执行保守唯一 ReID、全序列速度冻结、行为派生和事件保真抽样；异常退出保持 incomplete，默认不进入回放。
-- 同一 `road9` 内使用 `uav_replay_v2_*` 表和独立 `uav_replay_v2_alembic_version`；Kafka 使用 `uav_replay_v2_*_{source_key}` Topic 和独立消费者组。V2 Platform profile 只做 V2 迁移/消费并拒绝控制面写入。
+- 同一 `road9` 内使用 `uav_replay_v2_*` 表和独立 `uav_replay_v2_alembic_version`；Kafka 使用 `uav_replay_v2_*_{source_key}` Topic 和独立消费者组。自 2026-08-05 起，V2 Platform profile 是本机唯一完整运行模式：控制面写入、任务调度、实时 WebSocket、告警和测绘 worker 全部启用，检测子进程强制使用 V2 storage profile；旧的只读 shadow 门禁废止。
+- Replay V2 只隔离轨迹/统计数据面，不分叉 canonical 证据对象存储；所有本机运行模式固定复用 `.runtime/survey`。历史 `/private/tmp/traffic-analyzer-replay-v2-survey` 默认值退役，防止 road9 引用存在但运行时读取错误目录。
 - `/gis` 保留现有布局，但只按单 Mission T+ 时钟播放；“全部 Mission”只能汇总。无世界坐标时使用像素平面，明确质量 gap 不插值、不连线。
-- shadow 默认端口为 Platform `8200`、Console `5273`、视频服务 `18101+`；大文件直接引用主工作树，spool、缓存、输出和证据写 `/private/tmp`。
+- 历史 shadow 验收曾使用 Platform `8200`、Console `5273`、视频服务 `18101+`；该双实例拓扑已退役。本机演示固定使用单套 Platform `8000`、Console `5173`，大文件直接引用主工作树，spool、缓存、输出和证据写 `/private/tmp`。
 
 ### 后果
 
-开发验证不会改写当前 `8000/5173` 演示实例、canonical 表、Topic 或 offset。所有 Kafka 发布节点（包括跨 Show 进程的 TCC 证据发布器）必须使用同一个 profile Topic 选择器；验收运行器要以前后 offset 捕获任何绕行，并等待 declared journey 与全部实际/典型聚合同时收敛。`uav_replay_v2_*` 是开发隔离命名，不是永久生产命名；五源基线及 XQH 全长自然 EOF、Kafka/PG 对账、容量/延迟、浏览器和既有回归已完成，但仍只有获得单独破坏性批准后才能暂停旧写入并评审迁回 canonical。没有批准真值时所有正式跟踪、位置、速度和 ReID 准确率保持 `not_evaluated`。
+所有 Kafka 发布节点（包括跨 Show 进程的 TCC 证据发布器）必须使用同一个 profile Topic 选择器；验收运行器要以前后 offset 捕获任何绕行，并等待 declared journey 与全部实际/典型聚合同时收敛。`uav_replay_v2_*` 是当前本机演示的数据面命名，不代表生产已批准；生产切换仍需独立评审。没有批准真值时所有正式跟踪、位置、速度和 ReID 准确率保持 `not_evaluated`。
+
+## ADR-032：实时检测关联发现即目标（2026-08-05）
+
+### 状态
+
+已实施；本机 `replay_v2` 实时链路验证通过。
+
+### 决策
+
+- 达到既有 YOLO 检测与 ByteTrack 关联阈值的新关联在首次出现帧立即激活，不再执行历史的一帧确认等待。
+- `TrackerInfoUpdateNode` 同帧设置 `trajectory_output_eligible=true` 并进入 `active_tracks/mature_tracks`；当前生产者的 `candidate_trajectories` 正常为空，仅保留旧消息兼容读取。
+- 检测/关联阈值、lost 保留、ID 结束条件和地理/路网/TCC 独立质量门禁不因此放宽。
+- 轨迹结束后的 durable 历史归档继续要求最短时长与最少点数，避免单帧误检污染回放台账；该归档过滤不得反向隐藏实时目标。
+
+### 后果
+
+实时页面只要图像跟踪器接受目标就立即显示并计入通用活动目标统计；不会再出现候选冷静期虚线。响应更直接，也明确接受短暂误检在实时画面短时出现的产品取舍。正式检测/跟踪精度仍需批准真值评估，不能由即时投放数量证明。

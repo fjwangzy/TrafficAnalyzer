@@ -17,6 +17,32 @@ import { readDemoSnapshots } from '../lib/demoSnapshots'
 
 const intersections = prototypeIntersections
 const REPLAY_STEP_MS = 1000
+const REPLAY_DEFAULT_WINDOW_MS = 10_000
+const REPLAY_MIN_WINDOW_MS = 100
+const REPLAY_MAX_WINDOW_MS = 300_000
+
+function replayWindowStatistics(replay) {
+  const tracks = replay?.tracks || []
+  const windowStartMs = Number(replay?.cursor?.window_start_ms || 0)
+  const windowEndMs = Number(replay?.cursor?.window_end_ms ?? replay?.cursor?.offset_ms ?? 0)
+  const inWindow = (offset) => Number.isFinite(Number(offset)) && Number(offset) >= windowStartMs && Number(offset) <= windowEndMs
+  const windowPoints = tracks.flatMap((track) => (track.points || []).filter((point) => inWindow(point.offset_ms)))
+  const replayableTracks = tracks.filter((track) => (track.points || []).some((point) => inWindow(point.offset_ms)))
+  const spatialPoints = windowPoints.filter((point) => (
+    (Array.isArray(point.gcj02) && point.gcj02.length >= 2)
+    || (Array.isArray(point.enu_m) && point.enu_m.length >= 2)
+  ))
+  const conflicts = (replay?.conflicts || []).filter((item) => inWindow(item.offset_ms))
+
+  return {
+    totalTracks: tracks.length,
+    replayableTracks: replayableTracks.length,
+    spatialCoverageRatio: windowPoints.length ? spatialPoints.length / windowPoints.length : 0,
+    movementCount: new Set(tracks.map((track) => track.movement_key).filter(Boolean)).size,
+    conflicts,
+    unattributedConflicts: conflicts.filter((item) => !item.movement_key).length,
+  }
+}
 
 const trafficSeries = [
   { time: '06:00', flow: 382, congestion: 2.1, speed: 42 }, { time: '08:00', flow: 768, congestion: 6.2, speed: 26 }, { time: '10:00', flow: 842, congestion: 7.2, speed: 24 },
@@ -287,7 +313,16 @@ export function GisPage() {
   const [selectedTrackId, setSelectedTrackId] = useState(search.get('track_id'))
   const [analysisTab, setAnalysisTab] = useState(['movement', 'class', 'track'].includes(search.get('analysis_tab')) ? search.get('analysis_tab') : 'movement')
   const [movementSort, setMovementSort] = useState(MOVEMENT_SORTS.includes(search.get('movement_sort')) ? search.get('movement_sort') : 'business')
-  const [cursorMs, setCursorMs] = useState(Math.max(0, Number(search.get('cursor_ms')) || 0))
+  const initialCursorMs = Math.max(0, Number(search.get('cursor_ms')) || 0)
+  const initialWindowStartMs = search.has('window_start_ms')
+    ? Math.max(0, Math.min(initialCursorMs, Number(search.get('window_start_ms')) || 0))
+    : Math.max(0, initialCursorMs - REPLAY_DEFAULT_WINDOW_MS)
+  const [cursorMs, setCursorMs] = useState(initialCursorMs)
+  const [requestedCursorMs, setRequestedCursorMs] = useState(initialCursorMs)
+  const [windowStartMs, setWindowStartMs] = useState(initialWindowStartMs)
+  const [requestedWindowStartMs, setRequestedWindowStartMs] = useState(initialWindowStartMs)
+  const timelineDragging = useRef(null)
+  const shouldInitializeDefaultWindow = useRef(!search.has('cursor_ms') && !search.has('window_start_ms'))
   const [playing, setPlaying] = useState(false)
   const [playbackSpeed, setPlaybackSpeed] = useState(['0.5', '1', '2', '4'].includes(search.get('playback_speed')) ? Number(search.get('playback_speed')) : 1)
 
@@ -310,6 +345,9 @@ export function GisPage() {
     if (availableMissions[0]?.mission_id && missionId !== 'all' && !availableMissions.some((item) => item.mission_id === missionId)) {
       setMissionId(availableMissions[0].mission_id)
       setCursorMs(0)
+      setRequestedCursorMs(0)
+      setWindowStartMs(0)
+      setRequestedWindowStartMs(0)
     }
   }, [availableMissions, missionId])
 
@@ -319,6 +357,9 @@ export function GisPage() {
     if (previousScopeKey.current === scopeKey) return
     previousScopeKey.current = scopeKey
     setCursorMs(0)
+    setRequestedCursorMs(0)
+    setWindowStartMs(0)
+    setRequestedWindowStartMs(0)
     setSelectedMovement(null)
     setSelectedTrackId(null)
     setPlaying(false)
@@ -344,25 +385,37 @@ export function GisPage() {
     setOptional('movement_sort', movementSort === 'business' ? null : movementSort, null)
     setOptional('playback_speed', playbackSpeed === 1 ? null : String(playbackSpeed), null)
     setOptional('behavior', behavior)
-    setOptional('cursor_ms', cursorMs > 0 ? String(cursorMs) : null, null)
+    setOptional('cursor_ms', requestedCursorMs > 0 ? String(requestedCursorMs) : null, null)
+    const defaultWindowStartMs = Math.max(0, requestedCursorMs - REPLAY_DEFAULT_WINDOW_MS)
+    if (requestedWindowStartMs !== defaultWindowStartMs) params.set('window_start_ms', String(requestedWindowStartMs))
+    else params.delete('window_start_ms')
     for (const name of ['start_at', 'end_at', 'slice_start_at', 'slice_end_at']) params.delete(name)
     const nextSearch = params.toString()
     if (nextSearch !== location.search.replace(/^\?/, '')) {
       navigate(`${location.pathname}?${nextSearch}`, { replace: true })
     }
-  }, [analysisTab, behavior, cursorMs, location.pathname, location.search, missionId, movementSort, navigate, period, playbackSpeed, selectedId, selectedMovement, selectedTrackId, sourceProfileId, turnBehavior, vehicleClass, yoloClassId])
+  }, [analysisTab, behavior, location.pathname, location.search, missionId, movementSort, navigate, period, playbackSpeed, requestedCursorMs, requestedWindowStartMs, selectedId, selectedMovement, selectedTrackId, sourceProfileId, turnBehavior, vehicleClass, yoloClassId])
 
   const selectedMission = availableMissions.find((item) => item.mission_id === missionId) || null
   const durationMs = Number(selectedMission?.duration_ms || 0)
+  useEffect(() => {
+    if (!shouldInitializeDefaultWindow.current || missionId === 'all' || durationMs <= 0) return
+    shouldInitializeDefaultWindow.current = false
+    const defaultCursorMs = Math.min(durationMs, REPLAY_DEFAULT_WINDOW_MS)
+    setCursorMs(defaultCursorMs)
+    setRequestedCursorMs(defaultCursorMs)
+    setWindowStartMs(0)
+    setRequestedWindowStartMs(0)
+  }, [durationMs, missionId])
   const replayQuery = useQuery({
     queryKey: [
-      'trajectory-replay-v2', selected?.id, missionId, cursorMs, selectedTrackId,
+      'trajectory-replay-v2', selected?.id, missionId, requestedWindowStartMs, requestedCursorMs, selectedTrackId,
       behavior, vehicleClass, yoloClassId, turnBehavior, selectedMovement,
     ],
     queryFn: () => platformApi.trajectoryReplay(selected.id, {
       mission_id: missionId,
-      cursor_sec: cursorMs / 1000,
-      window_sec: 10,
+      cursor_sec: requestedCursorMs / 1000,
+      window_sec: Math.max(REPLAY_MIN_WINDOW_MS, requestedCursorMs - requestedWindowStartMs) / 1000,
       max_points: 5000,
       ...(selectedTrackId ? { track_id: selectedTrackId } : {}),
       ...(behavior !== 'all' ? { behavior } : {}),
@@ -374,21 +427,25 @@ export function GisPage() {
     enabled: Boolean(selected?.id && missionId && missionId !== 'all'),
     placeholderData: (previous) => previous?.mission?.mission_id === missionId ? previous : undefined,
   })
-  const emptyReplay = { mission: selectedMission || {}, cursor: { offset_ms: cursorMs, duration_ms: durationMs }, tracks: [], coordinate_mode: 'pixel', analysis: { quality: {}, movement_ranking: [], class_summary: { business: [], yolo: [] }, conflicts: [] }, conflicts: [] }
+  const emptyReplay = { mission: selectedMission || {}, cursor: { offset_ms: cursorMs, window_start_ms: windowStartMs, duration_ms: durationMs }, tracks: [], coordinate_mode: 'pixel', analysis: { quality: {}, movement_ranking: [], class_summary: { business: [], yolo: [] }, conflicts: [] }, conflicts: [] }
   const replay = missionId === 'all' ? emptyReplay : (replayQuery.data || emptyReplay)
   const analysis = replay.analysis || { quality: {}, movement_ranking: [], class_summary: { business: [], yolo: [] }, conflicts: [] }
+  const windowStatistics = replayWindowStatistics(replay)
   useEffect(() => {
     if (!playing || missionId === 'all' || durationMs <= 0) return undefined
     const timer = window.setInterval(() => {
       if (replayQuery.isFetching) return
-      setCursorMs((current) => {
-        const next = Math.min(durationMs, current + REPLAY_STEP_MS * playbackSpeed)
-        if (next >= durationMs) setPlaying(false)
-        return next
-      })
+      const windowSpanMs = Math.max(REPLAY_MIN_WINDOW_MS, requestedCursorMs - requestedWindowStartMs)
+      const next = Math.min(durationMs, requestedCursorMs + REPLAY_STEP_MS * playbackSpeed)
+      const nextWindowStart = Math.max(0, next - windowSpanMs)
+      setCursorMs(next)
+      setRequestedCursorMs(next)
+      setWindowStartMs(nextWindowStart)
+      setRequestedWindowStartMs(nextWindowStart)
+      if (next >= durationMs) setPlaying(false)
     }, REPLAY_STEP_MS)
     return () => window.clearInterval(timer)
-  }, [durationMs, missionId, playbackSpeed, playing, replayQuery.isFetching])
+  }, [durationMs, missionId, playbackSpeed, playing, replayQuery.isFetching, requestedCursorMs, requestedWindowStartMs])
 
   const tracks = (replay.tracks || []).map((track) => {
     const points = track.points || []
@@ -410,7 +467,8 @@ export function GisPage() {
       current_state: [...(track.episodes || []), ...(track.maneuvers || [])].find((item) => item.start_offset_ms <= cursorMs && cursorMs <= item.end_offset_ms)?.kind || 'moving',
     }
   })
-  const conflicts = replay.conflicts || analysis.conflicts || []
+  const missionConflicts = replay.conflicts || analysis.conflicts || []
+  const conflicts = windowStatistics.conflicts
   const timelineEvents = [
     ...tracks.flatMap((track) => [...(track.episodes || []), ...(track.maneuvers || [])]),
     ...tracks.flatMap((track) => (track.points || []).flatMap((point) => (
@@ -418,7 +476,7 @@ export function GisPage() {
         ? [{ kind: 'quality_gap', start_offset_ms: point.offset_ms }]
         : []
     ))),
-    ...conflicts.map((item) => ({ kind: 'conflict', start_offset_ms: item.offset_ms ?? 0 })),
+    ...missionConflicts.map((item) => ({ kind: 'conflict', start_offset_ms: item.offset_ms ?? 0 })),
   ]
   const selectedTrack = tracks.find((item) => item.id === selectedTrackId) || tracks[0] || null
   const movementColor = new Map((analysis.movement_ranking || []).map((item, index) => [item.movement_key, index % MOVEMENT_COLORS.length]))
@@ -456,8 +514,49 @@ export function GisPage() {
       return
     }
     if (missionId === 'all' || durationMs <= 0) return
-    if (cursorMs >= durationMs) setCursorMs(0)
+    if (cursorMs >= durationMs) {
+      setCursorMs(0)
+      setRequestedCursorMs(0)
+      setWindowStartMs(0)
+      setRequestedWindowStartMs(0)
+    }
     setPlaying(true)
+  }
+  const clampTimelineStart = (value) => Math.max(Math.max(0, cursorMs - REPLAY_MAX_WINDOW_MS), Math.min(Math.max(0, cursorMs - REPLAY_MIN_WINDOW_MS), Number(value) || 0))
+  const clampTimelineEnd = (value) => Math.min(Math.min(durationMs, windowStartMs + REPLAY_MAX_WINDOW_MS), Math.max(Math.min(durationMs, windowStartMs + REPLAY_MIN_WINDOW_MS), Number(value) || 0))
+  const previewTimelineStart = (event) => {
+    const next = clampTimelineStart(event.target.value)
+    setWindowStartMs(next)
+    setPlaying(false)
+    if (timelineDragging.current !== 'start') setRequestedWindowStartMs(next)
+  }
+  const previewTimelineCursor = (event) => {
+    const next = clampTimelineEnd(event.target.value)
+    setCursorMs(next)
+    setPlaying(false)
+    if (timelineDragging.current !== 'end') setRequestedCursorMs(next)
+  }
+  const startTimelineDrag = (handle, event) => {
+    timelineDragging.current = handle
+    setPlaying(false)
+    event.currentTarget.setPointerCapture?.(event.pointerId)
+  }
+  const commitTimelineDrag = (handle, event) => {
+    if (timelineDragging.current !== handle) return
+    const next = handle === 'start'
+      ? clampTimelineStart(event.currentTarget.value)
+      : clampTimelineEnd(event.currentTarget.value)
+    timelineDragging.current = null
+    if (event.pointerId != null && event.currentTarget.hasPointerCapture?.(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId)
+    }
+    if (handle === 'start') {
+      setWindowStartMs(next)
+      setRequestedWindowStartMs(next)
+    } else {
+      setCursorMs(next)
+      setRequestedCursorMs(next)
+    }
   }
   const intersectionResult = intersectionsQuery.isLoading ? '路口加载中' : intersectionsQuery.error ? '路口加载失败' : `${projectIntersections.length} 个路口`
   const trajectoryResult = intersectionsQuery.isLoading ? '轨迹等待路口' : replayQuery.isLoading ? '轨迹分析中' : replayQuery.error ? '轨迹分析失败' : `${missionId === 'all' ? allJourneyCount : selectedMission?.journey_count || 0} 条轨迹`
@@ -473,9 +572,9 @@ export function GisPage() {
 
   return <AppShell pageTitle='轨迹研判'>
     <PageHeader eyebrow='交通运行诊断' title='历史轨迹分析' description='按封存 Mission 的统一 T+时钟复盘实采轨迹、停车、排队、释放与掉头估计；不与实时监测轨迹混用。' meta={`${periodLabel} · ${trajectoryResult}`} />
-    <FilterBar result={`${intersectionResult} · ${trajectoryResult}`} onReset={() => { setMissionId('all'); setSourceProfileId('all'); setVehicleClass('all'); setYoloClassId('all'); setTurnBehavior('all'); setBehavior('all'); setSelectedMovement(null); setSelectedTrackId(null); setMovementSort('business'); setCursorMs(0) }}>
+    <FilterBar result={`${intersectionResult} · ${trajectoryResult}`} onReset={() => { setMissionId('all'); setSourceProfileId('all'); setVehicleClass('all'); setYoloClassId('all'); setTurnBehavior('all'); setBehavior('all'); setSelectedMovement(null); setSelectedTrackId(null); setMovementSort('business'); setCursorMs(0); setRequestedCursorMs(0); setWindowStartMs(0); setRequestedWindowStartMs(0) }}>
       <label>路口<select aria-label='路口' value={selected?.id || ''} onChange={(event) => selectIntersection(projectIntersections.find((item) => item.id === event.target.value))}>{projectIntersections.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
-      <label>任务<select aria-label='轨迹任务' value={missionId} onChange={(event) => { setMissionId(event.target.value); setSelectedTrackId(null); setSelectedMovement(null); setCursorMs(0); setPlaying(false) }}><option value='all'>全部任务（仅汇总）</option>{availableMissions.map((item) => <option key={item.mission_id} value={item.mission_id}>{item.mission_id}</option>)}</select></label>
+      <label>任务<select aria-label='轨迹任务' value={missionId} onChange={(event) => { setMissionId(event.target.value); setSelectedTrackId(null); setSelectedMovement(null); setCursorMs(0); setRequestedCursorMs(0); setWindowStartMs(0); setRequestedWindowStartMs(0); setPlaying(false) }}><option value='all'>全部任务（仅汇总）</option>{availableMissions.map((item) => <option key={item.mission_id} value={item.mission_id}>{item.mission_id}</option>)}</select></label>
       <label>数据源<select aria-label='轨迹数据源' value={sourceProfileId} onChange={(event) => setSourceProfileId(event.target.value)}><option value='all'>全部数据源</option>{missionSources.map((profileId) => <option key={profileId} value={profileId}>{profileId}</option>)}</select></label>
       <label>业务车型<select aria-label='车辆类型' value={vehicleClass} onChange={(event) => setVehicleClass(event.target.value)}><option value='all'>全部车型</option><option value='motor'>机动车</option><option value='non_motor'>非机动车</option><option value='unknown'>未分类</option></select></label>
       <label>原始 YOLO<select aria-label='原始 YOLO 分类' value={yoloClassId} onChange={(event) => setYoloClassId(event.target.value)}><option value='all'>全部原始类别</option>{(analysis.class_summary?.yolo || []).map((item) => <option key={`${item.class_id}-${item.class_name}`} value={String(item.class_id)}>#{item.class_id} {item.class_name || 'unknown'}</option>)}</select></label>
@@ -487,11 +586,11 @@ export function GisPage() {
     {error && <QualityNotice tone='warning' title='历史轨迹分析不可用'>{apiErrorMessage(error)} <button className='secondary-button' onClick={() => { intersectionsQuery.refetch(); missionsQuery.refetch(); replayQuery.refetch() }}>重新加载</button></QualityNotice>}
     {!loading && !error && !selected && <QualityNotice tone='info' title='暂无路口'>尚未登记项目路口。</QualityNotice>}
     {selected && <div className='trajectory-analysis-page'>
-      <div className='trajectory-analysis-kpis'>
-        <div><span>分析轨迹</span><strong>{quality.total_tracks || 0}</strong><small>全窗口事实，不受地图上限影响</small></div>
-        <div><span>可回放轨迹</span><strong>{quality.replayable_tracks || 0}</strong><small>{missionId === 'all' ? '请选择单个 Mission 查看空间覆盖' : `空间覆盖 ${Math.round((quality.spatial_coverage_ratio || 0) * 100)}%`}</small></div>
-        <div><span>识别流向</span><strong>{analysis.movement_ranking?.length || 0}</strong><small>{selectedMovement ? '已聚焦 1 个流向' : '点击排名可聚焦'}</small></div>
-        <div><span>当前切片冲突</span><strong>{conflicts.length}</strong><small>未归因 {quality.unattributed_conflicts || 0} 条</small></div>
+      <div className='trajectory-analysis-kpis' aria-label='当前回放窗口轨迹统计'>
+        <div><span>分析轨迹</span><strong>{missionId === 'all' ? allJourneyCount : windowStatistics.totalTracks}</strong><small>{missionId === 'all' ? '全部 Mission 汇总' : '当前回放窗口已加载'}</small></div>
+        <div><span>可回放轨迹</span><strong>{missionId === 'all' ? allJourneyCount : windowStatistics.replayableTracks}</strong><small>{missionId === 'all' ? '请选择单个 Mission 查看空间覆盖' : `空间覆盖 ${Math.round(windowStatistics.spatialCoverageRatio * 100)}%`}</small></div>
+        <div><span>识别流向</span><strong>{missionId === 'all' ? 0 : windowStatistics.movementCount}</strong><small>{selectedMovement ? '已聚焦 1 个流向' : '当前回放窗口轨迹'}</small></div>
+        <div><span>当前窗口冲突</span><strong>{conflicts.length}</strong><small>未归因 {windowStatistics.unattributedConflicts} 条</small></div>
       </div>
       {(!Number.isFinite(selected.lat) || !Number.isFinite(selected.lon)) && <QualityNotice tone='warning' title='坐标尚未冻结'>缺少可信 GCJ-02 坐标时不投放地图。</QualityNotice>}
       <div className='trajectory-analysis-workspace'>
@@ -504,8 +603,13 @@ export function GisPage() {
           </div>
           <div className='analysis-timeline'>
             <div className='timeline-actions'><button className='timeline-play' disabled={missionId === 'all' || durationMs <= 0} title={missionId === 'all' ? '请选择单个封存 Mission' : ''} aria-label={playing ? '暂停历史回放' : '播放历史回放'} onClick={togglePlayback}>{playing ? <Pause size={14} weight='fill' /> : <Play size={14} weight='fill' />}</button><select aria-label='回放速度' value={String(playbackSpeed)} onChange={(event) => setPlaybackSpeed(Number(event.target.value))}><option value='0.5'>0.5×</option><option value='1'>1×</option><option value='2'>2×</option><option value='4'>4×</option></select></div>
-            <div className='timeline-window'><strong>T+00:00.000</strong><span>—</span><strong>{replayTime(durationMs)}</strong><small>Mission 事件时钟</small></div>
-            <div className='timeline-control'><div className='timeline-bars replay-events'>{timelineEvents.map((item, index) => <i key={`${item.kind}-${item.start_offset_ms}-${index}`} className={`replay-event ${item.kind}`} title={item.kind} style={{ left: `${durationMs ? item.start_offset_ms / durationMs * 100 : 0}%` }} />)}</div><input aria-label='任务回放时间' type='range' min='0' max={String(durationMs)} step='100' value={Math.min(cursorMs, durationMs)} disabled={missionId === 'all'} onChange={(event) => { setCursorMs(Number(event.target.value)); setPlaying(false) }} /></div>
+            <div className='timeline-window'><strong>{replayTime(windowStartMs)}</strong><span>—</span><strong>{replayTime(cursorMs)}</strong><small>选择窗口 · 总长 {replayTime(durationMs)}</small></div>
+            <div className='timeline-control timeline-control-dual'>
+              <div className='timeline-bars replay-events'>{timelineEvents.map((item, index) => <i key={`${item.kind}-${item.start_offset_ms}-${index}`} className={`replay-event ${item.kind}`} title={item.kind} style={{ left: `${durationMs ? item.start_offset_ms / durationMs * 100 : 0}%` }} />)}</div>
+              <span className='timeline-window-selection' style={{ left: `${durationMs ? windowStartMs / durationMs * 100 : 0}%`, width: `${durationMs ? Math.max(0, cursorMs - windowStartMs) / durationMs * 100 : 0}%` }} />
+              <input className='timeline-range-input start' style={{ zIndex: 4 }} aria-label='回放窗口开始时间' type='range' min='0' max={String(durationMs)} step='100' value={Math.min(windowStartMs, durationMs)} disabled={missionId === 'all'} onPointerDown={(event) => startTimelineDrag('start', event)} onPointerUp={(event) => commitTimelineDrag('start', event)} onPointerCancel={(event) => commitTimelineDrag('start', event)} onBlur={(event) => commitTimelineDrag('start', event)} onChange={previewTimelineStart} />
+              <input className='timeline-range-input end' aria-label='任务回放时间' type='range' min='0' max={String(durationMs)} step='100' value={Math.min(cursorMs, durationMs)} disabled={missionId === 'all'} onPointerDown={(event) => startTimelineDrag('end', event)} onPointerUp={(event) => commitTimelineDrag('end', event)} onPointerCancel={(event) => commitTimelineDrag('end', event)} onBlur={(event) => commitTimelineDrag('end', event)} onChange={previewTimelineCursor} />
+            </div>
             <div className='timeline-now' aria-live='polite'><strong>{replayTime(cursorMs)}</strong><span>{tracks.length} 条轨迹 · {selectedMission?.behavior_count || 0} 个行为</span>{replayQuery.isFetching && replayQuery.data && <small>加载回放点…</small>}</div>
           </div>
         </section>
@@ -557,13 +661,14 @@ export function AlertsPage() {
   const [selectedSnapshotId, setSelectedSnapshotId] = useState(initialSnapshotId)
   const [demoSnapshots, setDemoSnapshots] = useState(() => readDemoSnapshots())
   const [actionError, setActionError] = useState('')
+  const [surveyActionError, setSurveyActionError] = useState('')
   const [severity, setSeverity] = useState(['critical', 'warning'].includes(initialParams.get('severity')) ? initialParams.get('severity') : 'all')
   const [eventType, setEventType] = useState(initialParams.get('event_type') || 'all')
   const [intersection, setIntersection] = useState(initialParams.get('intersection_id') || 'all')
   const [query, setQuery] = useState('')
   const intersectionsQuery = useQuery({ queryKey: ['i3-project-intersections'], queryFn: loadProjectIntersections, refetchInterval: 30_000 })
   const projectIntersections = (intersectionsQuery.data || []).map(mapIntersection)
-  const eventsQuery = useQuery({ queryKey: ['i3-events'], queryFn: () => platformApi.events({ limit: 500 }), refetchInterval: 30_000 })
+  const eventsQuery = useQuery({ queryKey: ['i3-events'], queryFn: () => platformApi.events({ limit: 150 }), refetchInterval: 30_000 })
   const events = useMemo(() => (eventsQuery.data || []).map(unifiedEvent), [eventsQuery.data])
   useEffect(() => {
     const refresh = () => setDemoSnapshots(readDemoSnapshots())
@@ -597,6 +702,15 @@ export function AlertsPage() {
     },
     onError: (error) => setActionError(apiErrorMessage(error, '技术复核失败')),
   })
+  const eventSurveyMutation = useMutation({
+    mutationFn: (event) => platformApi.createEventSurvey(event.id, `event-survey-${event.id}`),
+    onSuccess: (value) => {
+      setSurveyActionError('')
+      dispatch({ type: 'TOAST', value: { tone: 'success', text: '当前事件关键帧已带入测绘任务' } })
+      navigate(`/survey/${value.task.id}/measure`)
+    },
+    onError: (error) => setSurveyActionError(apiErrorMessage(error, '事件测绘创建失败')),
+  })
   const openEvent = (item) => {
     setSelected(item)
     setSelectedSnapshotId(null)
@@ -617,16 +731,14 @@ export function AlertsPage() {
   const loadError = intersectionsQuery.error || eventsQuery.error
   return <AppShell pageTitle='AI 事件中心'>
     <PageHeader eyebrow='S2 / S4 / S6' title='AI 事件中心' description='真实拥堵、质量下降、测绘成果与真实冲突统一查询；本机演示快照单独留档，不混入 road9 事实。' meta={`${events.length} 起真实事件 · ${demoSnapshots.length} 份本机快照`} />
-    <Panel title='本机演示分析快照' subtitle='同一路口与任务阶段覆盖更新 · 刷新后仍可恢复'>
-      {demoSnapshots.length ? <div className='demo-snapshot-ledger'>{demoSnapshots.map((snapshot) => <button key={snapshot.id} onClick={() => openSnapshot(snapshot)}><div><strong>{snapshot.intersection_name}</strong><span>{snapshot.mission_label} · {snapshot.source_mode === 'live' ? '实时数据截面' : '固定演示指标'}</span></div><small>目标 {snapshot.metrics?.vehicle_count ?? '—'} · 排队 {snapshot.metrics?.longest_queue_m ?? '—'}m · 风险 {snapshot.metrics?.conflict_count ?? 0}</small><b>饱和度 {snapshot.metrics?.max_saturation == null ? '—' : Number(snapshot.metrics.max_saturation).toFixed(2)}</b></button>)}</div> : <div className='demo-snapshot-empty'><strong>尚未保存演示快照</strong><span>从实时监测页保存事件与交通流后，可在这里进行事后分析。</span></div>}
-    </Panel>
     <FilterBar result={`显示 ${rows.length} / ${events.length} 起`} onReset={() => { setSeverity('all'); setEventType('all'); setIntersection('all'); setQuery('') }}><Segmented value={severity} onChange={setSeverity} options={[{ value: 'all', label: '全部' }, { value: 'critical', label: '高风险' }, { value: 'warning', label: '关注' }, { value: 'info', label: '成果' }]} /><label>事件类型<select aria-label='事件类型' value={eventType} onChange={(event) => setEventType(event.target.value)}><option value='all'>全部类型</option><option value='congestion'>持续拥堵</option><option value='quality_degradation'>质量下降</option><option value='survey_result'>测绘成果</option><option value='conflict'>真实冲突</option></select></label><label>路口<select aria-label='事件路口' value={intersection} onChange={(event) => setIntersection(event.target.value)}><option value='all'>全部项目路口</option>{projectIntersections.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label className='search-field'><Funnel size={15} /><input aria-label='事件搜索' value={query} onChange={(event) => setQuery(event.target.value)} placeholder='事件 ID / 标题' /></label></FilterBar>
     {loading && <QualityNotice tone='info' title='正在恢复事件台账'>从 road9 加载冲突事实与告警。</QualityNotice>}
     {loadError && <QualityNotice tone='warning' title='事件台账不可用'>{apiErrorMessage(loadError)}</QualityNotice>}
     {!loading && !loadError && <Panel title='AI 事件事实' subtitle='业务时间排序 · REST 为页面刷新后的恢复基线'><DataTable columns={eventColumns(openEvent)} rows={rows} onRowClick={openEvent} /></Panel>}
-    {selectedEvent && <DetailDrawer wide title={selectedEvent.title} subtitle={`${selectedEvent.type} · ${selectedEvent.id}`} onClose={() => openEvent(null)} footer={platformRole === 'admin' ? <><button className='danger-button' disabled={reviewMutation.isPending} onClick={() => reviewMutation.mutate({ event: selectedEvent, reviewStatus: 'rejected' })}><X size={15} /> 驳回 AI 结果</button><button className='primary-button' disabled={reviewMutation.isPending} onClick={() => reviewMutation.mutate({ event: selectedEvent, reviewStatus: 'confirmed' })}><Check size={15} /> 技术确认</button></> : <span className='muted'>仅管理员可执行技术复核</span>}>
+    {selectedEvent && <DetailDrawer wide title={selectedEvent.title} subtitle={`${selectedEvent.type} · ${selectedEvent.id}`} onClose={() => openEvent(null)} footer={platformRole === 'admin' ? <>{selectedEvent.evidence_refs?.some((item) => ['conflict_original_frame', 'conflict_keyframe'].includes(item.kind)) && <button className='secondary-button' disabled={eventSurveyMutation.isPending} onClick={() => eventSurveyMutation.mutate(selectedEvent)}><Crosshair size={15} /> 事件测绘</button>}<button className='danger-button' disabled={reviewMutation.isPending} onClick={() => reviewMutation.mutate({ event: selectedEvent, reviewStatus: 'rejected' })}><X size={15} /> 驳回 AI 结果</button><button className='primary-button' disabled={reviewMutation.isPending} onClick={() => reviewMutation.mutate({ event: selectedEvent, reviewStatus: 'confirmed' })}><Check size={15} /> 技术确认</button></> : <span className='muted'>仅管理员可执行技术复核</span>}>
       <div className='event-hero'><div className='event-primary-metrics'>{eventMetricTiles(selectedEvent).map(([label, value]) => <div key={label}><span>{label}</span><strong>{value}</strong></div>)}</div></div>
       {actionError && <QualityNotice tone='warning' title='技术复核失败'>{actionError}</QualityNotice>}
+      {surveyActionError && <QualityNotice tone='warning' title='事件测绘创建失败'>{surveyActionError}</QualityNotice>}
       {selectedEvent.evidence_refs?.length > 0 && <Panel title='事件画面证据' subtitle={`同一事件时刻 · ${selectedEvent.evidence_refs.length} 项内容寻址证据`}><EventEvidenceGallery references={selectedEvent.evidence_refs} /></Panel>}
       <div className='detail-two-col'><Panel title='事件与质量'><InfoRow label='业务时间' value={selectedEvent.occurredAt} /><InfoRow label='路口' value={projectIntersections.find((item) => item.id === selectedEvent.intersectionId)?.name || selectedEvent.intersectionId || '未匹配'} /><InfoRow label='任务 / Pipeline' value={`${selectedEvent.mission_id || '—'} / ${selectedEvent.pipeline_id || '—'}`} /><InfoRow label='数据源' value={selectedEvent.source_profile_id || '—'} /><InfoRow label='路网版本' value={selectedEvent.road_data_version || '—'} /><InfoRow label='质量' value={selectedEvent.quality} badge={selectedEvent.quality === 'verified' ? 'good' : 'degraded'} /></Panel><Panel title='投递与复核'><InfoRow label='投递状态' value={selectedEvent.delivery} badge={selectedEvent.delivery === 'blocked' ? 'blocked' : 'degraded'} /><InfoRow label='事实来源' value={selectedEvent.isConflict ? 'uav_conflict_events' : 'uav_ai_events'} /><InfoRow label='复核 revision' value={selectedEvent.review_revision || '—'} /><InfoRow label='技术复核' value={selectedEvent.review} badge={selectedEvent.review} /></Panel></div>
       {selectedEvent.related_tracks?.length > 0 && <Panel title='关联轨迹' subtitle={`同任务/事件窗口 ${selectedEvent.related_tracks.length} 条`}><div className='related-track-list'>{selectedEvent.related_tracks.slice(0, 8).map((track) => <button key={track.id} className='compact-event' onClick={() => navigate(`/gis?intersection_id=${selectedEvent.intersectionId}&mission_id=${track.mission_id || ''}&track_id=${track.id}`)}><StatusBadge value={track.quality_status || 'unverified'} /><div><strong>Track #{track.track_id}</strong><span>{track.vehicle_class || 'unknown'} · {track.turn_behavior || '未分类'} · {track.duration_sec ?? '—'}s</span></div></button>)}</div></Panel>}

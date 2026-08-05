@@ -235,6 +235,10 @@ WebSocket 推送沿用 `{channel, type, data, ts}` 外壳，但 `type` 和 UAV �
 
 `situation` 连接 PostgreSQL database=`ycx`，只读联结 `road9.dim_data_version/dim_inter_info/dim_link_info` 与 `xianchang.dws_inter_evaluation_5min_mm/dws_inter_link_status_5min_mm`。查询只使用启用道路版本，过滤删除态、无效坐标、空或无法转换的几何；LineString 和 MultiLineString 统一返回 `paths_gcj02`。路口范围取指标表全部有效 `inter_id`，路段范围取全部有效 `inter_id + link_id`，所选时槽无指标时仍返回范围对象并将状态置为 `missing`。`summary` 同时提供路口 `good/near_saturated/oversaturated/missing` 与路段 `smooth_segments/slow_segments/congested_segments/missing_segments` 汇总，首页前三个 KPI 直接读取该响应。
 
+本机原生 Platform 从权限为 `600`、Git 忽略的 `platform/.env` 读取 `YCX_*` 只读连接配置；
+`mac_local_platform.sh` 不注入空值覆盖该文件。配置缺失或连接失败时接口返回
+`503 dashboard_dependency_unavailable`，Console2 必须保留明确空态，不能用 mock 补齐。
+
 缓存键为 `road_version + day_of_week + step_index`，TTL 300 秒，LRU 上限 64。命中返回 `cache.status=hit`；外部连接失败且同一星期/时槽存在最近成功值时返回 `cache.status=stale/stale=true`；无缓存返回 `503 dashboard_dependency_unavailable`。该接口只用于首页态势展示，不允许写服务器、不写本地库，也不改变 Mission、检测、无人机统计或事件事实。
 
 主任首屏默认只订阅 `uav_alerts` 和 `uav_system`；选中路口后订阅 `uav_intersection:{intersection_id}`，需要无人机实时详情时再订阅 `uav_telemetry:{drone_id}`。禁止同时订阅城市全部路口明细频道。若未来新增全局路口状态增量，channel 和 `type` 必须以 `uav_` 开头并经过容量、恢复和幂等评审。
@@ -571,7 +575,7 @@ ENU 与 GCJ-02 的双向转换只由服务端版本化实现完成；浏览器�
 - `active_trajectories` 随统计消息发送，是成熟且生命周期未结束轨迹的当前尾部快照，避免长时间运行时 Kafka 单条消息无限增长；console 按 `track_id` 累积尾部点列用于 BEV 显示和 GeoJSON 导出。只有关联结束、源时间断点、关联超时或自然 EOF 才通过 `uav_track_complete_{camera_id}` 发送完整轨迹；30 秒统计窗口到期不得触发完成。
 
 ### BEV GeoJSON 导出
-- Console2 必须把 SourceProfile-scoped 历史 REST 快照与当前 WebSocket 状态分开保存；历史采样刷新不得清空或覆盖 `active_trajectories` / `candidate_trajectories`。`uav_stats`、`uav_track_complete` 和 `uav_conflict` 还必须携带并匹配当前运行 `pipeline_id`，同一 SourceProfile 的旧 Pipeline 消息或缺失 Pipeline lineage 的消息不得进入当前实时会话；Pipeline 切换时必须清空旧会话的统计、活动/候选/完成轨迹和实时冲突。BEV 只绘制至少两个合法 `trajectory_gcj02` 点的轨迹；只有 `trajectory_px` 的候选显示“地理投影不可用”，不得执行浏览器侧像素→地图猜测。
+- Console2 必须把 SourceProfile-scoped 历史 REST 快照与当前 WebSocket 状态分开保存；历史采样刷新不得清空或覆盖 `active_trajectories` / `candidate_trajectories`。`uav_stats`、`uav_track_complete` 和 `uav_conflict` 还必须携带并匹配当前运行 `pipeline_id`，同一 SourceProfile 的旧 Pipeline 消息或缺失 Pipeline lineage 的消息不得进入当前实时会话；Pipeline 切换时必须清空旧会话的统计、活动/候选/完成轨迹和实时冲突。BEV 地图只绘制至少两个合法 `trajectory_gcj02` 点的轨迹；只有 `trajectory_px` 时切换为独立像素坐标画布并显示“世界坐标不可用”，不得把像素点叠加到地图或执行浏览器侧像素→地图猜测。橙色虚线仅表示真正未成熟的 `candidate_trajectories`，成熟 `active_trajectories` 不得因 `formal_analytics_eligible=false` 或地理/路网降级而退化成候选样式。
 - Console BEV 视图导出时会合并三类轨迹：当前活跃轨迹快照、当前会话已完成轨迹、历史 API 查询轨迹。
 - 展示层可限制绘制数量以保持流畅，但导出使用当前会话缓存的全量轨迹数据，不受 BEV 显示上限裁剪。
 - GeoJSON geometry 使用 `trajectory_gcj02`，坐标顺序固定 `[longitude, latitude]`；properties 保留 `trajectory_enu_m`、`trajectory_px`、地图版本和车道匹配 lineage。
@@ -1019,14 +1023,22 @@ Content-Type: application/json
 创建、状态动作、采集、量算、报告和投递写接口接受 `Idempotency-Key`，同键重试返回原业务结果。
 状态修订不一致返回 `409`，状态机或质量门禁不满足返回 `422`。
 
+事件测绘入口必须携带认证身份和 `Idempotency-Key`。同一键重试返回同一任务；同一事件已有
+`source=event` 任务时复用现有任务，不复制底层原始 JPEG。新任务以
+`external_task_id=event_id`、单帧 `event_keyframe` batch 和 `event_evidence_reuse` 前置状态记录
+事件谱系；测绘证据项复用原内容地址并以 `derived_from_id` 回指原事件证据，只有派生 BEV 新增
+managed 对象。缺少原始关键帧、SourceProfile、同步遥测或有效像素→ENU 变换时返回 `422`，
+不得打开一个伪装成可量算的空任务；自动生成的定位、单应性和成果质量仍为 `unverified`。
+
 | 方法 | 路径 | 用途 |
 | --- | --- | --- |
 | GET/POST | `/survey-tasks` | 查询/创建测绘任务 |
+| POST | `/events/{event_id}/survey` | 从当前事件的 `conflict_original_frame`（历史兼容 `conflict_keyframe`）幂等创建事件测绘；校验证据哈希，以同一 `source_profile_id` 的同步遥测生成单帧 BEV 与米制变换，返回 `task/batch/frame` 后可直接进入量算 |
 | GET | `/survey-tasks/{task_id}` | 读取任务、状态、质量和版本 |
 | POST | `/survey-tasks/{task_id}/actions` | 前置核验、选择批次、提交/退回/技术复核、取消 |
 | GET/POST | `/survey-tasks/{task_id}/capture-batches` | 查询批次/流式上传 MP4+SRT 并入队 |
 | POST | `/survey-tasks/{task_id}/capture-batches/import` | 以 `source_profile_id` 引用已登记 MP4+DJI SRT/Cloud JSON，或兼容显式 allowlist 资产键；响应含遥测类型、同步配置和原始引用状态 |
-| GET | `/survey-tasks/{task_id}/frames` | 查询原始帧、BEV、遥测和测量变换摘要；可量算帧返回 `metric_transform`（BEV 像素→ENU 米制 3×3 矩阵），供浏览器只读计算绘制中边长，服务端仍是最终量算真源 |
+| GET | `/survey-tasks/{task_id}/frames` | 查询原始帧、BEV、遥测和测量变换摘要；可量算帧返回 `metric_transform`（BEV 像素→ENU 米制 3×3 矩阵），供浏览器只读计算绘制中边长和面积预览，服务端仍是最终量算真源 |
 | GET/POST | `/survey-tasks/{task_id}/measurements` | 查询/创建服务端 ENU 点线面量算 |
 | DELETE | `/survey-tasks/{task_id}/measurements/{measurement_id}` | 按 revision 删除当前量算版本 |
 | GET/POST | `/survey-tasks/{task_id}/annotations` | 查询/创建关联持久关键帧的场景标注 |
@@ -1041,8 +1053,10 @@ Content-Type: application/json
 `edit_history`、`quality_status`。缺失、false 或额外键返回 422；批准审计的
 `after_value.review_checklist` 保存完整清单。
 
-量算画布以 `metric_transform` 对当前鼠标预览边实时显示米制长度，已保存的线、折线、面积和
-对象按服务端 `metric_geometry` 在每条边上显示长度。报告生成时，每个包含当前量算的 BEV
+量算画布以 `metric_transform` 对当前鼠标预览边实时显示米制长度；面积达到三个顶点后还会
+自动计算预览面积并显示在多边形视觉中心。已保存的线、折线、面积和对象按服务端
+`metric_geometry` 在每条边上显示长度，面积中心值也从该服务端米制几何计算。画布标签使用
+无不透明底框的描边文字，避免遮挡证据图像。报告生成时，每个包含当前量算的 BEV
 帧都会固化为 `survey_report_annotated_image` 证据并嵌入 PDF；Console2 历史任务优先读取该
 不可变标注图，旧报告没有该字段时使用原 BEV 与版本化量算记录只读重绘，不改写历史报告。
 
@@ -1183,7 +1197,7 @@ RoadContext 质量字段写入 canonical 信封。验收产物以 `pipeline_id` 
 无已发布地图的本地巡航工程回放使用普通外部 Pipeline 登记，固定
 `map_version_id=null / road_context_status=missing / quality_status=degraded`。成熟图像轨迹进入
 `active_trajectories`、通用车辆计数与 `uav_track_complete/v1`；仅 Lane ID、Link ID 与匹配质量保持关闭。
-只有尚未满足最短时长和点数的图像关联位于 `candidate_trajectories`。
+新图像关联在首次发现的同帧即进入 `active_trajectories`；实时链路不再设置候选冷静期，`candidate_trajectories` 仅为旧生产者兼容且正常为空。最短时长和点数仅用于轨迹结束后的历史归档过滤。
 
 生产 Docker 发布使用根 `Dockerfile` 构建 Platform 与检测器统一镜像。检测实现位于镜像
 `/app`，`PIPELINE_PROJECT_ROOT=/app`；权重与视频分别只读挂载到 `/app/weights` 和
@@ -1464,7 +1478,9 @@ AlertEngine 创建告警和确认告警时写入 `road9` 中的 `uav_alerts`。P
 
 ## 2026-07-16 真实事件与轨迹查询补充
 
-- `GET /api/v1/events`：统一返回 `congestion`、`quality_degradation`、`survey_result` 和 `conflict`，保留 `mission_id` / `pipeline_id` / `source_profile_id` / `inter_id` / `road_data_version` / `quality_status` 与 `evidence_refs`。
+- `GET /api/v1/events`：统一返回 `congestion`、`quality_degradation`、`survey_result` 和 `conflict`，保留 `mission_id` / `pipeline_id` / `source_profile_id` / `inter_id` / `road_data_version` / `quality_status` 与 `evidence_refs`；页面与接口最多读取按业务时间倒序的最近 150 条。`replay_v2` 不在列表请求中重复物化质量事件，但允许告警/测绘同步和技术复核。
+- `replay_v2` 提供无人机、视频/遥测源、飞行计划和 Mission 的完整查询与控制接口；任务调度、Pipeline 启停和实时 WebSocket 均启用。Platform 启动的检测子进程强制使用 `TRAJECTORY_STORAGE_PROFILE=replay_v2`，轨迹与统计消息只进入 `uav_replay_v2_*` Topic 和表。
+- `replay_v2` 的 `uav_stats.active_trajectories/candidate_trajectories` 是有界实时投放字段；V2 MetricStore 只持久化标量统计样本并原样向当前 Pipeline WebSocket 投放尾迹。`GET /intersections/{id}/stats` 与 `GET /trajectories/{id}/conflicts` 直接查询 V2 样本/冲突/Mission 谱系；`uav_replay_mission` 只落库，不产生实时地图消息。
 - `GET /api/v1/events/{event_id}`：返回规则指标、关联轨迹和内容寻址证据；`PUT /api/v1/events/{event_id}/review` 使用 `expected_revision` 实现技术复核乐观锁。
 - `GET /api/v1/trajectories/{intersection_id}` 默认返回包括像素降级在内的全部完成轨迹，支持 `period=all|1h|24h`、`mission_id`、`source_profile_id`、车型和方向筛选。地图投放可显式使用 `spatial_ready=true&min_gcj02_points=N`，先在 PostgreSQL 过滤至少 N 个非空 GCJ-02 点再应用 `limit`。
 - 持续拥堵证据在第 30 个连续超阈值样本定格；页面不得以打开详情时的当前画面替换历史证据。
@@ -1591,7 +1607,7 @@ canonical Topic、`msg_type`、WebSocket channel 和 `*/v1` schema 版本保持�
 
 - `uav_stats.data`：`flight_phase`、`flight_segment_id`、`geo_reference_quality`、`tracking_diagnostics`、四层能力 `trajectory_output_eligible/geo_analytics_eligible/road_analytics_eligible/tcc_analytics_eligible`、兼容聚合 `formal_analytics_eligible`、活动/候选轨迹及采集质量字段。
 - `tracking_diagnostics.mahalanobis_gate` 为只读工程诊断，包含 `mahalanobis_gate_mode=shadow`、`eligible_pair_count`、`would_reject_eligible_pair_count` 和 `would_strand_track_count`；它不得改变图像 ID，也不是 IDF1/HOTA 或正式 ID switch 指标。
-- `candidate_trajectories` 仅表示尚未满足图像轨迹最短时长和点数的关联；成熟轨迹无论地图是否存在都进入 `active_trajectories`。候选不得计入完成数、速度、车道、流量或 TCC。
+- 新检测关联首次出现即进入 `active_trajectories`，`trajectory_output_eligible=true`；当前生产者不得为实时目标设置候选冷静期。`candidate_trajectories` 仅保留旧生产者输入兼容，若存在仍不得计入完成数、速度、车道、流量或 TCC。
 - `tracking_diagnostics.lifecycle` 可选且向后兼容，包含 `active_track_count/mature_track_count/candidate_track_count/completed_track_count/termination_reason/same_id_mature_to_candidate_count`；同一 ID 成熟后回到候选属于契约违例，正常计数必须为 0。
 - `uav_track_complete` 必须携带非空 `termination_reason`，每个 `pipeline_id + track_id` 只允许一个逻辑完成事实；Producer 对该组合生成确定性 `message_id`，重试由 `uav_message_inbox` 和事实唯一约束幂等拦截，不增加 schema major 或数据库迁移。
 - `trajectory_px` 固定表示逐源帧车辆地面接触点，并与 ENU/GCJ-02/时间/帧号/质量谱系同索引；旧 bbox 中心仅以可选 `trajectory_bbox_center_px` 输出。active 与 completed 使用同一语义。
@@ -1662,6 +1678,8 @@ V2 开发隔离 Topic 为：
 
 `GET /api/v1/trajectories/{intersection_id}/replay` 必须提供 `mission_id`，可选
 `cursor_sec/window_sec/max_points/page_after/track_id/behavior/vehicle_class/yolo_class_id/turn_behavior/movement_key`。`page_after` 是服务端签发的 opaque 锚点；响应 `pagination.next_page_after` 以稳定 `(track_id, point_seq)` 顺序继续，页间不得重复点。响应版本为 `uav.trajectory-replay/v1`，返回连续 Mission T+ cursor、像素与可空 ENU/GCJ-02、冻结速度、质量、sampling boundary、episodes、maneuvers 和 Runtime segment 引用。接口不插值，不跨明确 quality gap 连线；已经离开时间窗的 journey 不得用最后一点持续钉到 Mission 结束；非 sealed Mission 返回 404。
+
+Console2 将 `cursor_sec` 作为窗口结束游标，将 `cursor_sec - window_sec` 作为窗口开始游标；两端均可拖动，窗口范围限制为 `0.1–300s`。pointer 拖动期间只更新预览且不得调用接口，释放后仅提交最终的 `cursor_sec/window_sec` 一次；键盘调整可直接提交。开始游标的非默认位置使用页面查询参数 `window_start_ms` 恢复，该参数只属于 Console 路由，不发送给 Platform。顶部轨迹统计必须直接取已提交窗口的 `/replay` 响应并随响应替换，不能在拖动预览期变化，也不能额外调用 `/analysis` 重算；Mission 级流向排名不随该展示统计切换口径。服务端必须在 SQL 层按 Mission、窗口、筛选、稳定分页锚点和 `max_points` 限制 TrackPoint；完整 journey 只允许读取流向推断所需的首尾有效世界点与最终速度点，禁止每个游标请求全量装载 Mission 点集。
 
 `analysis.movement_ranking` 与返回的每条 track 必须包含一致的
 `movement_key/movement_label/movement_source`。sealed event 缺少正式 `movement_key` 时，服务端从

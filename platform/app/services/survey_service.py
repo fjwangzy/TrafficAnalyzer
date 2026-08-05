@@ -37,7 +37,7 @@ from app.models.survey import (
     SurveyReport,
     SurveyTask,
 )
-from app.services.survey_capture import process_mp4_telemetry
+from app.services.survey_capture import process_event_keyframe, process_mp4_telemetry
 from app.services.survey_geometry import calculate_measurement
 from app.services.survey_storage import (
     ContentAddressedStore,
@@ -328,6 +328,225 @@ class SurveyService:
         await self.session.flush()
         await self._audit(actor_id, "survey.task.created", "survey_task", task.id, after=_task_dict(task), request_id=request_id)
         return _task_dict(task)
+
+    async def create_from_event(
+        self,
+        event: dict,
+        actor_id: int | None,
+        actor_name: str,
+        role: str,
+        request_id: str | None,
+    ) -> dict:
+        if prior := await self._prior("survey.task.created_from_event", request_id):
+            return prior
+        event_id = str(event.get("id") or "").strip()
+        if not event_id:
+            raise ValueError("event id is required")
+        existing = (
+            await self.session.execute(
+                select(SurveyTask).where(
+                    SurveyTask.external_task_id == event_id,
+                    SurveyTask.source == "event",
+                )
+            )
+        ).scalar_one_or_none()
+        if existing is not None:
+            if role != "admin" and existing.assignee_user_id not in (None, actor_id):
+                raise PermissionError("event survey is outside the current assignment")
+            batch = await self.session.get(SurveyCaptureBatch, existing.selected_batch_id)
+            frame = (
+                await self.session.execute(
+                    select(SurveyFrame)
+                    .where(SurveyFrame.task_id == existing.id)
+                    .order_by(SurveyFrame.created_at.asc())
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+            if batch is None or frame is None:
+                raise RuntimeError("existing event survey is incomplete")
+            return {"task": _task_dict(existing), "batch": _batch_dict(batch), "frame": _frame_dict(frame)}
+
+        references = event.get("evidence_refs") or []
+        priority = ("conflict_original_frame", "conflict_keyframe")
+        reference = next(
+            (item for kind in priority for item in references if item.get("kind") == kind),
+            None,
+        )
+        if reference is None or not reference.get("id"):
+            raise ValueError("event has no reusable original keyframe evidence")
+        original = await self.session.get(EvidenceItem, reference["id"])
+        if original is None or not str(original.media_type).startswith("image/"):
+            raise LookupError("event keyframe evidence not found")
+        evidence_status = self._evidence_reference_status(original)
+        if evidence_status != "verified":
+            raise ValueError(f"event keyframe evidence is {evidence_status}")
+        metadata = original.item_metadata or {}
+        timestamp_sec = metadata.get("frame_timestamp_sec")
+        if timestamp_sec is None:
+            raise ValueError("event keyframe timestamp is missing")
+        source_profile_id = event.get("source_profile_id")
+        if not source_profile_id:
+            raise ValueError("event source profile is missing")
+        telemetry_source = (
+            await self.session.execute(
+                select(TelemetrySourceRecord).where(
+                    TelemetrySourceRecord.profile_id == source_profile_id
+                )
+            )
+        ).scalar_one_or_none()
+        if telemetry_source is None or telemetry_source.mode != "local" or not telemetry_source.enabled:
+            raise ValueError("event telemetry source is unavailable")
+        telemetry_config = telemetry_source.config or {}
+        telemetry_type = telemetry_source.source_type
+        if telemetry_type == "file":
+            telemetry_type = telemetry_config.get("format") or "dji_cloud_json"
+        evidence_frame_number = metadata.get("frame_number")
+        if evidence_frame_number is None:
+            source_manifest = telemetry_config.get("source_manifest") or {}
+            video_fps = float(source_manifest.get("video_fps") or 0)
+            evidence_frame_number = round(float(timestamp_sec) * video_fps) if video_fps > 0 else 0
+        platform_dir = Path(__file__).resolve().parents[2]
+        telemetry_asset = telemetry_source.location.removeprefix("test_videos/")
+        telemetry_path = resolve_allowlisted_asset(
+            telemetry_asset,
+            [*settings.survey_asset_roots, settings.survey_storage_dir],
+            platform_dir,
+        )
+        source_image = await asyncio.to_thread(self._resolve_evidence_path(original).read_bytes)
+        processed = await asyncio.to_thread(
+            process_event_keyframe,
+            source_image,
+            telemetry_path,
+            float(timestamp_sec),
+            telemetry_type=telemetry_type,
+            time_offset_sec=float(telemetry_config.get("time_offset_sec") or 0),
+            sync_tolerance_sec=float(telemetry_config.get("sync_tolerance_sec") or 0.5),
+            frame_number=int(evidence_frame_number),
+        )
+
+        task = SurveyTask(
+            id=f"SVY-{datetime.now(UTC).strftime('%Y%m%d')}-{uuid.uuid4().hex[:6].upper()}",
+            external_task_id=event_id,
+            title=f"{event.get('title') or event.get('event_type') or 'AI 事件'}事件测绘",
+            source="event",
+            scene_location=event.get("inter_id") or "事件现场",
+            inter_id=event.get("inter_id"),
+            road_data_version=event.get("road_data_version"),
+            assignee_user_id=actor_id,
+            owner_name=actor_name,
+            state="measuring",
+            quality_status="unverified",
+            delivery_status="not_generated",
+            precheck={
+                "mode": "event_evidence_reuse",
+                "source_event_id": event_id,
+                "checked_at": _now_iso(),
+                "checked_by": actor_id,
+            },
+            version=1,
+            created_by=actor_id,
+        )
+        self.session.add(task)
+        await self.session.flush()
+        package = EvidencePackage(
+            id=_identifier("EVP"),
+            task_id=task.id,
+            owner_type="survey_task",
+            owner_id=task.id,
+            source_event_id=event_id,
+            version=1,
+            integrity_status="unverified",
+        )
+        self.session.add(package)
+        await self.session.flush()
+        linked_original = EvidenceItem(
+            id=_identifier("EVI"),
+            package_id=package.id,
+            task_id=task.id,
+            kind="event_original_frame",
+            storage_backend=original.storage_backend,
+            storage_key=original.storage_key,
+            sha256=original.sha256,
+            media_type=original.media_type,
+            size_bytes=original.size_bytes,
+            item_metadata={
+                **metadata,
+                "source_event_id": event_id,
+                "source_evidence_id": original.id,
+                "mission_id": event.get("mission_id"),
+                "pipeline_id": event.get("pipeline_id"),
+                "source_profile_id": source_profile_id,
+            },
+            derived_from_id=original.id,
+        )
+        self.session.add(linked_original)
+        await self.session.flush()
+        bev_stored = await asyncio.to_thread(self.storage.ingest_bytes, processed.bev)
+        bev_item = await self._evidence(
+            package,
+            task.id,
+            "event_bev_frame",
+            bev_stored,
+            "image/jpeg",
+            {
+                "source_event_id": event_id,
+                "source_evidence_id": original.id,
+                "frame_timestamp_sec": processed.timestamp_sec,
+                "width": processed.image_width,
+                "height": processed.image_height,
+            },
+            derived_from_id=original.id,
+        )
+        batch = SurveyCaptureBatch(
+            id=_identifier("BATCH"),
+            task_id=task.id,
+            status="selected",
+            source_type="event_keyframe",
+            source_profile_id=source_profile_id,
+            video_evidence_id=linked_original.id,
+            telemetry_evidence_id=None,
+            duration_sec=0,
+            frame_count=1,
+            telemetry_coverage=1.0,
+            quality_checks={
+                "status": "unverified",
+                "keyframes_extracted": 1,
+                "homography_available": 1,
+                "source": "event_keyframe",
+            },
+            calibration={"status": "unverified", "method": "event_frame_telemetry"},
+        )
+        self.session.add(batch)
+        await self.session.flush()
+        frame = SurveyFrame(
+            id=_identifier("FRM"),
+            task_id=task.id,
+            batch_id=batch.id,
+            frame_number=processed.frame_number,
+            timestamp_sec=processed.timestamp_sec,
+            image_evidence_id=linked_original.id,
+            bev_evidence_id=bev_item.id,
+            image_width=processed.image_width,
+            image_height=processed.image_height,
+            homography=processed.homography,
+            view_transform=processed.view_transform,
+            telemetry=processed.telemetry,
+            quality=processed.quality,
+            selected=True,
+        )
+        self.session.add(frame)
+        task.selected_batch_id = batch.id
+        await self.session.flush()
+        result = {"task": _task_dict(task), "batch": _batch_dict(batch), "frame": _frame_dict(frame)}
+        await self._audit(
+            actor_id,
+            "survey.task.created_from_event",
+            "survey_task",
+            task.id,
+            after=result,
+            request_id=request_id,
+        )
+        return result
 
     async def get_task(self, task_id: str, actor_id: int | None, role: str) -> dict:
         return _task_dict(await self._task(task_id, actor_id, role))

@@ -11,7 +11,8 @@ import {
 } from '../components/Common'
 import { apiErrorMessage, platformApi } from '../lib/api'
 import {
-  geometrySegments, imageContainViewport, metricSegmentLabel,
+  geometrySegments, imageContainViewport, metricPolygonAreaLabel, metricSegmentLabel,
+  polygonArea, polygonCentroid,
 } from '../lib/surveyGeometry'
 import { useAppState } from '../state/AppState'
 
@@ -91,17 +92,27 @@ function SurveyTaskUnavailable({ title, error, onRetry }) {
 
 function EvidenceImage({ url, alt, className, imageRef, onLoad, onClick, onDoubleClick, onMouseMove, onMouseLeave }) {
   const [source, setSource] = useState('')
+  const [error, setError] = useState('')
+  const [attempt, setAttempt] = useState(0)
   const evidenceId = url?.match(/survey-evidence\/([^/]+)\/content/)?.[1]
   useEffect(() => {
     let active = true
     let objectUrl = ''
-    if (!evidenceId) return undefined
+    setSource('')
+    setError('')
+    if (!evidenceId) {
+      setError('证据图片地址无效')
+      return undefined
+    }
     platformApi.surveyEvidence(evidenceId).then((blob) => {
       objectUrl = URL.createObjectURL(blob)
       if (active) setSource(objectUrl)
-    }).catch(() => setSource(''))
+    }).catch((value) => {
+      if (active) setError(apiErrorMessage(value, '证据图片读取失败'))
+    })
     return () => { active = false; if (objectUrl) URL.revokeObjectURL(objectUrl) }
-  }, [evidenceId])
+  }, [attempt, evidenceId])
+  if (error) return <div className={`evidence-error ${className || ''}`} role='alert'><span>{error}</span><button type='button' onClick={() => setAttempt((value) => value + 1)}>重试图片</button></div>
   if (!source) return <div className={`evidence-loading ${className || ''}`}>正在校验证据哈希并读取图像…</div>
   return <img ref={imageRef} src={source} alt={alt} className={className} onLoad={onLoad} onClick={onClick} onDoubleClick={onDoubleClick} onMouseMove={onMouseMove} onMouseLeave={onMouseLeave} />
 }
@@ -265,7 +276,7 @@ function MeasurementCanvas({ frame, tool, draft, onPoint, onFinish, measurements
       context.lineWidth = shape.saved ? 2 : 2.5
       context.strokeStyle = shape.saved ? '#20c8d8' : '#f4c95d'
       context.fillStyle = shape.saved ? 'rgba(32,200,216,.12)' : 'rgba(244,201,93,.14)'
-      if (['area', 'object'].includes(shape.type) && (shape.saved || !hoverPoint)) context.fill()
+      if (['area', 'object'].includes(shape.type) && shape.points.length > 2) context.fill()
       context.stroke()
       shape.points.slice(0, shape.saved ? undefined : shape.committedPoints).forEach((point) => {
         const [x, y] = screenPoint(point)
@@ -284,18 +295,35 @@ function MeasurementCanvas({ frame, tool, draft, onPoint, onFinish, measurements
         const [x2, y2] = screenPoint(end)
         const x = (x1 + x2) / 2
         const y = (y1 + y2) / 2
-        context.font = '600 12px system-ui, sans-serif'
+        context.font = '600 11px system-ui, sans-serif'
         context.textAlign = 'center'
         context.textBaseline = 'middle'
-        const width = context.measureText(label).width + 10
-        context.fillStyle = 'rgba(6, 13, 24, .88)'
-        context.fillRect(x - width / 2, y - 10, width, 20)
-        context.strokeStyle = shape.saved ? '#20c8d8' : '#f4c95d'
-        context.lineWidth = 1
-        context.strokeRect(x - width / 2, y - 10, width, 20)
-        context.fillStyle = '#f7fbff'
+        context.lineJoin = 'round'
+        context.lineWidth = 3
+        context.strokeStyle = 'rgba(2, 8, 15, .86)'
+        context.strokeText(label, x, y)
+        context.fillStyle = shape.saved ? '#a9f5fb' : '#ffe69a'
         context.fillText(label, x, y)
       })
+      if (shape.type === 'area' && shape.points.length > 2) {
+        const measuredArea = shape.metricPoints?.length > 2 ? polygonArea(shape.metricPoints) : null
+        const areaLabel = Number.isFinite(measuredArea)
+          ? `${measuredArea.toFixed(2)} m²`
+          : metricPolygonAreaLabel(shape.points, frame.metric_transform)
+        const center = polygonCentroid(shape.points)
+        if (areaLabel && center) {
+          const [x, y] = screenPoint(center)
+          context.font = '700 14px system-ui, sans-serif'
+          context.textAlign = 'center'
+          context.textBaseline = 'middle'
+          context.lineJoin = 'round'
+          context.lineWidth = 4
+          context.strokeStyle = 'rgba(2, 8, 15, .9)'
+          context.strokeText(areaLabel, x, y)
+          context.fillStyle = shape.saved ? '#d9ffff' : '#fff2a8'
+          context.fillText(areaLabel, x, y)
+        }
+      }
     })
   }, [draft, editable, frame.id, frame.metric_transform, hoverPoint, measurements, tool])
   useEffect(() => { draw(); window.addEventListener('resize', draw); return () => window.removeEventListener('resize', draw) }, [draw])
@@ -314,11 +342,13 @@ function MeasurementCanvas({ frame, tool, draft, onPoint, onFinish, measurements
     const point = eventPoint(event)
     if (point) onPoint(point)
   }
+  const livePoints = draft.length && hoverPoint ? [...draft, hoverPoint] : draft
+  const liveAreaLabel = tool === 'area' && livePoints.length > 2 ? metricPolygonAreaLabel(livePoints, frame.metric_transform) : ''
   const liveLabel = draft.length && hoverPoint ? metricSegmentLabel(draft.at(-1), hoverPoint, frame.metric_transform) : ''
   return <div className='measure-canvas live-measure-canvas'>
     <EvidenceImage imageRef={imageRef} url={frame.bev_url} alt='由真实关键帧生成的正射量算底图' onLoad={draw} onClick={click} onDoubleClick={editable ? onFinish : undefined} onMouseMove={editable ? (event) => setHoverPoint(eventPoint(event)) : undefined} onMouseLeave={() => setHoverPoint(null)} />
     <canvas ref={canvasRef} aria-hidden='true' />
-    <span className='sr-only' aria-live='polite'>{liveLabel ? `当前边长 ${liveLabel}` : ''}</span>
+    <span className='sr-only' aria-live='polite'>{liveAreaLabel ? `当前面积 ${liveAreaLabel}` : liveLabel ? `当前边长 ${liveLabel}` : ''}</span>
   </div>
 }
 

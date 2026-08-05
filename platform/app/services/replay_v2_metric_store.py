@@ -31,7 +31,10 @@ from app.services.metric_store import (
     MessageEnvelope,
     MessageIdentityConflict,
     MetricContractError,
+    PostgresMetricStoreAdapter,
     PersistResult,
+    _granularity_seconds,
+    _period_start,
 )
 from app.services.replay_v2_aggregates import build_mission_aggregates
 
@@ -301,8 +304,6 @@ class ReplayV2MetricStoreAdapter:
         return references
 
     def _add_stats(self, session, value: dict, data: dict) -> list[str]:
-        if any(key in data for key in ("active_trajectories", "candidate_trajectories", "trajectory_px", "trajectory_gcj02")):
-            raise MetricContractError("replay-v2 stats must not carry trajectory tails")
         mission_id = str(data.get("mission_id") or "")
         sample_id = _fact_id("sample", value["message_id"])
         session.add(
@@ -320,6 +321,141 @@ class ReplayV2MetricStoreAdapter:
             )
         )
         return [f"uav_replay_v2_traffic_metric_samples:{sample_id}"]
+
+    async def query_traffic(
+        self,
+        inter_id: str,
+        period: str,
+        grain_type: str | None = None,
+        source_profile_id: str | None = None,
+        granularity: str | None = None,
+    ) -> list[dict]:
+        """Read live Replay V2 samples without persisting transient trajectory tails."""
+        if grain_type not in {None, "intersection"}:
+            return []
+        statement = (
+            select(ReplayV2TrafficMetricSample, ReplayV2Mission.pipeline_id)
+            .outerjoin(
+                ReplayV2Mission,
+                ReplayV2Mission.id == ReplayV2TrafficMetricSample.mission_id,
+            )
+            .where(
+                ReplayV2TrafficMetricSample.inter_id == inter_id,
+                ReplayV2TrafficMetricSample.sampled_at >= _period_start(period),
+            )
+        )
+        if source_profile_id:
+            statement = statement.where(
+                ReplayV2TrafficMetricSample.source_profile_id == source_profile_id
+            )
+        async with self._session_maker() as session:
+            rows = (
+                await session.execute(
+                    statement.order_by(ReplayV2TrafficMetricSample.sampled_at)
+                )
+            ).all()
+        summaries = [
+            {
+                "_observed_at": sample.sampled_at,
+                "time": sample.sampled_at.isoformat(),
+                "intersection_id": sample.inter_id,
+                "inter_id": sample.inter_id,
+                "grain_type": "intersection",
+                "grain_key": sample.inter_id,
+                "cars": sample.vehicle_count,
+                "total_vehicles": sample.vehicle_count,
+                "active_tracks": sample.active_tracks,
+                "flow_veh_per_min": None,
+                "avg_speed_kmh": sample.avg_speed_kmh,
+                "congestion_index": None,
+                "queue_length_m": None,
+                "queue_count": sample.queue_count,
+                "headway_sec": None,
+                "direction_flow": None,
+                "coverage_ratio": sample.coverage_ratio,
+                "quality_status": "estimated",
+                "time_quality": "verified",
+                "source_profile_id": sample.source_profile_id,
+                "pipeline_id": pipeline_id,
+                "tcc_diagnostics": None,
+            }
+            for sample, pipeline_id in rows
+        ]
+        if granularity:
+            summaries = PostgresMetricStoreAdapter._downsample_traffic(
+                summaries,
+                _granularity_seconds(granularity),
+            )
+        for item in summaries:
+            item.pop("_observed_at", None)
+        return summaries
+
+    async def query_conflicts(
+        self,
+        inter_id: str,
+        period: str,
+        limit: int,
+        source_profile_id: str | None = None,
+        pipeline_id: str | None = None,
+        prediction_type: str | None = None,
+    ) -> list[dict]:
+        """Expose Replay V2 conflict facts through the monitoring read contract."""
+        statement = (
+            select(ReplayV2ConflictEvent, ReplayV2Mission)
+            .join(ReplayV2Mission, ReplayV2Mission.id == ReplayV2ConflictEvent.mission_id)
+            .where(ReplayV2ConflictEvent.inter_id == inter_id)
+        )
+        if source_profile_id:
+            statement = statement.where(
+                ReplayV2Mission.source_profile_id == source_profile_id
+            )
+        if pipeline_id:
+            statement = statement.where(ReplayV2Mission.pipeline_id == pipeline_id)
+        if prediction_type:
+            statement = statement.where(
+                ReplayV2ConflictEvent.prediction_type == prediction_type
+            )
+        period_start = _period_start(period)
+        async with self._session_maker() as session:
+            rows = (
+                await session.execute(
+                    statement.order_by(
+                        ReplayV2Mission.started_at.desc(),
+                        ReplayV2ConflictEvent.offset_ms.desc(),
+                    ).limit(max(limit * 4, limit))
+                )
+            ).all()
+        result = []
+        for conflict, mission in rows:
+            occurred_at = mission.started_at + timedelta(milliseconds=conflict.offset_ms)
+            if occurred_at < period_start:
+                continue
+            result.append(
+                {
+                    "id": conflict.id,
+                    "message_id": conflict.id,
+                    "mission_id": conflict.mission_id,
+                    "pipeline_id": mission.pipeline_id,
+                    "source_profile_id": mission.source_profile_id,
+                    "occurred_at": occurred_at.isoformat(),
+                    "inter_id": conflict.inter_id,
+                    "offset_ms": conflict.offset_ms,
+                    "severity": conflict.severity,
+                    "prediction_type": conflict.prediction_type,
+                    "ttc_sec": conflict.ttc_sec,
+                    "pet_sec": conflict.pet_sec,
+                    "evidence": conflict.evidence,
+                    "quality_status": "estimated",
+                    "time_quality": "verified",
+                    "review_status": "pending",
+                    "review_revision": 1,
+                    "reviewed_at": None,
+                    "review_reason": None,
+                }
+            )
+            if len(result) >= limit:
+                break
+        return result
 
     def _add_conflict(self, session, value: dict, data: dict) -> list[str]:
         fact_id = _fact_id("conflict", value["message_id"])

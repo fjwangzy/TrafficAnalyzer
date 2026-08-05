@@ -129,7 +129,7 @@ class Settings(BaseSettings):
 
     @property
     def control_plane_writes_enabled(self) -> bool:
-        return self.app_runtime_profile == "live"
+        return True
 
     @model_validator(mode="after")
     def reject_insecure_deployment_defaults(self):
@@ -141,7 +141,6 @@ class Settings(BaseSettings):
                 r"^uav_replay_v2_(?:statistics|track_complete|conflicts|telemetry|mission)_"
                 r"[A-Za-z0-9._-]+$"
             )
-            self.lane_annotation_auto_tasks_enabled = False
         if self.deployment_mode in {"uat", "production"}:
             insecure_jwt = {
                 "",

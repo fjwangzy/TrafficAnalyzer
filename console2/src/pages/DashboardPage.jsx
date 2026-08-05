@@ -110,7 +110,10 @@ export function buildDashboardSourcePoints({ sources = [], drones = [], intersec
     const intersection = intersectionById.get(intersectionId)
     const position = projectPosition(intersection)
     const sourceStatus = dashboardSourceStatus(source, pipeline)
-    if (!intersectionId || !intersection || intersection.has_server_situation === false || !position || sourceStatus === 'disabled' || sourceStatus === 'invalid') return
+    // A verified project intersection remains a truthful UAV source location
+    // even when the selected server typical-situation matrix has no matching
+    // row.  Only missing coordinates or unusable sources exclude a marker.
+    if (!intersectionId || !intersection || !position || sourceStatus === 'disabled' || sourceStatus === 'invalid') return
     const mapped = {
       source_profile_id: source.profile_id,
       intersection_id: intersectionId,
@@ -220,7 +223,6 @@ export function DashboardPage() {
     { id: 'network', label: '态势路口', value: serverSummary.intersections_total ?? '—', unit: '处', detail: `路段 ${serverSummary.segments_total ?? '—'} 条`, tone: 'blue' },
     { id: 'oversaturated', label: '过饱和路口', value: serverSummary.oversaturated ?? '—', unit: '处', detail: '饱和度 > 0.95', tone: 'red' },
     { id: 'segments', label: '拥堵路段', value: serverSummary.congested_segments ?? '—', unit: '条', detail: '延误指数 > 2.0', tone: 'cyan' },
-    ...demoSituation.kpis.filter((item) => ['conflict', 'efficiency'].includes(item.id)).map((item) => ({ ...item, detail: `${item.detail} · 演示` })),
   ]
   const situationError = situationQuery.error
   const otherLoadError = intersectionsQuery.error || sourcesQuery.error || sourceDronesQuery.error || pipelinesQuery.error

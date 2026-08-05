@@ -141,6 +141,57 @@ def _jpeg(frame: np.ndarray, quality: int = 88) -> bytes:
     return encoded.tobytes()
 
 
+def process_event_keyframe(
+    image: bytes,
+    telemetry_path: str | Path,
+    timestamp_sec: float,
+    *,
+    telemetry_type: str = "srt",
+    time_offset_sec: float = 0.0,
+    sync_tolerance_sec: float = 0.5,
+    frame_number: int = 0,
+) -> ProcessedFrame:
+    """Build a metric BEV frame from an immutable event image and its source telemetry."""
+    decoded = cv2.imdecode(np.frombuffer(image, dtype=np.uint8), cv2.IMREAD_COLOR)
+    if decoded is None or decoded.size == 0:
+        raise ValueError("event keyframe cannot be decoded")
+    height, width = decoded.shape[:2]
+    telemetry_records = (
+        parse_dji_srt(telemetry_path)
+        if telemetry_type == "srt"
+        else parse_dji_json(telemetry_path)
+    )
+    telemetry = _nearest(
+        telemetry_records,
+        [record["timestamp"] for record in telemetry_records],
+        timestamp_sec + time_offset_sec,
+        sync_tolerance_sec,
+    )
+    homography = compute_homography_from_telemetry(telemetry, (width, height))
+    if homography is None or abs(np.linalg.det(homography)) <= 1e-10:
+        raise ValueError("event keyframe has no synchronized metric transform")
+    bev, image_to_view = create_bev(decoded, homography)
+    gray = cv2.cvtColor(decoded, cv2.COLOR_BGR2GRAY)
+    return ProcessedFrame(
+        frame_number=frame_number,
+        timestamp_sec=timestamp_sec,
+        image=image,
+        bev=_jpeg(bev),
+        image_width=width,
+        image_height=height,
+        homography=homography.tolist(),
+        view_transform=image_to_view.tolist(),
+        telemetry=telemetry,
+        quality={
+            "clarity_laplacian": round(float(cv2.Laplacian(gray, cv2.CV_64F).var()), 3),
+            "exposure_mean": round(float(gray.mean()), 3),
+            "positioning": "unverified",
+            "homography": "unverified",
+            "source": "event_keyframe",
+        },
+    )
+
+
 def process_mp4_telemetry(
     video_path: str | Path,
     telemetry_path: str | Path,

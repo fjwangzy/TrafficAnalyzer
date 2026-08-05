@@ -77,7 +77,8 @@ class TrackerInfoUpdateNode:
             config.get("tracking_node", {}).get("max_lost_sec", 2.0)
         )
 
-        # 完成轨迹发射参数
+        # 完成轨迹归档参数。实时目标不使用这些门槛：检测关联首次出现
+        # 即进入 mature/active；短轨迹只在结束归档时被过滤。
         trajectory_cfg = config.get("trajectory", {})
         self.min_track_duration = trajectory_cfg.get("min_track_duration_sec", 2.0)
         self.min_trajectory_points = 5
@@ -191,6 +192,7 @@ class TrackerInfoUpdateNode:
                     id=id,
                     timestamp_first=frame_element.timestamp,
                 )
+                self.buffer_tracks[id].trajectory_output_eligible = True
                 self.buffer_tracks[id].association_id = int(association_id)
                 self.buffer_tracks[id].track_family_id = (
                     f"association:{int(association_id)}"
@@ -428,14 +430,10 @@ class TrackerInfoUpdateNode:
                     self.buffer_tracks[id].timestamp_init_road = frame_element.timestamp
 
         for track in self.buffer_tracks.values():
-            if not track.trajectory_output_eligible:
-                track.trajectory_output_eligible = bool(
-                    track.timestamp_last - track.timestamp_first
-                    >= self.min_track_duration
-                    and len(track.trajectory_points) >= self.min_trajectory_points
-                )
-            if track.trajectory_output_eligible:
-                self._ever_mature_track_ids.add(int(track.id))
+            # Realtime lifecycle has no candidate cooldown: every association
+            # accepted by the image tracker is a target on its first sighting.
+            track.trajectory_output_eligible = True
+            self._ever_mature_track_ids.add(int(track.id))
 
         # 统计窗口不得结束图像轨迹。新版链路只消费显式终止事实；legacy
         # 回滚链路没有该事实，因此仅按最后观测时间清理已离开当前帧的轨迹。

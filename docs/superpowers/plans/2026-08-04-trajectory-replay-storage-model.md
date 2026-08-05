@@ -137,7 +137,7 @@
 - 工作树/分支：`/Users/yaoyao/.codex/worktrees/611d/TrafficAnalyzer` / `codex/trajectory-replay-v2`；大文件只引用主工作树绝对路径，spool/证据写 `/private/tmp/traffic-analyzer-replay-v2-*`。
 - Kafka：使用 `uav_replay_v2_{statistics|track_complete|conflicts|telemetry|mission}_{source_key}`，消费者组固定 `uav-platform-replay-v2`；旧 canonical 正则不匹配。
 - PostgreSQL：独立 `uav_replay_v2_alembic_version`，当前 head `20260805_rv2_0003`；V2 秒级指标为 Timescale hypertable，7 天后压缩、90 天后保留清理。sealed Mission 完整到达后幂等重建 intersection/link/lane/turn 真实 5 分钟聚合和独立典型矩阵；canonical revision、核心事实表行数和 schema checksum 在迁移前后未变。
-- 本机 shadow：Platform `8200`、Console `5273`、视频端口从 `18101` 起；`replay_v2` profile 不启动 Mission 调度、survey、告警同步等控制面写入，非认证变更接口返回 405。
+- 历史本机 shadow 方案：Platform `8200`、Console `5273`、视频端口从 `18101` 起，且控制面只读。该方案已于 2026-08-05 被单套 `8000/5173` 完整 `replay_v2` 运行模式取代，仅保留为实施记录。
 - 五个 SourceProfile 已以 `frame_stride=14`、`imgsz=640`、独立 Mission/Run/Pipeline 串行跑到自然 EOF：合计 1,966 条 Stats、6,539 条最终 journey、6,088 条遥测和 5 条 sealed Mission，294,387 个源点/保留点的字段对齐失败为 0；每源 Kafka 与 V2 PG 均精确对账，Stats 未携带完整轨迹尾迹。
 - V2 表当前约 201,400,320 bytes；消息 P95 分别为 Stats 14,083 bytes、journey 50,845 bytes、telemetry 1,473 bytes。15 次 `30s/20,000 points` 回放查询中位数 1,767.700ms、P95 2,769.671ms；这是本机 shadow 容量/延迟证据，不是生产 SLA。
 - 五个稳定来源共 25 个 V2 Topic；重复 `ensure_topics` 两次均返回空，复跑不增加 Topic。验收中发现并修复 `TccEvidencePublisherNode` 曾绕过 V2 选择器写入 5 条 canonical conflict 的问题；精确保留清理 manifest 后回收 5 条 conflict/inbox 和两个仅由 V2 创建的错误 Topic，实际探针已证明冲突进入 V2 Topic/表。最终 canonical 仍为 `292244/19493/902896/102406/36245/103`，`pipe-rv2-*` canonical conflict 为 0，五个预留 canonical Topic 为 0。

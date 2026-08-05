@@ -59,11 +59,30 @@ describe('dashboard UAV video source map', () => {
     ])
   })
 
-  it('does not place a UAV source that only matches a local corridor or test project point', () => {
+  it('places a UAV source on a project intersection even without server situation metrics', () => {
     const points = buildDashboardSourcePoints({
       sources: [{ profile_id: 'SRC-CORRIDOR', drone_id: 'UAV-CORRIDOR', enabled: true, validation_status: 'valid' }],
       drones: [{ id: 'UAV-CORRIDOR', default_inter_id: 'INT-CORRIDOR' }],
       intersections: [{ id: 'INT-CORRIDOR', lon: 117, lat: 36.7, has_server_situation: false }],
+      pipelines: [],
+    })
+
+    expect(points).toHaveLength(1)
+    expect(points[0]).toMatchObject({
+      id: 'INT-CORRIDOR',
+      intersection_id: 'INT-CORRIDOR',
+      source_profile_id: 'SRC-CORRIDOR',
+      source_count: 1,
+      lon: 117,
+      lat: 36.7,
+    })
+  })
+
+  it('still refuses to invent a UAV marker when the bound intersection has no coordinates', () => {
+    const points = buildDashboardSourcePoints({
+      sources: [{ profile_id: 'SRC-NO-GEO', drone_id: 'UAV-NO-GEO', enabled: true, validation_status: 'valid' }],
+      drones: [{ id: 'UAV-NO-GEO', default_inter_id: 'INT-NO-GEO' }],
+      intersections: [{ id: 'INT-NO-GEO', has_server_situation: false }],
       pipelines: [],
     })
 

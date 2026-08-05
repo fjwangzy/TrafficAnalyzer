@@ -2,9 +2,8 @@
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.api.v1 import (
@@ -70,20 +69,18 @@ async def lifespan(app: FastAPI):
     # ── Initialize components ──
     ws_manager = WSManager()
     event_center = (
-        EventCenter(async_session_maker)
-        if db_available and not replay_profile
+        EventCenter(
+            async_session_maker,
+            materialize_on_list=not replay_profile,
+        )
+        if db_available
         else None
     )
-    alert_store = (
-        SqlAlertStore(async_session_maker)
-        if db_available and not replay_profile
-        else None
-    )
+    alert_store = SqlAlertStore(async_session_maker) if db_available else None
     alert_engine = AlertEngine(
         ws_manager, settings, alert_store=alert_store, event_center=event_center
     )
-    if not replay_profile:
-        await alert_engine.load_persisted_alerts()
+    await alert_engine.load_persisted_alerts()
     if event_center:
         await event_center.sync_alerts()
         await event_center.sync_survey_reports()
@@ -105,16 +102,8 @@ async def lifespan(app: FastAPI):
         if db_available and replay_profile
         else None
     )
-    audit_service = (
-        AuditService(async_session_maker)
-        if db_available and not replay_profile
-        else None
-    )
-    enforcement_service = (
-        EnforcementService(async_session_maker)
-        if db_available and not replay_profile
-        else None
-    )
+    audit_service = AuditService(async_session_maker) if db_available else None
+    enforcement_service = EnforcementService(async_session_maker) if db_available else None
     situation_reader = DashboardSituationReadModel(
         settings,
         cache_ttl_sec=settings.dashboard_situation_cache_ttl_sec,
@@ -140,7 +129,7 @@ async def lifespan(app: FastAPI):
                 lane_annotation_store if settings.lane_annotation_auto_tasks_enabled else None
             ),
             metric_store=metric_store,
-            dispatch_realtime=not replay_profile,
+            dispatch_realtime=True,
         )
         await kafka_service.start()
         if kafka_service._consumer is not None:
@@ -159,7 +148,7 @@ async def lifespan(app: FastAPI):
     )
     mission_orchestrator = None
     road_context = None
-    if db_available and not replay_profile:
+    if db_available:
         road_context = RoadContext(Road9RoadContextAdapter(async_session_maker))
         mission_orchestrator = MissionOrchestrator(
             async_session_maker,
@@ -167,8 +156,8 @@ async def lifespan(app: FastAPI):
             road_context,
             poll_sec=settings.mission_scheduler_poll_sec,
         )
-    survey_worker = SurveyWorker() if not replay_profile else None
-    if db_available and not replay_profile:
+    survey_worker = SurveyWorker()
+    if db_available:
         await survey_worker.start()
         await mission_orchestrator.start()
 
@@ -230,24 +219,6 @@ app.add_middleware(
 
 # Add authentication middleware
 app.add_middleware(AuthMiddleware)
-
-
-@app.middleware("http")
-async def replay_v2_read_only_control_plane(request: Request, call_next):
-    """Keep the shadow Platform from mutating canonical control-plane state."""
-    if (
-        settings.app_runtime_profile == "replay_v2"
-        and request.method not in {"GET", "HEAD", "OPTIONS"}
-        and not request.url.path.startswith("/api/v1/auth/")
-    ):
-        return JSONResponse(
-            status_code=405,
-            content={
-                "detail": "replay_v2 runtime is read-only outside authentication",
-                "runtime_profile": "replay_v2",
-            },
-        )
-    return await call_next(request)
 
 # Include API routers
 app.include_router(auth.router, prefix="/api/v1")

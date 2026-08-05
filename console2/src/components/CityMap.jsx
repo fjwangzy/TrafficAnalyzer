@@ -28,9 +28,9 @@ function intersectionMarkerContent(item, selected) {
 
 function sourceMarkerContent(item, selected) {
   const color = sourceColors[item.source_status] || sourceColors.disabled
-  const icon = renderToStaticMarkup(<Drone size={18} weight='fill' />)
+  const icon = renderToStaticMarkup(<Drone size={20} weight='fill' />)
   const count = Math.max(1, Number(item.source_count) || 1)
-  return `<div class="amap-drone-marker${selected ? ' selected' : ''}" style="--marker-color:${color}" aria-hidden="true">${icon}${count > 1 ? `<b>${count}</b>` : ''}</div>`
+  return `<div class="amap-drone-marker${selected ? ' selected' : ''}" style="--marker-color:${color}" aria-hidden="true"><span class="amap-drone-marker-face">${icon}</span>${count > 1 ? `<b>${count}</b>` : ''}</div>`
 }
 
 export function CityMap({
@@ -96,7 +96,7 @@ export function CityMap({
             ? sourceMarkerContent(item, item.id === selectedId)
             : intersectionMarkerContent(item, item.id === selectedId),
           anchor: 'center',
-          zIndex: isLegacySource ? 200 : 100,
+          zIndex: isLegacySource ? (item.id === selectedId ? 320 : 300) : 100,
           extData: { ...item, kind: isLegacySource ? 'source' : 'intersection' },
         })
         marker.on('click', () => onSelect?.(item))
@@ -108,7 +108,7 @@ export function CityMap({
           position: [Number(item.lon), Number(item.lat)],
           content: sourceMarkerContent(item, item.id === selectedSourceId),
           anchor: 'center',
-          zIndex: 200,
+          zIndex: item.id === selectedSourceId ? 320 : 300,
           extData: { ...item, kind: 'source' },
         })
         marker.on('click', () => onSourceSelect?.(item))

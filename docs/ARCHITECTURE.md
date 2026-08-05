@@ -344,6 +344,8 @@ Mac 开发机不得用 x86_64/Rosetta Python 承担 YOLO 推理。仓库通过
 `mps.is_built()` 与 `mps.is_available()`，然后以用户级 `launchd` 运行 `run_platform.py`，注入
 原生 `.venv-mps`、`PIPELINE_DEVICE=mps`、默认 `PIPELINE_IMGSZ=960`、
 `PYTORCH_ENABLE_MPS_FALLBACK=1`、持久证据目录 `.runtime/survey` 以及本机 road9/Kafka 地址。
+外部 YCX 只读连接由 Git 忽略且权限为 `600` 的 `platform/.env` 持久化，并在 uvicorn 从
+`platform/` 工作目录加载 `Settings` 时读取；启动脚本不得注入空 `YCX_*` 覆盖该文件。
 本机证据目录不得回退到 `/tmp`；`uav_evidence_items.storage_key` 与内容寻址对象必须成对保留，
 切换运行拓扑时先以非破坏方式导入既有证据卷，不能只复用 road9 元数据。Platform 创建的检测器是同一
 macOS 环境中的进程组，因此 REST、Mission、MJPEG 与进程生命周期都保持本地回环，不需要
@@ -624,11 +626,27 @@ Console2 /survey/**
   → SurveyWorker（MP4+DJI SRT / DJI Cloud JSON 关键帧处理、outbox 重试/死信）
 ```
 
+事件中心另提供一条收敛到同一深模块的快捷路径：
+
+```text
+Console2 /events/{event_id} “事件测绘”
+  → POST /api/v1/events/{event_id}/survey（认证 + Idempotency-Key）
+  → 校验 conflict_original_frame / 历史 conflict_keyframe 内容地址
+  → 同 SourceProfile 遥测按证据帧时刻重建 pixel→ENU
+  → source=event 的单帧 selected batch + BEV + SurveyFrame
+  → /survey/{task_id}/measure
+```
+
+该路径复用原 JPEG 的 storage key、SHA-256 和大小，仅创建带 `derived_from_id` 的测绘引用与新
+BEV；不会复制事件原图，也不会绕过无米制变换门禁。它记录
+`precheck.mode=event_evidence_reuse` 以区别常规现场采集，质量继续为 `unverified`。
+
 - 已登记 `source_profile_id` 的服务器 MP4、DJI `.srt` 和 DJI Cloud JSON `.json/.txt` 使用 `storage_backend=server_asset`：数据库只保存 allowlist 相对键、SHA-256、大小和本机快速指纹（size/mtime/ctime），绝不复制原文件；显式资产键和 multipart 上传仍保留给其他场景。指纹未变化时目录查询为 O(1)，指纹变化或旧记录缺少指纹时重新计算完整 SHA-256；原文件缺失或内容变化时读取及派生处理返回 `missing/hash_mismatch`，不能继续生成可信成果。
 - 后台提取 6 个关键帧，保存原始帧、BEV 图、遥测、质量观测和像素到 ENU 的变换；未冻结的 RTK、覆盖和精度阈值始终标记 `unverified`。
 - 关键帧、BEV、场景标注、车道标注底图和报告仍写入持久内容寻址卷。场景标注按关键帧保留 revision/audit；车道标注保留悬停触发，并可从已持久化真实关键帧恢复任务，确认后同步 `uav_lane_annotation_tasks` 与 `uav_visual_lane_bindings`。
 - 检测器仅在真实冲突发生时把对应 JPEG 写入事件证据包；无事件素材只记录零检出，不生成测试事件。
-- 点、线、折线、面积和对象几何都由服务端基于帧变换计算并版本化，浏览器只提交图像坐标，不能自报米制结果。帧读接口额外返回 BEV→ENU `metric_transform`，仅用于画布鼠标跟随预览边长；保存后显示以服务端 `metric_geometry` 为准。
+- 事件详情的“事件测绘”把真实冲突原始关键帧、事件/任务/Pipeline/SourceProfile 谱系和同步遥测带入同一测绘表族；同一幂等键和事件复用已有任务，不能生成多个无来源空任务。
+- 点、线、折线、面积和对象几何都由服务端基于帧变换计算并版本化，浏览器只提交图像坐标，不能自报米制结果。帧读接口额外返回 BEV→ENU `metric_transform`，仅用于画布鼠标跟随预览边长以及三个以上顶点时的中心面积预览；保存后的逐边长度和中心面积以服务端 `metric_geometry` 为准。量算文字使用轻量描边而非不透明矩形底，避免覆盖证据图像。
 - 报告生成前重新校验证据对象的 SHA-256 与大小，按关联 BEV 固化带逐边长度的 `survey_report_annotated_image`，嵌入 PDF，并输出 canonical JSON 和 GeoJSON。Console2 报告/历史任务优先读取该内容寻址图，旧版本则从 BEV+量算版本链只读重绘；质量规则未批准或投递 URL 未配置时禁止外发。
 - 对外投递使用 `uav_ai_events(event_type=survey_result)`、`uav_event_outbox`、attempt 和 dead-letter 形成可靠投递链；批准阈值和主平台合同仍属外部验收阻断项。
 
@@ -916,9 +934,9 @@ Kalman/Mahalanobis 95% 门控不得作为当前生产关联的硬资格。固定
 
 `DetectionNode` 与 legacy `DetectionTrackingNodes` 共用 `utils_local/detection_geometry.py`。Apple MPS 在推理前强制 Ultralytics 选择非原地 bbox 裁剪，避免旧 PyTorch MPS 的 sliced `clamp_` 静默破坏边界框；输出再按同一行同时校验 bbox、置信度和类别，非有限值、零/负宽高或数组错位均被丢弃并写入 `detection_diagnostics`。检测几何诊断不替代当前帧矩阵与遥测质量门禁。
 
-`FlightGeoReferenceNode` 与 `PostTrackingWorldProjectionNode` 位于图像关联之后，但不再拥有轨迹生命周期。后者在成熟的 ByteTrack 关联首次出现时立即分配稳定 `track_id`，并保留原始 `association_id`；地图、地理投影或姿态质量变化只能改变逐帧能力与质量谱系，不能结束、丢弃或拆分图像轨迹。`TrackerInfoUpdateNode` 对所有生命周期尚未结束的图像轨迹维护 `active_tracks/buffer_tracks` 兼容视图，并另外输出 `mature_tracks/candidate_trajectories/completed_tracks`。同一 ID 的成熟状态单调，只有关联消失、源时间断点、超时或自然 EOF 才生成一次带明确原因的完成事件。
+`FlightGeoReferenceNode` 与 `PostTrackingWorldProjectionNode` 位于图像关联之后，但不再拥有轨迹生命周期。ByteTrack 对达到检测/关联阈值的新关联取消历史的一帧确认等待，后者在关联首次出现的同帧立即分配稳定 `track_id`，并保留原始 `association_id`；地图、地理投影或姿态质量变化只能改变逐帧能力与质量谱系，不能结束、丢弃或拆分图像轨迹。`TrackerInfoUpdateNode` 对所有生命周期尚未结束的图像轨迹维护 `active_tracks/buffer_tracks/mature_tracks` 目标视图；`candidate_trajectories` 仅为旧消息兼容且正常为空。只有关联消失、源时间断点、超时或自然 EOF 才生成一次带明确原因的完成事件，完成轨迹归档仍保留最短时长和点数质量门槛。
 
-运行能力分为四层：`trajectory_output_eligible` 只取决于图像关联成熟度；`geo_analytics_eligible` 控制 ENU/GCJ-02、速度与方向；`road_analytics_eligible` 只控制 Lane/Link ID 及其匹配质量；`tcc_analytics_eligible` 由可信世界坐标、时间、跟踪质量和 TCC 证据单独决定。通用车辆计数、方向/转向和 TCC 不读取 road gate。旧字段 `formal_analytics_eligible` 继续表示 Lane/Link 匹配能力，仅用于兼容，不再控制其他能力。
+运行能力分为四层：`trajectory_output_eligible` 在图像关联首次出现时即为真；`geo_analytics_eligible` 控制 ENU/GCJ-02、速度与方向；`road_analytics_eligible` 只控制 Lane/Link ID 及其匹配质量；`tcc_analytics_eligible` 由可信世界坐标、时间、跟踪质量和 TCC 证据单独决定。通用车辆计数、方向/转向和 TCC 不读取 road gate。旧字段 `formal_analytics_eligible` 继续表示 Lane/Link 匹配能力，仅用于兼容，不再控制其他能力。
 
 `CalcStatisticsNode` 独立维护道路入口事件窗口：成熟轨迹首次满足道路归属和 3 秒存在要求时登记一次，`buffer_analytics=0.5` 只让事件在 30 秒后退出辆/分钟窗口。该过期不写轨迹仓库，也不允许同一 ID 重新登记。`cars` 和 `queue_count` 只读取当前成熟轨迹；速度、方向、车道、拥堵和 TCC 也先应用成熟视图，再分别应用 geo/road/TCC 门禁。
 
@@ -940,7 +958,7 @@ Mission取得Runtime Bundle时，`Road9RoadContextAdapter`与校准API只输出�
 
 手动Mission解析视频、配对遥测与可选地图。显式`map_version_id`是严格约束，未指定时按`inter_id`选择最新不可变`lane_verified`地图。没有合格地图时检测、图像轨迹、世界坐标、速度、方向、通用统计、TCC和完成事件仍按各自独立证据运行；当前帧矩阵或遥测质量不可信时ENU/GCJ-02对应点写`null`、速度为空、TCC为0。地图缺失只关闭Lane ID、Link ID与匹配质量。
 
-Console2 监控态分为历史 REST 与实时 WebSocket 两个状态层，展示标量时实时层覆盖历史层；只有 WebSocket 层可更新实时活动/候选轨迹和新鲜度时钟。实时业务消息必须同时匹配当前 SourceProfile 与运行 `pipeline_id`，Pipeline id 变化会重置旧会话的统计、轨迹与冲突，避免 Kafka backlog 或同源旧任务覆盖当前 Runtime 质量。BEV 地图只消费服务端提供的 GCJ-02 点列，降级候选以虚线投放；仅有像素轨迹时展示明确空态，不在浏览器中重建坐标。
+Console2 监控态分为历史 REST 与实时 WebSocket 两个状态层，展示标量时实时层覆盖历史层；只有 WebSocket 层可更新实时活动/兼容候选轨迹和新鲜度时钟。实时业务消息必须同时匹配当前 SourceProfile 与运行 `pipeline_id`，Pipeline id 变化会重置旧会话的统计、轨迹与冲突，避免 Kafka backlog 或同源旧任务覆盖当前 Runtime 质量。BEV 地图只消费服务端提供的 GCJ-02 点列，当前实时目标全部以实线投放；只有收到旧 Pipeline 的显式 candidate 字段时才以橙色虚线兼容显示。仅有像素轨迹时切换到独立的像素坐标实时轨迹画布，明确标记世界坐标不可用，不把像素点叠加到底图，也不在浏览器中重建地理坐标。左侧面板优先显示实时轨迹和业务指标，巡航/悬停融合质量卡固定在面板最底部。
 
 ADR-023 已废止世界 Mahalanobis 关联：H 抖动不再能改变匹配结果，`pose_motion_warp` 只用于视觉/遥测一致性诊断。2026-07-24 同一真实 xqh 840s–EOF 原生 MPS 的 image-v2 复验结果记录在 `docs/generated/xqh-hover-departure-acceptance.json`；该证据只证明本机吞吐、双坐标对齐、显示和业务隔离，不替代 IDF1/HOTA/位置与速度真值验收。
 
@@ -958,14 +976,14 @@ Runtime Bundle 删除 `editor_model` 元数据，只携带已生成的 Lane/Link
 
 已发布版本的再次编辑只能调用服务端 `derive-draft`。新版本显式记录来源版本并重置人工复核，Console 不再自行拼装复制请求；因此 `lane_verified` 源行及其绑定不会因后续拟合被就地更新。
 
-## 轨迹 Replay V2 shadow 架构（2026-08-04）
+## 轨迹 Replay V2 单运行时架构（2026-08-04，2026-08-05 全量切换）
 
-Replay V2 是同一 `road9` 和 Kafka 集群内的物理隔离 shadow，不是 canonical 兼容层。检测器在
+Replay V2 是同一 `road9` 和 Kafka 集群内的物理隔离新版数据面，不是 canonical 兼容层。检测器在
 `TRAJECTORY_STORAGE_PROFILE=replay_v2` 时把终止的 Runtime Track 写入外部
 `MissionTrajectoryArchive` durable spool；只有自然 EOF 才执行保守 ReID、全序列速度冻结、行为派生与事件保真抽样，随后发布最终 journey 和 sealed Mission。异常退出保留 incomplete spool，默认读模型不可见。
 
 V2 Topic 固定为 `uav_replay_v2_{statistics|track_complete|conflicts|telemetry|mission}_{source_key}`，
-`source_key` 稳定绑定 SourceProfile/Camera；V2 consumer group 为 `uav-platform-replay-v2`，只订阅锚定的 V2 正则。Platform `APP_RUNTIME_PROFILE=replay_v2` 只执行独立迁移与 V2 消费，不启动 MissionOrchestrator、survey worker、告警同步或实时 WebSocket 派发；除认证外的变更接口只读拒绝。
+`source_key` 稳定绑定 SourceProfile/Camera；V2 consumer group 为 `uav-platform-replay-v2`，只订阅锚定的 V2 正则。Platform `APP_RUNTIME_PROFILE=replay_v2` 是本机唯一完整运行模式：MissionOrchestrator、survey worker、告警同步、实时 WebSocket 和控制面写入均启用；它启动的检测子进程强制继承 `TRAJECTORY_STORAGE_PROFILE=replay_v2`，业务配置与 Mission 仍使用 canonical 控制面表，轨迹与统计事实只写 `uav_replay_v2_*` 数据面。运行模式切换不得分叉测绘/事件证据对象目录；本机所有 profile 统一使用 `.runtime/survey`，与 canonical `uav_evidence_items.storage_key` 一一对应。
 
 V2 consumer 在 Mission sealed 且声明的 journey 已全部幂等入库后，才从同一 Mission 事实重建
 intersection/link/lane/turn 四类真实 5 分钟聚合和独立典型矩阵；跨 Topic 乱序只延迟聚合，不生成半成品。
@@ -973,3 +991,6 @@ intersection/link/lane/turn 四类真实 5 分钟聚合和独立典型矩阵；�
 
 产品读路径严格分叉：`/monitoring` 的 `MonitoringBevMap` 只读当前 Pipeline 的实时 WebSocket 轨迹；
 `/gis` 只读 sealed Mission 的 ReplayRepository，使用 Mission T+ 时钟。两者不共享历史 journey、Mission 选择或播放状态。ReplayRepository 对质量 gap 断线、不插值，世界坐标不足时返回像素平面。
+`/gis` 时间轴使用可独立拖动的窗口开始/结束双游标；未通过 URL 指定游标时初始化为 `T+0 ～ T+10s`（短 Mission 取实际总长），避免双游标重合在原点导致开始游标没有可移动区间。拖动只更新本地预览，释放或键盘提交后才更新查询游标并发起一次 REST 请求，禁止把连续 pointer move 转换为并发请求。自动播放保持当前窗口宽度向前移动。顶部“轨迹统计”只投影已提交窗口的 replay 响应（已加载轨迹、可回放轨迹、空间点覆盖、流向种类和窗口冲突），不触发第二套指标重算；右侧流向排名、时间轴全局事件标记和 Mission 行为总数继续保持封存 Mission 口径。PostgreSQL ReplayRepository 只读取完整 Mission 的轨迹摘要、行为、冲突及每条轨迹的首尾分析点，再按当前窗口下推 TrackPoint 范围、确定性锚点和分页上限；Python 组装期间不占用数据库连接，不得为每个游标全量加载 Mission 点集。
+V2 `uav_stats` 继续携带有界的 active/candidate 轨迹尾部，仅用于当前 Pipeline 的 WebSocket/BEV；`ReplayV2MetricStoreAdapter` 不持久化这些尾部，历史点仍只允许通过 Mission spool → sealed journey 路径落库。
+同一适配器实现 `/monitoring` 使用的 `query_traffic` 与 `query_conflicts` 读契约：查询只读取 `uav_replay_v2_*` 样本、冲突和 Mission 谱系，不回退 canonical 事实表。`uav_replay_mission` 是持久化控制事实，没有实时地图投影，consumer 落库后直接确认 dispatch。

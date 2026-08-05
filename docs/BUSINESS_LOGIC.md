@@ -487,14 +487,22 @@ near-miss 证据：
 
 Console2 对新事件展示 `conflict_original_frame`“原始画面”和 `conflict_detector_frame`“检测器输出的 TCC 画面帧”，两项均通过鉴权内容接口读取并支持全屏。历史事件已有的 `conflict_trajectory_reconstruction` 或单项 `conflict_keyframe` 保持可读，不迁移、不删除，也不会为新事件继续生成。
 
+管理员可从事件详情执行“事件测绘”。Platform 优先复用当前事件的
+`conflict_original_frame`，历史事件兼容 `conflict_keyframe`；原 JPEG 只新增指向同一内容地址的
+测绘证据引用，并通过 `derived_from_id` 保留事件来源。服务端按事件的 `source_profile_id`、证据
+帧时间和已登记遥测同步参数重建像素→ENU 变换与单帧 BEV；仅在哈希、遥测和米制变换均可用
+时创建 `source=event` 的 `measuring` 任务并跳转量算。该路径是既有事件证据的事后复核，不发起
+新飞行或伪造常规采集前置核验，任务 `precheck.mode=event_evidence_reuse` 且质量保持
+`unverified`。同一事件和幂等键重复操作复用原任务。
+
 节点每帧同时写入 `FrameElement.tcc_diagnostics`，记录检测开关、单应性有效性、motor/non_motor 输入数、双方合格轨迹数、候选配对、预测候选、证据通过、去重、正式路径交点事件和实验事件数量。诊断状态区分 `disabled`、`missing_calibration`、`no_eligible_candidates`、`no_prediction_candidates`、`no_evidence`、`deduplicated` 与 `events_emitted`。该漏斗随 `uav_stats.data.tcc_diagnostics` 发布，用于解释合法零检出；它只描述检测过程，不替代事件事实或召回率真值。
 
 ## 事故测绘业务闭环（S3）
 
 1. 任务先完成任务上下文、作业授权、现场指挥、设备和存储五项前置核验；缺项进入 `precheck_failed`，不能开始采集。
 2. 已登记 SourceProfile 的 MP4 与 DJI `.srt` / DJI Cloud JSON `.json/.txt` 不写入证据卷，而以 `server_asset` allowlist 相对键、SHA-256、字节数和 size/mtime/ctime 快速指纹形成不可变引用；派生关键帧/BEV/报告使用 `managed` 内容寻址对象。指纹未变化时快速确认，指纹变化时必须重新计算完整 SHA-256；绝对路径、路径穿越、allowlist 外文件、缺失或哈希变化均阻止可信处理。
-3. `SurveyWorker` 从 `uav_capture_ingestion_jobs` 取出任务，按来源记录的遥测类型、时间偏移和容忍窗口提取 6 个关键帧，生成原始帧/BEV、遥测覆盖和清晰度/曝光观测；失败按可配置次数重试并保留错误。已知遥测缺口必须保留 `degraded`，不能用插值伪装连续。
-4. 用户选择可用批次后进入量算。浏览器只提交图像像素几何，服务端使用该帧变换计算 ENU 米制点、长度、折线长度、面积和周长，并把每次修订保存为版本链。服务端同时只读下发 BEV→ENU 变换，画布在鼠标移动时把当前预览边换算为米并贴在线段中点；已保存折线、面积和对象的每条边使用持久化 `metric_geometry` 标长，浏览器计算值不替代服务端成果。
+3. `SurveyWorker` 从 `uav_capture_ingestion_jobs` 取出任务，按来源记录的遥测类型、时间偏移和容忍窗口提取 6 个关键帧，生成原始帧/BEV、遥测覆盖和清晰度/曝光观测；失败按可配置次数重试并保留错误。已知遥测缺口必须保留 `degraded`，不能用插值伪装连续。已持久化事件的“事件测绘”属于独立的证据复用入口：不重跑整段视频，也不创建采集 job，而是以事件原始关键帧和同源同步遥测生成一个 selected 单帧 batch。
+4. 用户选择可用批次后进入量算。浏览器只提交图像像素几何，服务端使用该帧变换计算 ENU 米制点、长度、折线长度、面积和周长，并把每次修订保存为版本链。服务端同时只读下发 BEV→ENU 变换，画布在鼠标移动时把当前预览边换算为米并贴在线段中点；面积形成三个以上顶点后同步计算预览面积并显示在多边形视觉中心。已保存折线、面积和对象的每条边使用持久化 `metric_geometry` 标长，已保存面积的中心值同样以该服务端米制几何为准。边长和面积采用无色块底框的描边文字，避免遮挡现场影像；浏览器计算值不替代服务端成果。
 5. 提交复核至少需要一项带 metric geometry 的当前量算；复核可通过或带原因退回“补拍/修订量算”。技术复核通过不等于法定事故认定。
 6. 报告生成前重新计算全部引用材料的 SHA-256 和大小；按量算关联帧生成带几何与逐边长度的标注 JPEG，将其作为派生证据嵌入 PDF，并随 canonical JSON、GeoJSON 与 manifest hash 输出。历史任务优先展示固化标注图；旧报告可由不可变 BEV 和版本化量算记录只读重绘，不回写旧版本。重复请求用 `Idempotency-Key` 返回同一业务结果。
 7. 报告只有在 `survey_quality` 规则已批准且配置主平台 URL 后才创建 `survey_result` 事件和 outbox；worker 记录每次 HTTP 尝试，超过上限进入 dead letter。当前未冻结阈值保持 `unverified`，不得伪造“质量通过”或成功回执。
@@ -517,7 +525,7 @@ Console2 对新事件展示 `conflict_original_frame`“原始画面”和 `conf
 帧 N 进入 TrackerInfoUpdateNode
   → buffer_tracks 新增 ID 16,17
   → ID 3 首次进入道路 2 的多边形 → start_road=2
-  → 输出 active/mature/candidate/completed 四个生命周期视图；统计窗口不清理轨迹
+  → 新关联首次出现即进入 active/mature 目标；candidate 仅保留旧消息兼容；统计窗口不清理轨迹
 帧 N 进入 LaneDetectionNode
   → 无人工标注 → YOLO 分割模型检测车道标线 → 膨胀为车道多边形
   → lane_source="model", lane_polygons={lane_1: Polygon, ...}
@@ -597,6 +605,7 @@ Console2 实时监测的 BEV 采用“最近 5 分钟或至少 150 条”的混�
 - 持续拥堵只在拥堵指数连续 30 个发布样本超过 4.0 时生成事件，证据快照与触发样本同时定格。
 - 完整性以 `expected_samples / actual_samples / dropped_samples / coverage_ratio / drop_reason` 表达；低覆盖数据保留事实但必须降质，不得伪装为完整时段。
 - 事件中心不把告警、冲突、拥堵、质量下降和测绘成果压成同一指标；每类事件保留各自的规则、质量和证据。
+- 事件中心页面和 REST 查询只返回业务时间倒序的最近 150 条；`replay_v2` 列表读取不在请求内重复生成质量事件，但完整运行模式允许告警/测绘同步与技术复核写入。清理前必须先按 `uav_ai_events + uav_conflict_events` 合并计数；总量不超过 150 时不得删除。
 - 当真实检测没有产生冲突时，轨迹研判显示 0 和真实空态，禁止为展示向正式 `road9` 注入伪冲突。
 
 ### 历史轨迹流向研判（2026-07-21）
@@ -683,10 +692,10 @@ Lane ID、Link ID 与匹配质量为不可用，不能用零值伪装；方向�
 
 正式业务门禁按以下边界执行：
 
-- `GroundTrajectoryTrackerNode` 对确认检测维护图像 `association_id`；`PostTrackingWorldProjectionNode` 立即分配稳定 `track_id`。只有未满足最短时长和点数的关联处于 `candidate_trajectories`。
+- `GroundTrajectoryTrackerNode` 对达到检测/关联阈值的目标立即维护图像 `association_id`，不再等待下一帧确认；`PostTrackingWorldProjectionNode` 同帧分配稳定 `track_id`，`TrackerInfoUpdateNode` 同帧放入成熟活动目标。实时链路不设候选冷静期，`candidate_trajectories` 仅作旧消息兼容且正常为空。
 - `PostTrackingWorldProjectionNode` 是新版唯一世界事实所有者：先对当前接地点去畸变，再使用该源帧 `pixel_to_world_enu` 生成 ENU/GCJ-02。`TrackerInfoUpdateNode` 只累积该结果，后续H或GCJ-02锚点变化不得触发二次计算。
 - 原始类别变化只增加关联代价；同业务组类别可更新，机动车/非机动车跨组变化默认连续 3 帧确认后才改写轨迹业务类别。
-- `TrackerInfoUpdateNode` 接收全部图像关联并逐点保存同帧接地点像素、可空 ENU/GCJ-02、源时间、源帧号和质量谱系；成熟后进入 `active_trajectories`，结束时只发一次完成事件。
+- `TrackerInfoUpdateNode` 接收全部图像关联并逐点保存同帧接地点像素、可空 ENU/GCJ-02、源时间、源帧号和质量谱系；首次发现即进入 `active_trajectories`，结束时仍只对满足历史归档时长/点数门槛的轨迹发一次完成事件。
 - `SpeedEstimationNode` 与 `DirectionFlowNode` 只消费连续可信ENU；证据不足时速度/方向为空。`RoadMapMatchingNode`只读取上游已有GCJ-02并转换到地图自身ENU，以填充Lane/Link ID与匹配质量；禁止从地图Homography创建或覆盖世界坐标，也不得覆盖轨迹自身的方向/转向。通用车辆计数消费成熟图像轨迹；`ConflictDetectionNode`只消费独立的`tcc_analytics_eligible`。
 - active/completed trajectory 的 canonical `trajectory_px` 使用与世界坐标相同的接地点锚点，旧 bbox 中心放在 `trajectory_bbox_center_px`；active world 轨迹直接读取逐帧保存的 `trajectory_enu_m`，禁止用当前帧 H 重投影历史像素。
 - 地理参考、地图覆盖或路网版本变化不得拆分 `track_id`；只有关联消失、源时间倒退/超时或自然 EOF 结束轨迹。世界点可在同一轨迹内从有效降级为 `null` 后再恢复。
@@ -724,8 +733,8 @@ Console2 普通模式使用服务器典型时段读模型与固定演示样例�
 - 启用 SourceProfile 只有在 `inter_id` 能匹配服务器态势路口时才显示无人机标；同一路口多源聚合计数，点击依次优先运行中 Pipeline、有效源、降级源。本地项目、走廊或测试坐标可作为灰态项目路口显示，但不能单独据此生成无人机覆盖图标。
 - 普通路口点击只更新地图路口与关联路段的选中态，不在地图上叠加指标详情面板；重点指标继续由右侧路口榜单承载。无人机标点击携带 `intersection_id + source_profile_id` 进入监控。服务器首次不可用时明确空态且不回退态势 mock；只有同槽成功缓存可作为 stale 降级。
 - 实时监测页有运行中 Pipeline 时优先展示真实视频与指标；没有运行中 Pipeline 时展示固定路口悬停指标、车道饱和度、交通流趋势和事件列表，并明确标记为固定演示指标。
-- “路口悬停”“路段航拍”“治理复盘”切换当前演示任务叙事；“保存事件与流量快照”会把当前车辆、排队、速度、饱和度、车道、事件、近六个 5 分钟流量桶和治理前后对比写入浏览器本地台账 `uav.console.demo-analysis-snapshots.v1`。同一路口与任务阶段使用稳定主键覆盖保存，刷新后可从事件中心继续打开，避免每次演示重新生成数据。
-- 本地演示台账与 road9 真实事件列表分区展示，不写入 `uav_*` 业务表，也不构成服务端、跨浏览器或生产持久化承诺；需要生产留档时应另行接入正式事件/指标持久化 API。
+- “路口悬停”“路段航拍”“治理复盘”切换当前演示任务叙事；“保存事件与流量快照”会把当前车辆、排队、速度、饱和度、车道、事件、近六个 5 分钟流量桶和治理前后对比写入浏览器本地台账 `uav.console.demo-analysis-snapshots.v1`。同一路口与任务阶段使用稳定主键覆盖保存；保存后通过 `snapshot_id` 深链打开事后分析，AI 事件中心顶部不再展示本机快照台账。
+- 本地演示快照不混入 road9 真实事件列表，不写入 `uav_*` 业务表，也不构成服务端、跨浏览器或生产持久化承诺；需要生产留档时应另行接入正式事件/指标持久化 API。
 - 固定事件与复盘值只用于功能演示，不作为生产现状、模型精度或治理效果证据；服务器典型矩阵只证明数据读取和展示口径，也不构成实时运行或生产效果声明。
 
 ## Replay V2 Mission 复盘规则（2026-08-04）

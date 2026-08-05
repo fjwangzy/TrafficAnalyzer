@@ -100,6 +100,18 @@ def test_tracked_class_name_survives_current_frame_class_switch_pending():
     assert result.tracked_cls == ["tricycle"]
 
 
+def test_detection_born_after_first_frame_is_target_immediately():
+    BaseTrack._count = 0
+    tracker = _TrackingPipeline(_config())
+
+    empty = tracker.process(_multi_frame(0.0, [], np.eye(3)))
+    detected = tracker.process(_frame(0.1, [20, 20, 40, 40]))
+
+    assert empty.id_list == []
+    assert detected.id_list == [1]
+    assert detected.association_trajectories[0]["trajectory_output_eligible"] is True
+
+
 def test_image_association_is_invariant_to_world_projection_jitter():
     """Changing only H must not change image identities or matched boxes."""
 
@@ -388,8 +400,8 @@ def test_target_outside_map_coverage_still_enters_output_buffer_without_road_mat
     assert frame.id_list == [1]
     assert frame.formal_track_ids == []
     assert list(frame.buffer_tracks) == [1]
-    assert len(frame.candidate_trajectories) == 1
-    assert frame.candidate_trajectories[0]["trajectory_output_eligible"] is False
+    assert list(frame.mature_tracks) == [1]
+    assert frame.candidate_trajectories == []
     trajectory = frame.association_trajectories[0]
     assert trajectory["track_id"] == 1
     assert trajectory["trajectory_output_eligible"] is True
@@ -660,7 +672,7 @@ def test_mature_hover_queue_tracks_do_not_reenter_candidate_state_at_statistics_
     assert max(candidate_counts_after_maturity) == 0
 
 
-def test_tracker_info_exposes_active_and_mature_lifecycle_views():
+def test_tracker_info_exposes_first_sighting_as_active_target():
     config = _config()
     config["trajectory"]["min_track_duration_sec"] = 2.0
     accumulator = TrackerInfoUpdateNode(config)
@@ -685,14 +697,15 @@ def test_tracker_info_exposes_active_and_mature_lifecycle_views():
         }
         return accumulator.process(frame)
 
-    candidate = process(0.0)
-    assert list(candidate.active_tracks) == [1]
-    assert candidate.mature_tracks == {}
-    assert candidate.mature_trajectory_association_ids == []
-    assert candidate.tracking_diagnostics["lifecycle"] == {
+    target = process(0.0)
+    assert list(target.active_tracks) == [1]
+    assert list(target.mature_tracks) == [1]
+    assert target.mature_trajectory_association_ids == [1]
+    assert target.candidate_trajectories == []
+    assert target.tracking_diagnostics["lifecycle"] == {
         "active_track_count": 1,
-        "mature_track_count": 0,
-        "candidate_track_count": 1,
+        "mature_track_count": 1,
+        "candidate_track_count": 0,
         "completed_track_count": 0,
         "same_id_mature_to_candidate_count": 0,
         "termination_reason": None,
@@ -773,7 +786,7 @@ def test_association_lost_beyond_two_seconds_completes_new_path_once():
     assert accumulator.buffer_tracks == {}
 
 
-def test_source_time_gap_completes_old_mature_id_once_and_starts_candidate():
+def test_source_time_gap_completes_old_mature_id_once_and_starts_target():
     config = _config()
     config["trajectory"]["min_track_duration_sec"] = 2.0
     tracker = _TrackingPipeline(config)
@@ -791,8 +804,8 @@ def test_source_time_gap_completes_old_mature_id_once_and_starts_candidate():
     assert [track["track_id"] for track in jumped.completed_tracks] == [1]
     assert jumped.completed_tracks[0]["termination_reason"] == "source_time_gap"
     assert list(jumped.active_tracks) == [2]
-    assert jumped.mature_tracks == {}
-    assert [track["track_id"] for track in jumped.candidate_trajectories] == [2]
+    assert list(jumped.mature_tracks) == [2]
+    assert jumped.candidate_trajectories == []
     assert jumped.tracking_diagnostics["lifecycle"]["completed_track_count"] == 1
     assert jumped.tracking_diagnostics["lifecycle"]["termination_reason"] == "source_time_gap"
 

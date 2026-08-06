@@ -103,8 +103,8 @@ export function ConsoleFrame({ children, pageTitle, immersive = false, topContex
   )
 }
 
-export function AppShell({ children, pageTitle, topContext }) {
-  return <ConsoleFrame pageTitle={pageTitle} topContext={topContext}>{children}</ConsoleFrame>
+export function AppShell({ children, pageTitle, topContext, immersive = false }) {
+  return <ConsoleFrame pageTitle={pageTitle} topContext={topContext} immersive={immersive}>{children}</ConsoleFrame>
 }
 
 export const routeAccess = {

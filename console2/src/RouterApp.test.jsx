@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -53,6 +53,7 @@ vi.mock('./lib/api', async (importOriginal) => {
         { id: 'INT-I5', inter_id: 'INT-I5', name: 'I5 未验证路口', lat: null, lon: null, map_eligible: false, map_exclusion_reason: 'road_context_unverified', road_data_version: 'ROAD-I5', monitor: 'standby', risk: 'unknown', quality: 'unverified', last_metric_at: null, metric: {}, mission_id: null, drone_id: null, pipeline_id: null, events: [], conflict_count: 0 },
       ] }),
       dashboardDrones: vi.fn().mockResolvedValue({ schema_version: 'uav.dashboard/v1', items: [{ id: 'UAV-I5', name: 'I5 drone', enabled: true, status: 'offline', telemetry_quality: 'missing' }] }),
+      droneTrajectory: vi.fn().mockResolvedValue([]),
       dashboardSituation: vi.fn().mockResolvedValue({
         schema_version: 'uav.dashboard-situation/v1',
         source: { database: 'ycx', road_schema: 'road9', metrics_schema: 'xianchang', road_version: '20260501', read_mode: 'readonly' },
@@ -162,10 +163,11 @@ vi.mock('./lib/api', async (importOriginal) => {
 })
 
 vi.mock('./components/CityMap', () => ({
-  CityMap: ({ offline = false, onSelect, onSourceSelect, points = [], sourcePoints = [] }) => <div data-testid='city-map'>
+  CityMap: ({ displayMode = 'situation', offline = false, onSelect, onSourceSelect, onLiveDroneSelect, points = [], sourcePoints = [], liveDronePoints = [], selectedLiveDroneId }) => <div data-testid='city-map' data-display-mode={displayMode} data-live-drones={liveDronePoints.length} data-selected-live-drone={selectedLiveDroneId || ''}>
     {offline ? '城市底图服务不可用' : '演示地图'}
     {points[0] && <button aria-label={`打开路口 ${points[0].id}`} onClick={() => onSelect?.(points[0])}>路口点位</button>}
-    {sourcePoints[0] && <button aria-label={`打开无人机 ${sourcePoints[0].id}`} onClick={() => onSourceSelect?.(sourcePoints[0])}>无人机点位</button>}
+    {sourcePoints.map((item) => <button key={`source-${item.id}`} aria-label={`打开无人机 ${item.id}`} onClick={() => onSourceSelect?.(item)}>无人机点位</button>)}
+    {liveDronePoints.map((item) => <button key={`live-${item.id}`} aria-label={`打开实时无人机 ${item.id}`} onClick={() => onLiveDroneSelect?.(item)}>实时无人机点位</button>)}
   </div>,
 }))
 
@@ -214,7 +216,7 @@ describe('Console2 full prototype', () => {
     const { container } = open('/')
     expect(await screen.findByRole('heading', { name: '无人机交通态势工作台' })).toHaveClass('sr-only')
     expect(container.querySelector('.page-heading')).not.toBeInTheDocument()
-    expect(container.querySelector('.page-actions')).toBeInTheDocument()
+    expect(container.querySelector('.dashboard-command-controls')).toBeInTheDocument()
     expect(screen.queryByText('I5 内部工程口径')).not.toBeInTheDocument()
     expect(screen.queryByText('无人机路口态势纵览')).not.toBeInTheDocument()
     expect(container.querySelector('.map-master-panel > .panel-title')).not.toBeInTheDocument()
@@ -223,16 +225,22 @@ describe('Console2 full prototype', () => {
     expect(screen.getByText('机非冲突风险升高')).toBeInTheDocument()
     expect(screen.getByText('轻微事故等待测绘')).toBeInTheDocument()
     expect(screen.getByText('治理前后复盘')).toBeInTheDocument()
-    expect(screen.getByText('服务器典型时段态势')).toBeInTheDocument()
-    expect(screen.getByText('拥堵路段')).toBeInTheDocument()
-    expect(screen.getByText('延误指数 > 2.0')).toBeInTheDocument()
-    expect(container.querySelector('.dashboard-kpis')).not.toHaveTextContent('机非冲突')
-    expect(container.querySelector('.dashboard-kpis')).not.toHaveTextContent('治理提升')
+    expect(screen.getByText('服务器典型时段 · 饱和度排序')).toBeInTheDocument()
+    expect(container.querySelector('.dashboard-kpis')).not.toBeInTheDocument()
+    expect(screen.queryByText('态势路口')).not.toBeInTheDocument()
+    expect(screen.queryByText('过饱和路口')).not.toBeInTheDocument()
+    expect(screen.queryByText('拥堵路段')).not.toBeInTheDocument()
     expect(container.querySelector('.situation-map-detail')).not.toBeInTheDocument()
     await waitFor(() => expect(platformApi.dashboardIntersections).toHaveBeenCalledWith({ limit: 500 }))
     expect(screen.getByRole('navigation', { name: '全域态势二级导航' })).toHaveTextContent('工作台首屏实时监测')
     expect(screen.getByRole('navigation', { name: '全域态势二级导航' })).not.toHaveTextContent('轨迹研判')
     expect(screen.getByRole('complementary', { name: '一级业务域' })).toBeInTheDocument()
+    expect(screen.queryByRole('complementary', { name: '无人机飞行详情' })).not.toBeInTheDocument()
+    expect(screen.getByRole('complementary', { name: '首页治理摘要' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '收起首页治理摘要' }))
+    expect(screen.getByRole('button', { name: '展开首页治理摘要' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '展开首页治理摘要' }))
+    expect(screen.getByRole('button', { name: '收起首页治理摘要' })).toBeInTheDocument()
   })
 
   it('requests the selected weekday and exact five-minute situation slot', async () => {
@@ -240,6 +248,7 @@ describe('Console2 full prototype', () => {
     open('/')
 
     await screen.findByRole('heading', { name: '无人机交通态势工作台' })
+    fireEvent.click(screen.getByRole('button', { name: 'road9 典型态势' }))
     fireEvent.change(screen.getByLabelText('星期'), { target: { value: '5' } })
     fireEvent.change(screen.getByLabelText('时间'), { target: { value: '95' } })
 
@@ -248,28 +257,84 @@ describe('Console2 full prototype', () => {
     expect(screen.getByLabelText('时间')).toHaveValue('95')
   })
 
-  it('opens the selected intersection monitoring screen from a dashboard map marker', async () => {
+  it('switches the dashboard map between road9 situation and pure AMap realtime traffic', async () => {
+    const { container } = open('/')
+    await screen.findByRole('heading', { name: '无人机交通态势工作台' })
+    const cityMap = screen.getByTestId('city-map')
+
+    expect(cityMap).toHaveAttribute('data-display-mode', 'traffic')
+    expect(screen.queryByLabelText('星期')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('时间')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '高德实时路况' })).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByLabelText('高德实时路况图例')).toHaveTextContent('通畅缓行拥堵严重拥堵未知')
+    expect(container.querySelector('.situation-legend')).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'road9 典型态势' }))
+
+    expect(cityMap).toHaveAttribute('data-display-mode', 'situation')
+    expect(screen.getByLabelText('星期')).toBeInTheDocument()
+    expect(screen.getByLabelText('时间')).toBeInTheDocument()
+    expect(container.querySelector('.situation-legend')).toBeInTheDocument()
+    fireEvent.click(await screen.findByRole('button', { name: '打开无人机 INT_camera_1' }))
+    expect(cityMap).toHaveAttribute('data-selected-live-drone', 'UAV-M300-03')
+    expect(screen.getByRole('complementary', { name: '无人机飞行详情' })).toHaveTextContent('M300 test')
+    fireEvent.click(screen.getByRole('button', { name: '关闭无人机详情' }))
+
+    fireEvent.click(screen.getByRole('button', { name: '高德实时路况' }))
+
+    expect(cityMap).toHaveAttribute('data-display-mode', 'traffic')
+    expect(screen.queryByLabelText('星期')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('时间')).not.toBeInTheDocument()
+  })
+
+  it('opens UAV details first and enters monitoring only from the enabled panel action', async () => {
     const source = { profile_id: 'SRC-MAP-1', display_name: '地图监测视频源', drone_id: 'UAV-MAP-1', enabled: true, validation_status: 'valid', video: { id: 'VID-MAP-1', source_type: 'mp4' } }
+    const offlineSource = { profile_id: 'SRC-MAP-2', display_name: '离线地图视频源', drone_id: 'UAV-MAP-2', enabled: true, validation_status: 'valid', video: { id: 'VID-MAP-2', source_type: 'mp4' } }
     const drone = { id: 'UAV-MAP-1', name: '地图监测无人机', default_inter_id: 'INT-MAP-1', default_video_source_id: 'VID-MAP-1', intersection_name: '地图监测路口' }
+    const offlineDrone = { id: 'UAV-MAP-2', name: '离线地图无人机', default_inter_id: 'INT-MAP-2', default_video_source_id: 'VID-MAP-2', intersection_name: '离线地图路口', status: 'offline', telemetry_status: 'stale', last_telemetry: { position_gcj02: { latitude: 36.68, longitude: 117.01 }, battery_pct: 41 } }
     const pipeline = { pipeline_id: 'PIPE-MAP-1', intersection_id: 'INT-MAP-1', source_profile_id: 'SRC-MAP-1', drone_id: 'UAV-MAP-1', camera_id: 17, video_stream_url: 'http://127.0.0.1:8127/video', status: 'running' }
-    platformApi.dashboardIntersections.mockResolvedValueOnce({ schema_version: 'uav.dashboard/v1', total: 1, map_eligible: 1, isolated: 0, items: [
+    platformApi.dashboardIntersections.mockResolvedValueOnce({ schema_version: 'uav.dashboard/v1', total: 2, map_eligible: 2, isolated: 0, items: [
       { id: 'INT-MAP-1', inter_id: 'INT-MAP-1', name: '地图监测路口', center_gcj02: { latitude: 36.67, longitude: 116.99 }, coordinate_system: 'GCJ02', map_eligible: true, map_coordinate_status: 'test', road_data_version: 'ROAD-MAP', monitor: 'running', risk: 'normal', quality: 'unverified', metric: {}, events: [], conflict_count: 0 },
+      { id: 'INT-MAP-2', inter_id: 'INT-MAP-2', name: '离线地图路口', center_gcj02: { latitude: 36.68, longitude: 117.01 }, coordinate_system: 'GCJ02', map_eligible: true, map_coordinate_status: 'test', road_data_version: 'ROAD-MAP', monitor: 'standby', risk: 'normal', quality: 'unverified', metric: {}, events: [], conflict_count: 0 },
     ] })
     platformApi.dashboardSituation.mockResolvedValueOnce({
       schema_version: 'uav.dashboard-situation/v1',
       source: { road_version: '20260501' },
       time_profile: { kind: 'typical_5min', timezone: 'Asia/Shanghai', available_days: [1, 2, 5] },
       cache: { status: 'miss', stale: false },
-      summary: { intersections_total: 1, good: 1, near_saturated: 0, oversaturated: 0, segments_total: 0 },
-      intersections: [{ inter_id: 'INT-MAP-1', name: '地图监测路口', lon: 116.99, lat: 36.67, saturation_max: 0.72 }],
+      summary: { intersections_total: 2, good: 2, near_saturated: 0, oversaturated: 0, segments_total: 0 },
+      intersections: [{ inter_id: 'INT-MAP-1', name: '地图监测路口', lon: 116.99, lat: 36.67, saturation_max: 0.72 }, { inter_id: 'INT-MAP-2', name: '离线地图路口', lon: 117.01, lat: 36.68, saturation_max: 0.68 }],
       segments: [],
     })
-    platformApi.sources.mockResolvedValueOnce([source]).mockResolvedValueOnce([source])
-    platformApi.drones.mockResolvedValueOnce([drone]).mockResolvedValueOnce([drone])
+    platformApi.sources.mockResolvedValueOnce([source, offlineSource]).mockResolvedValueOnce([source, offlineSource])
+    platformApi.drones.mockResolvedValueOnce([{ ...drone, status: 'flying', telemetry_status: 'fresh' }, offlineDrone]).mockResolvedValueOnce([drone, offlineDrone])
+    platformApi.dashboardDrones.mockResolvedValueOnce({ schema_version: 'uav.dashboard/v1', items: [{ id: 'UAV-MAP-1', name: '地图监测无人机', enabled: true, status: 'online', telemetry_quality: 'verified', position_gcj02: { latitude: 36.67, longitude: 116.99 }, battery_pct: 82, mission_id: 'MSN-MAP-1', inter_id: 'INT-MAP-1' }, { id: 'UAV-MAP-2', name: '离线地图无人机', enabled: true, status: 'offline', telemetry_quality: 'stale', inter_id: 'INT-MAP-2' }] })
     platformApi.pipelines.mockResolvedValueOnce([pipeline]).mockResolvedValueOnce([pipeline])
 
     open('/')
-    fireEvent.click(await screen.findByRole('button', { name: '打开无人机 INT-MAP-1' }))
+    const markerButton = await screen.findByRole('button', { name: '打开实时无人机 UAV-MAP-1' })
+    expect(screen.queryByRole('complementary', { name: '无人机飞行详情' })).not.toBeInTheDocument()
+    fireEvent.click(markerButton)
+
+    expect(window.location.pathname).toBe('/')
+    expect(screen.getByRole('complementary', { name: '无人机飞行详情' })).toBeInTheDocument()
+    expect(screen.getByTestId('city-map')).toHaveAttribute('data-selected-live-drone', 'UAV-MAP-1')
+    expect(screen.getByRole('complementary', { name: '首页治理摘要' })).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: '打开实时无人机 UAV-MAP-2' }))
+    const offlinePanel = screen.getByRole('complementary', { name: '无人机飞行详情' })
+    expect(within(offlinePanel).getByText('离线地图无人机')).toBeInTheDocument()
+    expect(screen.getByTestId('city-map')).toHaveAttribute('data-selected-live-drone', 'UAV-MAP-2')
+    expect(within(offlinePanel).getByRole('button', { name: /进入完整实时监测/ })).toBeDisabled()
+
+    fireEvent.click(markerButton)
+    expect(screen.getByTestId('city-map')).toHaveAttribute('data-selected-live-drone', 'UAV-MAP-1')
+    fireEvent.click(screen.getByRole('button', { name: '关闭无人机详情' }))
+    expect(screen.queryByRole('complementary', { name: '无人机飞行详情' })).not.toBeInTheDocument()
+    expect(screen.getByTestId('city-map')).toHaveAttribute('data-selected-live-drone', '')
+
+    fireEvent.click(markerButton)
+    fireEvent.click(screen.getByRole('button', { name: /进入完整实时监测/ }))
 
     await waitFor(() => expect(window.location.pathname).toBe('/monitoring'))
     expect(new URLSearchParams(window.location.search).get('intersection_id')).toBe('INT-MAP-1')

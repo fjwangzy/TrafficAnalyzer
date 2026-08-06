@@ -78,6 +78,7 @@ export const platformApi = {
   dashboardSituation: (dayOfWeek, stepIndex) => get('/dashboard/situation', { params: { day_of_week: dayOfWeek, step_index: stepIndex } }),
 
   drones: () => get('/drones'),
+  droneTrajectory: (droneId) => get(`/drones/${encodeURIComponent(droneId)}/trajectory`),
   createDrone: (body) => post('/drones', body),
   updateDrone: (droneId, body) => patch(`/drones/${encodeURIComponent(droneId)}`, body),
   droneSources: (droneId) => get(`/drones/${encodeURIComponent(droneId)}/sources`),

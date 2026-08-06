@@ -120,6 +120,141 @@ prior result: conditional pass; production acceptance blocked by P1 Kafka health
 
 final result: passed
 
+## 2026-08-06 首页监控式布局与无人机详情侧栏验收
+
+### Comparison target
+
+- Source visual truth：`.design-qa/2026-08-06-monitoring-reference-1357x912.png`，既有 `/monitoring` 深色沉浸工作区、玻璃浮层、地图/视频主舞台与边缘收展方式。
+- Implementation views：`.design-qa/2026-08-06-dashboard-home-1357x912.png`、`.design-qa/2026-08-06-dashboard-drone-selected-1357x912.png`、`.design-qa/2026-08-06-dashboard-drone-selected-900x800.png`。
+- Combined comparison input：`.design-qa/2026-08-06-dashboard-monitoring-comparison.png`；已作为同一视觉输入检查参考页、首页默认态、无人机选中态与窄屏态。
+- Focused comparison input：`.design-qa/2026-08-06-dashboard-drone-panel-focused-comparison.png`；并排检查参考页左侧实时态势与首页无人机飞行详情的面板宽度、标题层级、2 × 2 指标网格、空态和底部动作区。
+- Runtime：本机 Console2 `http://localhost:5173/`，管理员登录态；1357 × 912 主验收与 900 × 800 窄屏断点。
+- Pixel / CSS / density normalization：参考 PNG 1357 × 912 px、首页默认与无人机选中 PNG 均为 1357 × 912 px，对应 1357 × 912 CSS viewport；窄屏 PNG 900 × 800 px，对应 900 × 800 CSS viewport。浏览器 `devicePixelRatio=1`，所有全景对比均为 1:1，无缩放或设备框差异。
+
+### Findings and fixes
+
+- P1：首页原先沿用普通文档流布局，无人机点击直接进入 `/monitoring`。改为 `AppShell immersive`、全区域高德地图、顶部紧凑故事/控制条、默认展开且可收起的右侧治理摘要，以及默认关闭的左侧无人机详情。
+- P1：全部具备真实坐标的无人机均可通过鼠标、Enter 或空格打开详情；`can_open_monitoring` 只控制详情底部的完整监测入口。选中标记、航迹和地图 `setFitView` 使用左右面板安全边距。
+- P1：无人机详情只读取当前 Pipeline 的 `video_stream_url`，区分未启动任务、未登记地址、连接失败和实时画面。离线经十路回放实测展示最后真实遥测（100%、171.4m、3.1m/s、117.035279 / 36.648582），并明确显示无实时任务与无 Stats，不使用固定演示值补齐。
+- P1：实时 Stats 仅接受同时匹配 `pipeline_id + source_profile_id + intersection_id` 的推送；REST 最近样本保留 SourceProfile 过滤和降级标签，切换无人机或 Pipeline 会先清空上一任务指标。
+- P2：右栏收起后仅保留展开按钮，不再把已视觉隐藏的治理内容暴露为可聚焦 DOM；左栏关闭后选中态与安全边距同步清除。
+- Comparison history：2026-08-05 既有 QA 记录了“点击监控无人机直接进入 `/monitoring`”与悬浮卡内加载视频；本轮将点击语义改为先打开独立详情、压缩悬浮卡，并以 1357 × 912 的首页默认态/选中态和 900 × 800 窄屏态重新捕获。最终全景与聚焦对照未发现剩余 P0/P1/P2。
+
+### Visual fidelity review
+
+- 1357 × 912：地图完整铺满主区域；顶部故事线、右侧三块治理摘要、左侧飞行窗口/飞行数据/核心指标和底部事实口径无页面溢出。左右栏同时打开时，选中无人机保持在可视中心区域。
+- 900 × 800：`innerWidth=900`、`scrollWidth=900`、`innerHeight=800`、`scrollHeight=800`；顶部故事线压缩为单行标签，左右浮层保持可收展，页面没有横向或纵向溢出。
+- Focused comparison：参考页和实现页均使用深色玻璃边栏、紧凑标题、分组卡片及 2 × 2 指标网格；实现页按首页任务需要把趋势图/转向流量替换为飞行窗口、飞行数据和核心 Stats，这是产品内容差异而非视觉漂移。字号、间距、边框、圆角、状态色、Phosphor 图标和禁用动作层级一致，无需额外裁图修复。
+- Fidelity surfaces：字体继续复用 Console2 既有中文系统字体栈和光学字重；间距/布局继承监测页 8–12px 密度与玻璃面板圆角；颜色继续使用既有深色 token、青色选中态与红黄风险色；地图瓦片和 Pipeline 视频均使用真实运行资产，无新增占位图或自绘 SVG；文案明确区分服务器典型矩阵、真实遥测、REST 降级和固定演示样例。
+- 交互：默认左栏关闭、右栏展开；鼠标打开详情、Enter 打开首架无人机、空格切换到“回放无人机 · 经十路巡航”、关闭左栏及右栏收起/恢复均已在真实页面复验。road9 / 高德往返后仍保留周五 07:55 口径；无运行 Pipeline 时完整监测入口禁用。
+- Console：最终清洁刷新时间点之后的 `error / warn / warning` 为 0；早期热更新阶段的 `PageHeader` 历史异常不属于最终页面，生产构建与清洁刷新均已消除。
+
+### Verification
+
+- [x] 同视口参考页与实现页合并视觉比较。
+- [x] CityMap 鼠标、键盘、选中样式、航迹和安全边距回归。
+- [x] 首页默认收展、打开、关闭、完整监测入口及 road9 / 高德切换回归。
+- [x] 离线真实空态、Stats 归一化与 Pipeline / SourceProfile / 路口串线过滤回归。
+- [x] 1357 × 912 与 900 × 800 真实浏览器验收。
+
+### Follow-up polish
+
+- 2026-08-06 浏览器标注复验明确否决前端模拟动画：启动真实 Mission `MSN-84E158BAF747` / Pipeline `pipe-64759fab`，使用已校验的 `SRC-MP4729-JS-0729-3MS`（MP4 + 遥测文件、`hover_cruise_v1`、`frame_stride=3`）。首页真实显示“回放巡航”、LIVE 视频、3.0–3.1m/s 遥测和实时推送 Stats；MJPEG `http://localhost:8106/video` 返回 HTTP 200。
+- 2026-08-06 航迹视觉对齐：无人机飞行轨迹统一使用 `#ffffff`，与无人机图标白色外框保持一致；只调整 Polyline 颜色，不改变真实坐标、轨迹点数量、实线/虚线语义和方向箭头。
+- 2026-08-06 首页地图刷新回归：查询轮询会返回新的路口/数据源数组，旧实现因此生成新的 `initialCenter` 数组并销毁重建 AMap。中心依赖改为稳定的经纬度数值后，同坐标的遥测、轨迹与 Pipeline 刷新只更新无人机 Marker/Polyline；高德 TrafficLayer 的 180 秒路况刷新契约保持不变。
+- 选中经十路巡航任务后只聚焦 Pipeline 当前真实航迹，不循环历史坐标。1357 × 912、200 米比例尺下，浏览器连续 4.2 秒观测到 GCJ-02 从 `117.030693, 36.648586` 更新到 `117.030762, 36.648586`，标记同步移动约 1.53 CSS px；无浏览器控制台 error/warn。Road/Geo/TCC 能力仍按运行时证据门控，不因画面和移动效果推断为可用。
+- 无阻断性或 P3 跟进项。
+
+final result: passed
+
+## 2026-08-05 首页高德路况无人机实时态势与经十路回放验收
+
+### Comparison target
+
+- Source visual truth：浏览器批注中的 1357 × 912 首页高德实时路况基线；沿用现有深色指挥中心、地图主区、右侧 road9 典型时段榜单和底部事实口径。
+- Implementation state：首页默认高德实时路况，运行 `回放无人机 · 经十路巡航` 的本机可控 MP4 + SRT 检测任务；道路巡检作为任务区域，不要求伪装成物理路口。
+- Truth boundary：飞行位置和航迹来自 `/drones/{drone_id}/trajectory` 与 `uav_telemetry`，不做坐标插值；视频来自当前 Pipeline MJPEG；road9 典型时段榜单不冒充实时 UAV 数据。
+
+### Findings and fixes
+
+- P1：首页交通模式原先会隐藏全部无人机业务覆盖。新增独立实时无人机覆盖层，同时继续隐藏 road9 路口灯和典型路段线；接入、飞行/回放、监控数量和遥测连接状态保持可见。
+- P1：运行中回放原先只有最后遥测点，城市级缩放下难以确认飞行过程。首页现在每 3 秒读取当前运行无人机的真实轨迹，使用最新 GCJ-02 点刷新图标，并绘制带方向的真实实线航迹；无轨迹时才保留已有单点/任务区域降级口径。
+- P2：业务文案由“绑定路口”扩展为“任务区域”，`经十路巡航` 明确展示为“道路巡检 · 可控回放”，不再把道路巡检错误约束为路口悬停。
+- P2：监控中的无人机增加具有飞行动感的脉冲/航向图标；鼠标悬停或键盘聚焦展示 Pipeline MJPEG、真实电量、高度、地速和遥测质量。刷新期间保留正在交互的浮窗 DOM，避免 3/5 秒轮询导致浮窗闪退。
+- P2：点击监控无人机进入带 `intersection_id` 与 `source_profile_id` 的 `/monitoring`，不新增平行页面，复用现有实时检测大屏。
+
+### Browser evidence
+
+- 首页高德路况状态显示接入 6、飞行/回放 1、监控 1；`回放无人机 · 经十路巡航` 位置口径为 `replay_gcj02_trajectory`。重新启动 Mission `MSN-5CE66F864FEC` 后，浏览器在 6.5 秒内观察到位置从 `117.03007705735254, 36.64858704620964` 更新为 `117.03014534821179, 36.64858688904766`，证明图标由真实回放轨迹持续驱动。
+- 悬浮卡显示真实检测视频、100% 电量、171.4m 相对高度、3.0m/s 地速和 `回放遥测 · degraded`；MJPEG 已验证为 1280 × 720，当前流端口为 8104。
+- 点击后进入 `/monitoring?intersection_id=INT_MP4728_JINGSHI_CORRIDOR&source_profile_id=SRC-MP4729-JS-0729-3MS`，数据源保持 `729经十路交通状态拍摄3米每秒`；实时检测大屏显示高度约 171.5m、航向 179.5°、俯仰 -0.4°、2.6 FPS、200 条活动轨迹和 140 条像素轨迹。
+- `/drones` 显示该任务“运行中”，检测画面可见；道路未标定时继续明确显示“巡航分析 · 道路未标定 · 仅检测/跟踪/遥测”。
+- 模式切换复验：高德模式 `.dashboard-kpis=0`、road9 业务标记 0、星期选择器 0；切到 road9 后业务标记 258、星期/时间选择器各 1、实时无人机标记 0；切回高德后 road9 标记重新为 0、实时无人机标记恢复为 5。放大与复位可用。
+- Browser Console：0 error / 0 warning。
+- 同状态实现截图：`.design-qa/2026-08-05-dashboard-uav-replay-1154x912.png`。
+
+### Verification
+
+- [x] 单元测试覆盖道路巡检回放使用真实轨迹最新点、航迹点和高度/速度指标。
+- [x] `CityMap` 测试覆盖高德交通层上的实时无人机、MJPEG 浮窗、真实方向航迹与监控点击。
+- [x] Router 测试覆盖首页无人机点击进入既有实时检测大屏。
+- [x] 浏览器完成首页飞行动效、浮窗、视频、核心指标、监控跳转与 `/drones` 运行态验收。
+- [x] Console2 全量 21 文件 / 204 项测试、Vite production build 与 `git diff --check`。
+
+final result: passed
+
+## 2026-08-05 浏览器批注：首页高德实时路况切换
+
+### Comparison target
+
+- Source visual truth：浏览器批注要求把首页 road9 密集路口态势地图切换为高德实时路况，并优先查看不叠加业务标记的纯路况效果。
+- Runtime：本机 Console2 `http://localhost:5173/`，1357 × 912，管理员登录态；周边 KPI、重点路口榜单和底部口径继续使用同一 road9 典型时段事实。
+- Display boundary：切换只改变地图图层，不把高德交通瓦片写入 road9，也不将高德路况解释为 UAV 实时统计。
+
+### Findings and fixes
+
+- P1：原 `CityMap` 只有高德深色底图与 road9 路口、路段、无人机覆盖物，没有实时交通图层或展示模式入口。新增向后兼容的 `displayMode='situation' | 'traffic'`；交通模式使用 `AMap.TileLayer.Traffic`，开启自动刷新并设置 180 秒周期。
+- P1：首页地图工具栏新增“road9 典型态势 / 高德实时路况”切换。交通模式不创建 road9 路口灯、典型路段线和无人机标记，不执行覆盖物 `setFitView`，并隐藏星期/五分钟时槽选择器；切回 road9 后完整恢复原交互。
+- P2：交通模式使用独立来源标签和通畅、缓行、拥堵、严重拥堵、未知图例；右侧榜单与底部状态条仍明确标注服务器典型时段和 5 分钟典型矩阵，避免混淆两种数据口径。
+- Browser evidence：地图画布 937 × 550px、工具栏 251 × 41px；高德实时绿/黄/红交通色带可见，`.amap-status-marker=0`、`.amap-drone-marker=0`、星期/时间选择器均为 0；放大和复位操作正常，Console 0 error / 0 warning。
+
+### Verification
+
+- [x] `CityMap` 聚焦组件测试覆盖纯高德图层参数、业务覆盖物缺席和切回 road9 恢复。
+- [x] Router 回归覆盖默认高德实时路况、切换 road9、选择器/图例替换和切回恢复。
+- [x] Console2 全量 21 文件 / 202 项自动化测试。
+- [x] Vite production build。
+- [x] 真实浏览器视觉、DOM、地图控制和控制台验收。
+
+### Follow-up polish
+
+- 无阻断性或 P3 跟进项。
+
+final result: passed
+
+## 2026-08-05 浏览器批注：首页 KPI 删除与高德路况默认
+
+### Findings and fixes
+
+- 删除首页“态势路口 / 过饱和路口 / 拥堵路段”三张 KPI 卡及专用网格样式，不保留空容器；服务器典型态势仍保留在右侧榜单和底部口径条中。
+- 首页 `mapDisplayMode` 默认值改为 `traffic`，首次进入或刷新直接创建高德实时交通图层；road9 典型态势仍可通过地图内切换按钮主动查看。
+- 保持 `CityMap` 公共组件默认值为 `situation`，因此 GIS、热区、治理等其他调用方不会被首页默认偏好连带修改。
+
+### Browser evidence
+
+- 1357 × 912 刷新后，默认按下按钮为“高德实时路况”，实时绿/黄/红色带首屏可见；星期、时间选择器和 road9 路口/无人机标记均为 0。
+- `.dashboard-kpis=0`，故事线与地图工作区间距为 10px；地图画布由 550px 增至 650px，高 650px、宽 937px，没有 KPI 残留占位。
+- Console 0 error / 0 warning。
+
+### Verification
+
+- [x] Router 聚焦回归覆盖 KPI 缺席、默认高德、切到 road9 后选择器恢复及再次切回高德。
+- [x] Console2 全量 21 文件 / 202 项自动化测试。
+- [x] Vite production build。
+- [x] 真实浏览器刷新、DOM、布局和控制台验收。
+
+final result: passed
+
 ## 2026-08-05 浏览器批注：面积自动量算与轻量标签
 
 ### Findings and fixes

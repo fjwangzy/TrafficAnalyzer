@@ -3,7 +3,10 @@ import { demoMonitoring, demoSituation } from '../config/demoData'
 import {
   buildDashboardIntersectionPoints,
   buildDashboardSourcePoints,
+  buildLiveDronePoints,
+  dashboardStatsMessageMatchesDrone,
   defaultTypicalSlot,
+  normalizeDashboardRealtimeStats,
   segmentStatusFromDelayIndex,
   situationStatusFromSaturation,
 } from './DashboardPage'
@@ -87,6 +90,76 @@ describe('dashboard UAV video source map', () => {
     })
 
     expect(points).toEqual([])
+  })
+
+  it('uses true replay trajectory points for a road-inspection marker and its trail', () => {
+    const points = buildLiveDronePoints({
+      dashboardDrones: [{ id: 'UAV-REPLAY', status: 'online' }],
+      drones: [{ id: 'UAV-REPLAY', name: '回放无人机 · 经十路巡航', default_inter_id: 'INT-JINGSHI-CORRIDOR' }],
+      sources: [{ profile_id: 'SRC-REPLAY', drone_id: 'UAV-REPLAY', mode: 'local', video: { source_type: 'mp4' } }],
+      intersections: [{ id: 'INT-JINGSHI-CORRIDOR', name: '经十路巡检走廊', lon: 117, lat: 36.65 }],
+      pipelines: [{ drone_id: 'UAV-REPLAY', source_profile_id: 'SRC-REPLAY', intersection_id: 'INT-JINGSHI-CORRIDOR', status: 'running', video_stream_url: 'http://127.0.0.1:8103/video' }],
+      trajectoriesByDrone: {
+        'UAV-REPLAY': [
+          { position_gcj02: { longitude: 117.01, latitude: 36.651 }, height: 171.4, horizontal_speed: 3.1 },
+          { position_gcj02: { longitude: 117.011, latitude: 36.652 }, height: 171.4, horizontal_speed: 3.1 },
+        ],
+      },
+    })
+
+    expect(points).toHaveLength(1)
+    expect(points[0]).toMatchObject({
+      lon: 117.011,
+      lat: 36.652,
+      position_basis: 'replay_gcj02_trajectory',
+      status_label: '回放巡航',
+      scene_label: '道路巡检 · 可控回放',
+      altitude_m: 171.4,
+      speed_mps: 3.1,
+    })
+    expect(points[0].trail_gcj02).toEqual([[117.01, 36.651], [117.011, 36.652]])
+  })
+
+  it('keeps an offline UAV selectable while preserving truthful empty runtime fields', () => {
+    const points = buildLiveDronePoints({
+      dashboardDrones: [{ id: 'UAV-OFFLINE', status: 'offline' }],
+      drones: [{ id: 'UAV-OFFLINE', name: '离线无人机', default_inter_id: 'INT-1' }],
+      sources: [{ profile_id: 'SRC-1', drone_id: 'UAV-OFFLINE', enabled: true }],
+      intersections: [{ id: 'INT-1', name: '测试路口', lon: 117, lat: 36.7 }],
+      pipelines: [],
+      trajectoriesByDrone: {},
+    })
+
+    expect(points).toHaveLength(1)
+    expect(points[0]).toMatchObject({
+      id: 'UAV-OFFLINE',
+      is_online: false,
+      is_monitoring: false,
+      can_open_monitoring: false,
+      video_stream_url: null,
+      pipeline_id: null,
+      telemetry_fresh: false,
+    })
+  })
+
+  it('normalizes current Stats without inventing unavailable values', () => {
+    expect(normalizeDashboardRealtimeStats({
+      total: 17,
+      lane_stats: [{ queue_length: 23, avg_speed: 18 }, { queue_length: 31, avg_speed: 22 }],
+      tcc_events: [{ id: 'TCC-1' }, { id: 'TCC-2' }],
+    })).toEqual({ vehicles: 17, longestQueueM: 31, avgSpeedKmh: 20, tccEvents: 2 })
+    expect(normalizeDashboardRealtimeStats({})).toEqual({ vehicles: null, longestQueueM: null, avgSpeedKmh: null, tccEvents: null })
+  })
+
+  it('accepts realtime Stats only when Pipeline, SourceProfile, and intersection all match', () => {
+    const drone = { pipeline_id: 'PIPE-1', source_profile_id: 'SRC-1', intersection_id: 'INT-1' }
+    const exact = { type: 'uav_stats', data: { pipeline_id: 'PIPE-1', source_profile_id: 'SRC-1', intersection_id: 'INT-1' } }
+
+    expect(dashboardStatsMessageMatchesDrone(exact, drone)).toBe(true)
+    expect(dashboardStatsMessageMatchesDrone({ ...exact, data: { ...exact.data, pipeline_id: 'PIPE-2' } }, drone)).toBe(false)
+    expect(dashboardStatsMessageMatchesDrone({ ...exact, data: { ...exact.data, source_profile_id: 'SRC-2' } }, drone)).toBe(false)
+    expect(dashboardStatsMessageMatchesDrone({ ...exact, data: { ...exact.data, intersection_id: 'INT-2' } }, drone)).toBe(false)
+    expect(dashboardStatsMessageMatchesDrone({ ...exact, type: 'uav_telemetry' }, drone)).toBe(false)
   })
 
   it('merges server situation with project intersections and keeps missing project data gray', () => {

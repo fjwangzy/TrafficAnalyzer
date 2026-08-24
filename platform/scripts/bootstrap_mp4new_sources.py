@@ -262,9 +262,86 @@ MP4728_CATALOG = (
     },
 )
 
+# mp4820 is a separate east-Jingshi cruise lineage.  It deliberately has no
+# lane map: world trajectories and TCC may be assessed, while Lane/Link facts
+# remain unavailable.
+MP4820_CATALOG = (
+    {
+        "inter_id": "INT_MP4820_JINGSHI_EAST_CORRIDOR",
+        "road_data_version": None,
+        "intersection_name": "经十路东段巡航走廊",
+        "drone_id": "UAV-MP4820-JS",
+        "drone_name": "回放无人机 · 经十路东段巡航",
+        "test_coordinate": {
+            "lat": 36.6589100,
+            "lon": 117.1052664,
+            "source": "SRC-MP4820-JS-0813-EW telemetry_median",
+        },
+        "sources": (
+            {
+                "profile_id": "SRC-MP4820-JS-0813-EW",
+                "video": "test_videos/mp4820/8.13晚高峰东向西.mp4",
+                "telemetry": "test_videos/mp4820/8.13晚高峰东向西.txt",
+                "telemetry_enabled": True,
+                "telemetry_agl_policy": "laser_target",
+                "allow_roll_with_visual_validation": True,
+                "max_roll_visual_validation_deg": 15.0,
+                "time_offset_sec": 58.451,
+                "sync_tolerance_sec": 2.5,
+                "expected_speed_mps": 5.0,
+                "expected_capture_started_at": "2026-08-13T16:51:38.326+08:00",
+                "acceptance_mode": "geo_tcc_validation",
+                "min_tcc_eligible_coverage": 0.90,
+                "default": True,
+                "source_manifest": {
+                    "video_sha256": "f3fd1e970aedce0d0527c5c85afad74ced23e28b99451c383cb08ba679294ccc",
+                    "video_size_bytes": 2390960806,
+                    "video_duration_sec": 440.873767,
+                    "video_frame_count": 13213,
+                    "video_fps": 29.97003,
+                    "video_codec": "hevc",
+                    "video_resolution": [3840, 2160],
+                    "telemetry_sha256": "db895b67b9d2c27ba31b932a07cc6c64038ffb7fa747f106077e6356df737a68",
+                    "telemetry_size_bytes": 1544450,
+                    "telemetry_started_at": "2026-08-13T16:50:39.875+08:00",
+                    "telemetry_ended_at": "2026-08-13T17:03:16.311+08:00",
+                },
+            },
+            {
+                "profile_id": "SRC-MP4820-JS-0813-WE",
+                "video": "test_videos/mp4820/8.13晚高峰西向东.mp4",
+                "telemetry": "test_videos/mp4820/8.13晚高峰西向东.txt",
+                "telemetry_enabled": True,
+                "telemetry_agl_policy": "laser_target",
+                "allow_roll_with_visual_validation": True,
+                "max_roll_visual_validation_deg": 15.0,
+                "time_offset_sec": 216.149,
+                "sync_tolerance_sec": 2.5,
+                "expected_speed_mps": 5.0,
+                "expected_capture_started_at": "2026-08-13T17:14:34.326+08:00",
+                "acceptance_mode": "geo_tcc_validation",
+                "min_tcc_eligible_coverage": 0.90,
+                "source_manifest": {
+                    "video_sha256": "03a85933c5ef8494463b0faaf54088898652e2b46c0860b2d7d3dba40d993474",
+                    "video_size_bytes": 2225960569,
+                    "video_duration_sec": 409.3089,
+                    "video_frame_count": 12267,
+                    "video_fps": 29.97003,
+                    "video_codec": "hevc",
+                    "video_resolution": [3840, 2160],
+                    "telemetry_sha256": "028ea072c82e7e8c85ff4bbfcce1e53b77913a8191ead7ffb4a2c7ef03aa5877",
+                    "telemetry_size_bytes": 1453284,
+                    "telemetry_started_at": "2026-08-13T17:10:57.177+08:00",
+                    "telemetry_ended_at": "2026-08-13T17:22:54.306+08:00",
+                },
+            },
+        ),
+    },
+)
+
 # Keep the established map-dependent catalog stable for survey/map scripts.
 LOCAL_REPLAY_CATALOG = INTER_XQH_CATALOG + MP4NEW_CATALOG
-ALL_LOCAL_REPLAY_CATALOG = LOCAL_REPLAY_CATALOG + MP4728_CATALOG
+ALL_LOCAL_REPLAY_CATALOG = LOCAL_REPLAY_CATALOG + MP4728_CATALOG + MP4820_CATALOG
 
 
 def _source_id(prefix: str, profile_id: str) -> str:

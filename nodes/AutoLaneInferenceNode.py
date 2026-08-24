@@ -332,8 +332,15 @@ class AutoLaneInferenceNode:
             ]
             lane.stopped_count = len(stopped)
 
-            # 排队长度（基于像素距离，有H时转世界坐标）
-            lane.queue_length_m = self._compute_queue_length(stopped, frame_element)
+            # 排队长度：有 H 时输出米制；无 H 时只输出显式像素降级值。
+            # 禁止把像素距离写进 queue_length_m。
+            queue_m, queue_px, queue_unit, queue_method = self._compute_queue_length(
+                stopped, frame_element
+            )
+            lane.queue_length_m = queue_m
+            lane.queue_length_px = queue_px
+            lane.queue_length_unit = queue_unit
+            lane.queue_length_method = queue_method
 
             # 流量（辆/分钟）
             completion_times = self._lane_completion_times.get(lane_id, [])
@@ -347,10 +354,16 @@ class AutoLaneInferenceNode:
 
     def _compute_queue_length(
         self, stopped_tracks: list, frame_element: FrameElement
-    ) -> float:
+    ) -> tuple[float | None, float | None, str, str]:
         """计算排队长度。"""
+        H = frame_element.homography_matrix
+        has_metric_projection = is_valid_homography(H)
         if len(stopped_tracks) < 2:
-            return 0.0
+            return (
+                (0.0, None, "m", "homography_world")
+                if has_metric_projection
+                else (None, 0.0, "px", "pixel_fallback")
+            )
 
         # 获取停止车辆的bbox中心
         centers = []
@@ -360,7 +373,11 @@ class AutoLaneInferenceNode:
                 centers.append(np.array(last_pt))
 
         if len(centers) < 2:
-            return 0.0
+            return (
+                (0.0, None, "m", "homography_world")
+                if has_metric_projection
+                else (None, 0.0, "px", "pixel_fallback")
+            )
 
         # 计算最大像素距离
         max_dist_px = 0.0
@@ -370,8 +387,7 @@ class AutoLaneInferenceNode:
                 max_dist_px = max(max_dist_px, dist)
 
         # 如果有H矩阵，转换为世界坐标
-        H = frame_element.homography_matrix
-        if is_valid_homography(H) and centers:
+        if has_metric_projection and centers:
             pts_px = np.array(centers, dtype=np.float64)
             pts_world = pixel_to_world(pts_px, H)
             max_dist_m = 0.0
@@ -379,6 +395,6 @@ class AutoLaneInferenceNode:
                 for j in range(i + 1, len(pts_world)):
                     dist = float(np.linalg.norm(pts_world[i] - pts_world[j]))
                     max_dist_m = max(max_dist_m, dist)
-            return round(max_dist_m, 1)
+            return round(max_dist_m, 1), None, "m", "homography_world"
 
-        return round(max_dist_px, 1)  # 回退到像素距离
+        return None, round(max_dist_px, 1), "px", "pixel_fallback"

@@ -334,6 +334,22 @@ class KafkaActiveTrajectoriesTest(unittest.TestCase):
         self.assertEqual(message["time_quality"], "reconstructed")
         self.assertEqual(message["quality_status"], "verified")
 
+    def test_replay_conflict_envelope_uses_source_relative_offset(self):
+        frame = FrameElement(
+            "Processing of replay.mp4",
+            np.zeros((20, 20, 3), dtype=np.uint8),
+            15.8,
+            158,
+            {},
+        )
+        producer = self._producer_without_kafka()
+        producer.storage_profile = "replay_v2"
+        producer._replay_source_start_sec = 12.5
+
+        message = producer._canonical_envelope("uav_conflict", {}, frame)
+
+        self.assertEqual(message["data"]["offset_ms"], 3300)
+
     def test_build_active_trajectories_includes_world_points_and_track_metadata(self):
         frame = np.zeros((100, 100, 3), dtype=np.uint8)
         frame_element = FrameElement("test", frame, 3.0, 90, {})
@@ -605,8 +621,12 @@ class KafkaActiveTrajectoriesTest(unittest.TestCase):
         producer = self._producer_without_kafka()
         producer.storage_profile = "replay_v2"
         producer.trajectory_archive = Mock()
+        producer.trajectory_archive.begin_mission.return_value = {
+            "observed_start_source_sec": 2.0,
+        }
         producer.mission_id = "MSN-1"
         producer.source_profile_id = "SRC-1"
+        producer._replay_start_published = True
         producer.topic_name = "uav_replay_v2_statistics_SRC-1"
         sent = []
         producer._enqueue = lambda topic, data, **_kwargs: sent.append((topic, data))

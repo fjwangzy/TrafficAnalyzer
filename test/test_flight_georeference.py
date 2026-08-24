@@ -94,6 +94,37 @@ def test_geo_reference_consumes_precomputed_image_motion_quality():
     assert result.formal_analytics_eligible is True
 
 
+def test_pose_visual_discontinuity_blocks_world_and_tcc_for_current_frame():
+    node = FlightGeoReferenceNode({
+        "tracking_profile": "hover_cruise_v1",
+        "geo_reference": {
+            "require_visual_validation": True,
+            "max_pose_visual_residual_p95_px": 0.5,
+        },
+    })
+    first = _frame(0.0, 0.0)
+    first.telemetry["horizontal_speed"] = 2.0
+    first.visual_motion_quality = {"status": "bootstrap", "feature_count": 0}
+    node.process(first)
+
+    current = _frame(0.1, 1.0)
+    current.telemetry["horizontal_speed"] = 2.0
+    current.camera_motion_warp = np.eye(3)
+    current.visual_motion_quality = {
+        "status": "verified",
+        "feature_count": 80,
+        "inlier_ratio": 0.95,
+        "reprojection_p95_px": 0.4,
+    }
+
+    result = node.process(current)
+
+    assert result.geo_reference_quality["visual_warp"]["status"] == "degraded"
+    assert "pose_visual_residual_exceeded" in result.geo_reference_quality["geo_reasons"]
+    assert result.geo_analytics_eligible is False
+    assert result.tcc_analytics_eligible is False
+
+
 def test_telemetry_projection_without_road_enables_geo_but_not_road_analytics():
     node = FlightGeoReferenceNode({
         "tracking_profile": "hover_only_legacy",

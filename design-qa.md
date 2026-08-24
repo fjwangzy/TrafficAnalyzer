@@ -1,5 +1,159 @@
 # Design QA
 
+## 首页车辆数字孪生分级降级（2026-08-08）
+
+- 3D preview entry: 开发态 `/?twinPreview=1`；该入口显式标记“前端 Mock 预览”，生产构建中不启用，且不启动 Pipeline、不写 road9/Kafka。
+- 3D scale model: 经十路预览使用最后真实无人机位置与高度 `171.4m`、近垂直云台、`4.5mm / 6.4×3.6mm` 相机内参，计算约 `244×137m` 地面覆盖框；像素车辆按覆盖框与云台航向投放到高德 3D 矢量地图，不再按浏览器视口任意拉伸。未做 GCP 精配准，因此 UI 不宣称车道/道路归属。
+- browser result: 120 辆稳定 Mock 车辆在主地图覆盖框内连续运动；同一 `PREVIEW-H-10` 在 2.2 秒内横向位置发生变化，AMap 实例始终为 1，右侧 BEV 小窗为 0，Console 0 error。截图：`output/playwright/dashboard-digital-twin-3d-mock-preview-final-20260808.png`。
+- real replay: 用户确认 Mock 视觉后，从飞行任务页启动 `SRC-MP4729-JS-0729-3MS`，新建 `MSN-F11143F1E557 / pipe-8f94cf2e`；原生 arm64 `.venv-mps` 主进程明确使用 `detection_node.device=mps`，MJPEG `8109` 返回 200。首页严格显示可控回放而非 preview，主地图实例为 1、右侧 BEV 为 0、Console 0 error。
+- adaptive camera result: 真实遥测 `zoom_factor=0.567823...` 按测绘统一契约 `effective_focal=focal/zoom_factor` 将覆盖从错误的 `244×137m` 修正为约 `138×78m`；地图按云台偏航自动进入 `镜头跟随 180°`，卫星影像、RoadNet 与 50° 3D 倾斜共同显示。同一 Track 2 在 6 秒内发生屏幕位移；125 辆样本包含 39 个不同航向，范围 `87°–340°`。截图：`output/playwright/dashboard-digital-twin-adaptive-camera-real-20260808.png`。
+- accuracy boundary: 经十路源没有 GCP、Lane 或 Link；相机覆盖只用于展示，仍可能存在卫星视觉残差。实现不做道路吸附，不把楼体/绿地边界反推为车道，也不将显示点写回 GCJ-02 轨迹。
+- verification: 数字孪生、主地图、无人机面板和 Dashboard 聚焦测试通过；Console2 全量 `23 files / 225 tests`；Vite production build 与 `git diff --check` 通过。真实任务最终运行精确 3600.002 秒，Mission `completed / window_ended`，Pipeline `stopped`，Platform `pipelines_active=0`，8109 与所有检测子进程均回收。
+- persistence result: 本次 lineage 在 `uav_replay_v2_traffic_metric_samples` 落库 1321 条，范围 `2026-08-08T13:31:52.680704Z–14:31:42.666007Z`。stride 3 在一小时窗口内只推进到源时间 `226.833s / 579s`，因此 Replay V2 诊断为 `incomplete`，Track Event/Point 为 0，不能称为完整视频 EOF 或 sealed Mission。当前 ReplayV2 MetricStore 还未实现通用 `query_tracks`，`GET /trajectories/{intersection_id}` 返回 500；这是独立运行/回放门禁，不影响 Dashboard 当前 Stats 车辆显示，但必须在完整轨迹回放验收前修复。
+- post-stop browser: Mission 结束后首页自动恢复 `飞行/回放 0 / 监控 0`，数字孪生车辆 DOM 为 0，高德地图实例仍为 1，归因标签恢复“高德实时路况 · GCJ-02”，Console 0 error。
+
+以下为同日初始 unavailable 基线，保留用于证明没有任务时不会自动生成车辆：
+
+- implementation screenshot: `output/playwright/dashboard-digital-twin-unavailable-20260808.png`
+- runtime: Platform `/ready` 200、Console2 200；当前 `监控 0`，未启动检测任务，因此浏览器验收真实落在 `unavailable`，未启动 Pipeline 生成演示车辆。
+- browser result: 首页点击真实登记的回放无人机后，治理摘要与无人机面板互斥切换；地图显示“等待 BEV 车辆轨迹”和“高德地图 · 数字孪生 · 可控回放”，详情区显示“当前任务尚未产生可显示的成熟车辆轨迹”；返回后恢复治理摘要和高德实时路况标识。
+- degradation coverage: `lane/road/spatial/bev_pixel/unavailable` 五级、Lane/Link/停止线/区域独立缺失、候选地图隔离、车辆 `moveTo` 增量更新和单地图实例由 Vitest 组件/纯函数测试覆盖；纯像素轨迹只有具备相机覆盖参数时才允许进入明确标记的 3D 近似仿真层，不能形成地理或车道事实。
+- console: 0 error；2 条 warning 均来自高德 JS API Canvas `willReadFrequently` 性能提示，不是 Console2 业务异常。
+
+final result: passed for Dashboard implementation、truthful degradation、隔离 Mock、真实可控回放浏览器效果和一小时 Mission/Pipeline 自然收口；full-video EOF、sealed replay 和通用轨迹查询未通过，已作为独立门禁记录。
+
+---
+
+## 首页态势面板 / 无人机面板整体切换（2026-08-08）
+
+- source visual truth path: `browser:Comment 1` 对话附件（1348 × 912，原右侧完整治理摘要与左侧无人机详情同时可见）
+- implementation default screenshot path: `/private/tmp/TrafficAnalyzer-dashboard-summary-left-20260808.jpg`（1348 × 912）
+- implementation UAV screenshot path: `/private/tmp/TrafficAnalyzer-dashboard-drone-left-20260808.jpg`（1348 × 912）
+- viewport: 1348 × 912 CSS px，浏览器截图 1348 × 912，devicePixelRatio 2；浏览器截图已按 CSS 尺寸归一化，与参考图像素尺寸一致
+- state: authenticated admin，首页 `/`，高德实时路况，周五 07:55 服务器典型矩阵；默认治理摘要、无人机详情、返回治理摘要三种状态
+
+**Full-view comparison evidence**
+
+- 参考图的右侧完整治理摘要包含“重点路口态势、重点事件、治理前后复盘”三块；最终实现保持三块内容、顺序、字体、颜色、间距和真实/演示数据标识不变，将整组移动到左侧。
+- 点击地图无人机后，左侧整组治理摘要完全退出，同一位置切换为无人机飞行窗口、飞行数据和核心实时指标；右侧不再保留任何治理摘要或收起控制。
+- 点击“返回态势面板”、普通路口/路段或地图空白处后，完整三块治理摘要恢复，无人机面板退出，地图重新以左侧单栏安全区取景。
+
+**Focused region comparison evidence**
+
+- 无需额外裁剪：参考图与实现图均为同一 1348 × 912 视口，目标左/右侧栏的标题、三块卡片及切换按钮在全图中可清晰读取；另保留无人机状态全屏截图作为互斥切换证据。
+
+**Findings**
+
+- 无剩余 P0/P1/P2 视觉或交互差异。
+- 字体与排版：沿用 Console2 现有中文系统字体、标题层级和小字号密度，三块面板未重排内部文案。
+- 间距与布局节奏：完整三块面板使用原 `1.22fr / .82fr / 1fr` 纵向比例；左侧宽 306px，右侧释放给地图，底部图例与指标条无重叠。
+- 色彩与视觉令牌：沿用原深色半透明卡片、风险色、饱和度色和蓝色操作态，无新增视觉令牌。
+- 图片质量与资产一致性：本次不新增图片资产；无人机飞行窗口继续使用真实登记视频流或真实空状态。
+- 文案与内容：服务器典型态势、固定演示事件/复盘口径保持不变；返回操作明确标注“返回态势面板”。
+- 交互与可访问性：默认只有 `首页治理摘要` complementary；选中无人机后只有 `无人机飞行详情` complementary；返回按钮可键盘聚焦，地图其他位置提供统一退出行为。浏览器 Console 为 0 error / 0 warning。
+
+**Comparison history**
+
+1. 初始参考：右侧完整治理摘要与左侧无人机面板同时存在，占用地图两侧。
+2. 第一轮误解：只把“重点路口态势”移到左侧，右侧仍保留事件与复盘；未满足“右侧整体面板合并”的要求。
+3. 最终修正：右侧完整三块整体移入左侧，与无人机面板互斥切换；右侧栏及收起按钮节点均为 0，往返切换通过。
+
+**Implementation Checklist**
+
+- [x] 原右侧三块治理摘要整体迁移到左侧。
+- [x] 地图无人机点击切换为完整无人机面板。
+- [x] 返回按钮恢复完整态势面板。
+- [x] 点击普通路口、路段或地图空白处恢复完整态势面板。
+- [x] 删除右侧栏、收起按钮和右侧地图占位。
+- [x] 组件/路由回归、生产构建和同视口浏览器验证。
+
+final result: passed
+
+---
+
+# Design QA · xqh 实时方向指标真实性终验（2026-08-24）
+
+- route: `/monitoring?intersection_id=INT_camera_1&source_profile_id=SRC-E2BA6A8F6D0F`
+- state: Mission `MSN-E8FCEF371A8A` / Pipeline `pipe-8aa7ee61`，真实检测器主视图，双侧栏展开
+- implementation screenshot: `/private/tmp/TrafficAnalyzer-monitoring-xqh-no-timeline-final-20260824.png`
+- viewport: 1357 × 912 CSS px，dark theme
+
+**Focused verification**
+
+- 左侧“实时流向”标记为“实时观测”，四个物理方向展示辆/分钟与正速度；页面无 `Mock 接口` 标记。
+- `road_analytics_eligible=false` 时，AutoLane 米制排队按物理方向降级展示：最终页面顶部“最长排队 85m”，东进口→西出口方向为 85m，卡片 title 明确“按 AutoLane 物理方向输出降级排队估算”；饱和度仍为“未标定”。
+- 中央检测视频、左侧态势、右侧 BEV/事件和底部时间轴沿用原监控样式；新增文字未造成卡片溢出或列重叠。
+- 最终截图可见当前目标、活动轨迹、平均车速、四个实时 Movement 和真实视频同步工作；双侧栏仍可收缩与固定。
+- 底部“实时数据时间轴”与暂停/冻结按钮已删除；DOM 中时间轴 region 与暂停按钮均为 0。左右面板实测 bottom=898px，距 912px 视口底部 14px，中央视频无遮挡延伸到底部。
+
+**Findings**
+
+- P1 fixed: 真实 SourceProfile 在方向契约缺失时曾回退 Mock，现改为 AutoLane 观测、轨迹推断或等待数据。
+- P1 fixed: 活动轨迹数量曾可能读取截断为 200 的数组长度，现使用权威 `active_tracks`。
+- P2 fixed: 道路门禁不通过时“—m”容易被理解为接口空值；现按用户确认使用方向维度的米制降级估算，并以“降级观测 / 方向估算”与正式道路指标区分。
+- P2 fixed: 底部实时时间轴占用主画面且与实时页业务目标重复；已完整删除并释放 74px 垂直空间。
+- 无剩余 P0/P1/P2 视觉问题；最终页面未观察到新增运行时错误。
+
+final result: passed
+
+---
+
+# Design QA · 实时监测方向流量与场景策略（2026-08-24）
+
+- source visual truth path: `/Users/yaoyao/.codex/generated_images/01a0319f-7ca6-7d52-bf33-b7b4ee1c8be0/exec-954128ec-64b1-4c3b-99c4-eac438d0dcba.png`
+- annotated source update: `browser:Comment 1 / 按方向实时流量 / 指标统一放到左侧态势面板`
+- implementation screenshot path: `/private/tmp/TrafficAnalyzer-monitoring-real-mp4820-indicators-left-20260824.png`
+- combined comparison path: `/private/tmp/TrafficAnalyzer-monitoring-design-compare-20260824.png`
+- viewport: 1357 × 912 CSS px，device scale factor 1，dark theme
+- dimensions: source 1487 × 1058 px；implementation 1357 × 912 px；combined comparison按高度 912px 归一化为 2640 × 912 px
+- state: `INT_MP4820_JINGSHI_EAST_CORRIDOR` + `SRC-MP4820-JS-0813-EW`，Mission `MSN-1F67AF07F75C`，Pipeline `pipe-75a03bd6`，双侧栏展开，场景策略页签，真实检测器主视图
+
+**Full-view comparison evidence**
+
+- 实现保留原监控全局图标导航、第二层左侧实时态势、中央真实视频、右侧 BEV/策略和底部时间轴；没有把页面改成新的框架。
+- 用户批注要求的方向指标已从右侧移动至左侧 KPI 下方；右侧不再重复该面板，场景策略获得完整可用高度。
+- 中央画面使用真实 MP4820 检测流作为全画布底图，符合用户后续指定的“监控原风格”；与早期概念图的独立视频卡片差异属于明确的后续设计决策。
+
+**Focused region comparison evidence**
+
+- 左侧方向面板完整显示四个 Movement 以及流量、均速、排队、饱和度；无正式方向契约时醒目标记 `Mock 接口`，没有冒充现场实时观测。
+- 左侧指标容器实测 `clientHeight=652 / scrollHeight=932 / overflowY=auto`，底部趋势、转向和融合质量仍可滚动访问；收缩按钮与标题位于滚动容器外。
+- 真实主视频节点 `complete=true`、自然尺寸 1280×720、CSS 画面 1295×848，SourceProfile 与 Pipeline 均与 MP4820 EW 一致。
+- 六类场景按钮、场景/事件页签、`建议未下发 / 待人工确认`状态均可交互；左右侧栏都完成 collapsed 状态验证并恢复为 expanded。
+
+**Findings**
+
+- 无剩余 P0/P1/P2 视觉差异。
+- 字体与排版：复用现有 Console2 字体、字号、字重和单行截断；窄表格列没有相互覆盖。
+- 间距与布局：方向指标与 KPI/趋势保持 9px 节奏；右侧移除指标后策略区域无重叠，双侧栏仍占原宽度。
+- 色彩与视觉令牌：继续使用暗色、蓝色信息、琥珀色提醒和红色风险令牌；Mock 与真实来源状态色可区分。
+- 图片与资产：未新增占位或代码绘制资产；真实视频、既有 BEV 和 Phosphor 图标保持原来源与清晰度。
+- 文案与内容：六场景名称完整，Mock 控制链路、建议未下发、待人工确认等真实性边界明确。
+- 浏览器 console 检查为 0 error / 0 warning。
+
+**Comparison history**
+
+1. 初始实现把方向流量放在右侧 BEV 下方；用户批注要求指标统一归入左侧态势面板。
+2. 修复后把面板移至左侧 KPI 下方，新增独立滚动容器，并删除右侧重复节点；聚焦测试和 production build 通过。
+3. 真实 MP4820 Mission 运行后重拍同一 1357×912 桌面状态，对图确认中央视频、双侧栏、方向指标和场景策略没有遮挡或裁切。
+
+**Implementation Checklist**
+
+- [x] 方向流量指标只在左侧态势面板出现。
+- [x] 左侧超高内容可滚动，侧栏控制不随内容滚动。
+- [x] 右侧保留 BEV、六类场景策略与近期事件。
+- [x] 双侧栏收缩、恢复和默认锁定状态可用。
+- [x] 真实 MP4820 1280×720 检测流浏览器验收。
+- [x] 聚焦测试、production build、diff check 与浏览器 console 验收。
+
+**Follow-up Polish**
+
+- P3：正式 Movement 接口接入后，左侧 `Mock 接口` 会自然切换为实时统计；当前不阻断布局与真实视频交付。
+
+final result: passed
+
+---
+
 - source visual truth path: `browser:Comment 1 / 数据质量 · 实时` 与 `browser:Comment 1 / 检测器视频流没显示`
 - implementation screenshot path: `Codex in-app browser capture / 2026-07-21 09:39 / SRC-MP4NEW2-CH-0715-PM`
 - viewport: 1357 × 912 desktop, dark theme

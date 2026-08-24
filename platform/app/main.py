@@ -71,7 +71,10 @@ async def lifespan(app: FastAPI):
     event_center = (
         EventCenter(
             async_session_maker,
-            materialize_on_list=not replay_profile,
+            # Listing events must remain read-only and bounded while native MPS
+            # replay is appending telemetry.  Quality-gap materialization is an
+            # explicit maintenance workflow, never part of GET /events.
+            materialize_on_list=False,
         )
         if db_available
         else None

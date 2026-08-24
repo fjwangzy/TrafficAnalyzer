@@ -1,3 +1,4 @@
+import copy
 from itertools import pairwise
 from typing import ClassVar
 
@@ -600,24 +601,35 @@ class ShowNode:
             frame_element, FrameElement
         ), f"ShowNode | 输入元素格式错误 {type(frame_element)}"
 
+        conflict_events = getattr(frame_element, "conflict_events", None)
+        self._refresh_conflict_state(conflict_events)
+        conflict_ids, focused_events = self._focused_conflict_view(frame_element)
+
         # 结合共享内存就地修改，直接引用以避免 4K 帧复制
         frame_result = frame_element.frame
 
-        if self.show_only_yolo_detections:
+        if conflict_ids:
+            focused_frame = self._focused_frame_element(
+                frame_element,
+                conflict_ids,
+                focused_events,
+            )
+            frame_result = self._draw_tracked(frame_result, focused_frame)
+        elif self.show_only_yolo_detections:
             frame_result = self._draw_detections(frame_result, frame_element)
         else:
             frame_result = self._draw_tracked(frame_result, frame_element)
 
         # 绘制道路多边形
-        if self.show_roi:
+        if self.show_roi and not conflict_ids:
             frame_result = self._draw_roads(frame_result, frame_element)
 
         # 计算fps并绘制
-        if self.draw_fps_info:
+        if self.draw_fps_info and not conflict_ids:
             frame_result = self._draw_fps(frame_result, fps_counter)
 
         # 绘制方向流量统计信息叠加层
-        if self.show_direction_stats:
+        if self.show_direction_stats and not conflict_ids:
             direction_stats = getattr(frame_element, "direction_stats", None)
             if direction_stats:
                 self._draw_direction_overlay(
@@ -627,7 +639,7 @@ class ShowNode:
                 )
 
         # 绘制车道多边形（数据驱动：有标注时叠加显示）
-        if self.show_lane_polygons:
+        if self.show_lane_polygons and not conflict_ids:
             lane_polygons = getattr(frame_element, "lane_polygons", None)
             lane_source = getattr(frame_element, "lane_source", None)
             if lane_polygons:
@@ -643,11 +655,15 @@ class ShowNode:
         #     )
 
         # 绘制冲突事件及警示连线 (必定调用以维持余辉显示)
-        conflict_events = getattr(frame_element, "conflict_events", None)
-        self._draw_conflicts(frame_result, conflict_events, frame_element)
+        self._draw_conflicts(
+            frame_result,
+            conflict_events,
+            frame_element,
+            refresh_state=False,
+        )
 
         # 处理显示统计信息的单独窗口
-        if self.show_info_statistics:
+        if self.show_info_statistics and not conflict_ids:
             frame_result = self._draw_stats_panel(frame_result, frame_element)
 
         frame_element.frame_result = frame_result
@@ -658,6 +674,108 @@ class ShowNode:
             cv2.waitKey(1)
 
         return frame_element
+
+    def _refresh_conflict_state(self, conflict_events):
+        """Advance the TCC afterglow and register events before frame rendering."""
+        self.processed_frames += 1
+        for event in conflict_events or []:
+            motor_id = str(event.get("motor_id"))
+            non_motor_id = str(event.get("non_motor_id"))
+            if (
+                motor_id
+                and motor_id != "None"
+                and non_motor_id
+                and non_motor_id != "None"
+            ):
+                self.persistent_conflicts[(motor_id, non_motor_id)] = {
+                    "event": event,
+                    "expire": self.processed_frames + self.persist_frames,
+                }
+        self.persistent_conflicts = {
+            key: value
+            for key, value in self.persistent_conflicts.items()
+            if self.processed_frames <= value["expire"]
+        }
+
+    def _focused_conflict_view(self, frame_element):
+        """Return only visible objects participating in active TCC evidence."""
+        active_ids = {str(value) for value in (frame_element.id_list or [])}
+        ids = set()
+        events = []
+        sorted_conflicts = sorted(
+            self.persistent_conflicts.items(),
+            key=lambda item: item[1]["event"].get("ttc_sec", 99),
+        )[:5]
+        for (motor_id, non_motor_id), data in sorted_conflicts:
+            if motor_id not in active_ids or non_motor_id not in active_ids:
+                continue
+            ids.update((motor_id, non_motor_id))
+            events.append(data["event"])
+        return ids, events
+
+    @staticmethod
+    def _focused_frame_element(frame_element, conflict_ids, focused_events):
+        """Build a shallow render view with every non-TCC detection removed."""
+        focused = copy.copy(frame_element)
+        keep = [
+            index
+            for index, track_id in enumerate(frame_element.id_list or [])
+            if str(track_id) in conflict_ids
+        ]
+        for name in (
+            "tracked_xyxy",
+            "tracked_conf",
+            "tracked_cls",
+            "tracked_cls_ids",
+            "id_list",
+        ):
+            values = getattr(frame_element, name, None)
+            setattr(
+                focused,
+                name,
+                [values[index] for index in keep if index < len(values)]
+                if values is not None
+                else None,
+            )
+        numeric_ids = {int(value) for value in conflict_ids}
+        track_map = (
+            getattr(frame_element, "track_id_by_association", None)
+            or getattr(frame_element, "formal_track_id_by_association", None)
+            or {}
+        )
+        internal_ids = {
+            int(track_map.get(association_id, association_id))
+            for association_id in numeric_ids
+        }
+        for name in (
+            "trajectory_association_ids",
+            "mature_trajectory_association_ids",
+        ):
+            values = getattr(frame_element, name, None)
+            if values is not None:
+                setattr(focused, name, [v for v in values if int(v) in numeric_ids])
+        formal_ids = getattr(frame_element, "formal_track_ids", None)
+        if formal_ids is not None:
+            focused.formal_track_ids = [
+                value
+                for value in formal_ids
+                if int(value) in numeric_ids or int(value) in internal_ids
+            ]
+        for name in ("association_trajectories", "candidate_trajectories"):
+            values = getattr(frame_element, name, None)
+            if values is not None:
+                setattr(
+                    focused,
+                    name,
+                    [
+                        value
+                        for value in values
+                        if int(value.get("association_id", value.get("track_id", -1)))
+                        in numeric_ids
+                    ],
+                )
+        focused.conflict_events = list(focused_events)
+        return focused
 
     # ── 绘制子方法 ──────────────────────────────────────────────────────────
 
@@ -861,7 +979,7 @@ class ShowNode:
             tid = frame_element.id_list[i]
             formal_tid = int(track_map.get(int(tid), int(tid)))
             # 有冲突时隐藏非冲突目标的标签
-            if conflict_ids and str(formal_tid) not in conflict_ids:
+            if conflict_ids and str(tid) not in conflict_ids:
                 labels.append("")
                 continue
             cls_name = frame_element.tracked_cls[i] if frame_element.tracked_cls else ""
@@ -1213,26 +1331,17 @@ class ShowNode:
             )
             lane_idx += 1
 
-    def _draw_conflicts(self, frame_result, conflict_events, frame_element):
-        """在输出画面上绘制机非冲突事件（专业级可视化，支持余辉跟随）。"""
-        self.processed_frames += 1
-
-        # 1. 刷新新收到的事件到余辉字典中
-        for event in (conflict_events or []):
-            motor_id = str(event.get("motor_id"))
-            non_motor_id = str(event.get("non_motor_id"))
-            if motor_id and motor_id != "None" and non_motor_id and non_motor_id != "None":
-                key = (motor_id, non_motor_id)
-                self.persistent_conflicts[key] = {
-                    "event": event,
-                    "expire": self.processed_frames + self.persist_frames
-                }
-
-        # 2. 清理过期事件
-        self.persistent_conflicts = {
-            k: v for k, v in self.persistent_conflicts.items()
-            if self.processed_frames <= v["expire"]
-        }
+    def _draw_conflicts(
+        self,
+        frame_result,
+        conflict_events,
+        frame_element,
+        *,
+        refresh_state=True,
+    ):
+        """绘制双方预测轨迹、碰撞爆点和 TCC 提示，支持余辉跟随。"""
+        if refresh_state:
+            self._refresh_conflict_state(conflict_events)
 
         if not self.persistent_conflicts:
             return
@@ -1240,6 +1349,11 @@ class ShowNode:
         buffer_tracks = getattr(frame_element, "buffer_tracks", {})
         if not buffer_tracks:
             return
+        track_map = (
+            getattr(frame_element, "track_id_by_association", None)
+            or getattr(frame_element, "formal_track_id_by_association", None)
+            or {}
+        )
 
         # 动态分辨率缩放
         img_h, img_w = frame_result.shape[:2]
@@ -1263,15 +1377,17 @@ class ShowNode:
             if motor_id not in active_ids or non_motor_id not in active_ids:
                 continue
 
-            # 查找轨迹
-            motor = non_motor = None
-            for tid, t in buffer_tracks.items():
-                if str(tid) == motor_id:
-                    motor = t
-                if str(tid) == non_motor_id:
-                    non_motor = t
-                if motor and non_motor:
-                    break
+            # 冲突事件使用当前帧 association_id；轨迹仓库以稳定 track_id 为键。
+            # 两个身份域必须在显示边界显式映射，旧帧则自然回退为同 ID。
+            try:
+                motor_track_id = int(track_map.get(int(motor_id), int(motor_id)))
+                non_motor_track_id = int(
+                    track_map.get(int(non_motor_id), int(non_motor_id))
+                )
+            except (TypeError, ValueError):
+                continue
+            motor = buffer_tracks.get(motor_track_id)
+            non_motor = buffer_tracks.get(non_motor_track_id)
             if not motor or not non_motor:
                 continue
 
@@ -1283,77 +1399,65 @@ class ShowNode:
             pt_m = (int(motor_pts[-1][0]), int(motor_pts[-1][1]))
             pt_n = (int(non_motor_pts[-1][0]), int(non_motor_pts[-1][1]))
 
-            # 配色方案
+            collision_pt = self._prediction_collision_point_px(
+                event,
+                frame_element,
+                pt_m,
+                pt_n,
+            )
+
+            class_by_association = {
+                str(association_id): class_name
+                for association_id, class_name in zip(
+                    getattr(frame_element, "id_list", None) or [],
+                    getattr(frame_element, "tracked_cls", None) or [],
+                )
+            }
+            # Prediction extensions inherit the exact box/history palette so
+            # viewers can follow each participant continuously into the future.
+            motor_line_color = self._formal_trace_color(
+                class_by_association.get(motor_id, "unknown"),
+                int(motor_id),
+                frame_element,
+            )
+            non_motor_line_color = self._formal_trace_color(
+                class_by_association.get(non_motor_id, "unknown"),
+                int(non_motor_id),
+                frame_element,
+            )
+
+            # 风险级别只控制提示徽章；双方轨迹颜色始终由对象自身决定。
             if severity == "critical":
-                line_color = (60, 60, 230)      # 深红
                 badge_bg = (40, 30, 180)         # 暗红背景
                 badge_border = (80, 80, 255)     # 亮红边框
                 text_color = (255, 255, 255)
-                marker_color = (0, 0, 255)
                 ttc_label = f"TTC {ttc:.1f}s"
             else:
-                line_color = (0, 0, 255)         # 高对比红
                 badge_bg = (0, 0, 190)           # 暗红背景
                 badge_border = (0, 0, 255)       # 亮红边框
                 text_color = (255, 255, 255)
-                marker_color = (0, 0, 255)
                 ttc_label = f"TTC {ttc:.1f}s"
 
-            # ── 虚线连接 ──
-            self._draw_dashed_line(frame_result, pt_m, pt_n, line_color,
-                                   thickness=max(1, int(2 * s)),
-                                   dash_length=int(12 * s),
-                                   gap_length=int(8 * s))
+            # ── 双方预测轨迹：从当前轨迹端点分别收敛到预测碰撞点 ──
+            prediction_thickness = max(2, int(3 * s))
+            for start, color in (
+                (pt_m, motor_line_color),
+                (pt_n, non_motor_line_color),
+            ):
+                self._draw_dashed_line(
+                    frame_result,
+                    start,
+                    collision_pt,
+                    color,
+                    thickness=prediction_thickness,
+                    dash_length=max(8, int(14 * s)),
+                    gap_length=max(6, int(9 * s)),
+                )
 
-            # ── 端点钻石标记 ──
-            diamond_r = int(6 * s)
-            for pt in (pt_m, pt_n):
-                diamond_pts = np.array([
-                    [pt[0], pt[1] - diamond_r],
-                    [pt[0] + diamond_r, pt[1]],
-                    [pt[0], pt[1] + diamond_r],
-                    [pt[0] - diamond_r, pt[1]],
-                ], dtype=np.int32)
-                cv2.fillPoly(frame_result, [diamond_pts], marker_color)
-                cv2.polylines(frame_result, [diamond_pts], True, (255, 255, 255),
-                              max(1, int(1 * s)))
+            # OpenCV 字体不支持彩色 Emoji；用等价的红黄爆点图形表达 💥。
+            self._draw_collision_burst(frame_result, collision_pt, s)
 
             # ── 圆角徽章 ──
-            mid_x = (pt_m[0] + pt_n[0]) / 2.0
-            mid_y = (pt_m[1] + pt_n[1]) / 2.0
-            
-            # 计算法向量，将标签偏移，避免遮挡车辆
-            link_dx = float(pt_n[0] - pt_m[0])
-            link_dy = float(pt_n[1] - pt_m[1])
-            link_dist = max(1.0, np.hypot(link_dx, link_dy))
-            # 单位法向量（垂直于两车连线）
-            nx = -link_dy / link_dist
-            ny =  link_dx / link_dist
-
-            # 自适应偏移：基础 50px，同时确保与两端点的距离 >= min_clearance
-            base_offset = 50 * s
-            min_clearance = 35 * s
-            offset_mag = base_offset
-            for attempt in range(5):
-                cx_try = mid_x + nx * offset_mag
-                cy_try = mid_y + ny * offset_mag
-                d_m = np.hypot(cx_try - pt_m[0], cy_try - pt_m[1])
-                d_n = np.hypot(cx_try - pt_n[0], cy_try - pt_n[1])
-                if d_m >= min_clearance and d_n >= min_clearance:
-                    break
-                offset_mag += 15 * s
-
-            cx = int(mid_x + nx * offset_mag)
-            cy = int(mid_y + ny * offset_mag)
-
-            # 边界钳制
-            cx = max(60, min(img_w - 60, cx))
-            cy = max(30, min(img_h - 30, cy))
-
-            # 画一根很细的指示线连接连线中点和偏移后的标签中心
-            cv2.line(frame_result, (int(mid_x), int(mid_y)), (cx, cy),
-                     line_color, max(1, int(1 * s)), cv2.LINE_AA)
-
             font = cv2.FONT_HERSHEY_SIMPLEX
             font_scale = 0.5 * s
             font_thick = max(1, int(1.5 * s))
@@ -1363,6 +1467,41 @@ class ShowNode:
             pad_y = int(6 * s)
             badge_w = tw + pad_x * 2
             badge_h = th + pad_y * 2
+            obstacle_boxes = []
+            for association_id, raw_box in zip(
+                getattr(frame_element, "id_list", None) or [],
+                getattr(frame_element, "tracked_xyxy", None) or [],
+            ):
+                if str(association_id) not in {motor_id, non_motor_id}:
+                    continue
+                normalized = self._normalize_visible_box(raw_box, frame_result.shape)
+                if normalized is None:
+                    continue
+                x1_box, y1_box, x2_box, y2_box = normalized
+                obstacle_boxes.append((x1_box, y1_box, x2_box, y2_box))
+                # Supervision places the participant label above the box.
+                obstacle_boxes.append((
+                    x1_box - 45 * s,
+                    y1_box - 42 * s,
+                    x2_box + 45 * s,
+                    y1_box + 8 * s,
+                ))
+            cx, cy = self._select_ttc_badge_center(
+                frame_shape=frame_result.shape,
+                collision_pt=collision_pt,
+                badge_size=(badge_w, badge_h),
+                scale=s,
+                obstacle_boxes=obstacle_boxes,
+                obstacle_segments=[
+                    (pt_m, collision_pt),
+                    (pt_n, collision_pt),
+                ],
+                obstacle_points=[
+                    *motor_pts,
+                    *non_motor_pts,
+                    collision_pt,
+                ],
+            )
             bx1 = cx - badge_w // 2
             by1 = cy - badge_h // 2
             bx2 = bx1 + badge_w
@@ -1387,6 +1526,151 @@ class ShowNode:
             ty = cy + th // 2 - 1
             cv2.putText(frame_result, ttc_label, (tx, ty),
                         font, font_scale, text_color, font_thick, cv2.LINE_AA)
+
+    @staticmethod
+    def _select_ttc_badge_center(
+        *,
+        frame_shape,
+        collision_pt,
+        badge_size,
+        scale,
+        obstacle_boxes,
+        obstacle_segments,
+        obstacle_points,
+    ):
+        """Place the TTC badge outside participant and trajectory geometry."""
+        height, width = frame_shape[:2]
+        badge_w, badge_h = badge_size
+        half_w = badge_w / 2.0
+        half_h = badge_h / 2.0
+        margin = max(6.0, 8.0 * scale)
+        horizontal = half_w + max(36.0, 42.0 * scale)
+        vertical = half_h + max(34.0, 40.0 * scale)
+        offsets = (
+            (horizontal, 0.0),
+            (-horizontal, 0.0),
+            (horizontal, -vertical),
+            (-horizontal, -vertical),
+            (horizontal, vertical),
+            (-horizontal, vertical),
+            (0.0, -vertical * 1.35),
+            (0.0, vertical * 1.35),
+        )
+
+        def clamp_center(raw_x, raw_y):
+            return (
+                float(np.clip(raw_x, half_w + margin, width - half_w - margin)),
+                float(np.clip(raw_y, half_h + margin, height - half_h - margin)),
+            )
+
+        def bounds(center, clearance=0.0):
+            return (
+                center[0] - half_w - clearance,
+                center[1] - half_h - clearance,
+                center[0] + half_w + clearance,
+                center[1] + half_h + clearance,
+            )
+
+        def overlap_area(first, second):
+            return max(0.0, min(first[2], second[2]) - max(first[0], second[0])) * max(
+                0.0,
+                min(first[3], second[3]) - max(first[1], second[1]),
+            )
+
+        clearance = max(6.0, 8.0 * scale)
+        candidates = [
+            clamp_center(collision_pt[0] + dx, collision_pt[1] + dy)
+            for dx, dy in offsets
+        ]
+        best_center = candidates[0]
+        best_score = float("inf")
+        for candidate in candidates:
+            rect = bounds(candidate, clearance)
+            score = float(np.hypot(
+                candidate[0] - collision_pt[0],
+                candidate[1] - collision_pt[1],
+            ))
+            for box in obstacle_boxes:
+                score += overlap_area(rect, box) * 1000.0
+            for point in obstacle_points:
+                try:
+                    px, py = float(point[0]), float(point[1])
+                except (TypeError, ValueError, IndexError):
+                    continue
+                if rect[0] <= px <= rect[2] and rect[1] <= py <= rect[3]:
+                    score += 1_000_000.0
+            for start, end in obstacle_segments:
+                for ratio in np.linspace(0.0, 1.0, 48):
+                    px = start[0] + (end[0] - start[0]) * ratio
+                    py = start[1] + (end[1] - start[1]) * ratio
+                    if rect[0] <= px <= rect[2] and rect[1] <= py <= rect[3]:
+                        score += 1_000_000.0
+                        break
+            if score < best_score:
+                best_center = candidate
+                best_score = score
+        return int(round(best_center[0])), int(round(best_center[1]))
+
+    @staticmethod
+    def _prediction_collision_point_px(event, frame_element, pt_m, pt_n):
+        """Project the event's predicted ENU collision point back to this frame."""
+        explicit = event.get("conflict_position_px")
+        if isinstance(explicit, (list, tuple)) and len(explicit) >= 2:
+            point = np.asarray(explicit[:2], dtype=np.float64)
+        else:
+            motor_world = event.get("motor_position_enu_m")
+            non_motor_world = event.get("non_motor_position_enu_m")
+            world_points = []
+            for value in (motor_world, non_motor_world):
+                if isinstance(value, (list, tuple)) and len(value) >= 2:
+                    candidate = np.asarray(value[:2], dtype=np.float64)
+                    if np.all(np.isfinite(candidate)):
+                        world_points.append(candidate)
+            point = None
+            projection = getattr(frame_element, "pixel_to_world_enu", None)
+            if world_points and projection is not None:
+                try:
+                    inverse = np.linalg.inv(np.asarray(projection, dtype=np.float64))
+                    world = np.mean(world_points, axis=0)
+                    homogeneous = inverse @ np.asarray([world[0], world[1], 1.0])
+                    if abs(float(homogeneous[2])) > 1e-9:
+                        point = homogeneous[:2] / homogeneous[2]
+                except (np.linalg.LinAlgError, TypeError, ValueError):
+                    point = None
+            if point is None or not np.all(np.isfinite(point)):
+                point = (np.asarray(pt_m, dtype=np.float64) + np.asarray(pt_n, dtype=np.float64)) / 2.0
+        height, width = frame_element.frame.shape[:2]
+        return (
+            int(np.clip(round(float(point[0])), 0, max(0, width - 1))),
+            int(np.clip(round(float(point[1])), 0, max(0, height - 1))),
+        )
+
+    @staticmethod
+    def _draw_collision_burst(frame, center, scale):
+        """Draw a resolution-aware red/yellow burst equivalent to the 💥 icon."""
+        outer = max(10, int(round(13 * scale)))
+        inner = max(5, int(round(6 * scale)))
+        points = []
+        for index in range(16):
+            angle = -np.pi / 2 + index * np.pi / 8
+            radius = outer if index % 2 == 0 else inner
+            points.append(
+                (
+                    int(round(center[0] + np.cos(angle) * radius)),
+                    int(round(center[1] + np.sin(angle) * radius)),
+                )
+            )
+        polygon = np.asarray(points, dtype=np.int32)
+        cv2.fillPoly(frame, [polygon], (0, 205, 255), cv2.LINE_AA)
+        cv2.polylines(
+            frame,
+            [polygon],
+            True,
+            (0, 0, 255),
+            max(2, int(round(2 * scale))),
+            cv2.LINE_AA,
+        )
+        cv2.circle(frame, center, max(2, int(round(3 * scale))), (255, 255, 255), -1, cv2.LINE_AA)
 
     @staticmethod
     def _draw_dashed_line(img, pt1, pt2, color, thickness=1,

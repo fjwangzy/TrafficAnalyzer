@@ -34,6 +34,8 @@ class FlightMotionClassifier:
         max_agl_m: float = 150.0,
         max_nadir_deviation_deg: float = 10.0,
         max_roll_deg: float = 5.0,
+        allow_roll_with_visual_validation: bool = False,
+        max_roll_visual_validation_deg: float = 15.0,
         max_vertical_speed_mps: float = 2.0,
         max_yaw_rate_dps: float = 15.0,
         max_zoom_drift_ratio: float = 0.02,
@@ -51,6 +53,8 @@ class FlightMotionClassifier:
         self.max_agl_m = float(max_agl_m)
         self.max_nadir_deviation_deg = float(max_nadir_deviation_deg)
         self.max_roll_deg = float(max_roll_deg)
+        self.allow_roll_with_visual_validation = bool(allow_roll_with_visual_validation)
+        self.max_roll_visual_validation_deg = float(max_roll_visual_validation_deg)
         self.max_vertical_speed_mps = float(max_vertical_speed_mps)
         self.max_yaw_rate_dps = float(max_yaw_rate_dps)
         self.max_zoom_drift_ratio = float(max_zoom_drift_ratio)
@@ -225,10 +229,21 @@ class FlightMotionClassifier:
             reasons.append("gps_unavailable")
         if not self.min_agl_m <= agl <= self.max_agl_m:
             reasons.append("agl_out_of_range")
+        if telemetry.get("altitude_agl_source") == "unavailable":
+            reasons.append("agl_source_unverified")
+        if telemetry.get("camera_lens_verified") is False:
+            reasons.append("camera_lens_unverified")
         if abs(pitch + 90.0) > self.max_nadir_deviation_deg:
             reasons.append("gimbal_pitch_out_of_range")
+        roll_requires_visual_validation = False
         if roll > self.max_roll_deg:
-            reasons.append("gimbal_roll_out_of_range")
+            if (
+                self.allow_roll_with_visual_validation
+                and roll <= self.max_roll_visual_validation_deg
+            ):
+                roll_requires_visual_validation = True
+            else:
+                reasons.append("gimbal_roll_out_of_range")
         if vertical_speed > self.max_vertical_speed_mps:
             reasons.append("vertical_speed_out_of_range")
         if yaw_rate is not None and yaw_rate > self.max_yaw_rate_dps:
@@ -239,6 +254,8 @@ class FlightMotionClassifier:
             reasons.append("horizontal_speed_out_of_range")
 
         pose_reasons = list(reasons)
+        if roll_requires_visual_validation:
+            reasons.append("gimbal_roll_visual_validation_required")
         eligible = not pose_reasons
         leaving_hover = self._was_hover_verified and (
             (speed is not None and speed > self.hover_exit_speed_mps)

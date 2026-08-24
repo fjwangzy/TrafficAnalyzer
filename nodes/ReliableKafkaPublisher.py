@@ -19,8 +19,21 @@ from pathlib import Path
 from queue import Empty, Full, Queue
 from typing import Any
 
+from kafka.codec import has_zstd
+
 
 logger = logging.getLogger(__name__)
+
+
+def kafka_compression_type(storage_profile: str) -> str | None:
+    """Return the canonical codec and fail before a video-only false runtime starts."""
+    if storage_profile != "replay_v2":
+        return None
+    if not has_zstd():
+        raise RuntimeError(
+            "Replay V2 Kafka compression requires the 'zstandard' dependency"
+        )
+    return "zstd"
 
 
 class ReliableKafkaPublisher:

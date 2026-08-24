@@ -155,6 +155,7 @@ async def get_stats(
     period: str = Query("1h"),
     granularity: str = Query("1m"),
     source_profile_id: str | None = Query(None),
+    pipeline_id: str | None = Query(None),
 ):
     """Get historical intersection metrics from road9."""
     metric_store = getattr(request.app.state, "metric_store", None)
@@ -164,13 +165,14 @@ async def get_stats(
             period,
             grain_type="intersection",
             source_profile_id=source_profile_id,
+            pipeline_id=pipeline_id,
             granularity=granularity,
         )
         if rows:
             return rows
     # Fallback: return latest from Kafka cache
     kafka = request.app.state.kafka_service
-    if kafka:
+    if kafka and pipeline_id is None:
         latest = kafka.latest_stats.get(intersection_id)
         return [latest] if latest else []
     return []

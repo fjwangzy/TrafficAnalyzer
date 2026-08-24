@@ -74,6 +74,35 @@ def test_hover_cruise_speed_uses_world_history_independent_of_current_h():
     assert result.buffer_tracks[1].speed_kmh == pytest.approx(18.0)
 
 
+def test_hover_cruise_speed_rejects_single_frame_world_position_outlier():
+    track = TrackElement(id=1, timestamp_first=0.0)
+    track.position_history_enu_m = [
+        (0.0, 0.0, 0.0),
+        (0.1, 0.0, 0.1),
+        (0.2, 0.0, 0.2),
+        (10.3, 0.0, 0.3),
+        (0.4, 0.0, 0.4),
+        (0.5, 0.0, 0.5),
+    ]
+    track.trajectory_output_eligible = True
+    frame = _frame_with_track(track)
+    node = SpeedEstimationNode(
+        {
+            "tracking_profile": "hover_cruise_v1",
+            "speed_estimation": {
+                "enabled": True,
+                "smoothing_window": 1,
+                "max_segment_speed_ms": 45.0,
+            },
+        }
+    )
+
+    result = node.process(frame)
+
+    np.testing.assert_allclose(result.buffer_tracks[1].velocity_ms, [1.0, 0.0])
+    assert result.buffer_tracks[1].speed_kmh == pytest.approx(3.6)
+
+
 def test_hover_only_legacy_does_not_invent_speed_from_pixel_history():
     track = TrackElement(id=1, timestamp_first=0.0)
     track.position_history = [

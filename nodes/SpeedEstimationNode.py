@@ -29,12 +29,38 @@ class SpeedEstimationNode:
         self.history_frames = cfg.get("history_frames", 15)
         self.smoothing_window = cfg.get("smoothing_window", 5)
         self.min_displacement_px = cfg.get("min_displacement_px", 2.0)
+        self.max_segment_speed_ms = float(cfg.get("max_segment_speed_ms", 45.0))
 
     @staticmethod
     def _clear_current_world_motion(track) -> None:
         track.velocity_ms = None
         track.speed_kmh = None
         track.avg_speed_kmh = None
+
+    def _robust_velocity_ms(self, world_history) -> np.ndarray | None:
+        """Return a segment-median velocity after rejecting impossible jumps.
+
+        A current-frame projection discontinuity affects two adjacent segments
+        (jump in and jump back). Regressing raw positions turns that transient
+        into a plausible-looking high speed; segment filtering keeps it out of
+        the business motion facts without touching the image association.
+        """
+        points = np.asarray(world_history, dtype=np.float64)
+        if points.ndim != 2 or points.shape[1] < 3 or not np.all(np.isfinite(points)):
+            return None
+        dt = np.diff(points[:, 2])
+        valid_dt = dt > 0
+        if not np.any(valid_dt):
+            return None
+        velocity = np.diff(points[:, :2], axis=0)[valid_dt] / dt[valid_dt, None]
+        speed = np.linalg.norm(velocity, axis=1)
+        valid_velocity = np.all(np.isfinite(velocity), axis=1) & (
+            speed <= self.max_segment_speed_ms
+        )
+        velocity = velocity[valid_velocity]
+        if velocity.size == 0:
+            return None
+        return np.median(velocity, axis=0)
 
     @profile_time
     def process(self, frame_element: FrameElement) -> FrameElement:
@@ -65,22 +91,16 @@ class SpeedEstimationNode:
                 self._clear_current_world_motion(track)
                 continue
 
-            # T-202: 线性回归速度估算
-            # 提取时间戳和坐标
             t_arr = np.array([p[2] for p in world_history])
-            x_arr = np.array([p[0] for p in world_history])
-            y_arr = np.array([p[1] for p in world_history])
-
             dt_total = t_arr[-1] - t_arr[0]
             if dt_total < 0.05:
                 self._clear_current_world_motion(track)
                 continue
 
-            pts_world = np.column_stack([x_arr, y_arr])
-            t_centered = t_arr - t_arr[0]
-            slope_e = np.polyfit(t_centered, pts_world[:, 0], 1)[0]
-            slope_n = np.polyfit(t_centered, pts_world[:, 1], 1)[0]
-            true_vel = np.array([slope_e, slope_n])
+            true_vel = self._robust_velocity_ms(world_history)
+            if true_vel is None:
+                self._clear_current_world_motion(track)
+                continue
             speed_ms = float(np.linalg.norm(true_vel))
             track.velocity_ms = true_vel
             track.speed_kmh = speed_ms * 3.6

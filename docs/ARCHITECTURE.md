@@ -62,7 +62,7 @@ TrafficAnalyzer 是智慧交通大项目下的无人机 AI 交通分析子系统
 ┌─────────────────────────────────────────────────────────┐
 │             TrackerInfoUpdateNode                        │
 │  维护 buffer_tracks 字典（TrackElement）                  │
-│  车辆底部接地点 + motor/non_motor 分类 + 逐帧轨迹累积      │
+│  车辆底部接地点 + 30帧业务类别滚动投票 + 逐帧轨迹累积       │
 └─────────────────────┬───────────────────────────────────┘
                       ▼
 ┌─────────────────────────────────────────────────────────┐
@@ -456,6 +456,28 @@ Console2 城市地图、实时监测和渠化地图编辑预览统一使用高�
 `trajectory_gcj02`、`geometry_gcj02`、`position_gcj02` 坐标均为 GCJ-02，GeoJSON 顺序固定为
 `[longitude, latitude]`。`trajectory_enu_m` 只参与速度、距离、TTC、PET 和拟合计算，不由浏览器
 近似换算经纬度。缺失已验证地图或 GCJ-02 轨迹时显示真实空态，不回退其他底图或坐标契约。
+Dashboard 选中运行中无人机后复用同一 AMap 实例进入车辆数字孪生模式，严格按当前
+`pipeline_id + source_profile_id + intersection_id` 的 `uav_stats.active_trajectories` 增量维护车辆
+Marker。正式 `lane_verified` 车道几何、可信 Link、车辆 GCJ-02 和纯像素轨迹分别形成车道级、
+道路级、空间轨迹和像素覆盖仿真四级能力；停止线与渠化区域是独立增强层，缺失不抑制车道层。
+只有像素坐标时，Console2 只在无人机位置、高度、近垂直云台航向和相机内参齐备时计算
+显示专用的 3D 地面覆盖框，并明确标记 `telemetry_camera_footprint_approximate`；结果不得回写
+Runtime/road9，不得形成 Lane/Link 或精度事实。开发态 `?twinPreview=1` 使用隔离的确定性 Mock
+轨迹调整 3D 视角和密度，`dataMode=preview` 与真实 `live/controlled_replay` 分离。
+像素覆盖模式使用高德卫星影像与 RoadNet 叠加；地图旋转角由云台偏航实时派生，使镜头前向
+保持屏幕向上，车辆图标再扣除同一地图旋转角；但只要当前任务已有正式 Lane/Link 或车辆
+GCJ-02，视角就固定为北向 3D，不允许相邻 Stats 的能力降级带动地图旋转。数字孪生首次取景
+只使用当前车辆位置（纯像素模式使用相机覆盖框），不得把可能跨越上千米的完整路网几何或
+历史尾迹纳入缩放范围；取景完成后以选中无人机为锚点，将其投放到地图屏幕宽度的 70% 位置，
+为左侧详情面板保留可视中心；同一任务后续轮询只增量更新覆盖物，不再次移动相机。`zoom_factor` 遵循遥测/测绘统一语义
+`effective_focal = focal_length / zoom_factor`，不得把小于 1 的缩放系数钳为 1 而放大地面覆盖。
+数字孪生模式不渲染无人机地图标记的 hover 详情卡，详情统一由左侧上下文面板承载；选中无人机
+Marker 固定在车辆覆盖物之上，退出数字孪生后恢复 hover 卡片，且该模式切换不得重建 AMap 实例。
+左侧飞行窗口双击复用既有监控深链进入 `/monitoring`，必须携带当前任务的
+`intersection_id + source_profile_id`；监控页在 Source、Drone、Pipeline 查询完成前不得用演示源
+改写该深链，避免把当前无人机切换成默认监控对象。
+镜头跟随、相机尺度和覆盖框仍只是无 GCP 时的显示近似；不得为消除卫星视觉偏移而把车辆
+吸附到道路、楼体边缘或候选 Lane。
 Console2 在配置了 `AMAP_SECURITY_JS_CODE` 时，于 Loader 执行前设置
 `window._AMapSecurityConfig.securityJsCode`；未配置时仅使用 Web Key，仍尝试由浏览器直接连接
 高德。Vite 与 Console Nginx 均不提供 `/_AMapService` 代理。安全密钥可选是 2026-07-22 用户明确
@@ -519,6 +541,15 @@ http://localhost:8009/camera_{n}
 
 三种源实现相同的 `get_nearest(timestamp) -> dict` 接口，VideoReader 通过 `telemetry.source` 配置切换。
 
+DJI Cloud 文件是低频离散采样，`TelemetryFileReader` 在相邻记录间隔不超过
+`max_interpolation_gap_sec` 且当前帧仍处于 `sync_tolerance_sec` 内时，按帧源时间连续化位置、
+高度、线速度和姿态；航向使用跨 `±180°` 的最短角插值，`recorded_at` 同步插值并保留左右记录
+时间、比例和间隔血缘。超过最大间隔、缺失任一端或超出同步容忍窗口时不外推、不沿用超窗旧值。
+
+DJI Cloud 文件回放与 MQTT 订阅必须经同一字段归一化：`altitude_ellipsoid_m`、`altitude_takeoff_relative_m`、`laser_target_altitude_m`、`laser_range_m`、`laser_state`、`altitude_agl`、`altitude_agl_source`、`altitude_agl_residual_m`、`camera_stream` 与 `camera_lens_verified`。`elevation` 只表示相对起飞点高度，不能静默当作 AGL。需要米制世界 TCC 的 SourceProfile 必须选择 `telemetry_agl_policy=laser_target`：仅激光状态正常、绝对高度与激光目标高度之差和激光垂直分量相符（残差不超过配置门槛）时产生 AGL；否则 AGL 为空并关闭地理/TCC 能力。回放流还必须唯一确认正在录制的 `vision` 广角镜头；未知或歧义镜头不得借用其他镜头的 zoom 值。
+
+标准巡航滚转仍为 `|roll| <= 5°`。仅 SourceProfile 显式启用时，`5° < |roll| <= 15°` 可进入“需要视觉一致性验证”的候选状态：完整含 roll 的相机位姿投影必须与背景视觉运动方向一致才保留地理/TCC 能力；它不是放宽滚转门禁，未通过或缺视觉证据的帧仍明确降级并计入覆盖率。
+
 ### 无人机对接与飞行计划调度（S9 当前工程实现）
 
 S9 在平台单体中增加持久化无人机配置与后台调度服务，不新增 flight 微服务。实时与本地源都复用现有 PipelineManager 和生产入口 `main_optimized.py`：
@@ -559,7 +590,7 @@ PipelineManager → main_optimized.py → Kafka uav_* → road9/TimescaleDB + We
 - 编辑/暂停计划只影响未来执行，不改写运行中 Mission 的设备、源、路网和计划快照。
 - SourceProfile 是 API 聚合，物理数据由 `uav_video_sources` 与 `uav_telemetry_sources` 承载；配对关系只能有一套状态真源。
 - 路口渠化工作流允许“视频先发现”和“路口先建档”两条入口，但都必须汇聚到 `IntersectionProject + SourceProfile + SourceIntersectionBinding`。`IntersectionProject` 是稳定工作壳，不替代 RoadContext；视频归属必须先经 WGS84 证据留存和 GCJ-02 候选匹配，不能直接套用无人机默认路口。
-- DJI Cloud JSON 回放源在 `uav_telemetry_sources.config` 保存 `time_offset_sec/sync_tolerance_sec`，PipelineManager 将其作为 Hydra override 传给 `TelemetryFileReader`；原始空洞返回无有效遥测，不做插值伪造。
+- DJI Cloud JSON 回放源在 `uav_telemetry_sources.config` 保存 `time_offset_sec/sync_tolerance_sec`，PipelineManager 将其作为 Hydra override 传给 `TelemetryFileReader`；合格相邻记录只在受限窗口内插值，超过 `max_interpolation_gap_sec` 的原始空洞返回无有效遥测，不做外推或超窗补值。
 - 根 `docker-compose.yaml` 为 Platform 启用 Docker init 进程，用于回收 EOF、人工停止或异常退出后的多进程检测 worker，避免反复切换摄像头积累僵尸进程。
 - Console2 `/drones` 从持久化 Drone/Source/Mission 聚合生成路口控制卡，通过手动 Mission 独立启停，并与 `/monitoring` 共用 Pipeline 启动时登记的 `video_stream_url` 直连检测器 MJPEG。
 - 本地路径经 realpath 规范化并限制在批准的 allowlist 根目录；RTSP/MQTT 凭据只保存 secret reference，API、日志和审计不得回显明文。
@@ -590,7 +621,7 @@ Console2 /（典型时段地图）
 
 - DashboardReadModel 只在查询时聚合现有事实，不创建 Dashboard 业务表。后续缓存、物化视图或连续聚合必须以 `uav_` 命名、可重建且不得复制事件/任务状态机。
 - S8 口径未批准时 KPI 值为 null，同时返回事实分子/分母和阻断原因；主任首屏不展示无值或未验证的 KPI 卡片，也不把缺失解释为 0。阻断详情只保留在 API 和口径治理材料中。
-- 当前唯一活动底图是高德 JS API 2.0，Dashboard 路口、无人机、路网和轨迹坐标全部使用经服务端一次转换的 GCJ-02。只有 `lane_verified` 地图或可追溯的 GCJ-02 测试点位进入地图；缺坐标或未验证记录进入隔离计数/配置待办。
+- 当前唯一活动底图是高德 JS API 2.0，Dashboard 路口、无人机、路网和轨迹坐标全部使用经服务端一次转换的 GCJ-02。正式车道层只接受 `lane_verified`；`link_verified` 最多作为明确标记的道路级降级骨架，不得显示为车道。可追溯的 GCJ-02 测试点位可进入本机验收地图；缺坐标或其他未验证记录进入隔离计数/配置待办。
 - 正式首页顶部范围、窗口和 `as_of` 来自聚合响应，不再使用 AppState 中的试点原型常量。I5-B 内部查询已支持风险/监测/质量、GCJ-02 bbox、搜索和 offset/limit，并将 road9 超时统一为 503；Console2 保留上一成功快照和有限重试，高德加载失败时降级为列表/KPI。项目范围/权限、点位聚合/zoom、全局增量/断线 REST 缺口回补和容量仍属后续或外部门禁。
 - `situation` 是首页专用的外部读模型例外，不参与 Pipeline、Mission、Kafka、无人机统计或本地 `road9` 写链路，也不复制服务器数据。服务端按启用 `road_version + day_of_week + step_index` 缓存 5 分钟、最多 64 个时槽；首次依赖失败返回结构化 503，有同槽成功缓存时才允许返回 `stale=true`。地图用全量态势路口/路段范围与本地项目路口做并集，无当槽指标的对象保持灰色。
 
@@ -940,11 +971,13 @@ Kalman/Mahalanobis 95% 门控不得作为当前生产关联的硬资格。固定
 
 `CalcStatisticsNode` 独立维护道路入口事件窗口：成熟轨迹首次满足道路归属和 3 秒存在要求时登记一次，`buffer_analytics=0.5` 只让事件在 30 秒后退出辆/分钟窗口。该过期不写轨迹仓库，也不允许同一 ID 重新登记。`cars` 和 `queue_count` 只读取当前成熟轨迹；速度、方向、车道、拥堵和 TCC 也先应用成熟视图，再分别应用 geo/road/TCC 门禁。
 
+活动轨迹的 `vehicle_class` 是最近配置窗口内逐帧原始类别映射后的业务投票，不是首帧冻结值；同时保留 `current_vehicle_class`、`vehicle_class_confidence`、当前 bbox、源帧尺寸和当前观测源时间。`ConflictDetectionNode` 在构造机非配对前检查当前帧与投票一致性、最小置信度、双方是否在当前采样帧被观测、bbox 完整可见性，以及跨类别 bbox 是否高度嵌套；普通 `general_crossing` 再要求双方稳健世界方向置信度达到门槛且夹角至少 60°。失败只增加对应漏斗诊断，不形成 TCC。这样既不使用 lost-buffer/已出画目标的历史世界速度制造事件，也不把车辆框内部的 pedestrian/motor 伪检或低夹角超车当作横向冲突。这里必须区分 VisDrone 原始 `motor`（摩托车，业务 `non_motor`）和业务 `motor`（机动车）。
+
 `uav_stats` 每帧携带四个独立布尔值；Platform 将它们和分层原因持久化到 Pipeline
 `runtime_quality.capabilities/capability_reasons`，Mission/Pipeline 详情原样返回。首个运行样本前状态
 为 `null/runtime_sample_pending`，不得用启动时地图状态或单一 `quality_status` 推断其他能力。
 
-`PostTrackingWorldProjectionNode` 是 `hover_cruise_v1` 唯一的像素→ENU→GCJ-02 事实所有者：镜头去畸变和目标接地点投影复用同一个逐帧视频/SRT计算结果。`TrackerInfoUpdateNode` 只能消费已经生成的当前点，禁止再次读取 H 投影；后续 H 或锚点变化不能改写该帧事实。`SpeedEstimationNode` 对至少3个逐帧 `position_history_enu_m` 点做真实时间回归，世界历史不足时速度为空；所有profile均禁止用当前H重投历史像素或把px/s冒充km/h。
+`PostTrackingWorldProjectionNode` 是 `hover_cruise_v1` 唯一的像素→ENU→GCJ-02 事实所有者：镜头去畸变和目标接地点投影复用同一个逐帧视频/SRT计算结果。`TrackerInfoUpdateNode` 只能消费已经生成的当前点，禁止再次读取 H 投影；后续 H 或锚点变化不能改写该帧事实。`FlightGeoReferenceNode` 在要求视觉验证时把 pose/visual 残差超限作为当前帧世界能力阻断，但不结束或重置图像关联。`SpeedEstimationNode` 对至少3个逐帧 `position_history_enu_m` 点计算分段速度，剔除超过 `max_segment_speed_ms` 的异常段后取分量中位数；世界历史或合格分段不足时速度为空。所有 profile 均禁止用当前 H 重投历史像素或把 px/s 冒充 km/h。
 
 轨迹坐标分为三层且不得混用：`trajectory_px` 是每个源帧中的车辆地面接触点；`trajectory_display_px` 是用相邻背景视觉 `camera_motion_warp` 逐帧递推到当前画面的显示缓存；`trajectory_enu_m/trajectory_gcj02` 是 ByteTrack 分配 ID 后，用每个点所属源帧的绝对矩阵生成的世界事实。源像素、世界坐标、`trajectory_timestamps_sec/trajectory_frame_nums/point_quality_lineage` 按同一索引保留；旧 bbox 中心显式保留为 `trajectory_bbox_center_px`。ShowNode 禁止用当前 H 反投影整段历史，世界坐标也禁止反馈关联或修正显示 ID。
 

@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useQueries, useQuery } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
-import { ArrowRight, CaretLeft, CaretRight, Database, Drone, Funnel, Pulse, ShieldWarning } from '@phosphor-icons/react'
+import { ArrowRight, Database, Drone, Funnel, Pulse, ShieldWarning } from '@phosphor-icons/react'
 import { AppShell } from '../components/AppShell'
 import { CityMap } from '../components/CityMap'
 import { DashboardDronePanel } from '../components/DashboardDronePanel'
 import { Panel } from '../components/Common'
 import { useWebSocket } from '../hooks/useWebSocket'
 import { platformApi } from '../lib/api'
+import { buildDashboardDigitalTwin, selectDigitalTwinMap } from '../lib/dashboardDigitalTwin'
 import { intersectionChannels, telemetryChannels } from '../lib/realtime'
 import { demoSituation } from '../config/demoData'
 
@@ -236,6 +237,10 @@ export function buildLiveDronePoints({ dashboardDrones = [], drones = [], source
       altitude_m: firstFinite(telemetry?.height, telemetry?.altitude, telemetry?.alt_agl, telemetry?.altitude_m, telemetry?.altitude_agl, telemetry?.relative_altitude, telemetry?.height_m),
       speed_mps: firstFinite(telemetry?.horizontal_speed, telemetry?.ground_speed_mps, telemetry?.horizontal_speed_mps, telemetry?.speed_mps, telemetry?.speed),
       heading_deg: firstFinite(telemetry?.heading_deg, telemetry?.heading, telemetry?.yaw, telemetry?.flight_yaw_degree),
+      gimbal_pitch_deg: firstFinite(telemetry?.gimbal_pitch, telemetry?.gb_pitch),
+      gimbal_yaw_deg: firstFinite(telemetry?.gimbal_yaw, telemetry?.gb_yaw, telemetry?.attitude_head),
+      focal_length_mm: firstFinite(telemetry?.focal_len, telemetry?.focal_length_mm, 4.5),
+      camera_zoom_factor: firstFinite(telemetry?.zoom_factor, telemetry?.dzoom_ratio ? 1 / telemetry.dzoom_ratio : null, 1),
       telemetry_fresh: Boolean(liveTelemetry || trajectoryTelemetry || drone.telemetry_status === 'fresh'),
       telemetry_note: telemetryQuality ? `${isReplay ? '回放' : '实时'}遥测 · ${telemetryQuality}` : isReplay ? '回放遥测' : '实时遥测',
     }]
@@ -277,6 +282,44 @@ export function normalizeDashboardRealtimeStats(stats) {
   }
 }
 
+export function buildDigitalTwinPreviewStats(tick = 0) {
+  const classes = ['car', 'car', 'car', 'van', 'bus', 'truck']
+  const horizontalLanes = [760, 850, 940, 1220, 1310, 1400]
+  const verticalLanes = [1660, 1770, 1880, 2070, 2180, 2290]
+  const horizontal = Array.from({ length: 84 }, (_, index) => {
+    const laneIndex = index % horizontalLanes.length
+    const direction = laneIndex < 3 ? 1 : -1
+    const current = (index * 173 + tick * 32 + 3840) % 3840
+    const x = direction > 0 ? current : 3840 - current
+    return {
+      track_id: `PREVIEW-H-${index}`,
+      vehicle_class: classes[index % classes.length],
+      trajectory_output_eligible: true,
+      trajectory_px: [[x - direction * 64, horizontalLanes[laneIndex]], [x - direction * 32, horizontalLanes[laneIndex]], [x, horizontalLanes[laneIndex]]],
+    }
+  })
+  const vertical = Array.from({ length: 36 }, (_, index) => {
+    const laneIndex = index % verticalLanes.length
+    const direction = laneIndex < 3 ? 1 : -1
+    const current = (index * 181 + tick * 27 + 2160) % 2160
+    const y = direction > 0 ? current : 2160 - current
+    return {
+      track_id: `PREVIEW-V-${index}`,
+      vehicle_class: classes[(index + 2) % classes.length],
+      trajectory_output_eligible: true,
+      trajectory_px: [[verticalLanes[laneIndex], y - direction * 54], [verticalLanes[laneIndex], y - direction * 27], [verticalLanes[laneIndex], y]],
+    }
+  })
+  return {
+    pipeline_id: 'frontend-preview',
+    source_profile_id: 'FRONTEND-MOCK-TRAJECTORY',
+    intersection_id: 'INT_MP4728_JINGSHI_CORRIDOR',
+    cars: horizontal.length + vertical.length,
+    avg_speed_kmh: 28.5,
+    active_trajectories: [...horizontal, ...vertical],
+  }
+}
+
 export function dashboardStatsMessageMatchesDrone(message, drone) {
   if (message?.type !== 'uav_stats' || !drone?.pipeline_id || !drone?.source_profile_id || !drone?.intersection_id) return false
   const data = message.data || {}
@@ -294,9 +337,10 @@ export function DashboardPage() {
   const [selectedIntersectionId, setSelectedIntersectionId] = useState(null)
   const [selectedSegmentId, setSelectedSegmentId] = useState(null)
   const [selectedDroneId, setSelectedDroneId] = useState(null)
-  const [rightPanelOpen, setRightPanelOpen] = useState(true)
   const [telemetryByDrone, setTelemetryByDrone] = useState({})
   const [realtimeDroneStats, setRealtimeDroneStats] = useState(null)
+  const [previewTick, setPreviewTick] = useState(0)
+  const previewMode = import.meta.env.DEV && new URLSearchParams(window.location.search).get('twinPreview') === '1'
   const trafficMode = mapDisplayMode === 'traffic'
   const queryOptions = { refetchInterval: 60_000, retry: (count, error) => error?.response?.status !== 401 && count < 2 }
   const intersectionParams = { limit: 500 }
@@ -345,12 +389,53 @@ export function DashboardPage() {
     () => buildLiveDronePoints({ dashboardDrones, drones: sourceDrones, sources, intersections, pipelines, telemetryByDrone, trajectoriesByDrone }),
     [dashboardDrones, sourceDrones, sources, intersections, pipelines, telemetryByDrone, trajectoriesByDrone],
   )
+  useEffect(() => {
+    if (!previewMode) return undefined
+    const timer = window.setInterval(() => setPreviewTick((value) => value + 1), 900)
+    return () => window.clearInterval(timer)
+  }, [previewMode])
+  useEffect(() => {
+    if (!previewMode || selectedDroneId || !liveDronePoints.length) return
+    const previewDrone = liveDronePoints.find((item) => item.id === 'UAV-MP4728-JS') || liveDronePoints[0]
+    setSelectedDroneId(previewDrone.id)
+    setMapDisplayMode('traffic')
+  }, [previewMode, selectedDroneId, liveDronePoints])
   const telemetryDroneIds = useMemo(() => [...new Set([
     ...dashboardDrones.map((item) => item.id),
     ...sourceDrones.map((item) => item.id),
   ].filter(Boolean))], [dashboardDrones, sourceDrones])
   const telemetryChannelList = useMemo(() => telemetryDroneIds.flatMap(telemetryChannels), [telemetryDroneIds])
-  const selectedDrone = liveDronePoints.find((item) => item.id === selectedDroneId) || null
+  const selectedDroneBase = liveDronePoints.find((item) => item.id === selectedDroneId) || null
+  const selectedDrone = selectedDroneBase && previewMode ? {
+    ...selectedDroneBase,
+    is_preview: true,
+    is_monitoring: false,
+    status_label: '3D 车流预览',
+    scene_label: '3D 车流仿真 · 前端 Mock',
+    source_profile_id: 'FRONTEND-MOCK-TRAJECTORY',
+    pipeline_id: 'frontend-preview',
+    lon: finiteNumber(selectedDroneBase.lon) ?? 117.033454,
+    lat: finiteNumber(selectedDroneBase.lat) ?? 36.648220,
+    altitude_m: finiteNumber(selectedDroneBase.altitude_m) ?? 171.4,
+    gimbal_pitch_deg: finiteNumber(selectedDroneBase.gimbal_pitch_deg) ?? -90,
+    gimbal_yaw_deg: finiteNumber(selectedDroneBase.gimbal_yaw_deg) ?? 180,
+    focal_length_mm: finiteNumber(selectedDroneBase.focal_length_mm) ?? 4.5,
+    camera_zoom_factor: 1,
+  } : selectedDroneBase
+  const digitalTwinMapsQuery = useQuery({
+    queryKey: ['dashboard', 'digital-twin-maps', selectedDrone?.intersection_id],
+    queryFn: () => platformApi.channelizedMaps(selectedDrone.intersection_id),
+    enabled: Boolean(selectedDrone?.is_monitoring && selectedDrone?.intersection_id),
+    retry: (count, error) => error?.response?.status !== 401 && count < 2,
+  })
+  const digitalTwinMapSummary = useMemo(() => selectDigitalTwinMap(digitalTwinMapsQuery.data), [digitalTwinMapsQuery.data])
+  const digitalTwinMapQuery = useQuery({
+    queryKey: ['dashboard', 'digital-twin-map', digitalTwinMapSummary?.id],
+    queryFn: () => platformApi.channelizedMap(digitalTwinMapSummary.id),
+    enabled: Boolean(digitalTwinMapSummary?.id),
+    staleTime: 60_000,
+    retry: (count, error) => error?.response?.status !== 401 && count < 2,
+  })
   const selectedStatsQuery = useQuery({
     queryKey: ['dashboard', 'selected-drone-stats', selectedDrone?.intersection_id, selectedDrone?.source_profile_id, selectedDrone?.pipeline_id],
     queryFn: () => platformApi.intersectionStats(selectedDrone.intersection_id, '30m', '5m', selectedDrone.source_profile_id),
@@ -374,8 +459,14 @@ export function DashboardPage() {
   useEffect(() => setRealtimeDroneStats(null), [selectedDrone?.id, selectedDrone?.pipeline_id])
 
   const historicalStats = Array.isArray(selectedStatsQuery.data) ? selectedStatsQuery.data.at(-1) : null
-  const selectedStats = normalizeDashboardRealtimeStats(realtimeDroneStats || historicalStats)
-  const selectedStatsSource = realtimeDroneStats
+  const previewStats = useMemo(() => previewMode ? buildDigitalTwinPreviewStats(previewTick) : null, [previewMode, previewTick])
+  const selectedStats = normalizeDashboardRealtimeStats(previewStats || realtimeDroneStats || historicalStats)
+  const digitalTwin = useMemo(() => buildDashboardDigitalTwin({
+    stats: previewStats || realtimeDroneStats,
+    mapVersion: digitalTwinMapQuery.data || digitalTwinMapSummary,
+    selectedDrone,
+  }), [previewStats, realtimeDroneStats, digitalTwinMapQuery.data, digitalTwinMapSummary, selectedDrone])
+  const selectedStatsSource = previewStats ? '前端 Mock 预览' : realtimeDroneStats
     ? dashboardSocketStatus === 'connected' ? '实时推送' : '实时快照'
     : historicalStats ? 'REST 最近样本' : selectedDrone?.is_monitoring ? '等待实时数据' : '无实时任务'
 
@@ -406,10 +497,12 @@ export function DashboardPage() {
     navigate(`/monitoring?intersection_id=${encodeURIComponent(item.intersection_id)}&source_profile_id=${encodeURIComponent(item.source_profile_id)}${suffix}`)
   }, [navigate])
   const selectIntersection = useCallback((item) => {
+    setSelectedDroneId(null)
     setSelectedIntersectionId(item.id)
     setSelectedSegmentId(null)
   }, [])
   const selectSegment = useCallback((item) => {
+    setSelectedDroneId(null)
     setSelectedIntersectionId(item.inter_id)
     setSelectedSegmentId(item.id)
   }, [])
@@ -417,6 +510,7 @@ export function DashboardPage() {
     const droneId = item?.drone_id || item?.id
     if (!droneId) return
     setSelectedDroneId(droneId)
+    setMapDisplayMode('traffic')
     if (item.intersection_id) setSelectedIntersectionId(item.intersection_id)
     setSelectedSegmentId(null)
   }, [])
@@ -428,15 +522,15 @@ export function DashboardPage() {
   const storyRoutes = ['/', '/monitoring', '/events', '/events', '/monitoring?stage=review']
   const viewportInsets = {
     top: 104,
-    right: rightPanelOpen ? 354 : 70,
+    right: 70,
     bottom: 78,
-    left: selectedDrone ? 338 : 70,
+    left: 338,
   }
 
   return <AppShell immersive pageTitle='全局态势' topContext={{ scope: `服务器态势 ${serverSummary.intersections_total ?? '—'} 路口 · 项目 ${projectIntersections.length} 路口`, window: `${slotLabel} 典型时段`, asOf: situation?.cache?.stale ? '缓存降级' : '服务器典型矩阵' }}>
     <div
-      className={`dashboard-command-workspace${selectedDrone ? ' drone-open' : ''}${rightPanelOpen ? ' summary-open' : ''}`}
-      style={{ '--dashboard-left-inset': `${selectedDrone ? 332 : 14}px`, '--dashboard-right-inset': `${rightPanelOpen ? 344 : 14}px` }}
+      className={`dashboard-command-workspace context-open${selectedDrone ? ' drone-open' : ''}`}
+      style={{ '--dashboard-left-inset': '332px', '--dashboard-right-inset': '14px' }}
     >
       <h1 className='sr-only'>无人机交通态势工作台</h1>
       <CityMap
@@ -452,6 +546,8 @@ export function DashboardPage() {
         onSegmentSelect={selectSegment}
         onSourceSelect={selectDrone}
         onLiveDroneSelect={selectDrone}
+        onMapSelect={() => setSelectedDroneId(null)}
+        digitalTwin={digitalTwin}
         fitToData
         displayMode={mapDisplayMode}
         viewportInsets={viewportInsets}
@@ -483,33 +579,33 @@ export function DashboardPage() {
         </div>
       </header>
 
-      {selectedDrone && <DashboardDronePanel
-        drone={selectedDrone}
-        stats={selectedStats}
-        statsSource={selectedStatsSource}
-        statsError={selectedStatsQuery.error}
-        socketStatus={dashboardSocketStatus}
-        onClose={() => setSelectedDroneId(null)}
-        onOpenMonitoring={openSourceMonitoring}
-      />}
-
-      <aside className={`dashboard-summary-rail ${rightPanelOpen ? 'expanded' : 'collapsed'}`} aria-label='首页治理摘要'>
-        <button className='dashboard-summary-edge' type='button' aria-expanded={rightPanelOpen} aria-label={rightPanelOpen ? '收起首页治理摘要' : '展开首页治理摘要'} onClick={() => setRightPanelOpen((value) => !value)}>{rightPanelOpen ? <CaretRight size={17} /> : <CaretLeft size={17} />}</button>
-        {rightPanelOpen && <div className='dashboard-side'>
-          <Panel title='重点路口态势' subtitle='服务器典型时段 · 饱和度排序' action={<button className='text-button' onClick={() => navigate('/gis')}>历史分析</button>}>
-            {focusIntersections.length
-              ? <div className='demo-intersection-list'>{focusIntersections.map((item, index) => { const segment = [...segments.filter((row) => row.inter_id === item.id)].sort((left, right) => (right.delay_index ?? -1) - (left.delay_index ?? -1))[0]; const source = sourcePoints.find((row) => row.intersection_id === item.id); return <button key={item.id} onClick={() => selectIntersection(item)}><span className={`rank rank-${index + 1}`}>{index + 1}</span><div><strong>{item.name}</strong><span>{segment ? `${segment.direction || ''}${segment.name}延误指数 ${formatMetric(segment.delay_index)}` : '暂无路段指标'}</span><small>{source ? `${source.source_count} 路无人机源` : '无无人机覆盖'} · 排队 {formatMetric(segment?.queue_len_est_m, 0)}m</small></div><b className={item.status}>{formatMetric(item.saturation_max)}</b></button> })}</div>
-              : <div className='situation-empty'>{situationError ? '服务器态势读取失败；未使用 mock 补齐。' : '当前典型时槽暂无态势数据。'}</div>}
-          </Panel>
-          <Panel title='重点事件' subtitle='固定演示样例 · 机非冲突与事故测绘' action={<button className='text-button' onClick={() => navigate('/events')}>事件中心</button>}>
-            <div className='demo-event-list'>{demoSituation.events.map((event) => <button key={event.id} onClick={() => navigate(event.route)}><span className={event.tone}><ShieldWarning size={16} weight='fill' /></span><div><strong>{event.title}</strong><small>{event.metric}</small></div><time>{event.time}</time></button>)}</div>
-          </Panel>
-          <Panel title='治理前后复盘' subtitle='固定演示样例 · 同口径对比'>
-            <div className='demo-comparison'>{demoSituation.comparison.map((item) => <div key={item.label}><span>{item.label}</span><small>{item.before}</small><ArrowRight size={12} /><strong>{item.after}</strong><b>{item.delta}</b></div>)}</div>
-            <button className='review-dispatch-button' disabled={!firstSource} onClick={() => firstSource && openSourceMonitoring(firstSource, true)}><Drone size={15} weight='fill' />再次调度无人机复盘</button>
-          </Panel>
-        </div>}
-      </aside>
+      {selectedDrone
+        ? <DashboardDronePanel
+          drone={selectedDrone}
+          stats={selectedStats}
+          statsSource={selectedStatsSource}
+          statsError={selectedStatsQuery.error}
+          socketStatus={dashboardSocketStatus}
+          digitalTwin={digitalTwin}
+          onBack={() => setSelectedDroneId(null)}
+          onOpenMonitoring={openSourceMonitoring}
+        />
+        : <aside className='dashboard-context-panel dashboard-summary-panel' aria-label='首页治理摘要'>
+          <div className='dashboard-side'>
+            <Panel title='重点路口态势' subtitle='服务器典型时段 · 饱和度排序' action={<button className='text-button' onClick={() => navigate('/gis')}>历史分析</button>}>
+              {focusIntersections.length
+                ? <div className='demo-intersection-list'>{focusIntersections.map((item, index) => { const segment = [...segments.filter((row) => row.inter_id === item.id)].sort((left, right) => (right.delay_index ?? -1) - (left.delay_index ?? -1))[0]; const source = sourcePoints.find((row) => row.intersection_id === item.id); return <button key={item.id} onClick={() => selectIntersection(item)}><span className={`rank rank-${index + 1}`}>{index + 1}</span><div><strong>{item.name}</strong><span>{segment ? `${segment.direction || ''}${segment.name}延误指数 ${formatMetric(segment.delay_index)}` : '暂无路段指标'}</span><small>{source ? `${source.source_count} 路无人机源` : '无无人机覆盖'} · 排队 {formatMetric(segment?.queue_len_est_m, 0)}m</small></div><b className={item.status}>{formatMetric(item.saturation_max)}</b></button> })}</div>
+                : <div className='situation-empty'>{situationError ? '服务器态势读取失败；未使用 mock 补齐。' : '当前典型时槽暂无态势数据。'}</div>}
+            </Panel>
+            <Panel title='重点事件' subtitle='固定演示样例 · 机非冲突与事故测绘' action={<button className='text-button' onClick={() => navigate('/events')}>事件中心</button>}>
+              <div className='demo-event-list'>{demoSituation.events.map((event) => <button key={event.id} onClick={() => navigate(event.route)}><span className={event.tone}><ShieldWarning size={16} weight='fill' /></span><div><strong>{event.title}</strong><small>{event.metric}</small></div><time>{event.time}</time></button>)}</div>
+            </Panel>
+            <Panel title='治理前后复盘' subtitle='固定演示样例 · 同口径对比'>
+              <div className='demo-comparison'>{demoSituation.comparison.map((item) => <div key={item.label}><span>{item.label}</span><small>{item.before}</small><ArrowRight size={12} /><strong>{item.after}</strong><b>{item.delta}</b></div>)}</div>
+              <button className='review-dispatch-button' disabled={!firstSource} onClick={() => firstSource && openSourceMonitoring(firstSource, true)}><Drone size={15} weight='fill' />再次调度无人机复盘</button>
+            </Panel>
+          </div>
+        </aside>}
 
       {trafficMode
         ? <div className='map-legend traffic-legend' aria-label='高德实时路况图例'><span><i className='traffic-free' />通畅</span><span><i className='traffic-slow' />缓行</span><span><i className='traffic-congested' />拥堵</span><span><i className='traffic-severe' />严重拥堵</span><span><i className='traffic-unknown' />未知</span><em /><span><i className='uav-monitoring' />无人机监控</span><span><i className='uav-flying' />飞行中</span><span><i className='uav-history' />最后遥测</span><span><i className='uav-connected' />配置任务区域</span></div>

@@ -25,8 +25,8 @@ class _Session:
 
 
 @pytest.mark.asyncio
-async def test_readonly_event_center_does_not_materialize_on_list():
-    center = EventCenter(lambda: _Session(), materialize_on_list=False)
+async def test_event_center_does_not_materialize_quality_events_on_list_by_default():
+    center = EventCenter(lambda: _Session())
     center.materialize_quality_events = AsyncMock()
 
     assert await center.list_events(limit=150) == []

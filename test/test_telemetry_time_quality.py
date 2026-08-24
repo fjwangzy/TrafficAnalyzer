@@ -14,6 +14,7 @@ def test_srt_and_json_do_not_invent_zero_motion_when_speed_is_absent():
         1.0,
     )
     reader = object.__new__(TelemetryFileReader)
+    reader.agl_policy = "legacy_height"
     json_record = reader._extract_telemetry(
         {"latitude": 36.7, "longitude": 117.0, "height": 100}, 1.0
     )

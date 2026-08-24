@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import {
   ArrowSquareOut,
   BatteryHigh,
+  CaretLeft,
   Compass,
   Crosshair,
   Drone,
@@ -9,9 +10,9 @@ import {
   ListBullets,
   MapPin,
   NavigationArrow,
+  RoadHorizon,
   ShieldWarning,
   VideoCamera,
-  X,
 } from '@phosphor-icons/react'
 import { detectorVideoStreamSrc } from '../lib/videoStream'
 
@@ -40,7 +41,7 @@ const realtimeMetrics = [
   { key: 'tccEvents', label: '机非事件', icon: ShieldWarning, digits: 0, suffix: '起', tone: 'red' },
 ]
 
-export function DashboardDronePanel({ drone, stats, statsSource, statsError, socketStatus, onClose, onOpenMonitoring }) {
+export function DashboardDronePanel({ drone, stats, statsSource, statsError, socketStatus, digitalTwin, onBack, onOpenMonitoring }) {
   const [videoError, setVideoError] = useState(false)
   const streamUrl = detectorVideoStreamSrc({ video_stream_url: drone?.video_stream_url })
 
@@ -55,9 +56,10 @@ export function DashboardDronePanel({ drone, stats, statsSource, statsError, soc
       : videoError
         ? '飞行窗口连接失败'
         : ''
-  const realtimeAvailable = Boolean(drone.is_monitoring && stats && Object.values(stats).some((value) => Number.isFinite(value)))
+  const realtimeAvailable = Boolean((drone.is_monitoring || drone.is_preview) && stats && Object.values(stats).some((value) => Number.isFinite(value)))
 
-  return <aside className='dashboard-drone-panel' aria-label='无人机飞行详情'>
+  return <aside className='dashboard-context-panel dashboard-drone-panel' aria-label='无人机飞行详情'>
+    <button className='dashboard-panel-back' type='button' onClick={onBack}><CaretLeft size={14} />返回态势面板</button>
     <header className='dashboard-drone-heading'>
       <span><Drone size={18} weight='fill' /></span>
       <div>
@@ -65,14 +67,42 @@ export function DashboardDronePanel({ drone, stats, statsSource, statsError, soc
         <small>{drone.location_name || drone.intersection_name || '未绑定任务区域'}</small>
       </div>
       <i className={drone.is_monitoring ? 'live' : ''}>{drone.status_label || '状态未知'}</i>
-      <button type='button' aria-label='关闭无人机详情' onClick={onClose}><X size={17} /></button>
     </header>
 
     <section className='dashboard-drone-video' aria-label='无人机飞行窗口'>
       <div className='dashboard-drone-section-title'><span><VideoCamera size={15} weight='fill' />无人机飞行窗口</span>{drone.is_monitoring && <small><i />LIVE</small>}</div>
       {streamUrl && !videoError
-        ? <img src={streamUrl} alt={`${drone.name || drone.drone_id} 无人机飞行窗口`} onError={() => setVideoError(true)} />
+        ? <img
+          src={streamUrl}
+          alt={`${drone.name || drone.drone_id} 无人机飞行窗口`}
+          className={drone.can_open_monitoring ? 'monitoring-entry' : ''}
+          title={drone.can_open_monitoring ? '双击进入实时监控大屏' : undefined}
+          draggable={false}
+          onDoubleClick={() => drone.can_open_monitoring && onOpenMonitoring(drone)}
+          onError={() => setVideoError(true)}
+        />
         : <div className='dashboard-drone-video-empty'><VideoCamera size={28} /><strong>{streamLabel}</strong><span>{drone.is_monitoring ? '检测任务仍可继续；请检查视频流登记或连接状态。' : '飞行数据保留最后真实遥测，不使用演示画面补齐。'}</span></div>}
+    </section>
+
+    <section className={`dashboard-drone-section dashboard-digital-twin ${digitalTwin?.level || 'unavailable'}`} aria-label='车辆数字孪生状态'>
+      <div className='dashboard-drone-section-title'>
+        <span><RoadHorizon size={15} weight='duotone' />车辆数字孪生</span>
+        <small className={digitalTwin?.availableLayers?.vehicles ? 'fresh' : ''}>{digitalTwin?.dataMode === 'preview' ? '前端 Mock 预览' : digitalTwin?.dataMode === 'controlled_replay' ? '可控回放' : '实时检测'}</small>
+      </div>
+      <div className='dashboard-digital-twin-status'>
+        <strong>{digitalTwin?.label || '等待 BEV 车辆轨迹'}</strong>
+        <span>{digitalTwin?.level === 'lane'
+          ? '已验证车道与车辆世界轨迹独立叠加'
+          : digitalTwin?.level === 'road'
+            ? '无正式车道几何，按可信道路骨架展示'
+            : digitalTwin?.level === 'spatial'
+              ? '车道数据不可用，不执行道路吸附'
+              : digitalTwin?.level === 'bev_pixel'
+                ? digitalTwin?.pixelGroundProjection
+                  ? '车辆按无人机高度、云台航向和相机视场投影到 3D 地面覆盖框；未做 GCP 精配准'
+                  : '缺少高度、云台姿态或相机视场，暂不把像素轨迹拉伸到地图'
+                : '当前任务尚未产生可显示的成熟车辆轨迹'}</span>
+      </div>
     </section>
 
     <section className='dashboard-drone-section'>

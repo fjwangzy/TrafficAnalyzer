@@ -3,6 +3,7 @@ import { demoMonitoring, demoSituation } from '../config/demoData'
 import {
   buildDashboardIntersectionPoints,
   buildDashboardSourcePoints,
+  buildDigitalTwinPreviewStats,
   buildLiveDronePoints,
   dashboardStatsMessageMatchesDrone,
   defaultTypicalSlot,
@@ -149,6 +150,15 @@ describe('dashboard UAV video source map', () => {
       tcc_events: [{ id: 'TCC-1' }, { id: 'TCC-2' }],
     })).toEqual({ vehicles: 17, longestQueueM: 31, avgSpeedKmh: 20, tccEvents: 2 })
     expect(normalizeDashboardRealtimeStats({})).toEqual({ vehicles: null, longestQueueM: null, avgSpeedKmh: null, tccEvents: null })
+  })
+
+  it('builds deterministic dev-preview traffic with stable ids and moving pixel positions', () => {
+    const first = buildDigitalTwinPreviewStats(0)
+    const next = buildDigitalTwinPreviewStats(1)
+    expect(first.active_trajectories).toHaveLength(120)
+    expect(first.active_trajectories[0].track_id).toBe(next.active_trajectories[0].track_id)
+    expect(first.active_trajectories[0].trajectory_px.at(-1)).not.toEqual(next.active_trajectories[0].trajectory_px.at(-1))
+    expect(first).toMatchObject({ pipeline_id: 'frontend-preview', source_profile_id: 'FRONTEND-MOCK-TRAJECTORY', cars: 120 })
   })
 
   it('accepts realtime Stats only when Pipeline, SourceProfile, and intersection all match', () => {

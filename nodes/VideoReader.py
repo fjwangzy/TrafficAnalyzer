@@ -103,7 +103,21 @@ class VideoReader:
                     file_path = telemetry_config.get("file_path", "")
                     sync_tol = telemetry_config.get("sync_tolerance_sec", 0.5)
                     time_offset = telemetry_config.get("time_offset_sec", 0.0)
-                    self.telemetry_subscriber = TelemetryFileReader(file_path, sync_tol, time_offset)
+                    agl_policy = telemetry_config.get("agl_policy", "legacy_height")
+                    interpolation_enabled = telemetry_config.get(
+                        "interpolation_enabled", True
+                    )
+                    max_interpolation_gap = telemetry_config.get(
+                        "max_interpolation_gap_sec", sync_tol
+                    )
+                    self.telemetry_subscriber = TelemetryFileReader(
+                        file_path,
+                        sync_tol,
+                        time_offset,
+                        agl_policy,
+                        interpolation_enabled,
+                        max_interpolation_gap,
+                    )
                     self.telemetry_subscriber.start()
                     logger.info(f"VideoReader: 文件遥测加载已启动 ({file_path}, offset={time_offset}s)")
                 except Exception as exc:

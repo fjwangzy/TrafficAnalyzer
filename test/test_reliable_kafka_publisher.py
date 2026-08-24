@@ -1,6 +1,9 @@
 import time
 
-from nodes.ReliableKafkaPublisher import ReliableKafkaPublisher
+import pytest
+
+import nodes.ReliableKafkaPublisher as reliable_module
+from nodes.ReliableKafkaPublisher import ReliableKafkaPublisher, kafka_compression_type
 
 
 class _Future:
@@ -35,6 +38,15 @@ def _wait_until(predicate, timeout=2.0):
             return True
         time.sleep(0.01)
     return False
+
+
+def test_replay_v2_compression_fails_before_start_when_zstd_is_missing(monkeypatch):
+    monkeypatch.setattr(reliable_module, "has_zstd", lambda: False)
+
+    with pytest.raises(RuntimeError, match="zstandard"):
+        kafka_compression_type("replay_v2")
+
+    assert kafka_compression_type("live") is None
 
 
 def test_durable_message_survives_publisher_restart(tmp_path):

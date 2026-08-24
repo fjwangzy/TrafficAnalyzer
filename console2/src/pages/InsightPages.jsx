@@ -139,7 +139,7 @@ function unifiedEvent(item) {
     quality: item.quality_status || 'unverified',
     occurredAt: item.occurred_at || '—',
     intersectionId: item.inter_id,
-    isConflict: item.source_kind === 'conflict',
+    isConflict: ['conflict', 'replay_v2_conflict'].includes(item.source_kind),
   }
 }
 
@@ -170,7 +170,35 @@ const eventEvidenceLabels = {
   conflict_detector_frame: '检测器输出的 TCC 画面帧',
   conflict_trajectory_reconstruction: '轨迹投放 BEV 视图',
   conflict_keyframe: '关键帧证据',
+  survey_report_annotated_image: '量算标注图',
+  survey_report_pdf: '测绘报告 PDF',
+  survey_report_json: '测绘报告 JSON',
+  survey_report_geojson: '测绘报告 GeoJSON',
 }
+
+const conflictEvidenceLabels = {
+  path_intersection: '未来路径交点',
+  hard_ttc_or_pet: '极短 TTC',
+  hard_pet: '近同时占用',
+  hard_deceleration: '急减速避险',
+  hard_steering: '急转向避险',
+  stop_or_yield: '停车或让行',
+  high_angle_crossing: '高夹角严格交汇',
+}
+
+function conflictEvidenceText(evidence) {
+  return (Array.isArray(evidence) ? evidence : [])
+    .map((item) => conflictEvidenceLabels[item] || item)
+    .join(' · ') || '—'
+}
+
+const eventEvidenceImageKinds = new Set([
+  'conflict_original_frame',
+  'conflict_detector_frame',
+  'conflict_trajectory_reconstruction',
+  'conflict_keyframe',
+  'survey_report_annotated_image',
+])
 
 function EventEvidenceImage({ reference, label }) {
   const [url, setUrl] = useState('')
@@ -218,13 +246,44 @@ function EventEvidenceImage({ reference, label }) {
   </>
 }
 
+function EventEvidenceAttachment({ reference, label }) {
+  const [url, setUrl] = useState('')
+  useEffect(() => {
+    let active = true
+    let objectUrl = ''
+    setUrl('')
+    if (!reference?.id) return undefined
+    platformApi.surveyEvidence(reference.id).then((blob) => {
+      objectUrl = URL.createObjectURL(blob)
+      if (active) setUrl(objectUrl)
+    }).catch(() => setUrl(''))
+    return () => { active = false; if (objectUrl) URL.revokeObjectURL(objectUrl) }
+  }, [reference?.id])
+  return <button
+    className='event-evidence-attachment'
+    type='button'
+    aria-label={`打开${label}`}
+    disabled={!url}
+    onClick={() => window.open(url, '_blank', 'noopener,noreferrer')}
+  >
+    <DownloadSimple size={20} />
+    <span><strong>{label}</strong><small>{url ? '在新窗口打开内容寻址文件' : '正在读取文件…'}</small></span>
+    <ArrowSquareOut size={16} />
+  </button>
+}
+
 function EventEvidenceGallery({ references }) {
+  const orderedReferences = [...references].sort((left, right) => (
+    Number(eventEvidenceImageKinds.has(right.kind)) - Number(eventEvidenceImageKinds.has(left.kind))
+  ))
   return <div className='event-evidence-gallery'>
-    {references.map((reference, index) => {
+    {orderedReferences.map((reference, index) => {
       const label = eventEvidenceLabels[reference.kind] || (index === 0 ? '关键帧证据' : `事件证据 ${index + 1}`)
       return <article className='event-evidence-card' key={reference.id}>
         <header><strong>{label}</strong><span>sha256:{reference.sha256?.slice(0, 12)}…</span></header>
-        <EventEvidenceImage reference={reference} label={label} />
+        {eventEvidenceImageKinds.has(reference.kind)
+          ? <EventEvidenceImage reference={reference} label={label} />
+          : <EventEvidenceAttachment reference={reference} label={label} />}
       </article>
     })}
   </div>
@@ -657,7 +716,9 @@ export function AlertsPage() {
   const initialParams = new URLSearchParams(location.search)
   const initialId = initialParams.get('event_id')
   const initialSnapshotId = initialParams.get('snapshot_id')
-  const [selected, setSelected] = useState(null)
+  const initialSourceProfileId = initialParams.get('source_profile_id')
+  const initialMissionId = initialParams.get('mission_id')
+  const [selected, setSelected] = useState(() => initialId ? { id: initialId } : null)
   const [selectedSnapshotId, setSelectedSnapshotId] = useState(initialSnapshotId)
   const [demoSnapshots, setDemoSnapshots] = useState(() => readDemoSnapshots())
   const [actionError, setActionError] = useState('')
@@ -668,7 +729,17 @@ export function AlertsPage() {
   const [query, setQuery] = useState('')
   const intersectionsQuery = useQuery({ queryKey: ['i3-project-intersections'], queryFn: loadProjectIntersections, refetchInterval: 30_000 })
   const projectIntersections = (intersectionsQuery.data || []).map(mapIntersection)
-  const eventsQuery = useQuery({ queryKey: ['i3-events'], queryFn: () => platformApi.events({ limit: 150 }), refetchInterval: 30_000 })
+  const eventsQuery = useQuery({
+    queryKey: ['i3-events', eventType, intersection, initialSourceProfileId, initialMissionId],
+    queryFn: () => platformApi.events({
+      limit: 150,
+      ...(eventType !== 'all' ? { event_type: eventType } : {}),
+      ...(intersection !== 'all' ? { inter_id: intersection } : {}),
+      ...(initialSourceProfileId ? { source_profile_id: initialSourceProfileId } : {}),
+      ...(initialMissionId ? { mission_id: initialMissionId } : {}),
+    }),
+    refetchInterval: 30_000,
+  })
   const events = useMemo(() => (eventsQuery.data || []).map(unifiedEvent), [eventsQuery.data])
   useEffect(() => {
     const refresh = () => setDemoSnapshots(readDemoSnapshots())
@@ -679,9 +750,6 @@ export function AlertsPage() {
       window.removeEventListener('uav-demo-snapshots-changed', refresh)
     }
   }, [])
-  useEffect(() => {
-    if (initialId && !selected) setSelected(events.find((item) => item.id === initialId) || null)
-  }, [events, initialId, selected])
   const rows = useMemo(() => events.filter((item) =>
     (severity === 'all' || item.severity === severity) &&
     (eventType === 'all' || item.event_type === eventType) &&
@@ -735,14 +803,17 @@ export function AlertsPage() {
     {loading && <QualityNotice tone='info' title='正在恢复事件台账'>从 road9 加载冲突事实与告警。</QualityNotice>}
     {loadError && <QualityNotice tone='warning' title='事件台账不可用'>{apiErrorMessage(loadError)}</QualityNotice>}
     {!loading && !loadError && <Panel title='AI 事件事实' subtitle='业务时间排序 · REST 为页面刷新后的恢复基线'><DataTable columns={eventColumns(openEvent)} rows={rows} onRowClick={openEvent} /></Panel>}
-    {selectedEvent && <DetailDrawer wide title={selectedEvent.title} subtitle={`${selectedEvent.type} · ${selectedEvent.id}`} onClose={() => openEvent(null)} footer={platformRole === 'admin' ? <>{selectedEvent.evidence_refs?.some((item) => ['conflict_original_frame', 'conflict_keyframe'].includes(item.kind)) && <button className='secondary-button' disabled={eventSurveyMutation.isPending} onClick={() => eventSurveyMutation.mutate(selectedEvent)}><Crosshair size={15} /> 事件测绘</button>}<button className='danger-button' disabled={reviewMutation.isPending} onClick={() => reviewMutation.mutate({ event: selectedEvent, reviewStatus: 'rejected' })}><X size={15} /> 驳回 AI 结果</button><button className='primary-button' disabled={reviewMutation.isPending} onClick={() => reviewMutation.mutate({ event: selectedEvent, reviewStatus: 'confirmed' })}><Check size={15} /> 技术确认</button></> : <span className='muted'>仅管理员可执行技术复核</span>}>
+    {selectedEvent && <DetailDrawer wide title={selectedEvent.title} subtitle={`${selectedEvent.type} · ${selectedEvent.id}`} onClose={() => openEvent(null)} footer={platformRole === 'admin' ? <>{selectedEvent.evidence_refs?.some((item) => ['conflict_original_frame', 'conflict_keyframe'].includes(item.kind)) && <button className='secondary-button' disabled={eventSurveyMutation.isPending} onClick={() => eventSurveyMutation.mutate(selectedEvent)}><Crosshair size={15} /> 事件测绘</button>}{selectedEvent.review_supported === false ? <span className='muted'>Replay V2 冲突事实只读</span> : <><button className='danger-button' disabled={reviewMutation.isPending} onClick={() => reviewMutation.mutate({ event: selectedEvent, reviewStatus: 'rejected' })}><X size={15} /> 驳回 AI 结果</button><button className='primary-button' disabled={reviewMutation.isPending} onClick={() => reviewMutation.mutate({ event: selectedEvent, reviewStatus: 'confirmed' })}><Check size={15} /> 技术确认</button></>}</> : <span className='muted'>仅管理员可执行技术复核</span>}>
       <div className='event-hero'><div className='event-primary-metrics'>{eventMetricTiles(selectedEvent).map(([label, value]) => <div key={label}><span>{label}</span><strong>{value}</strong></div>)}</div></div>
       {actionError && <QualityNotice tone='warning' title='技术复核失败'>{actionError}</QualityNotice>}
       {surveyActionError && <QualityNotice tone='warning' title='事件测绘创建失败'>{surveyActionError}</QualityNotice>}
-      {selectedEvent.evidence_refs?.length > 0 && <Panel title='事件画面证据' subtitle={`同一事件时刻 · ${selectedEvent.evidence_refs.length} 项内容寻址证据`}><EventEvidenceGallery references={selectedEvent.evidence_refs} /></Panel>}
-      <div className='detail-two-col'><Panel title='事件与质量'><InfoRow label='业务时间' value={selectedEvent.occurredAt} /><InfoRow label='路口' value={projectIntersections.find((item) => item.id === selectedEvent.intersectionId)?.name || selectedEvent.intersectionId || '未匹配'} /><InfoRow label='任务 / Pipeline' value={`${selectedEvent.mission_id || '—'} / ${selectedEvent.pipeline_id || '—'}`} /><InfoRow label='数据源' value={selectedEvent.source_profile_id || '—'} /><InfoRow label='路网版本' value={selectedEvent.road_data_version || '—'} /><InfoRow label='质量' value={selectedEvent.quality} badge={selectedEvent.quality === 'verified' ? 'good' : 'degraded'} /></Panel><Panel title='投递与复核'><InfoRow label='投递状态' value={selectedEvent.delivery} badge={selectedEvent.delivery === 'blocked' ? 'blocked' : 'degraded'} /><InfoRow label='事实来源' value={selectedEvent.isConflict ? 'uav_conflict_events' : 'uav_ai_events'} /><InfoRow label='复核 revision' value={selectedEvent.review_revision || '—'} /><InfoRow label='技术复核' value={selectedEvent.review} badge={selectedEvent.review} /></Panel></div>
+      {selectedEvent.payload?.historical_replay && <QualityNotice tone='info' title='历史口径复现证据'>该事件由同一源视频帧在历史检测器版本下重新运行并复现；当前生产口径在同一源帧未触发，事件时间与质量标记为 reconstructed，不参与当前口径效果统计。</QualityNotice>}
+      {selectedEvent.evidence_refs?.length > 0 && <Panel title='事件画面证据' subtitle={`${selectedEvent.event_type === 'multiple_conflicts' ? '一分钟聚合窗口' : '同一事件时刻'} · ${selectedEvent.evidence_refs.length} 项内容寻址证据`}><EventEvidenceGallery references={selectedEvent.evidence_refs} /></Panel>}
+      {selectedEvent.source_kind === 'replay_v2_conflict' && selectedEvent.payload?.evidence_error === 'historical_managed_evidence_unavailable' && <QualityNotice tone='warning' title='历史关联图不可恢复'>该历史 Replay V2 事件未保留事件帧、轨迹对和可靠源时间，且原始消息已超出保留窗口；系统不会拿其他时刻的图片冒充本事件证据。</QualityNotice>}
+      {selectedEvent.isConflict && <Panel title='TCC 判定依据' subtitle='正式路径交点与行为证据'><InfoRow label='预测类型' value={selectedEvent.prediction_type || 'path_intersection'} /><InfoRow label='冲突场景' value={selectedEvent.conflict_scene || '—'} /><InfoRow label='判定证据' value={conflictEvidenceText(selectedEvent.evidence)} /></Panel>}
+      <div className='detail-two-col'><Panel title='事件与质量'><InfoRow label='业务时间' value={selectedEvent.occurredAt} /><InfoRow label='路口' value={projectIntersections.find((item) => item.id === selectedEvent.intersectionId)?.name || selectedEvent.intersectionId || '未匹配'} /><InfoRow label='任务 / Pipeline' value={`${selectedEvent.mission_id || '—'} / ${selectedEvent.pipeline_id || '—'}`} /><InfoRow label='数据源' value={selectedEvent.source_profile_id || '—'} />{selectedEvent.isConflict && <><InfoRow label='机动车轨迹' value={selectedEvent.motor_id || '—'} /><InfoRow label='非机动车轨迹' value={selectedEvent.non_motor_id || '—'} /></>}<InfoRow label='路网版本' value={selectedEvent.road_data_version || '—'} /><InfoRow label='质量' value={selectedEvent.quality} badge={selectedEvent.quality === 'verified' ? 'good' : 'degraded'} /></Panel><Panel title='投递与复核'><InfoRow label='投递状态' value={selectedEvent.delivery} badge={selectedEvent.delivery === 'blocked' ? 'blocked' : 'degraded'} /><InfoRow label='事实来源' value={selectedEvent.fact_table || (selectedEvent.isConflict ? 'uav_conflict_events' : 'uav_ai_events')} /><InfoRow label='复核 revision' value={selectedEvent.review_revision || '—'} /><InfoRow label='技术复核' value={selectedEvent.review_supported === false ? '只读' : selectedEvent.review} badge={selectedEvent.review} /></Panel></div>
       {selectedEvent.related_tracks?.length > 0 && <Panel title='关联轨迹' subtitle={`同任务/事件窗口 ${selectedEvent.related_tracks.length} 条`}><div className='related-track-list'>{selectedEvent.related_tracks.slice(0, 8).map((track) => <button key={track.id} className='compact-event' onClick={() => navigate(`/gis?intersection_id=${selectedEvent.intersectionId}&mission_id=${track.mission_id || ''}&track_id=${track.id}`)}><StatusBadge value={track.quality_status || 'unverified'} /><div><strong>Track #{track.track_id}</strong><span>{track.vehicle_class || 'unknown'} · {track.turn_behavior || '未分类'} · {track.duration_sec ?? '—'}s</span></div></button>)}</div></Panel>}
-      <Panel title='事实状态时间线'><div className='state-timeline'>{[`事实入库 ${selectedEvent.occurredAt}`, selectedEvent.delivery === 'not_queued' ? '主平台投递未启用' : `投递：${selectedEvent.delivery}`, selectedEvent.review === 'pending' ? '等待技术复核' : `技术复核：${selectedEvent.review}`].map((item, index) => <div key={item} className={index === 2 ? 'current' : ''}><i /><span>{item}</span></div>)}</div></Panel>
+      <Panel title='事实状态时间线'><div className='state-timeline'>{[`事实入库 ${selectedEvent.occurredAt}`, selectedEvent.delivery === 'not_queued' ? '主平台投递未启用' : `投递：${selectedEvent.delivery}`, selectedEvent.review_supported === false ? 'Replay V2 冲突事实只读' : selectedEvent.review === 'pending' ? '等待技术复核' : `技术复核：${selectedEvent.review}`].map((item, index) => <div key={item} className={index === 2 ? 'current' : ''}><i /><span>{item}</span></div>)}</div></Panel>
       <QualityNotice tone='warning' title='责任边界'>“确认/驳回”仅表示 AI 识别结果技术或业务复核，不生成派警、处罚或案件办结状态。</QualityNotice>
     </DetailDrawer>}
     {selectedSnapshot && <DetailDrawer wide title='事件与交通流事后分析' subtitle={`${selectedSnapshot.mission_label} · ${selectedSnapshot.id}`} onClose={() => openSnapshot(null)} footer={<span className='muted'>本机演示存档 · 不写入 road9 事实表</span>}>

@@ -10,6 +10,8 @@ import logging
 import threading
 from collections import deque
 
+from services.dji_telemetry import extract_dji_telemetry
+
 logger = logging.getLogger(__name__)
 
 try:
@@ -31,6 +33,7 @@ class TelemetrySubscriber:
         self.topic = config.get("mqtt_topic", "drone/+/osd")
         self.buffer_size = config.get("buffer_size", 100)
         self.sync_tolerance_sec = config.get("sync_tolerance_sec", 0.05)
+        self.agl_policy = config.get("agl_policy", "legacy_height")
         self._buffer: deque[dict] = deque(maxlen=self.buffer_size)
         self._lock = threading.Lock()
         self._client: mqtt.Client | None = None
@@ -86,27 +89,11 @@ class TelemetrySubscriber:
 
     def _extract_telemetry(self, payload: dict) -> dict:
         """从DJI OSD消息中提取关键字段。"""
-        osd = payload.get("99-0-0", payload)  # 兼容不同格式
-        height = payload.get("height", 0)
-        elevation = payload.get("elevation", 0)
-        return {
-            "timestamp": payload.get("timestamp", time.time()),
-            "latitude": payload.get("latitude"),
-            "longitude": payload.get("longitude"),
-            "height": height,
-            "elevation": elevation,
-            # DJI ``height`` is relative-to-takeoff and is the best available
-            # AGL proxy when no DEM is attached.
-            "altitude_agl": height,
-            "attitude_head": payload.get("attitude_head", 0),
-            "attitude_pitch": payload.get("attitude_pitch", 0),
-            "gimbal_pitch": osd.get("gimbal_pitch", -90),
-            "gimbal_yaw": osd.get("gimbal_yaw", 0),
-            "gimbal_roll": osd.get("gimbal_roll", 0),
-            "zoom_factor": osd.get("zoom_factor", 1.0),
-            "horizontal_speed": payload.get("horizontal_speed"),
-            "vertical_speed": payload.get("vertical_speed"),
-        }
+        return extract_dji_telemetry(
+            payload,
+            payload.get("timestamp", time.time()),
+            agl_policy=self.agl_policy,
+        )
 
     def get_nearest(self, frame_timestamp: float) -> dict | None:
         """查找与视频帧时间戳最接近的遥测记录。

@@ -91,7 +91,7 @@ Topic 的单复数按上表固定。`msg_type` 必须与 Topic 映射一致；�
 
 消费者必须先校验 `msg_type + schema_version`，再通过长期 canonical 表 `uav_message_inbox` 的唯一键 `(source_system, message_id)` 做全局幂等；事实写入与 inbox 置为 `processed` 必须在同一数据库事务提交。未知 major 版本进入 `uav_message_dead_letters`，不得按旧结构猜测解析。
 
-`uav_message_inbox` 保存 `payload_hash/status/topic/partition/offset/first_seen_at/processed_at/fact_refs`，并以 `dispatch_status/dispatch_attempts/last_dispatch_error/last_dispatch_attempt_at/dispatched_at` 记录事实提交后的副作用恢复状态。相同 ID、相同 hash 的重放不重复写事实；仅 `dispatched` 可跳过 WS/告警，`pending` 必须继续派发。相同 ID、不同 hash 视为消息身份冲突，必须隔离并告警，不能覆盖原事实。hypertable 唯一键只是第二层防重，不能替代 inbox 的跨时间全局唯一性。
+`uav_message_inbox` 保存 `payload_hash/status/topic/partition/offset/first_seen_at/processed_at/fact_refs`，并以 `dispatch_status/dispatch_attempts/last_dispatch_error/last_dispatch_attempt_at/dispatched_at` 记录事实提交后的副作用恢复状态。相同 ID、相同 hash 的重放不重复写事实；仅 `dispatched` 可跳过 WS/告警，`pending` 必须继续派发。相同 ID、不同 hash 视为消息身份冲突，必须隔离并告警，不能覆盖原事实。`(topic, partition, offset)` 也是不可复用的传输身份：若它已绑定另一 `message_id`，消费者必须以 `MessageTransportConflict` 隔离该记录并推进 offset，不能让唯一键异常钉住分区、饿死其他来源 Topic。hypertable 唯一键只是第二层防重，不能替代 inbox 的跨时间全局唯一性。
 
 ### 0.4 各消息 `data` 边界
 
@@ -334,7 +334,7 @@ WebSocket 推送沿用 `{channel, type, data, ts}` 外壳，但 `type` 和 UAV �
 }
 ```
 
-本地回放使用 `mode=local`、`video.source_type=mp4`；遥测可为 `source_type=srt` 或 `source_type=file`。`file` 只接受 allowlist 内可解析的 DJI Cloud API JSON `.json/.txt`，并可携带 `time_offset_sec` 与 `sync_tolerance_sec`；两者持久化到 `uav_telemetry_sources.config`，由 PipelineManager 传给生产入口。偏移后的最近记录超过容忍窗口时必须返回无有效遥测，不得沿用旧记录或插值。响应只返回文件名、同步参数和验证摘要，不返回服务器完整路径。
+本地回放使用 `mode=local`、`video.source_type=mp4`；遥测可为 `source_type=srt` 或 `source_type=file`。`file` 只接受 allowlist 内可解析的 DJI Cloud API JSON `.json/.txt`，并可携带 `time_offset_sec` 与 `sync_tolerance_sec`；两者持久化到 `uav_telemetry_sources.config`，由 PipelineManager 传给生产入口。文件源默认在相邻记录间隔不超过 `max_interpolation_gap_sec` 时按帧时刻插值连续字段，并输出左右记录时间、比例和间隔血缘；角度按最短角插值。偏移后的当前帧超过同步容忍窗口或记录间隔超过最大插值间隔时必须返回无有效遥测，不得外推或沿用超窗旧记录。响应只返回文件名、同步参数和验证摘要，不返回服务器完整路径。
 
 #### 0.10.4 FlightPlan 与 Mission 最小 shape
 
@@ -536,9 +536,17 @@ I4 通过 `EnforcementService` 将候选围栏、候选规则、统一 AI 事件
 }
 ```
 
-冲突检测默认启用（`conflict_detection.enabled: true`），但无有效单应性矩阵、双方世界坐标速度向量或足够历史轨迹时会自动跳过，避免像素距离和短轨迹抖动误报。`ttc_sec` 基于 motor/non_motor 世界坐标运动趋势做未来 `0-5s` 候选交汇预测；有足够历史轨迹时，预测方向优先取最近一个有效轨迹段，速度大小沿用 `SpeedEstimationNode` 的米/秒估计，避免线性回归测速方向在转弯或轨迹错位时制造虚假交点。默认路径交点候选必须同时满足：双方预测路径存在空间交点、到达时间差不超过 `arrival_time_tolerance_sec`（默认 `1.0s`）、且双方到达交点这段时间内的连续同刻最小中心距进入 `same_time_collision_radius_m`（默认 `0.8m`）共同冲突区；只有数学射线交点但同刻距离仍偏大的 0.9m~1.7m 擦肩轨迹不会被判成相撞。同刻 CPA 候选默认关闭（`enable_same_time_cpa: false`），显式开启后也只使用 `same_time_collision_radius_m`，且 CPA 的 `pet_sec=0` 不作为 PET 侵占证据。候选还必须满足 `30°~150°` 冲突角，并归入无车道标注轨迹几何近似场景：`suspected_right_turn_mv_nmv` 或 `suspected_unprotected_left_turn`。机动车转弯场景除首尾 heading 差外，还要求转弯前后两段投影位移都达到 `min_turn_leg_m`（默认 `2.0m`），用于过滤短窗口小折线和近直行误分。
+冲突检测默认启用（`conflict_detection.enabled: true`），但无有效单应性矩阵、双方世界坐标速度向量或足够历史轨迹时会自动跳过，避免像素距离和短轨迹抖动误报。`ttc_sec` 基于 motor/non_motor 世界坐标运动趋势做未来 `0-5s` 候选交汇预测；方向由过滤后的历史分段估计：只有连续同向的多段转弯证据才使用最新分段方向，近直行或末段单点抖动使用分段速度中位方向，速度大小沿用 `SpeedEstimationNode` 的米/秒估计。超过 `max_segment_speed_ms` 的世界跳变既不参与方向，也不产生急减速/急转向证据。默认路径交点候选必须同时满足：双方预测路径存在空间交点、到达时间差不超过 `arrival_time_tolerance_sec`（默认 `1.0s`）、且双方到达交点这段时间内的连续同刻最小中心距进入 `same_time_collision_radius_m`（默认 `0.8m`）共同冲突区；只有数学射线交点但同刻距离仍偏大的 0.9m~1.7m 擦肩轨迹不会被判成相撞。同刻 CPA 候选默认关闭（`enable_same_time_cpa: false`），显式开启后也只使用 `same_time_collision_radius_m`，且 CPA 的 `pet_sec=0` 不作为 PET 侵占证据。候选还必须满足 `30°~150°` 冲突角，并归入无车道标注轨迹几何近似场景：`suspected_right_turn_mv_nmv` 或 `suspected_unprotected_left_turn`。机动车转弯场景除首尾 heading 差外，还要求转弯前后两段投影位移都达到 `min_turn_leg_m`（默认 `2.0m`），用于过滤短窗口小折线和近直行误分。
 
-最终 `conflict` 事件需要 near-miss 证据：`hard_ttc_or_pet`（默认 TTC <= 1.5s）可直接触发；路径交点 `hard_pet`（默认 PET <= 1.0s）只表示极近抢行强度，必须叠加 `hard_deceleration`、`hard_steering`、`stop_or_yield` 之一才触发事件，避免仅凭数学交点和低 PET 把近距离错位经过报成 near-miss。`hard_steering` 只把非机动车短窗口 heading 突变视为避险证据，机动车正常右/左转不计作避险急转向。`prediction_type` 标识候选来源，默认业务口径只展示/处理 `path_intersection`；显式启用扩展时产生的 `same_time_cpa` 属于中心点同刻最近接近候选，Monitoring 冲突回放入口会过滤该类 CPA-only 擦肩事件。旧格式事件仅在缺少 `prediction_type` 且 `distance_m` 近似 `0.0` 时按路径交点兼容，带 `prediction_type=path_intersection` 但 `distance_m` 非零的畸形消息也会被前端过滤，0.9m/1.3m/1.7m 等非零距离旧 CPA 消息不会进入业务冲突列表。`distance_m` 表示预测冲突时刻的双方距离，路径交点场景为 `0.0`；`motor_position_enu_m` / `non_motor_position_enu_m` 表示预测冲突点附近的双方未来 ENU 世界坐标。`motor_arrival_ttc_sec` / `non_motor_arrival_ttc_sec` 表示双方到达冲突点的预测时间。`motor_id` / `non_motor_id` 轨迹对同级别事件不重复上报，但允许从 `warning` 升级为 `critical` 再次上报，直到轨迹清理后释放状态。Platform Kafka consumer 的实时冲突缓存和 WebSocket 推送同样按 `motor_id` / `non_motor_id` upsert，同级重复消息会被丢弃，升级消息会替换原事件并重新推送。机非分类由 `vehicle_classification.non_motor_class_names` / `non_motor_class_ids` 配置非机动车集合；未配置的已知检测类别按机动车处理。摩托车、电动车相关类别默认归入非机动车。
+`enable_high_angle_path_intersection=true` 时允许严格扩展至
+`high_angle_max_conflict_angle_deg`（默认 `170°`）。该分支不是普通阈值放宽：只接受
+`path_intersection`，要求 `TTC <= critical_horizon_sec`、`PET <= hard_pet_sec`、至少一项避险行为，
+且场景必须是有实测转弯弧线的 `suspected_unprotected_left_turn`。否则分别以
+`high_angle_path_intersection_required`、`high_angle_ttc_exceeded`、`high_angle_pet_exceeded`、
+`high_angle_behavior_missing` 或 `high_angle_scene_ambiguous` 拒绝。通过事件追加
+`evidence=high_angle_crossing`；该分支不启用同刻 CPA。风险分中的急减速、急转向和停车让行属于同一短运动窗口，只计最强一项，不能因同一异常重复累计至 100。
+
+最终 `conflict` 事件需要 near-miss 证据：`hard_ttc_or_pet`（默认 TTC <= 1.5s）可直接触发；路径交点 `hard_pet`（默认 PET <= 1.0s）只表示极近抢行强度，必须叠加 `hard_deceleration`、`hard_steering`、`stop_or_yield` 之一才触发事件，避免仅凭数学交点和低 PET 把近距离错位经过报成 near-miss。`hard_steering` 只把非机动车短窗口 heading 突变视为避险证据，机动车正常右/左转不计作避险急转向。`prediction_type` 标识候选来源，默认业务口径只展示/处理 `path_intersection`；显式启用扩展时产生的 `same_time_cpa` 属于中心点同刻最近接近候选，Monitoring 冲突回放入口会过滤该类 CPA-only 擦肩事件。旧格式事件仅在缺少 `prediction_type` 且 `distance_m` 近似 `0.0` 时按路径交点兼容，带 `prediction_type=path_intersection` 但 `distance_m` 非零的畸形消息也会被前端过滤，0.9m/1.3m/1.7m 等非零距离旧 CPA 消息不会进入业务冲突列表。`distance_m` 表示预测冲突时刻的双方距离，路径交点场景为 `0.0`；`motor_position_enu_m` / `non_motor_position_enu_m` 表示预测冲突点附近的双方未来 ENU 世界坐标。`motor_arrival_ttc_sec` / `non_motor_arrival_ttc_sec` 表示双方到达冲突点的预测时间。正式事件必须同时携带 `min_same_time_distance_m`、双方 `velocity_enu_ms`、双方方向置信度、双方 `vehicle_class_confidence`、双方 `participant_border_clearance_px`、`projection_quality`、`motion_segment_id` 与 `algorithm_version`，使单条 payload 可以独立复核。活动轨迹分类使用最近 `vehicle_classification.rolling_window_frames` 帧的业务类别投票；当前帧业务类别必须与投票一致且置信度达到 `conflict_detection.min_vehicle_class_confidence`，否则计入 `class_unstable` 并拒绝事件。双方还必须在当前采样帧被观测，否则计入 `participant_not_currently_observed`；bbox 距画面边界不足 `min_participant_border_clearance_px` 时计入 `participant_not_fully_visible`；跨类别检测框交集占较小框比例达到 `max_cross_class_bbox_containment` 时计入 `nested_cross_class_detection`。普通 `general_crossing` 还要求双方 `heading_confidence >= min_heading_confidence` 且 `conflict_angle_deg >= min_general_crossing_angle_deg`；否则分别计入 `heading_unreliable` 或 `general_crossing_angle_too_shallow`。这些情况都不得形成正式事件。`motor_id` / `non_motor_id` 轨迹对同级别事件不重复上报，但允许从 `warning` 升级为 `critical` 再次上报，直到轨迹清理后释放状态。事件详情的 `related_tracks` 只返回精确双方，其他同 Mission 轨迹放入 `context_tracks`。Platform Kafka consumer 的实时冲突缓存和 WebSocket 推送同样按 `motor_id` / `non_motor_id` upsert，同级重复消息会被丢弃，升级消息会替换原事件并重新推送。机非分类由 `vehicle_classification.non_motor_class_names` / `non_motor_class_ids` 配置非机动车集合；未配置的已知检测类别按机动车处理。摩托车、电动车相关类别默认归入非机动车；VisDrone 原始类别名 `motor` 表示摩托车，映射为业务 `non_motor`。
 
 ### 世界坐标说明
 
@@ -563,9 +571,13 @@ ENU 与 GCJ-02 的双向转换只由服务端版本化实现完成；浏览器�
 | `avg_speed_kmh` | float | 整体平均车速 |
 | `lane_stats` | dict \| null | 车道级统计（有标注或模型检测时输出） |
 | `lane_source` | string \| null | 车道数据来源：`"manual"` / `"model"` / `"auto"` / `null` |
+| `lanes[].queue_length_m` | float \| null | 米制排队长度；AutoLane 只有在有效 H 矩阵完成 pixel→world 换算时输出 |
+| `lanes[].queue_length_px` | float \| null | 无有效 H 时的像素降级距离；不得作为米制业务指标 |
+| `lanes[].queue_length_unit` | `"m"` \| `"px"` \| null | 排队距离单位；Console 仅把 `m` 或旧版明确 `queue_length_m` 作为方向降级估算 |
+| `lanes[].queue_length_method` | `"homography_world"` \| `"pixel_fallback"` \| null | 排队距离计算方法与降级来源 |
 | `road_polygons` | dict | 当前检测配置中的道路多边形，供悬停生成标注任务后导出复用 |
 | `conflict_count` | int | 当前帧正式 TCC 事件数；只计 `prediction_type=path_intersection && distance_m≈0.0`，实验 `same_time_cpa` 不计入 |
-| `tcc_diagnostics` | dict \| null | TCC 轻量漏斗：检测/标定状态、输入及合格机非轨迹、候选配对、预测、证据、去重、正式/实验事件计数和可解释状态 |
+| `tcc_diagnostics` | dict \| null | TCC 轻量漏斗：检测/标定状态、输入及合格机非轨迹、候选配对、预测、证据、去重、正式/实验事件计数；含严格高夹角候选/输出/拒绝数及 `rejection_reasons` |
 | `drone_position` | dict \| null | 无人机位置（有遥测时输出） |
 | `is_hovering` | bool | 是否悬停 |
 
@@ -575,7 +587,10 @@ ENU 与 GCJ-02 的双向转换只由服务端版本化实现完成；浏览器�
 - `active_trajectories` 随统计消息发送，是成熟且生命周期未结束轨迹的当前尾部快照，避免长时间运行时 Kafka 单条消息无限增长；console 按 `track_id` 累积尾部点列用于 BEV 显示和 GeoJSON 导出。只有关联结束、源时间断点、关联超时或自然 EOF 才通过 `uav_track_complete_{camera_id}` 发送完整轨迹；30 秒统计窗口到期不得触发完成。
 
 ### BEV GeoJSON 导出
-- Console2 必须把 SourceProfile-scoped 历史 REST 快照与当前 WebSocket 状态分开保存；历史采样刷新不得清空或覆盖 `active_trajectories` / `candidate_trajectories`。`uav_stats`、`uav_track_complete` 和 `uav_conflict` 还必须携带并匹配当前运行 `pipeline_id`，同一 SourceProfile 的旧 Pipeline 消息或缺失 Pipeline lineage 的消息不得进入当前实时会话；Pipeline 切换时必须清空旧会话的统计、活动/候选/完成轨迹和实时冲突。BEV 地图只绘制至少两个合法 `trajectory_gcj02` 点的轨迹；只有 `trajectory_px` 时切换为独立像素坐标画布并显示“世界坐标不可用”，不得把像素点叠加到地图或执行浏览器侧像素→地图猜测。橙色虚线仅表示真正未成熟的 `candidate_trajectories`，成熟 `active_trajectories` 不得因 `formal_analytics_eligible=false` 或地理/路网降级而退化成候选样式。
+- Console2 必须把 SourceProfile-scoped 历史 REST 快照与当前 WebSocket 状态分开保存；历史采样刷新不得清空或覆盖 `active_trajectories` / `candidate_trajectories`。`uav_stats`、`uav_track_complete` 和 `uav_conflict` 还必须携带并匹配当前运行 `pipeline_id`，同一 SourceProfile 的旧 Pipeline 消息或缺失 Pipeline lineage 的消息不得进入当前实时会话；Pipeline 切换时必须清空旧会话的统计、活动/候选/完成轨迹和实时冲突。实时监测页的 BEV 地图只绘制至少两个合法 `trajectory_gcj02` 点的轨迹；只有 `trajectory_px` 时切换为独立像素坐标画布并显示“世界坐标不可用”，不得把 Dashboard 的显示专用 3D 覆盖近似作为可导出地理坐标。橙色虚线仅表示真正未成熟的 `candidate_trajectories`，成熟 `active_trajectories` 不得因 `formal_analytics_eligible=false` 或地理/路网降级而退化成候选样式。
+- Dashboard 车辆数字孪生不新增消息字段：只使用当前 WebSocket `uav_stats.active_trajectories`，最多绘制生产者有界的 200 条成熟轨迹，并继续执行 `pipeline_id + source_profile_id + intersection_id` 三重匹配。车辆 GCJ-02 只取尾部最后一段连续合法点，坐标缺口两侧不得跨段连线。只有像素点时，Dashboard 可结合既有 `uav_telemetry` 的位置、高度、云台姿态及前端相机内参计算显示专用 3D 覆盖框；该近似结果不进入消息、导出、持久化或正式地理能力。
+- 像素覆盖框必须沿用测绘侧 `zoom_factor` 契约：`effective_focal_mm = focal_length_mm / zoom_factor`，无效或非正值才回退 1；地图镜头跟随角从同一遥测的 `gimbal_yaw` 派生。前端可据此旋转卫星底图与车辆 DOM，但不得把旋转后的位置写回 `trajectory_gcj02`，也不得使用道路吸附弥补无 GCP 的配准残差。
+- Dashboard 渠化覆盖物读取既有 `GET /calibration/channelized-maps?inter_id=...` 与详情接口。`lane_verified` Lane 才能形成车道级；`lane_verified/link_verified` 的 Link 最多形成道路级；停止线、渠化区域独立可空。前端统一输出 `lane/road/spatial/bev_pixel/unavailable` 展示状态和 `live/controlled_replay/preview` 数据来源标签，不改变 Runtime Road Map Bundle、轨迹生命周期或持久化契约。`preview` 仅在 Vite 开发态且显式 `?twinPreview=1` 时启用。
 - Console BEV 视图导出时会合并三类轨迹：当前活跃轨迹快照、当前会话已完成轨迹、历史 API 查询轨迹。
 - 展示层可限制绘制数量以保持流畅，但导出使用当前会话缓存的全量轨迹数据，不受 BEV 显示上限裁剪。
 - GeoJSON geometry 使用 `trajectory_gcj02`，坐标顺序固定 `[longitude, latitude]`；properties 保留 `trajectory_enu_m`、`trajectory_px`、地图版本和车道匹配 lineage。
@@ -1248,13 +1263,14 @@ seam 拉起 `main_optimized.py`。开发和生产都使用同操作系统的本�
 | GET | `/api/v1/intersections` | 列出所有路口 |
 | GET | `/api/v1/intersections/summary` | 系统级概览（车流量/拥堵/告警/无人机在线/管道数） |
 | GET | `/api/v1/intersections/{id}` | 路口详情（含当前分配的无人机信息） |
-| GET | `/api/v1/intersections/{id}/stats` | SourceProfile-scoped 历史统计；`period` 控制窗口，`granularity` 控制返回采样桶；响应含标量态势与 `direction_flow`，仅读最后一个保留点的 `tcc_diagnostics` |
+| GET | `/api/v1/intersections/{id}/stats` | SourceProfile/Pipeline-scoped 历史统计；`source_profile_id` 与可选 `pipeline_id` 共同限定 lineage，`period` 控制窗口，`granularity` 控制返回采样桶；响应含标量态势与 `direction_flow`，仅读最后一个保留点的 `tcc_diagnostics` |
 | GET | `/api/v1/intersections/{id}/lane-stats` | 车道级历史统计；`period` 与 `granularity` 同样生效 |
 
 历史统计查询不得为趋势图加载 `uav_traffic_metrics.payload` 全量审计 JSON。实现必须投影已类型化的
 标量列、按 `granularity` 每桶保留最新观测，并仅为最后一个返回点补读一次 TCC 诊断。Console2
-`/monitoring` 的趋势和转向流量只消费当前 `source_profile_id` 的响应；近期事件只展示具有同一
-SourceProfile lineage 的严格路径交点冲突或实时告警，不混入无法证明来源的全局固定告警。
+`/monitoring` 的趋势和转向流量只消费当前 `source_profile_id + pipeline_id` 的响应；适配器查询必须
+在 Mission lineage 上应用相同的 Pipeline 过滤，不能把同一 SourceProfile 的旧任务桶混入当前任务。
+近期事件只展示具有同一 lineage 的严格路径交点冲突或实时告警，不混入无法证明来源的全局固定告警。
 
 ### 无人机管理 `/api/v1/drones`（当前 S9 实现）
 
@@ -1478,10 +1494,11 @@ AlertEngine 创建告警和确认告警时写入 `road9` 中的 `uav_alerts`。P
 
 ## 2026-07-16 真实事件与轨迹查询补充
 
-- `GET /api/v1/events`：统一返回 `congestion`、`quality_degradation`、`survey_result` 和 `conflict`，保留 `mission_id` / `pipeline_id` / `source_profile_id` / `inter_id` / `road_data_version` / `quality_status` 与 `evidence_refs`；页面与接口最多读取按业务时间倒序的最近 150 条。`replay_v2` 不在列表请求中重复物化质量事件，但允许告警/测绘同步和技术复核。
+- `GET /api/v1/events`：统一返回 `congestion`、`quality_degradation`、`survey_result` 和 `conflict`，保留 `mission_id` / `pipeline_id` / `source_profile_id` / `inter_id` / `road_data_version` / `quality_status` 与 `evidence_refs`；页面与接口最多读取按业务时间倒序的最近 150 条。该接口在所有运行模式都是只读的，不得在列表请求中物化质量事件；告警/测绘同步和技术复核仍在各自的明确写入工作流完成。
 - `replay_v2` 提供无人机、视频/遥测源、飞行计划和 Mission 的完整查询与控制接口；任务调度、Pipeline 启停和实时 WebSocket 均启用。Platform 启动的检测子进程强制使用 `TRAJECTORY_STORAGE_PROFILE=replay_v2`，轨迹与统计消息只进入 `uav_replay_v2_*` Topic 和表。
 - `replay_v2` 的 `uav_stats.active_trajectories/candidate_trajectories` 是有界实时投放字段；V2 MetricStore 只持久化标量统计样本并原样向当前 Pipeline WebSocket 投放尾迹。`GET /intersections/{id}/stats` 与 `GET /trajectories/{id}/conflicts` 直接查询 V2 样本/冲突/Mission 谱系；`uav_replay_mission` 只落库，不产生实时地图消息。
-- `GET /api/v1/events/{event_id}`：返回规则指标、关联轨迹和内容寻址证据；`PUT /api/v1/events/{event_id}/review` 使用 `expected_revision` 实现技术复核乐观锁。
+- `GET /api/v1/events/{event_id}`：返回规则指标、关联轨迹和内容寻址证据；`multiple_conflicts` 告警按告警业务时间之前 60 秒的 Replay V2 inbox lineage 精确投影同路口子冲突，返回有序 `related_event_ids`，并在每个聚合 `evidence_refs[]` 中增加 `related_event_id`。不存在 lineage 或受管对象时不得按文件名或相近时间猜图。`POST /api/v1/events/{event_id}/review` 使用 `expected_revision` 实现技术复核乐观锁。canonical 冲突标题按复核状态映射：`pending` 为“待复核冲突候选”、`confirmed` 为“已确认机非冲突”、`rejected` 为“已驳回冲突候选”；Replay V2 只读记录不得带“真实”标题，也不支持借标题绕过复核。
+- 经同一源帧、历史 detector commit 和历史配置实际重跑验证的旧 TCC 输出允许作为 `prediction_type=historical_detector_output` 的 Replay V2 只读事实恢复。响应必须返回 `quality_status=historical_reconstructed`、`payload.historical_replay=true`、`payload.time_quality=reconstructed` 和历史 `algorithm_versions`；不得作为当前生产口径检出或效果统计。
 - `GET /api/v1/trajectories/{intersection_id}` 默认返回包括像素降级在内的全部完成轨迹，支持 `period=all|1h|24h`、`mission_id`、`source_profile_id`、车型和方向筛选。地图投放可显式使用 `spatial_ready=true&min_gcj02_points=N`，先在 PostgreSQL 过滤至少 N 个非空 GCJ-02 点再应用 `limit`。
 - 持续拥堵证据在第 30 个连续超阈值样本定格；页面不得以打开详情时的当前画面替换历史证据。
 
@@ -1616,6 +1633,8 @@ canonical Topic、`msg_type`、WebSocket channel 和 `*/v1` schema 版本保持�
 - `association_id` 是地理参考之前分配的图像身份；ByteTrack 确认后立即映射稳定业务 `track_id`。地理质量、地图覆盖和路网匹配变化不创建新 ID。
 - `tracking_method` 当前值为 `motion_compensated_image_v2`。`uav_track_complete.data` 增加四层能力、分层质量、降级原因、`road_context_status`和可空地图字段；Topic、`msg_type`、channel与v1版本不变。历史`geo_registration_id`数据库列保留但新消息不再写入。
 - `uav_conflict.data`：`flight_phase` 与双方 `tracking_quality` 摘要。冲突只接受已成熟图像关联的可信世界轨迹与源时间；envelope 的 `quality_status` 取双方轨迹、地理参考和时间质量的最差值，不读取地图、Lane 或 Link。
+- 文件回放与 MQTT 遥测共享可选字段 `altitude_ellipsoid_m`、`altitude_takeoff_relative_m`、`laser_target_altitude_m`、`laser_range_m`、`laser_state`、`altitude_agl`、`altitude_agl_source`、`altitude_agl_residual_m`、`camera_stream` 与 `camera_lens_verified`。严格 `laser_target` 策略仅在正常激光状态和高度/距离垂直分量残差合格时输出 `altitude_agl`；`elevation` 不得作为回退。无法唯一确认录制 `vision` 镜头时 `camera_lens_verified=false`，下游必须关闭正式世界 TCC。
+- `geo_tcc_validation` 运行的 Stats 保留四层能力和 `tcc_diagnostics`，但 `road_analytics_eligible=false`、Lane/Link/地图转向字段必须保持空；结果及事件查询始终以 `source_profile_id` 隔离。它是本批素材的 TCC 验真契约，不构成地图、车道或生产精度认证。
 - 所有 envelope 的 `quality_status` 按当前帧/轨迹动态计算，不再只复制 Mission 启动时值。
 - 实时源带设备 `recorded_at` 时使用 `source_time_semantics=event_time/time_quality=verified`；离线回放时间锚点使用 `reconstructed`；缺少事件时间为 `ingest_only`。冲突遇到 `ingest_only/quarantined` 必须标记 `quality_status=unverified`，经批准的 `reconstructed` 回放仍可参与离线正式分析。
 

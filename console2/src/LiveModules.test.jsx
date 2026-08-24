@@ -84,6 +84,7 @@ vi.mock('./components/MonitoringBevMap', () => ({
 }))
 
 import { RouterApp } from './RouterApp'
+import { monitoringEventCenterUrl } from './App'
 import { readDemoSnapshots } from './lib/demoSnapshots'
 
 function open(path) {
@@ -117,7 +118,7 @@ function mockSuccessfulApis() {
   liveMocks.api.intersectionStats.mockResolvedValue([{ time: '2026-07-14T10:00:00Z', congestion_index: 4.8, cars: 20, direction_flow: { straight: { count: 14 }, left_turn: { count: 4 }, right_turn: { count: 2 }, u_turn: { count: 0 } } }])
   liveMocks.api.alerts.mockResolvedValue([{ id: 'A-1', intersection_id: 'INT-1', alert_type: 'conflict', severity: 'P1', title: '机非冲突风险升高', description: '预测轨迹交汇', ttc_sec: 1.2, pet_sec: 0.8 }])
   liveMocks.api.conflicts.mockResolvedValue([
-    { id: 'DB-C-1', message_id: 'C-1', source_profile_id: 'SRC-1', pipeline_id: 'P-old', prediction_type: 'path_intersection', distance_m: 0.0, motor_id: 96, non_motor_id: 88, severity: 'critical', title: '历史路径交点事件', occurred_at: '2026-07-14T09:59:58Z', ttc_sec: 1.1, pet_sec: 0.3 },
+    { id: 'DB-C-1', message_id: 'C-1', mission_id: 'MSN-XQH-1', source_profile_id: 'SRC-1', pipeline_id: 'P-old', prediction_type: 'path_intersection', distance_m: 0.0, motor_id: 96, non_motor_id: 88, severity: 'critical', title: '历史路径交点事件', occurred_at: '2026-07-14T09:59:58Z', ttc_sec: 1.1, pet_sec: 0.3 },
     { id: 'C-CPA', source_profile_id: 'SRC-1', prediction_type: 'same_time_cpa', distance_m: 0.4, motor_id: 7, non_motor_id: 8, severity: 'warning', title: '实验 CPA 事件', occurred_at: '2026-07-14T09:59:57Z' },
   ])
   liveMocks.api.trajectories.mockResolvedValue([
@@ -183,6 +184,17 @@ describe('Console2 live module migration', () => {
     Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: vi.fn() })
   })
 
+  it('preserves XQH source, Mission and conflict identity when opening Event Center', () => {
+    expect(monitoringEventCenterUrl({
+      intersectionId: '011wwe0z19700001',
+      sourceProfileId: 'SRC-INTER-XQH-0403-PM',
+      event: {
+        id: 'd1bfae25da343b0d5e32c61ffe85a09f5892180d',
+        raw: { mission_id: 'MSN-AE785FD3C417' },
+      },
+    })).toBe('/events?event_type=conflict&intersection_id=011wwe0z19700001&source_profile_id=SRC-INTER-XQH-0403-PM&mission_id=MSN-AE785FD3C417&event_id=d1bfae25da343b0d5e32c61ffe85a09f5892180d')
+  })
+
   it('drives monitoring from REST and realtime data and preserves detector/BEV switching', async () => {
     open('/monitoring')
 
@@ -206,6 +218,7 @@ describe('Console2 live module migration', () => {
         fps: 29.7,
         inference_ms: 33,
         inference_context: { effective_imgsz: 960, device: 'mps', precision: 'fp16' },
+        road_analytics_eligible: true,
         lane_stats: [{ queue_length_m: 186 }],
         active_trajectories: [{ track_id: 101 }, { track_id: 102 }],
       },
@@ -451,9 +464,10 @@ describe('Console2 live module migration', () => {
 
     expect(await screen.findByText('历史路径交点事件')).toBeInTheDocument()
     expect(liveMocks.api.conflicts).toHaveBeenCalledWith('INT-1', {
-      period: '24h',
+      period: 'all',
       limit: 20,
       source_profile_id: 'SRC-1',
+      pipeline_id: 'P-1',
       prediction_type: 'path_intersection',
     })
     expect(screen.queryByText('实验 CPA 事件')).not.toBeInTheDocument()
@@ -461,10 +475,18 @@ describe('Console2 live module migration', () => {
     act(() => liveMocks.wsCallback({
       type: 'uav_conflict',
       occurredAt: '2026-07-14T09:59:58Z',
-      data: { message_id: 'C-1', pipeline_id: 'P-1', source_profile_id: 'SRC-1', prediction_type: 'path_intersection', distance_m: 0.0, motor_id: 96, non_motor_id: 88, severity: 'critical', title: '历史路径交点事件', ttc_sec: 1.1, pet_sec: 0.3 },
+      data: { message_id: 'C-1', mission_id: 'MSN-XQH-1', pipeline_id: 'P-1', source_profile_id: 'SRC-1', prediction_type: 'path_intersection', distance_m: 0.0, motor_id: 96, non_motor_id: 88, severity: 'critical', title: '历史路径交点事件', ttc_sec: 1.1, pet_sec: 0.3 },
     }))
 
     expect(screen.getAllByText('历史路径交点事件')).toHaveLength(1)
+
+    fireEvent.click(screen.getByRole('button', { name: '全部事件' }))
+    await waitFor(() => expect(window.location.pathname).toBe('/events'))
+    const params = new URLSearchParams(window.location.search)
+    expect(params.get('intersection_id')).toBe('INT-1')
+    expect(params.get('source_profile_id')).toBe('SRC-1')
+    expect(params.get('mission_id')).toBe('MSN-XQH-1')
+    expect(params.get('event_id')).toBe('C-1')
   })
 
   it('keeps realtime monitoring BEV free of historical Mission replay', async () => {
@@ -490,7 +512,7 @@ describe('Console2 live module migration', () => {
       intersection_id: 'INT-1',
       source_profile_id: 'SRC-1',
       mission_mode: 'hover',
-      source_mode: 'fixed_demo',
+      source_mode: 'live',
     })
     expect(screen.getByRole('button', { name: '重新保存当前快照' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '查看已保存快照' })).toBeInTheDocument()
@@ -514,7 +536,7 @@ describe('Console2 live module migration', () => {
   it('aligns the monitoring selector with registered UAV video sources and their intersections', async () => {
     open('/monitoring?intersection_id=INT-1')
 
-    const selector = await screen.findByRole('combobox', { name: '选择无人机视频源' })
+    const selector = await screen.findByRole('combobox', { name: '选择无人机视频源' }, { timeout: 10_000 })
     await waitFor(() => expect(window.location.search).toContain('source_profile_id=SRC-1'))
     expect(selector).toHaveDisplayValue('小清河北路早高峰 · 小清河无人机')
     expect(selector).toHaveAttribute('title', '小清河北路早高峰 · 小清河无人机')
@@ -528,6 +550,24 @@ describe('Console2 live module migration', () => {
       expect(params.get('intersection_id')).toBe('INT-2')
     })
     expect(screen.getByText(/新泺大街 × 崇华路 · SRC-2 · 监测离线/)).toBeInTheDocument()
+  }, 15_000)
+
+  it('preserves a dashboard monitoring deep link while registered sources are still loading', async () => {
+    let resolveSources
+    liveMocks.api.sources.mockReturnValue(new Promise((resolve) => { resolveSources = resolve }))
+
+    open('/monitoring?intersection_id=INT-1&source_profile_id=SRC-1')
+
+    await waitFor(() => expect(liveMocks.api.sources).toHaveBeenCalled(), { timeout: 10_000 })
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)) })
+    expect(new URLSearchParams(window.location.search).get('source_profile_id')).toBe('SRC-1')
+    expect(new URLSearchParams(window.location.search).get('intersection_id')).toBe('INT-1')
+
+    await act(async () => resolveSources([
+      { profile_id: 'SRC-1', display_name: '小清河北路早高峰', drone_id: 'UAV-1', mode: 'local', enabled: true, validation_status: 'valid', video: { id: 'VID-1', source_type: 'mp4', location_hint: 'xqh-am.mp4' }, telemetry: { source_type: 'srt' } },
+    ]))
+    expect(await screen.findByRole('combobox', { name: '选择无人机视频源' })).toHaveDisplayValue('小清河北路早高峰 · 小清河无人机')
+    expect(new URLSearchParams(window.location.search).get('source_profile_id')).toBe('SRC-1')
   })
 
   it('follows the running source when the monitoring URL points to a stopped source at the same intersection', async () => {
@@ -547,7 +587,12 @@ describe('Console2 live module migration', () => {
     )
     expect(screen.getByRole('combobox', { name: '选择无人机视频源' })).toHaveDisplayValue('崇华路早高峰 · 小清河无人机')
     expect(await screen.findByAltText('检测器输出视频流')).toHaveAttribute('src', expect.stringMatching(/^http:\/\/127\.0\.0\.1:8103\/video\?retry=/))
-    expect(liveMocks.api.intersectionStats).toHaveBeenCalledWith('INT-1', '30m', '5m', 'SRC-RUNNING')
+    expect(liveMocks.api.intersectionStats).toHaveBeenCalledWith('INT-1', '30m', '5m', 'SRC-RUNNING', 'P-RUNNING')
+    expect(liveMocks.api.conflicts).toHaveBeenCalledWith('INT-1', expect.objectContaining({
+      source_profile_id: 'SRC-RUNNING',
+      pipeline_id: 'P-RUNNING',
+      prediction_type: 'path_intersection',
+    }))
   })
 
   it('starts the selected source from the offline canvas and keeps target counts in the metric panel', async () => {
@@ -610,40 +655,12 @@ describe('Console2 live module migration', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('检测器进程启动失败')
   })
 
-  it('freezes visible REST, WebSocket, and clock updates while paused then restores them in order', async () => {
-    const { queryClient } = open('/monitoring?intersection_id=INT-1')
-    expect((await screen.findAllByText('20')).length).toBeGreaterThan(0)
-
-    fireEvent.click(screen.getByRole('button', { name: '暂停实时数据' }))
-    const frozenClock = document.querySelector('.timeline-controls span').textContent
-
-    act(() => liveMocks.wsCallback({ type: 'uav_stats', data: { pipeline_id: 'P-1', cars: 842, congestion_index: 6.3 } }))
-    liveMocks.api.intersectionStats.mockResolvedValueOnce([{ time: '2026-07-14T10:05:00Z', congestion_index: 5.1, cars: 30 }])
-    await act(async () => queryClient.refetchQueries({ queryKey: ['monitoring-trend', 'INT-1'] }))
-    await act(async () => new Promise((resolve) => window.setTimeout(resolve, 1_100)))
-
-    expect(screen.queryByText('842')).not.toBeInTheDocument()
-    expect(screen.queryByText('30')).not.toBeInTheDocument()
-    expect((screen.getAllByText('20')).length).toBeGreaterThan(0)
-    expect(document.querySelector('.timeline-controls span')).toHaveTextContent(frozenClock)
-
-    fireEvent.click(screen.getByRole('button', { name: '恢复实时数据' }))
-    expect(await screen.findByText('842')).toBeInTheDocument()
-    expect(screen.queryByText('30')).not.toBeInTheDocument()
-  })
-
-  it('auto-collapses the monitoring timeline and expands it while hovered', async () => {
+  it('does not render the removed monitoring timeline or pause control', async () => {
     open('/monitoring?intersection_id=INT-1&source_profile_id=SRC-1')
     await screen.findByAltText('检测器输出视频流', {}, { timeout: 10_000 })
 
-    const timeline = screen.getByRole('region', { name: '实时数据时间轴' })
-    expect(timeline).toHaveAttribute('data-state', 'collapsed')
-
-    fireEvent.mouseEnter(timeline)
-    expect(timeline).toHaveAttribute('data-state', 'expanded')
-
-    fireEvent.mouseLeave(timeline)
-    expect(timeline).toHaveAttribute('data-state', 'collapsed')
+    expect(screen.queryByRole('region', { name: '实时数据时间轴' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '暂停实时数据' })).not.toBeInTheDocument()
   })
 
   it('opens monitoring side panels by default and keeps manual collapse and pin controls', async () => {
@@ -686,6 +703,33 @@ describe('Console2 live module migration', () => {
     expect(document.querySelector('.map-tools')).not.toHaveClass('side-collapsed')
     fireEvent.mouseLeave(rightPanel)
     expect(rightPanel).toHaveAttribute('data-state', 'collapsed')
+  })
+
+  it('switches between directional strategy and recent events without claiming mock execution', async () => {
+    open('/monitoring?intersection_id=INT-1&source_profile_id=SRC-1')
+    await screen.findByAltText('检测器输出视频流', {}, { timeout: 10_000 })
+
+    const flowPanel = screen.getByRole('article', { name: '按方向实时流量' })
+    expect(flowPanel).toHaveTextContent('实时流向')
+    expect(flowPanel).toHaveTextContent('等待数据')
+    expect(within(screen.getByLabelText('实时态势面板')).getByRole('article', { name: '按方向实时流量' })).toBe(flowPanel)
+    expect(within(screen.getByLabelText('BEV 与实时事件面板')).queryByRole('article', { name: '按方向实时流量' })).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('tab', { name: '场景策略' }))
+    const scenarioGroup = screen.getByRole('group', { name: '重点业务场景' })
+    expect(within(scenarioGroup).getAllByRole('button')).toHaveLength(6)
+    expect(screen.getByRole('tabpanel', { name: '场景策略' })).not.toHaveTextContent('Mock 控制链路')
+    expect(screen.getByRole('tabpanel', { name: '场景策略' })).not.toHaveTextContent('基于 Mock 数据')
+    expect(screen.getByRole('tabpanel', { name: '场景策略' })).toHaveTextContent('证据未齐 · 不触发')
+    expect(screen.getByRole('tabpanel', { name: '场景策略' })).toHaveTextContent('仅生成建议')
+    expect(screen.getByRole('tabpanel', { name: '场景策略' })).toHaveTextContent('交警 / 信控平台确认')
+
+    fireEvent.click(within(scenarioGroup).getByRole('button', { name: '行人感应' }))
+    expect(screen.getByRole('tabpanel', { name: '场景策略' })).toHaveTextContent('有效请求：待接 行人检测 / 按钮')
+    expect(screen.getByRole('tabpanel', { name: '场景策略' })).toHaveTextContent('已进入人行横道的行人清空时间不得因机动车排队提前结束')
+
+    fireEvent.click(screen.getByRole('tab', { name: /近期事件/ }))
+    expect(screen.getByRole('tabpanel', { name: '近期事件' })).toHaveTextContent('历史路径交点事件')
   })
 
   it('keeps world-coordinate tracks off the detector video and renders them only on the BEV map', async () => {

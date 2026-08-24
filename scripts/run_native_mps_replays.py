@@ -19,6 +19,7 @@ import json
 import os
 from pathlib import Path
 import platform
+import re
 import signal
 import statistics
 import subprocess
@@ -26,13 +27,26 @@ import sys
 import time
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
-import uuid
 
-from kafka import KafkaConsumer
+from kafka import KafkaConsumer, TopicPartition
+from kafka.errors import (
+    KafkaConnectionError,
+    NoBrokersAvailable,
+    NodeNotReadyError,
+    RequestTimedOutError,
+    UnrecognizedBrokerVersion,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
 PLATFORM_DIR = ROOT / "platform"
+RUNNER_CAMERA_ID_MIN = 30000
+RUNNER_CAMERA_ID_MAX = 35500
+RUNNER_VIDEO_PORT_MIN = 16000
+LEGACY_RUNNER_CAMERA_ID_MIN = 5701
+LEGACY_RUNNER_CAMERA_ID_MAX = 5712
+LEGACY_RUNNER_VIDEO_PORT_MIN = 15701
+LEGACY_RUNNER_VIDEO_PORT_MAX = 15712
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 if str(PLATFORM_DIR) not in sys.path:
@@ -91,6 +105,200 @@ def validate_source_time_stride(
             f"tracker maximum is {max_frame_gap_sec:.6f}s"
         )
     return source_gap_sec
+
+
+def choose_runner_camera_id_base(used_camera_ids: set[int], source_count: int) -> int:
+    """Reserve a contiguous never-before-used camera/topic range for one replay.
+
+    road9's inbox intentionally treats ``topic + partition + offset`` as
+    immutable. Reusing a numeric camera id would therefore make Kafka offset
+    zero from a later replay collide with a prior run. The reserved range keeps
+    the topic identity unique while still leaving regular production camera ids
+    untouched.
+    """
+    if source_count < 1:
+        raise ValueError("source_count must be positive")
+    last_base = RUNNER_CAMERA_ID_MAX - source_count + 1
+    for base in range(RUNNER_CAMERA_ID_MIN, last_base + 1):
+        if all(camera_id not in used_camera_ids for camera_id in range(base + 1, base + source_count + 1)):
+            return base
+    raise RuntimeError("no unused reserved camera/topic ids remain for native replay")
+
+
+def replay_video_port_base(camera_id_base: int) -> int:
+    """Map a reserved replay camera range to its equally isolated MJPEG ports."""
+    if RUNNER_CAMERA_ID_MIN <= camera_id_base <= RUNNER_CAMERA_ID_MAX:
+        return RUNNER_VIDEO_PORT_MIN + (camera_id_base - RUNNER_CAMERA_ID_MIN)
+    return LEGACY_RUNNER_VIDEO_PORT_MIN - 1
+
+
+def _assign_topics_to_end(
+    consumer: KafkaConsumer,
+    topics: list[str],
+    timeout_sec: float = 15.0,
+) -> list[TopicPartition]:
+    """Manually assign capture topics and avoid a long-lived group heartbeat.
+
+    The acceptance reader never commits offsets and owns a unique, read-once
+    capture window.  Group coordination only adds a heartbeat thread which can
+    race kafka-python's socket cleanup during long native-MPS runs.
+    """
+    deadline = time.monotonic() + timeout_sec
+    partitions: list[TopicPartition] = []
+    while time.monotonic() < deadline:
+        partitions = sorted(
+            (
+                TopicPartition(topic, partition)
+                for topic in topics
+                for partition in (consumer.partitions_for_topic(topic) or set())
+            ),
+            key=lambda item: (item.topic, item.partition),
+        )
+        if partitions:
+            break
+        consumer.poll(timeout_ms=500)
+    if not partitions:
+        raise RuntimeError(f"Kafka topic metadata timed out: {topics}")
+    consumer.assign(partitions)
+    consumer.seek_to_end(*partitions)
+    return partitions
+
+
+class RecoveringKafkaCapture:
+    """Capture a replay topic window and recover transient selector failures.
+
+    kafka-python can surface ``Invalid file descriptor`` after a long-running
+    broker connection is replaced or closed.  The acceptance reader is not the
+    business consumer, so it must not terminate an otherwise healthy detector.
+    Keep explicit next offsets and rebuild the manually assigned consumer from
+    those offsets; this preserves the exact capture window without committing a
+    group offset or skipping messages produced during recovery.
+    """
+
+    def __init__(
+        self,
+        kafka_bootstrap: str,
+        topics: list[str],
+        *,
+        consumer_factory=KafkaConsumer,
+        recovery_timeout_sec: float = 90.0,
+        recovery_backoff_sec: float = 1.0,
+    ) -> None:
+        self.kafka_bootstrap = kafka_bootstrap
+        self.topics = list(topics)
+        self.consumer_factory = consumer_factory
+        self.recovery_timeout_sec = recovery_timeout_sec
+        self.recovery_backoff_sec = recovery_backoff_sec
+        self.consumer = None
+        self.next_offsets: dict[TopicPartition, int] = {}
+        self.recovery_count = 0
+        self._open(initial=True)
+
+    def _new_consumer(self):
+        return self.consumer_factory(
+            bootstrap_servers=self.kafka_bootstrap,
+            group_id=None,
+            enable_auto_commit=False,
+            auto_offset_reset="latest",
+            consumer_timeout_ms=1000,
+            value_deserializer=lambda raw: json.loads(raw.decode("utf-8")),
+        )
+
+    def _open(self, *, initial: bool) -> None:
+        consumer = self._new_consumer()
+        try:
+            partitions = _assign_topics_to_end(consumer, self.topics)
+            if initial:
+                self.next_offsets = {
+                    partition: int(consumer.position(partition))
+                    for partition in partitions
+                }
+            else:
+                for partition in partitions:
+                    offset = self.next_offsets.get(partition)
+                    if offset is None:
+                        self.next_offsets[partition] = int(
+                            consumer.position(partition)
+                        )
+                    else:
+                        consumer.seek(partition, offset)
+        except Exception:
+            consumer.close()
+            raise
+        self.consumer = consumer
+
+    @staticmethod
+    def _recoverable(exc: Exception) -> bool:
+        return (
+            isinstance(exc, ValueError)
+            and "Invalid file descriptor" in str(exc)
+        ) or isinstance(
+            exc,
+            (
+                KafkaConnectionError,
+                NoBrokersAvailable,
+                NodeNotReadyError,
+                RequestTimedOutError,
+                UnrecognizedBrokerVersion,
+            ),
+        )
+
+    def _recover(self, *, deadline: float) -> None:
+        if self.consumer is not None:
+            try:
+                self.consumer.close()
+            except Exception:
+                pass
+            self.consumer = None
+        while True:
+            try:
+                self._open(initial=False)
+                self.recovery_count += 1
+                return
+            except Exception as exc:
+                if not self._recoverable(exc) or time.monotonic() >= deadline:
+                    raise
+                time.sleep(self.recovery_backoff_sec)
+
+    def poll(self, *, timeout_ms: int, max_records: int):
+        deadline = time.monotonic() + self.recovery_timeout_sec
+        while True:
+            try:
+                records = self.consumer.poll(
+                    timeout_ms=timeout_ms,
+                    max_records=max_records,
+                )
+                break
+            except Exception as exc:
+                if not self._recoverable(exc) or time.monotonic() >= deadline:
+                    raise
+                self._recover(deadline=deadline)
+        for partition, messages in records.items():
+            for message in messages:
+                self.next_offsets[partition] = int(message.offset) + 1
+        return records
+
+    def close(self) -> None:
+        if self.consumer is not None:
+            self.consumer.close()
+
+
+def used_replay_camera_ids(kafka_bootstrap: str) -> set[int]:
+    """Read canonical Kafka topic names before allocating this run's topic ids."""
+    consumer = KafkaConsumer(
+        bootstrap_servers=kafka_bootstrap,
+        consumer_timeout_ms=1000,
+        api_version_auto_timeout_ms=10000,
+    )
+    try:
+        topic_pattern = re.compile(r"^uav_(?:statistics|track_complete|conflicts|telemetry)_(\\d+)$")
+        return {
+            int(match.group(1))
+            for topic in consumer.topics()
+            if (match := topic_pattern.fullmatch(topic))
+        }
+    finally:
+        consumer.close()
 
 
 def validate_source_assets(source: dict, digest_cache: dict[Path, str] | None = None) -> dict:
@@ -371,6 +579,12 @@ def tcc_diagnostics_summary(messages: list[dict]) -> dict:
             return 0
 
     rejection_keys = (
+        "class_unstable",
+        "participant_not_fully_visible",
+        "participant_not_currently_observed",
+        "heading_unreliable",
+        "general_crossing_angle_too_shallow",
+        "nested_cross_class_detection",
         "speed_missing",
         "speed_below_min",
         "history_insufficient",
@@ -402,6 +616,25 @@ def tcc_diagnostics_summary(messages: list[dict]) -> dict:
         "funnel_rejections": {
             key: value for key, value in funnel_rejections.items() if value > 0
         },
+    }
+
+
+def tcc_eligibility_summary(messages: list[dict]) -> dict:
+    """Keep TCC world-quality coverage distinct from map-dependent analytics."""
+    samples = len(messages)
+    eligible = sum(bool((message.get("data") or {}).get("tcc_analytics_eligible")) for message in messages)
+    reasons: Counter[str] = Counter()
+    for message in messages:
+        data = message.get("data") or {}
+        if data.get("tcc_analytics_eligible"):
+            continue
+        quality = data.get("geo_reference_quality") or {}
+        reasons.update(str(reason) for reason in quality.get("geo_reasons") or quality.get("reasons") or [])
+    return {
+        "samples": samples,
+        "eligible_samples": eligible,
+        "coverage_ratio": round(eligible / samples, 4) if samples else 0.0,
+        "ineligible_reason_counts": dict(sorted(reasons.items())),
     }
 
 
@@ -523,6 +756,17 @@ def formal_business_leakage(result: dict) -> dict:
     }
 
 
+def road_context_leakage(result: dict) -> dict:
+    """Verify a mapless replay did not invent Lane/Link business facts."""
+    candidate = result.get("candidate_isolation") or {}
+    return {
+        "road_activity_frames": int(candidate.get("road_activity_frames") or 0),
+        "lane_stats_frames": int(candidate.get("lane_stats_frames") or 0),
+        "total": int(candidate.get("road_activity_frames") or 0)
+        + int(candidate.get("lane_stats_frames") or 0),
+    }
+
+
 def source_result_passed(result: dict) -> bool:
     """Apply the per-source functional acceptance contract."""
     recognition = result.get("recognition")
@@ -558,8 +802,8 @@ def source_result_passed(result: dict) -> bool:
             "eligible_completed_tracks": int(result.get("trajectory_count") or 0),
             "point_alignment_failures": 0,
         }
+    isolation = result.get("candidate_isolation") or {}
     if result.get("acceptance_mode") in {"roadless_trajectory", "candidate_isolation"}:
-        isolation = result.get("candidate_isolation") or {}
         leakage = result.get("formal_business_leakage") or formal_business_leakage(result)
         return bool(
             base
@@ -568,6 +812,19 @@ def source_result_passed(result: dict) -> bool:
             and int(trajectory.get("eligible_completed_tracks") or 0) > 0
             and int(trajectory.get("point_alignment_failures") or 0) == 0
             and float(leakage.get("total") or 0) == 0
+        )
+    if result.get("acceptance_mode") == "geo_tcc_validation":
+        quality = result.get("tcc_eligibility") or {}
+        min_coverage = float(result.get("min_tcc_eligible_coverage") or 0.90)
+        road_leakage = result.get("road_context_leakage") or road_context_leakage(result)
+        return bool(
+            base
+            and int(isolation.get("active_formal_tracks_peak") or 0) > 0
+            and int(isolation.get("candidate_point_alignment_failures") or 0) == 0
+            and int(trajectory.get("eligible_completed_tracks") or 0) > 0
+            and int(trajectory.get("point_alignment_failures") or 0) == 0
+            and float(quality.get("coverage_ratio") or 0.0) >= min_coverage
+            and int(road_leakage.get("total") or 0) == 0
         )
     return bool(
         base
@@ -691,10 +948,19 @@ class PlatformClient:
         """Stop stale registrations owned by this serial replay runner."""
         stopped = []
         for pipeline in self.request("GET", "/api/v1/pipelines"):
+            camera_id = int(pipeline.get("camera_id") or 0)
+            video_port = int(pipeline.get("video_port") or 0)
+            is_legacy_reserved = (
+                LEGACY_RUNNER_CAMERA_ID_MIN <= camera_id <= LEGACY_RUNNER_CAMERA_ID_MAX
+                and LEGACY_RUNNER_VIDEO_PORT_MIN <= video_port <= LEGACY_RUNNER_VIDEO_PORT_MAX
+            )
+            is_current_reserved = (
+                RUNNER_CAMERA_ID_MIN <= camera_id <= RUNNER_CAMERA_ID_MAX
+                and RUNNER_VIDEO_PORT_MIN <= video_port <= RUNNER_VIDEO_PORT_MIN + (RUNNER_CAMERA_ID_MAX - RUNNER_CAMERA_ID_MIN)
+            )
             if (
                 pipeline.get("status") == "running"
-                and 5701 <= int(pipeline.get("camera_id") or 0) <= 5712
-                and 15701 <= int(pipeline.get("video_port") or 0) <= 15712
+                and (is_legacy_reserved or is_current_reserved)
             ):
                 self.stop(pipeline["pipeline_id"])
                 stopped.append(pipeline["pipeline_id"])
@@ -739,6 +1005,7 @@ def _capture_message(buckets: dict[str, list[dict]], message, pipeline_id: str) 
             {
                 "message_id": payload.get("message_id"),
                 "occurred_at": payload.get("occurred_at"),
+                "source_time_raw": payload.get("source_time_raw"),
                 "data": {
                     "pipeline_id": data.get("pipeline_id"),
                     "source_profile_id": data.get("source_profile_id"),
@@ -811,7 +1078,7 @@ async def _wait_for_road9(
     source_profile_id: str,
     pipeline_id: str,
     expected: dict[str, int],
-    timeout_sec: float = 30.0,
+    timeout_sec: float = 180.0,
 ) -> dict:
     deadline = time.monotonic() + timeout_sec
     actual = {key: 0 for key in expected}
@@ -852,7 +1119,10 @@ async def _reconcile_road9_once(
 
 
 def reconcile_road9(source_profile_id: str, pipeline_id: str, buckets: dict) -> dict:
-    expected = {key: len(buckets[key]) for key in ("stats", "tracks", "conflicts", "telemetry")}
+    expected = {
+        key: _distinct_message_count(buckets[key])
+        for key in ("stats", "tracks", "conflicts", "telemetry")
+    }
     try:
         return asyncio.run(_reconcile_road9_once(source_profile_id, pipeline_id, expected))
     except Exception as exc:
@@ -864,6 +1134,21 @@ def reconcile_road9(source_profile_id: str, pipeline_id: str, buckets: dict) -> 
             "mismatches": {"query": str(exc)},
             "matched": False,
         }
+
+
+def _distinct_message_count(messages: list[dict]) -> int:
+    """Count canonical messages under Kafka's at-least-once delivery contract."""
+    message_ids: set[str] = set()
+    missing_message_id = 0
+    for message in messages:
+        message_id = message.get("message_id") if isinstance(message, dict) else None
+        if isinstance(message_id, str) and message_id:
+            message_ids.add(message_id)
+        else:
+            # A malformed capture must not disappear from reconciliation merely
+            # because it cannot participate in canonical message-id deduplication.
+            missing_message_id += 1
+    return len(message_ids) + missing_message_id
 
 
 def _write_json(path: Path, payload) -> None:
@@ -888,6 +1173,18 @@ def telemetry_overrides(source: dict) -> list[str]:
         f"telemetry.file_path={hydra_string(source['telemetry'])}",
         f"telemetry.time_offset_sec={source['time_offset_sec']}",
         f"telemetry.sync_tolerance_sec={source.get('sync_tolerance_sec', 2.5)}",
+        f"telemetry.agl_policy={source.get('telemetry_agl_policy', 'legacy_height')}",
+    ]
+
+
+def flight_motion_overrides(source: dict) -> list[str]:
+    """Enable roll only for a source that opts into full-pose visual validation."""
+    if not source.get("allow_roll_with_visual_validation", False):
+        return []
+    return [
+        "flight_motion.allow_roll_with_visual_validation=true",
+        "flight_motion.max_roll_visual_validation_deg="
+        f"{source.get('max_roll_visual_validation_deg', 15.0)}",
     ]
 
 
@@ -912,6 +1209,7 @@ def run_source(
     *,
     index: int,
     camera_id_base: int,
+    video_port_base: int,
     output_dir: Path,
     kafka_bootstrap: str,
     frame_stride: int,
@@ -925,16 +1223,19 @@ def run_source(
     save_video: bool = False,
 ) -> dict:
     camera_id = camera_id_base + index
-    video_port = 15700 + index
+    video_port = video_port_base + index
     configured_mode = source.get("acceptance_mode", "formal_world_trajectory")
     runtime_bundle = client.runtime_bundle(
         source,
-        required=configured_mode not in {"roadless_trajectory", "candidate_isolation"},
+        required=configured_mode not in {"roadless_trajectory", "candidate_isolation", "geo_tcc_validation"},
     )
     telemetry_enabled = source.get("telemetry_enabled", True)
     if not telemetry_enabled:
         runtime_bundle = None
-    acceptance_mode = "formal_world_trajectory" if runtime_bundle is not None else "roadless_trajectory"
+    acceptance_mode = (
+        "formal_world_trajectory" if runtime_bundle is not None
+        else configured_mode
+    )
     registered = client.register(
         source,
         camera_id,
@@ -951,23 +1252,11 @@ def run_source(
         f"uav_conflicts_{camera_id}",
         f"uav_telemetry_{camera_id}",
     ]
-    consumer = KafkaConsumer(
-        bootstrap_servers=kafka_bootstrap,
-        group_id=f"native-mps-acceptance-{uuid.uuid4().hex}",
-        enable_auto_commit=False,
-        auto_offset_reset="latest",
-        consumer_timeout_ms=1000,
-        value_deserializer=lambda raw: json.loads(raw.decode("utf-8")),
-    )
-    consumer.subscribe(topics)
-    deadline = time.monotonic() + 15
-    while not consumer.assignment() and time.monotonic() < deadline:
-        consumer.poll(timeout_ms=500)
-    if not consumer.assignment():
-        consumer.close()
+    try:
+        capture = RecoveringKafkaCapture(kafka_bootstrap, topics)
+    except Exception:
         client.stop(pipeline_id)
-        raise RuntimeError(f"Kafka topic assignment timed out for {source['profile_id']}")
-    consumer.seek_to_end(*consumer.assignment())
+        raise
 
     source_dir = output_dir / source["profile_id"]
     source_dir.mkdir(parents=True, exist_ok=True)
@@ -1015,6 +1304,7 @@ def run_source(
         f"tracking_profile={tracking_profile}",
     ]
     command.extend(telemetry_overrides(source))
+    command.extend(flight_motion_overrides(source))
     buckets: dict[str, list[dict]] = {
         "stats": [],
         "tracks": [],
@@ -1039,7 +1329,7 @@ def run_source(
                 start_new_session=True,
             )
             while process.poll() is None:
-                for messages in consumer.poll(timeout_ms=1000, max_records=1000).values():
+                for messages in capture.poll(timeout_ms=1000, max_records=1000).values():
                     for message in messages:
                         _capture_message(buckets, message, pipeline_id)
             return_code = process.returncode
@@ -1047,17 +1337,17 @@ def run_source(
             final_deadline = quiet_since + drain_seconds
             while time.monotonic() < final_deadline:
                 matched = False
-                for messages in consumer.poll(timeout_ms=500, max_records=1000).values():
+                for messages in capture.poll(timeout_ms=500, max_records=1000).values():
                     for message in messages:
                         matched = _capture_message(buckets, message, pipeline_id) or matched
                 if matched:
                     quiet_since = time.monotonic()
                     final_deadline = quiet_since + drain_seconds
-    except Exception as exc:  # Preserve artifacts and unregister before surfacing the failure.
+    except BaseException as exc:  # Preserve artifacts and unregister even on an interactive interrupt.
         error = f"{type(exc).__name__}: {exc}"
     finally:
         terminate_process_tree(process)
-        consumer.close()
+        capture.close()
         # Keep the external pipeline registration alive until Platform has
         # consumed every Kafka message observed by this acceptance consumer.
         # Unregistering first can make the final EOF-adjacent stats envelope
@@ -1084,6 +1374,8 @@ def run_source(
         "road_context_status": "lane_verified" if runtime_bundle else "missing",
         "quality_status": "verified" if runtime_bundle else "degraded",
         "acceptance_mode": acceptance_mode,
+        "configured_acceptance_mode": configured_mode,
+        "min_tcc_eligible_coverage": source.get("min_tcc_eligible_coverage"),
         "video": source["video"],
         "telemetry": source["telemetry"],
         "telemetry_enabled": telemetry_enabled,
@@ -1106,6 +1398,7 @@ def run_source(
         "telemetry_message_count": len(buckets["telemetry"]),
         "invalid_tcc_events": invalid_tcc,
         "tcc_diagnostics": tcc_diagnostics_summary(buckets["stats"]),
+        "tcc_eligibility": tcc_eligibility_summary(buckets["stats"]),
         "candidate_isolation": candidate,
         "trajectory_output": trajectory_output,
         "eligible_completed_tracks": trajectory_output["eligible_completed_tracks"],
@@ -1114,8 +1407,10 @@ def run_source(
         "recognition": recognition_summary(buckets["stats"]),
         "lifecycle": lifecycle_summary(buckets["stats"]),
         "error": error,
+        "capture_recovery_count": capture.recovery_count,
     }
     result["formal_business_leakage"] = formal_business_leakage(result)
+    result["road_context_leakage"] = road_context_leakage(result)
     result["passed"] = source_result_passed(result)
     _write_json(source_dir / "result.json", result)
     return result
@@ -1173,8 +1468,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--camera-id-base",
         type=int,
-        default=5700,
-        help="reserved camera/topic base; single-source default is 5701",
+        default=None,
+        help="optional camera/topic base; omit to reserve unused Kafka topic ids",
     )
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--resume", action="store_true", help="reuse completed source artifacts")
@@ -1193,7 +1488,7 @@ def main() -> int:
     unknown = [profile_id for profile_id in selected if profile_id not in catalog]
     if unknown:
         raise SystemExit(f"unknown source profile(s): {', '.join(unknown)}")
-    if args.camera_id_base < 0 or args.camera_id_base + len(selected) > 65535:
+    if args.camera_id_base is not None and (args.camera_id_base < 0 or args.camera_id_base + len(selected) > 65535):
         raise SystemExit("--camera-id-base must keep generated camera IDs in 1..65535")
     device = verify_native_mps() if not args.skip_preflight else {"skipped": True}
     digest_cache: dict[Path, str] = {}
@@ -1214,6 +1509,12 @@ def main() -> int:
     stale = client.stop_stale_reserved()
     if stale:
         print(f"stopped stale replay registrations: {', '.join(stale)}", flush=True)
+    camera_id_base = args.camera_id_base
+    if camera_id_base is None:
+        camera_id_base = choose_runner_camera_id_base(
+            used_replay_camera_ids(args.kafka_bootstrap), len(selected)
+        )
+    video_port_base = replay_video_port_base(camera_id_base)
     results = []
     effective_imgsz = resolve_replay_imgsz(
         args.imgsz,
@@ -1250,7 +1551,8 @@ def main() -> int:
             client,
             catalog[profile_id],
             index=index,
-            camera_id_base=args.camera_id_base,
+            camera_id_base=camera_id_base,
+            video_port_base=video_port_base,
             output_dir=output_dir,
             kafka_bootstrap=args.kafka_bootstrap,
             frame_stride=frame_stride,

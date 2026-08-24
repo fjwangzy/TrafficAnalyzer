@@ -223,6 +223,14 @@ async def test_sealed_mission_transactionally_converges_all_dws_grains_without_c
             "all",
             grain_type="intersection",
             source_profile_id=source_id,
+            pipeline_id=f"pipe-{marker}",
+        )
+        other_pipeline_rows = await store.query_traffic(
+            inter_id,
+            "all",
+            grain_type="intersection",
+            source_profile_id=source_id,
+            pipeline_id=f"pipe-other-{marker}",
         )
         conflict_rows = await store.query_conflicts(
             inter_id,
@@ -275,6 +283,7 @@ async def test_sealed_mission_transactionally_converges_all_dws_grains_without_c
         assert intersection.release_count == 1
         assert traffic_rows[0]["total_vehicles"] == 1
         assert traffic_rows[0]["pipeline_id"] == f"pipe-{marker}"
+        assert other_pipeline_rows == []
         assert conflict_rows[0]["prediction_type"] == "crossing"
         assert replay["mission"]["mission_id"] == mission_id
         assert [track["track_id"] for track in replay["tracks"]] == ["J-1"]

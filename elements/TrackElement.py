@@ -71,6 +71,13 @@ class TrackElement:
         self.yolo_model_id: str | None = None  # 权重文件名 + 内容摘要
         self.class_mapping_version: str | None = None  # 原始类别到业务类别的映射版本
         self.class_id_history: list[int] = []  # 逐帧累积的YOLO类别ID，用于多帧投票
+        self.class_name_history: list[str | None] = []
+        self.vehicle_class_history: list[str] = []
+        self.current_vehicle_class: str | None = None
+        self.vehicle_class_confidence: float | None = None
+        self.current_bbox_xyxy: list[float] | None = None
+        self.current_frame_size: list[int] | None = None
+        self.current_observation_timestamp_sec: float | None = None
         self.appearance_crop_jpeg: str | None = None
         self.appearance_crop_confidence: float = -1.0
 

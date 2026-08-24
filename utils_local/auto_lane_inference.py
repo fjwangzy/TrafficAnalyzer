@@ -55,7 +55,10 @@ class InferredLane:
     # 实时统计
     count: int = 0                        # 当前车道内活跃车辆数
     avg_speed_kmh: float = 0.0            # 平均车速
-    queue_length_m: float = 0.0           # 排队长度（米或像素）
+    queue_length_m: float | None = None   # 有效 H 矩阵换算的排队长度（米）
+    queue_length_px: float | None = None  # 无有效 H 时的像素降级距离
+    queue_length_unit: str | None = None  # "m" | "px"
+    queue_length_method: str | None = None
     stopped_count: int = 0                # 排队车辆数
     flow_per_min: float | None = None     # 流量（辆/分钟）
     avg_headway_sec: float | None = None  # 平均车头时距（秒）

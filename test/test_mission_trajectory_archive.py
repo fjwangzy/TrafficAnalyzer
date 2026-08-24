@@ -102,6 +102,47 @@ def test_replay_v2_producer_defers_completed_journeys_until_mission_seal(tmp_pat
     )
 
 
+def test_replay_v2_producer_publishes_running_mission_before_conflicts(tmp_path):
+    sent = []
+    producer = KafkaProducerNode.__new__(KafkaProducerNode)
+    producer.storage_profile = "replay_v2"
+    producer.trajectory_archive = MissionTrajectoryArchive(tmp_path)
+    producer.mission_id = "MSN-RUNNING"
+    producer.pipeline_id = "PIPE-RUNNING"
+    producer.run_id = "RUN-RUNNING"
+    producer.source_profile_id = "SRC-RUNNING"
+    producer.intersection_id = "INT-RUNNING"
+    producer.inter_id = "INT-RUNNING"
+    producer.camera_id = 2
+    producer.drone_id = "UAV-2"
+    producer.road_context_status = "complete"
+    producer.quality_status = "verified"
+    producer.mission_topic = build_replay_v2_topics("SRC-RUNNING").mission
+    producer._enqueue = lambda topic, data, durable=False: sent.append((topic, data, durable))
+    frame = SimpleNamespace(timestamp=10.0, telemetry={}, source_is_realtime=False)
+    manifest = producer.trajectory_archive.begin_mission(
+        mission_id=producer.mission_id,
+        source_profile_id=producer.source_profile_id,
+        intersection_id=producer.intersection_id,
+        source_timestamp_sec=frame.timestamp,
+    )
+
+    assert producer.publish_replay_mission_started(frame, manifest) == 1
+    assert producer.publish_replay_mission_started(frame, manifest) == 0
+
+    assert len(sent) == 1
+    message = sent[0][1]
+    assert sent[0][2] is True
+    assert message["data"]["status"] == "running"
+    assert message["data"]["source_profile_id"] == "SRC-RUNNING"
+    assert message["message_id"] == str(
+        uuid.uuid5(
+            uuid.NAMESPACE_URL,
+            "traffic-analyzer:uav-replay-v2-mission:MSN-RUNNING:started",
+        )
+    )
+
+
 def test_replay_v2_producer_publishes_incomplete_diagnostic_without_final_journeys(tmp_path):
     sent = []
     closed = []

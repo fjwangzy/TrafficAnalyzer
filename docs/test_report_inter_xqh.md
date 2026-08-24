@@ -742,3 +742,114 @@ build 成功；xqh 基线 `56 PASS / 0 FAIL / 0 WARN`。`git diff --check` 无�
 - 关键帧没有批准控制点真值，控制点 JSON 为空；残差输入只证明门禁接口和交互存在，不构成精度测量。地图精度、IDF1/HOTA、位置 RMSE 和速度 MAE继续为 `not_evaluated`。
 - 自动化门禁：Console2 19 个文件 166 passed、production build 成功；Platform 259 passed、5 skipped、10 subtests passed；相关根测试 42 passed。XQH 基线在本机需 `PYTORCH_ENABLE_MPS_FALLBACK=1` 才能执行 torchvision NMS，结果为 55 PASS / 0 FAIL / 1 WARN（前 100 帧方向统计为空）；未设置 fallback 时是当前 PyTorch/MPS 不支持 NMS 的环境失败。ADR-019 strict 代码项通过，`local_runtime_evidence` 仍是既有外部门禁。
 - 视觉证据与逐轮问题记录见仓库根 `design-qa.md`；最终浏览器截图为 `/private/tmp/trafficanalyzer-road-annotation-chonghua-after-reload.png`。
+
+---
+
+## 2026-08-09 TCC 输出链路修复验收
+
+- 修复 association ID 与内部 track ID 分离后 `ShowNode` 无法定位冲突端点的问题；检测器实际输出帧已恢复红色连线、冲突点、双方标签和 TTC 徽章。
+- Replay V2 canonical envelope 现在强制输出源时间相对 `offset_ms`，Store 对缺失/非法/负值拒绝写入，不再把全部冲突静默落在 `T+0`。
+- Replay V2 冲突事实新增并返回双方轨迹 ID、`distance_m` 和 `conflict_scene`；Alembic head 升至 `20260809_rv2_0004`，补齐从零/向前迁移所需的 `env.py`。
+- Monitoring 对本地 SourceProfile 使用 `period=all`，实时来源仍使用 `24h`；正式业务过滤继续限定 `path_intersection && distance_m≈0`。
+- XQH 最终实跑 Mission `MSN-AE785FD3C417`、Pipeline `pipe-d6e82e41` 在 `T+15.816s` 输出轨迹 `88/725` 的 `warning`：`TTC=2.25s`、`PET=0.18s`、`distance_m=0.0`、证据 `hard_pet + hard_deceleration`。检测器证据为 `test_videos/videos_out/conflict_20260809_220023_warning_ttc2.2s_m88_nm725.jpg`，真实 Monitoring 页面已显示该事件。
+- 自动化门禁：受影响根测试 49 passed；Replay V2 schema/contract 6 passed；road9 迁移/集成 7 passed；XQH 静态基线 `55 PASS / 0 FAIL / 1 WARN`（前 100 帧方向统计为空）；Console TCC 聚焦用例和 production build 通过。
+- Console2 `LiveModules.test.jsx` 全文件仍有两个与本次 TCC 修复无关且可独立复现的既有失败，因此不宣称 UI 全量测试全绿。人工停止实跑使 Mission 标记为 `incomplete/cancelled`；没有外部轨迹真值，IDF1/HOTA、正式 ID switch、位置 RMSE 和速度 MAE 仍为 `not_evaluated`。
+- 本机只保留最新 Replay V2 运行态：Platform `8000`、Console2 `5173`；不再要求或保留 `8200` 隔离实例。完整根因、方案、测试矩阵和运行方法见 `docs/2026-08-09-xqh-tcc-repair-validation.md`。
+
+---
+
+## 2026-08-10 AI 事件中心 TCC 可见性复验
+
+- 修复 Event Center 只查询普通事件表、遗漏 `uav_replay_v2_conflict_events` 的读模型缺口；Replay V2
+  冲突事实现在可按路口、SourceProfile、Mission、事件类型与事件 ID 精确查询，且保持只读，不复制事实。
+- Monitoring 的“全部事件”链接会保留 XQH 的路口、SourceProfile、Mission 和真实事件 ID；事件中心
+  深链能够直接打开目标详情，不再依赖未过滤的前 150 条客户端列表。
+- 精确查询在修复前连续两次 `count=0`，修复后连续两次 `count=1`。最终事件
+  `d1bfae25da343b0d5e32c61ffe85a09f5892180d` 对应 Mission `MSN-AE785FD3C417`、Pipeline
+  `pipe-d6e82e41`、轨迹 `88/725`、`TTC=2.25s`、`PET=0.18s`、`distance_m=0.0`。
+- Platform 全量 `303 passed / 6 skipped / 10 subtests passed`；事件中心聚焦测试 `3 passed`；Console
+  Router 全文件 `63 passed`、Monitoring 深链聚焦测试和 production build 通过。真实浏览器验证目标
+  列表、详情和只读标记均正确且无 error/warning 日志。
+
+---
+
+## 2026-08-10 XQH TCC 事件图片复验
+
+- 根因确认：Replay V2 Store 遗漏 TCC envelope 中已经由 ShowNode 后置保存的 `evidence_files`，只保留
+  `hard_pet/hard_deceleration` 风险规则标签，导致 Event Center 的 `evidence_refs` 为空。
+- 新冲突会在 Replay V2 入库事务中校验受控对象的 SHA-256、大小、类型和 storage key，并登记
+  EvidencePackage/EvidenceItem；事件中心只返回鉴权内容 URL，不暴露本地绝对路径。
+- 历史事件 `d1bfae25...` 已补登记检测器输出证据 `043185b5...`：3840×2160、2,748,877 bytes、
+  SHA-256 `a1a58957492a461039abb18935e726d9d0f628c965bc1f24837500391a36aecc`。TCC 数值、轨迹、Mission
+  和原始文件均未修改。
+- 原红灯连续两次为 `evidence_refs=[]`；修复后连续两次返回一个 `conflict_detector_frame`，内容接口
+  返回 `image/jpeg`，下载大小与 SHA-256 均一致。
+- 自动化门禁：Platform 全量 `304 passed / 6 skipped / 10 subtests passed`；相关后端聚焦
+  `23 passed`、检测器证据链 `41 passed`、Console Router `63 passed`，production build 通过。
+
+### 选中事件关联图片补充验证
+
+- 频发告警 `EVT-8da17a...` 已通过 Replay V2 inbox 的一分钟窗口精确恢复 4 个子冲突，详情返回
+  4 个有序 `related_event_ids` 和 4 张 3840×2160 受管检测器帧；逐图 SHA-256 与原文件一致。
+- 测绘成果 `EVT-CA8624DA3384` 展示 1 张量算标注图，PDF/JSON/GeoJSON 改为附件按钮，不再产生
+  3 个无法解码的图片位置。
+- 3 条 2026-08-04 早期 Replay V2 冲突缺少可核验源帧关系，页面显示“历史关联图不可恢复”；未以
+  其他时刻图片补位。
+- 新增 Event Center 聚合证据回归 `1 passed`；Platform 全量 `306 passed / 6 skipped / 10 subtests
+  passed`；Console Router `66 passed`。Console 全量仍有 2 个既有 LiveModules 失败（演示源路口绑定
+  与 Mission 失败提示），与本次事件证据改动无关。
+
+### 典型 TTC 1.6s 历史事件恢复
+
+- 对 `conflict_20260715_164100_critical_ttc1.6s_m6342_nm5713.jpg` 做全片逐秒、候选窗口逐帧像素反查，
+  定位 XQH 源时间 `33.37303s` / 源帧约 `1000`。
+- 当前 `hover_cruise_v1` 与当前 `hover_only_legacy` 均越过 42s：前者只产出已知 `TTC=2.25s`，后者
+  没有 TCC；两次 Mission 均已停止，无遗留检测器进程。
+- 提交 `41fb6e6` 的离线历史链路在同一窗口重现 `critical / TTC=1.6s`。复现图与旧图均为
+  3840×2160，平均绝对像素差 `1.3843`，`99.437%` 像素差 ≤5；跟踪 ID 跨运行变化按事实保留。
+- 恢复事件 `19ecefeb...` 使用 sealed historical Mission、受管证据 `0969a479...` 与原图 SHA-256
+  `082d0de8...7d54e`，接口明确返回 `historical_reconstructed / reconstructed`，页面显示历史口径提示。
+
+### 2026-08-10 当前检测器高夹角 TCC 正式恢复
+
+- 目标几何的当前冲突角为 `160.8°`；标准 150° 门禁保持不变，新增严格 `150°~170°` 左转交叉分支，要求路径交点、`TTC<=3s`、`PET<=1s`、避险行为和明确左转弧线同时成立。
+- 视觉不明确的 `T+51.552s` 近对向通行被 `high_angle_scene_ambiguous` 排除；同刻 CPA 仍关闭。
+- 最终实时 Mission `MSN-DD60921B64E2` 在 `running` 状态即落库目标事件 `ddb7ca9e...`：`T+33.333s / critical / TTC=2.16s / PET=0.03s / 1802×1770`，两项 3840×2160 JPEG 证据完整。
+- 真实事件中心页面可见原始画面、检测器 TCC 帧，以及“近同时占用 · 急减速避险 · 高夹角严格交汇”判定依据；命中后停止任务，单一 8000 Platform 健康且无活动检测进程。
+- 自动化门禁：受影响根测试 `52 passed`；Platform `307 passed / 6 skipped / 10 subtests`；Console Router `66 passed` 且 production build 成功；XQH 静态基线 `55 PASS / 0 FAIL / 1 WARN`（前 100 帧方向统计为空）；`git diff --check` 通过。ADR-019 local strict 仅保留既有 `local_runtime_evidence` 外部门禁。
+
+### 2026-08-10 事件 ddb7ca9e TCC 聚焦证据重建
+
+- 生产 `ShowNode` 冲突帧聚焦视图只绘制冲突双方的框、标签、实线历史轨迹、两条到预测冲突点的虚线预测轨迹、红黄爆点和 TTC 徽章；两条预测线分别继承对应对象检测框和历史轨迹的颜色，TTC 徽章动态避开双方框、标签及历史/预测轨迹，非冲突目标与常规道路/统计叠加均为 0。
+- 真实重放再次命中 `T+33.333s / 1802×1770 / TTC=2.16s / PET=0.03s`，新旧原始帧 SHA-256 同为 `dae77839...3e9`，确认重建使用完全相同的源帧。
+- 原事件 ID、Mission、TCC 事实、原始 EvidenceItem 均保持不变；detector EvidenceItem `d8cf0df8...` 换版后 SHA-256 为 `a64b7a20...d107`，EvidencePackage version 为 4，内容接口下载复算一致。
+- 自动化门禁为 `31 passed`；临时重放的 2 条重复冲突数据库引用已清理、受管对象未物理删除，单一 Platform `8000` ready、`pipelines_active=0`。
+
+### 2026-08-24 Console2 实时方向指标真实性复验
+
+- 后续监控指标验证固定使用 xqh `INT_camera_1 / SRC-E2BA6A8F6D0F`。本次真实运行 Mission
+  `MSN-E8FCEF371A8A`、Pipeline `pipe-8aa7ee61`，Platform `/health` 与 `/ready` 均为 200，
+  database、Kafka、TimescaleDB 和 pipeline manager 全部 healthy。
+- 冻结原视频时刻 14:24:23 后，页面显示当前目标 177、活动轨迹 169、平均车速 13.2km/h；Kafka
+  `uav_replay_v2_statistics_SRC-E2BA6A8F6D0F` 的 message
+  `b9f5a823-0783-42e5-8ec2-43687873b228` 同帧分别为 177、169、13.2，差值均为 0。消息携带的
+  `active_trajectories` 长度也为 169；此前 MP4820 验证已证明该数组可能截断为 200，因此页面总数统一读取
+  权威 `active_tracks`。
+- 页面四个物理流向为西→东 38.3、东→西 17.8、北→南 10.6、北→东 3.4 辆/分钟；逐项回算
+  11 条 AutoLane 的 `flow_veh_per_min` 后完全一致。页面正速度按流率加权：西→东 8.4、东→西
+  5.8、北→南 18.4、北→东 7.2km/h，与消息计算一致；0 速度不冒充有效观测。
+- 同帧 `road_analytics_eligible=false` 且质量原因为 `lane_verified_map_required`。按后续业务确认，AutoLane
+  的米制 `queue_length_m` 在缺正式路网时按物理进口→出口聚合为“方向估算”，同方向多车道取最大值；
+  页面实测顶部最长排队 85m、东进口→西出口 85m，并标记“降级观测”。饱和度仍显示“未标定”。
+  检测管道同时收紧单位契约：有效 H 才输出 `queue_length_m/homography_world`，无 H 只输出
+  `queue_length_px/pixel_fallback`，后者不在 Console 以米展示。
+- 已登记真实源缺少 Movement/AutoLane 时使用活动 GCJ-02 轨迹方位推断并标记“轨迹推断”；连轨迹也
+  不可用时显示等待数据，绝不回退固定 Mock。固定演示统计、事件和趋势也只允许显式演示源使用。
+- 六类场景策略均扩展为适用点位、业务目标、三项联合触发判据、三步处置链、控制边界、退出规则和
+  四项复盘指标。黄闪明确要求交警值守席审批，可变车道必须先清空再切换，溢流控制禁止在下游无接收
+  空间时简单增加上游绿灯。已登记 MP4820 源离线时显示“证据未齐 · 不触发”，不把示例值冒充实时事实。
+- 1357×912 应用内浏览器逐项切换六个场景，详情区均可独立滚动、无横向溢出、底部“仅生成建议 / 交警
+  或信控平台确认”始终可见，Console 无新增 error/warning。策略目录聚焦测试 `10 passed`、页签交互测试
+  `1 passed`、production build 通过。Console2 全量为 `243 passed / 2 failed`；剩余两项均为本轮未修改的
+  “启动演示检测”用例（未绑定无人机/路口时按钮被禁用，因而无法进入 Mission 失败提示），已单独复现，
+  不将其误报为本轮通过。

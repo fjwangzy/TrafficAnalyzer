@@ -5,6 +5,7 @@ from scripts.bootstrap_mp4new_sources import (
     LOCAL_REPLAY_CATALOG,
     MP4NEW_CATALOG,
     MP4728_CATALOG,
+    MP4820_CATALOG,
 )
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -77,8 +78,24 @@ def test_mp4728_catalog_registers_jingshi_profiles_with_distinct_telemetry():
 def test_all_local_catalog_adds_mp4728_without_expanding_map_dependent_catalog():
     sources = [source for item in ALL_LOCAL_REPLAY_CATALOG for source in item["sources"]]
     assert len(LOCAL_REPLAY_CATALOG) == 4
-    assert len(ALL_LOCAL_REPLAY_CATALOG) == 5
-    assert len(sources) == 13
+    assert len(ALL_LOCAL_REPLAY_CATALOG) == 6
+    assert len(sources) == 15
+
+
+def test_mp4820_catalog_isolated_and_requires_laser_verified_geo_tcc_validation():
+    assert len(MP4820_CATALOG) == 1
+    item = MP4820_CATALOG[0]
+    assert item["inter_id"] == "INT_MP4820_JINGSHI_EAST_CORRIDOR"
+    sources = {source["profile_id"]: source for source in item["sources"]}
+    assert set(sources) == {"SRC-MP4820-JS-0813-EW", "SRC-MP4820-JS-0813-WE"}
+    assert sources["SRC-MP4820-JS-0813-EW"]["time_offset_sec"] == 58.451
+    assert sources["SRC-MP4820-JS-0813-WE"]["time_offset_sec"] == 216.149
+    for source in sources.values():
+        assert source["acceptance_mode"] == "geo_tcc_validation"
+        assert source["telemetry_agl_policy"] == "laser_target"
+        assert source["min_tcc_eligible_coverage"] == 0.90
+        assert (ROOT / source["video"]).is_file()
+        assert (ROOT / source["telemetry"]).is_file()
 
 
 def test_all_local_replay_catalog_has_traceable_test_coordinates_for_acceptance():

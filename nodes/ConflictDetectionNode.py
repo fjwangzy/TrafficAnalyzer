@@ -39,6 +39,13 @@ class ConflictDetectionNode:
         self.min_history_points = cfg.get("min_history_points", 4)
         self.min_conflict_angle_deg = cfg.get("min_conflict_angle_deg", 30.0)
         self.max_conflict_angle_deg = cfg.get("max_conflict_angle_deg", 150.0)
+        self.enable_high_angle_path_intersection = cfg.get(
+            "enable_high_angle_path_intersection", False
+        )
+        self.high_angle_max_conflict_angle_deg = max(
+            self.max_conflict_angle_deg,
+            cfg.get("high_angle_max_conflict_angle_deg", 170.0),
+        )
         self.turn_angle_threshold_deg = cfg.get("turn_angle_threshold_deg", 45.0)
         self.min_turn_leg_m = cfg.get("min_turn_leg_m", 2.0)
         self.straight_angle_threshold_deg = cfg.get("straight_angle_threshold_deg", 25.0)
@@ -47,12 +54,34 @@ class ConflictDetectionNode:
         self.stop_speed_ms = cfg.get("stop_speed_ms", 1.0)
         self.moving_speed_ms = cfg.get("moving_speed_ms", 2.0)
         self.min_segment_speed_ms = cfg.get("min_segment_speed_ms", 0.2)
+        self.max_segment_speed_ms = float(cfg.get("max_segment_speed_ms", 45.0))
+        self.min_vehicle_class_confidence = float(
+            cfg.get("min_vehicle_class_confidence", 0.8)
+        )
+        self.min_heading_confidence = float(cfg.get("min_heading_confidence", 0.6))
+        self.min_general_crossing_angle_deg = max(
+            self.min_conflict_angle_deg,
+            float(cfg.get("min_general_crossing_angle_deg", 60.0)),
+        )
+        self.min_participant_border_clearance_px = float(
+            cfg.get("min_participant_border_clearance_px", 8.0)
+        )
+        self.max_cross_class_bbox_containment = float(
+            cfg.get("max_cross_class_bbox_containment", 0.8)
+        )
+        self.max_current_observation_age_sec = float(
+            cfg.get("max_current_observation_age_sec", 0.05)
+        )
         self.max_pair_distance_m = cfg.get("max_pair_distance_m", 15.0)
         self.min_trajectory_length_m = cfg.get("min_trajectory_length_m", 3.0)
         self.emit_cooldown_sec = cfg.get("emit_cooldown_sec", 2.0)
         # (pair_key) -> {"severity": str, "timestamp": float}
         self._reported_pairs: dict[tuple, dict] = {}
         self._severity_rank = {"warning": 1, "critical": 2}
+        self._last_prediction_rejection_reason: str | None = None
+        self.algorithm_version = str(
+            cfg.get("algorithm_version", "tcc-path-intersection/v2")
+        )
 
     @profile_time
     def process(self, frame_element: FrameElement) -> FrameElement:
@@ -68,12 +97,22 @@ class ConflictDetectionNode:
             "eligible_non_motor_tracks": 0,
             "candidate_pairs": 0,
             "association_immature": 0,
+            "class_unstable": 0,
+            "participant_not_fully_visible": 0,
+            "nested_cross_class_detection": 0,
+            "participant_not_currently_observed": 0,
+            "heading_unreliable": 0,
+            "general_crossing_angle_too_shallow": 0,
             "speed_missing": 0,
             "speed_below_min": 0,
             "history_insufficient": 0,
             "displacement_insufficient": 0,
             "distance_filtered": 0,
             "prediction_failed": 0,
+            "high_angle_candidates": 0,
+            "high_angle_emitted": 0,
+            "high_angle_rejected": 0,
+            "rejection_reasons": {},
             "scene_filtered": 0,
             "evidence_failed": 0,
             "severity_filtered": 0,
@@ -131,6 +170,40 @@ class ConflictDetectionNode:
             elif track.vehicle_class == "non_motor":
                 diagnostics["non_motor_tracks"] += 1
 
+            heading_confidence = (
+                float(motion_profile.get("heading_confidence") or 0.0)
+                if motion_profile is not None
+                else 0.0
+            )
+
+            current_vehicle_class = getattr(track, "current_vehicle_class", None)
+            confidence_value = getattr(track, "vehicle_class_confidence", None)
+            vehicle_class_confidence = (
+                1.0 if confidence_value is None else float(confidence_value)
+            )
+            if (
+                current_vehicle_class is not None
+                and current_vehicle_class != track.vehicle_class
+            ) or vehicle_class_confidence < self.min_vehicle_class_confidence:
+                diagnostics["class_unstable"] += 1
+                continue
+
+            participant_visible, border_clearance_px = self._participant_visibility(track)
+            if not participant_visible:
+                diagnostics["participant_not_fully_visible"] += 1
+                continue
+
+            observation_timestamp = getattr(
+                track, "current_observation_timestamp_sec", None
+            )
+            if (
+                observation_timestamp is not None
+                and float(frame_element.timestamp) - float(observation_timestamp)
+                > self.max_current_observation_age_sec
+            ):
+                diagnostics["participant_not_currently_observed"] += 1
+                continue
+
             # TCC is a derived business fact, so a ByteTrack association must
             # first satisfy the canonical source-time/point maturity contract.
             if not getattr(track, "trajectory_output_eligible", False):
@@ -164,14 +237,24 @@ class ConflictDetectionNode:
                 continue
             entry = {
                 "track_id": track_id,
+                # `frame_element.id_list` carries image-association IDs, while
+                # lifecycle views are keyed by the stable formal track ID.  Keep
+                # both: evidence/rendering uses the association ID, but encounter
+                # deduplication must use the lifecycle key or it is cleared every
+                # frame as a false "inactive pair".
+                "formal_track_id": int(track.id),
                 "center_px": (cx, cy),
                 "speed_kmh": track.avg_speed_kmh,
                 "velocity_ms": velocity_ms,
                 "vehicle_class": track.vehicle_class,
                 "motion_profile": motion_profile,
+                "heading_confidence": heading_confidence,
                 "position_enu_m": current_position,
                 "position_is_absolute": True,
                 "tracking_quality": getattr(track, "tracking_quality", "degraded"),
+                "vehicle_class_confidence": vehicle_class_confidence,
+                "border_clearance_px": border_clearance_px,
+                "bbox_xyxy": getattr(track, "current_bbox_xyxy", None),
             }
             if track.vehicle_class == "motor":
                 motor_tracks.append(entry)
@@ -196,9 +279,21 @@ class ConflictDetectionNode:
             for non_motor in non_motor_tracks:
                 diagnostics["candidate_pairs"] += 1
                 pair_key = (
-                    min(motor["track_id"], non_motor["track_id"]),
-                    max(motor["track_id"], non_motor["track_id"]),
+                    min(motor["formal_track_id"], non_motor["formal_track_id"]),
+                    max(motor["formal_track_id"], non_motor["formal_track_id"]),
                 )
+                containment = self._bbox_containment(
+                    motor["bbox_xyxy"], non_motor["bbox_xyxy"]
+                )
+                if (
+                    containment is not None
+                    and containment >= self.max_cross_class_bbox_containment
+                ):
+                    diagnostics["nested_cross_class_detection"] += 1
+                    self._record_rejection(
+                        diagnostics, "nested_cross_class_detection"
+                    )
+                    continue
                 # 计算当前世界坐标（无人机相对米制坐标）
                 pts = np.asarray(
                     [motor["position_enu_m"], non_motor["position_enu_m"]],
@@ -209,6 +304,7 @@ class ConflictDetectionNode:
                 pair_dist = float(np.linalg.norm(pts[0] - pts[1]))
                 if pair_dist > self.max_pair_distance_m:
                     diagnostics["distance_filtered"] += 1
+                    self._record_rejection(diagnostics, "pair_distance_exceeded")
                     continue
 
                 prediction = self._predict_collision(
@@ -219,8 +315,15 @@ class ConflictDetectionNode:
                 )
                 if prediction is None:
                     diagnostics["prediction_failed"] += 1
+                    reason = self._last_prediction_rejection_reason
+                    self._record_rejection(diagnostics, reason)
+                    if reason and reason.startswith("high_angle_"):
+                        diagnostics["high_angle_rejected"] += 1
                     continue
                 diagnostics["prediction_candidates"] += 1
+                is_high_angle = prediction.get("angle_band") == "high_angle_strict"
+                if is_high_angle:
+                    diagnostics["high_angle_candidates"] += 1
 
                 scene = self._classify_scene(
                     motor["motion_profile"],
@@ -229,6 +332,38 @@ class ConflictDetectionNode:
                 )
                 if scene is None:
                     diagnostics["scene_filtered"] += 1
+                    self._record_rejection(diagnostics, "scene_unclassified")
+                    continue
+                if scene == "general_crossing" and min(
+                    float(motor["heading_confidence"]),
+                    float(non_motor["heading_confidence"]),
+                ) < self.min_heading_confidence:
+                    diagnostics["scene_filtered"] += 1
+                    diagnostics["heading_unreliable"] += 1
+                    self._record_rejection(
+                        diagnostics, "general_crossing_heading_unreliable"
+                    )
+                    continue
+                if (
+                    scene == "general_crossing"
+                    and prediction["conflict_angle_deg"]
+                    < self.min_general_crossing_angle_deg
+                ):
+                    diagnostics["scene_filtered"] += 1
+                    diagnostics["general_crossing_angle_too_shallow"] += 1
+                    self._record_rejection(
+                        diagnostics, "general_crossing_angle_too_shallow"
+                    )
+                    continue
+                if is_high_angle and scene != "suspected_unprotected_left_turn":
+                    # 150–170° is visually close to opposing flow.  It is a formal
+                    # crossing only when a measured left-turn arc cuts across the
+                    # other participant; straight opposing tracks are ambiguous.
+                    diagnostics["scene_filtered"] += 1
+                    diagnostics["high_angle_rejected"] += 1
+                    self._record_rejection(
+                        diagnostics, "high_angle_scene_ambiguous"
+                    )
                     continue
 
                 evidence = self._collect_evidence(
@@ -237,8 +372,23 @@ class ConflictDetectionNode:
                     non_motor["motion_profile"],
                     scene,
                 )
+                if is_high_angle:
+                    behavior_evidence = {
+                        "hard_deceleration",
+                        "hard_steering",
+                        "stop_or_yield",
+                    }
+                    if not behavior_evidence.intersection(evidence):
+                        diagnostics["evidence_failed"] += 1
+                        diagnostics["high_angle_rejected"] += 1
+                        self._record_rejection(
+                            diagnostics, "high_angle_behavior_missing"
+                        )
+                        continue
+                    evidence.append("high_angle_crossing")
                 if not evidence:
                     diagnostics["evidence_failed"] += 1
+                    self._record_rejection(diagnostics, "evidence_missing")
                     continue
                 diagnostics["evidence_passed"] += 1
 
@@ -262,10 +412,42 @@ class ConflictDetectionNode:
                         "evidence": evidence,
                         "risk_score": self._risk_score(prediction, evidence),
                         "motor_speed_kmh": round(motor["speed_kmh"], 1),
+                        "min_same_time_distance_m": round(
+                            float(prediction["min_same_time_distance_m"]), 3
+                        ),
+                        "motor_velocity_enu_ms": [
+                            round(float(value), 3) for value in motor["velocity_ms"]
+                        ],
+                        "non_motor_velocity_enu_ms": [
+                            round(float(value), 3) for value in non_motor["velocity_ms"]
+                        ],
+                        "motor_heading_confidence": round(
+                            float(motor["heading_confidence"]), 3
+                        ),
+                        "non_motor_heading_confidence": round(
+                            float(non_motor["heading_confidence"]), 3
+                        ),
+                        "projection_quality": self._projection_quality_snapshot(
+                            frame_element
+                        ),
+                        "motion_segment_id": getattr(
+                            frame_element, "flight_segment_id", None
+                        ),
+                        "algorithm_version": self.algorithm_version,
                         "flight_phase": getattr(frame_element, "flight_phase", None),
                         "tracking_quality": {
                             "motor": motor["tracking_quality"],
                             "non_motor": non_motor["tracking_quality"],
+                        },
+                        "vehicle_class_confidence": {
+                            "motor": round(float(motor["vehicle_class_confidence"]), 3),
+                            "non_motor": round(
+                                float(non_motor["vehicle_class_confidence"]), 3
+                            ),
+                        },
+                        "participant_border_clearance_px": {
+                            "motor": motor["border_clearance_px"],
+                            "non_motor": non_motor["border_clearance_px"],
                         },
                     }
                     if "motor_arrival_ttc_sec" in prediction:
@@ -313,6 +495,8 @@ class ConflictDetectionNode:
                         diagnostics["business_events_emitted"] += 1
                     else:
                         diagnostics["experimental_events_emitted"] += 1
+                    if is_high_angle:
+                        diagnostics["high_angle_emitted"] += 1
                     self._reported_pairs[pair_key] = {
                         "severity": severity, "timestamp": now
                     }
@@ -333,6 +517,43 @@ class ConflictDetectionNode:
         else:
             diagnostics["status"] = "no_events"
         return frame_element
+
+    @staticmethod
+    def _bbox_containment(
+        first_bbox, second_bbox
+    ) -> float | None:
+        """返回交集占较小框的比例，用于识别同一物体上的跨类别嵌套检测。"""
+        if first_bbox is None or second_bbox is None:
+            return None
+        if len(first_bbox) != 4 or len(second_bbox) != 4:
+            return None
+        ax1, ay1, ax2, ay2 = (float(value) for value in first_bbox)
+        bx1, by1, bx2, by2 = (float(value) for value in second_bbox)
+        first_area = max(0.0, ax2 - ax1) * max(0.0, ay2 - ay1)
+        second_area = max(0.0, bx2 - bx1) * max(0.0, by2 - by1)
+        smaller_area = min(first_area, second_area)
+        if smaller_area <= 0:
+            return None
+        intersection = (
+            max(0.0, min(ax2, bx2) - max(ax1, bx1))
+            * max(0.0, min(ay2, by2) - max(ay1, by1))
+        )
+        return intersection / smaller_area
+
+    def _participant_visibility(self, track) -> tuple[bool, float | None]:
+        """要求当前检测框完整落在画面内，避免用已出画目标的历史运动外推事件。"""
+        bbox = getattr(track, "current_bbox_xyxy", None)
+        frame_size = getattr(track, "current_frame_size", None)
+        if bbox is None or frame_size is None:
+            return True, None
+        if len(bbox) != 4 or len(frame_size) != 2:
+            return False, None
+        x1, y1, x2, y2 = (float(value) for value in bbox)
+        frame_width, frame_height = (float(value) for value in frame_size)
+        if x2 <= x1 or y2 <= y1 or frame_width <= 0 or frame_height <= 0:
+            return False, None
+        clearance = min(x1, y1, frame_width - x2, frame_height - y2)
+        return clearance >= self.min_participant_border_clearance_px, round(clearance, 2)
 
     def _velocity_ms(self, track) -> np.ndarray | None:
         vel = getattr(track, "velocity_ms", None)
@@ -394,7 +615,10 @@ class ConflictDetectionNode:
         segment_velocities = deltas / dt[:, None]
         segment_speeds = np.linalg.norm(segment_velocities, axis=1)
 
-        moving = segment_speeds >= self.min_segment_speed_ms
+        moving = (
+            (segment_speeds >= self.min_segment_speed_ms)
+            & (segment_speeds <= self.max_segment_speed_ms)
+        )
         if not np.any(moving):
             return None
 
@@ -437,7 +661,37 @@ class ConflictDetectionNode:
             float(np.min(acceleration)) if acceleration.size else 0.0
         )
 
-        recent_velocity = segment_velocities[moving][-1]
+        significant_heading_steps = heading_steps[
+            np.abs(heading_steps) >= self.straight_angle_threshold_deg / 2.0
+        ]
+        sustained_turn = (
+            abs(turn_angle) > self.straight_angle_threshold_deg
+            and significant_heading_steps.size >= 2
+            and (
+                np.all(significant_heading_steps > 0)
+                or np.all(significant_heading_steps < 0)
+            )
+        )
+        moving_velocities = segment_velocities[moving]
+        recent_velocity = (
+            moving_velocities[-1]
+            if sustained_turn
+            else np.median(moving_velocities, axis=0)
+        )
+        recent_heading = float(
+            np.degrees(np.arctan2(recent_velocity[1], recent_velocity[0]))
+        )
+        heading_deviation = np.asarray(
+            [
+                abs(self._normalize_angle_deg(heading - recent_heading))
+                for heading in valid_headings
+            ],
+            dtype=np.float64,
+        )
+        heading_confidence = max(
+            0.0,
+            1.0 - float(np.median(heading_deviation)) / 90.0,
+        )
         current_velocity = self._prediction_velocity_ms(
             self._velocity_ms(track),
             {"recent_velocity_ms": recent_velocity},
@@ -457,8 +711,26 @@ class ConflictDetectionNode:
             "min_acceleration_ms2": min_acceleration,
             "current_speed_ms": current_speed,
             "recent_velocity_ms": recent_velocity,
+            "direction_source": (
+                "sustained_turn_last_segment"
+                if sustained_turn
+                else "robust_segment_median"
+            ),
+            "heading_confidence": heading_confidence,
             "is_stopped": is_stopped,
             "is_straight": abs(turn_angle) <= self.straight_angle_threshold_deg,
+        }
+
+    @staticmethod
+    def _projection_quality_snapshot(frame_element: FrameElement) -> dict:
+        quality = getattr(frame_element, "geo_reference_quality", None)
+        if not isinstance(quality, dict):
+            return {"geo_status": "unknown", "tcc_reasons": ["geo_quality_missing"]}
+        return {
+            "geo_status": quality.get("geo_status", quality.get("status", "unknown")),
+            "tcc_reasons": list(quality.get("tcc_reasons") or []),
+            "current_frame_matrix": dict(quality.get("current_frame_matrix") or {}),
+            "visual_warp": dict(quality.get("visual_warp") or {}),
         }
 
     def _predict_collision(
@@ -468,14 +740,30 @@ class ConflictDetectionNode:
         motor_velocity_ms: np.ndarray | None,
         non_motor_velocity_ms: np.ndarray | None,
     ) -> dict | None:
+        prediction, reason = self._predict_collision_with_reason(
+            motor_pos_m,
+            non_motor_pos_m,
+            motor_velocity_ms,
+            non_motor_velocity_ms,
+        )
+        self._last_prediction_rejection_reason = reason
+        return prediction
+
+    def _predict_collision_with_reason(
+        self,
+        motor_pos_m: np.ndarray,
+        non_motor_pos_m: np.ndarray,
+        motor_velocity_ms: np.ndarray | None,
+        non_motor_velocity_ms: np.ndarray | None,
+    ) -> tuple[dict | None, str | None]:
         if motor_velocity_ms is None or non_motor_velocity_ms is None:
-            return None
+            return None, "velocity_missing"
 
         # 至少一方速度 >= 1 m/s（允许急停方接近 0）
         motor_speed = float(np.linalg.norm(motor_velocity_ms))
         non_motor_speed = float(np.linalg.norm(non_motor_velocity_ms))
         if motor_speed < 1.0 and non_motor_speed < 0.5:
-            return None
+            return None, "pair_speed_below_min"
 
         # 物理验证：两车必须真的在靠近（相对位置·相对速度 < 0）
         relative_position = non_motor_pos_m - motor_pos_m
@@ -483,14 +771,24 @@ class ConflictDetectionNode:
         closing_rate = float(np.dot(relative_position, relative_vel))
         if closing_rate >= 0:
             # 距离正在增大或保持不变，不可能碰撞
-            return None
+            return None, "not_approaching"
 
         conflict_angle = self._conflict_angle_deg(
             motor_velocity_ms,
             non_motor_velocity_ms,
         )
-        if conflict_angle is None or not self._is_valid_conflict_angle(conflict_angle):
-            return None
+        if conflict_angle is None:
+            return None, "angle_unavailable"
+        if conflict_angle < self.min_conflict_angle_deg:
+            return None, "angle_below_min"
+        effective_max_angle = (
+            self.high_angle_max_conflict_angle_deg
+            if self.enable_high_angle_path_intersection
+            else self.max_conflict_angle_deg
+        )
+        if conflict_angle > effective_max_angle:
+            return None, "angle_above_max"
+        is_high_angle = conflict_angle > self.max_conflict_angle_deg
 
         # 过滤同向并行：冲突角度较小（< 60°）时，检查沿连线方向的接近速度
         # 同向并行车辆虽然 closing_rate < 0（微小横向漂移），但沿连线方向的
@@ -504,18 +802,18 @@ class ConflictDetectionNode:
                 closing_along_line = float(np.dot(relative_vel, pair_dir))
                 # 接近速度太低（< 1 m/s），视为并行通行
                 if abs(closing_along_line) < 1.0:
-                    return None
+                    return None, "parallel_drift"
 
         relative_speed = float(np.linalg.norm(relative_vel))
         if relative_speed < self.relative_speed_min_ms:
-            return None
+            return None, "relative_speed_below_min"
 
         if self.prediction_horizon_sec <= 0 or self.sample_interval_sec <= 0:
-            return None
+            return None, "invalid_prediction_window"
 
         candidates = []
 
-        if self.enable_same_time_cpa:
+        if self.enable_same_time_cpa and not is_high_angle:
             same_time = self._predict_same_time_collision(
                 motor_pos_m,
                 non_motor_pos_m,
@@ -537,9 +835,20 @@ class ConflictDetectionNode:
             candidates.append(path_intersection)
 
         if not candidates:
-            return None
+            return None, "path_intersection_missing"
 
-        return min(candidates, key=lambda item: item["ttc_sec"])
+        prediction = min(candidates, key=lambda item: item["ttc_sec"])
+        if is_high_angle:
+            if prediction.get("prediction_type") != "path_intersection":
+                return None, "high_angle_path_intersection_required"
+            if prediction["ttc_sec"] > self.critical_horizon_sec:
+                return None, "high_angle_ttc_exceeded"
+            if prediction["pet_sec"] > self.hard_pet_sec:
+                return None, "high_angle_pet_exceeded"
+            prediction["angle_band"] = "high_angle_strict"
+        else:
+            prediction["angle_band"] = "standard"
+        return prediction, None
 
     def _predict_same_time_collision(
         self,
@@ -811,12 +1120,15 @@ class ConflictDetectionNode:
             and prediction["pet_sec"] <= self.hard_pet_sec
         ):
             score += 30
-        if "hard_deceleration" in evidence:
-            score += 20
-        if "stop_or_yield" in evidence:
-            score += 20
-        if "hard_steering" in evidence:
-            score += 10
+        # These behavior flags share the same short motion window and are often
+        # correlated manifestations of one projection/motion change. Count the
+        # strongest behavior signal once instead of inflating one anomaly to 100.
+        behavior_score = 0
+        if "hard_deceleration" in evidence or "stop_or_yield" in evidence:
+            behavior_score = 20
+        elif "hard_steering" in evidence:
+            behavior_score = 10
+        score += behavior_score
         return min(score, 100)
 
     def _conflict_angle_deg(
@@ -839,7 +1151,19 @@ class ConflictDetectionNode:
         return float(np.degrees(np.arccos(cos_theta)))
 
     def _is_valid_conflict_angle(self, angle_deg: float) -> bool:
-        return self.min_conflict_angle_deg <= angle_deg <= self.max_conflict_angle_deg
+        effective_max_angle = (
+            self.high_angle_max_conflict_angle_deg
+            if self.enable_high_angle_path_intersection
+            else self.max_conflict_angle_deg
+        )
+        return self.min_conflict_angle_deg <= angle_deg <= effective_max_angle
+
+    @staticmethod
+    def _record_rejection(diagnostics: dict, reason: str | None) -> None:
+        if not reason:
+            return
+        reasons = diagnostics.setdefault("rejection_reasons", {})
+        reasons[reason] = int(reasons.get(reason, 0)) + 1
 
     @staticmethod
     def _normalize_angle_deg(angle: float) -> float:

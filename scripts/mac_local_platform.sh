@@ -6,25 +6,18 @@ PROJECT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MPS_PYTHON="${MPS_VENV_DIR:-$PROJECT_ROOT/.venv-mps}/bin/python"
 PLATFORM_INSTANCE="${PLATFORM_INSTANCE:-live}"
 APP_RUNTIME_PROFILE="${APP_RUNTIME_PROFILE:-live}"
+PLATFORM_PORT="${PLATFORM_PORT:-8000}"
 DEFAULT_SURVEY_STORAGE_DIR="$PROJECT_ROOT/.runtime/survey"
 if [[ ! "$PLATFORM_INSTANCE" =~ ^[A-Za-z0-9_-]+$ ]]; then
   echo "PLATFORM_INSTANCE contains unsupported characters." >&2
   exit 2
 fi
 if [[ "$APP_RUNTIME_PROFILE" == "replay_v2" ]]; then
-  PLATFORM_PORT="${PLATFORM_PORT:-8200}"
   PIPELINE_CAMERA_ID_START="${PIPELINE_CAMERA_ID_START:-18101}"
-  REPLAY_V2_PYTHON_DEPS="${REPLAY_V2_PYTHON_DEPS:-/private/tmp/traffic-analyzer-replay-v2-python}"
-  if [[ -d "$REPLAY_V2_PYTHON_DEPS" ]]; then
-    PLATFORM_PYTHONPATH="$REPLAY_V2_PYTHON_DEPS${PYTHONPATH:+:$PYTHONPATH}"
-  else
-    PLATFORM_PYTHONPATH="${PYTHONPATH:-}"
-  fi
 else
-  PLATFORM_PORT="${PLATFORM_PORT:-8000}"
   PIPELINE_CAMERA_ID_START="${PIPELINE_CAMERA_ID_START:-$(date +%s)}"
-  PLATFORM_PYTHONPATH="${PYTHONPATH:-}"
 fi
+PLATFORM_PYTHONPATH="${PYTHONPATH:-}"
 RUNTIME_DIR="${TMPDIR:-/tmp}/traffic-analyzer-local-platform-${PLATFORM_INSTANCE}-${UID}"
 LOG_FILE="$RUNTIME_DIR/platform.log"
 LAUNCHD_LABEL="com.traffic-analyzer.local-platform-${PLATFORM_INSTANCE}-${UID}"

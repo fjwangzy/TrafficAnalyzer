@@ -8,6 +8,7 @@
 """
 import base64
 import logging
+import math
 import os
 import re
 import time
@@ -21,7 +22,7 @@ from kafka import KafkaProducer
 
 from elements.FrameElement import FrameElement
 from elements.VideoEndBreakElement import VideoEndBreakElement
-from nodes.ReliableKafkaPublisher import ReliableKafkaPublisher
+from nodes.ReliableKafkaPublisher import ReliableKafkaPublisher, kafka_compression_type
 from services.MissionTrajectoryArchive import MissionTrajectoryArchive
 from utils_local.coordinates import enu_to_gcj02, normalize_telemetry_position
 from utils_local.replay_topics import build_replay_v2_topics
@@ -69,7 +70,7 @@ class KafkaProducerNode:
             # 增加重试和超时配置以提高可靠性
             retries=3,
             request_timeout_ms=5000,
-            compression_type="zstd" if self.storage_profile == "replay_v2" else None,
+            compression_type=kafka_compression_type(self.storage_profile),
         )
 
         self.mission_id = os.environ.get("MISSION_ID")
@@ -90,6 +91,8 @@ class KafkaProducerNode:
         )
         self.trajectory_archive = None
         self._last_replay_frame = None
+        self._replay_source_start_sec = None
+        self._replay_start_published = False
         if self.storage_profile == "replay_v2":
             if not self.mission_id:
                 raise ValueError("MISSION_ID is required for replay_v2 trajectory archive")
@@ -243,6 +246,29 @@ class KafkaProducerNode:
                 dynamic_quality = "unverified"
             elif time_quality == "inferred" and dynamic_quality == "verified":
                 dynamic_quality = "degraded"
+        envelope_data = {
+            "mission_id": getattr(self, "mission_id", None),
+            "pipeline_id": getattr(self, "pipeline_id", None),
+            "run_id": getattr(self, "run_id", None),
+            "source_profile_id": getattr(self, "source_profile_id", None),
+            **data,
+        }
+        if getattr(self, "storage_profile", "live") == "replay_v2":
+            source_start = getattr(self, "_replay_source_start_sec", None)
+            try:
+                source_timestamp = float(frame_element.timestamp)
+                source_start = float(source_start)
+            except (TypeError, ValueError) as exc:
+                raise RuntimeError(
+                    "replay_v2 source start must be registered before publishing"
+                ) from exc
+            if not math.isfinite(source_timestamp) or not math.isfinite(source_start):
+                raise RuntimeError("replay_v2 source timestamps must be finite")
+            offset_ms = round((source_timestamp - source_start) * 1000)
+            if offset_ms < 0:
+                raise RuntimeError("replay_v2 source timestamp precedes Mission start")
+            envelope_data["offset_ms"] = offset_ms
+
         return {
             "message_id": message_id or str(uuid.uuid4()),
             "msg_type": msg_type,
@@ -261,13 +287,7 @@ class KafkaProducerNode:
             "source_time_semantics": semantics,
             "time_quality": time_quality,
             "quality_status": dynamic_quality,
-            "data": {
-                "mission_id": getattr(self, "mission_id", None),
-                "pipeline_id": getattr(self, "pipeline_id", None),
-                "run_id": getattr(self, "run_id", None),
-                "source_profile_id": getattr(self, "source_profile_id", None),
-                **data,
-            },
+            "data": envelope_data,
         }
 
     def _enqueue(self, topic: str, data: dict, *, durable: bool = False):
@@ -702,12 +722,13 @@ class KafkaProducerNode:
         archive = getattr(self, "trajectory_archive", None)
         if archive is None or not self.mission_topic:
             raise RuntimeError("replay_v2 mission publisher is not configured")
-        archive.begin_mission(
+        manifest = archive.begin_mission(
             mission_id=self.mission_id,
             source_profile_id=self.source_profile_id,
             intersection_id=self.intersection_id,
             source_timestamp_sec=frame_element.timestamp,
         )
+        self._replay_source_start_sec = float(manifest["observed_start_source_sec"])
         sealed = archive.seal_mission(
             self.mission_id,
             termination_reason=termination_reason,
@@ -751,6 +772,57 @@ class KafkaProducerNode:
         self._enqueue(self.mission_topic, mission_message, durable=True)
         return len(sealed["journeys"])
 
+    def publish_replay_mission_started(
+        self,
+        frame_element: FrameElement,
+        manifest: dict,
+    ) -> int:
+        """Publish the Mission lineage before any realtime facts can arrive."""
+        if getattr(self, "storage_profile", "live") != "replay_v2":
+            return 0
+        if getattr(self, "_replay_start_published", False):
+            return 0
+        if not self.mission_topic:
+            raise RuntimeError("replay_v2 mission publisher is not configured")
+        start = float(manifest["observed_start_source_sec"])
+        self._replay_source_start_sec = start
+        message = self._canonical_envelope(
+            "uav_replay_mission",
+            {
+                "schema_version": manifest.get("schema_version"),
+                "mission_id": self.mission_id,
+                "source_profile_id": self.source_profile_id,
+                "pipeline_id": self.pipeline_id,
+                "run_id": self.run_id,
+                "status": "running",
+                "duration_sec": 0.0,
+                "source_point_count": 0,
+                "retained_point_count": 0,
+                "journey_count": 0,
+                "behavior_count": 0,
+                "coordinate_coverage_ratio": 0.0,
+                "algorithm_versions": {},
+                "accuracy": {
+                    key: "not_evaluated"
+                    for key in (
+                        "idf1", "hota", "id_switch", "position_rmse",
+                        "speed_mae", "reid_accuracy",
+                    )
+                },
+            },
+            frame_element,
+            message_id=str(
+                uuid.uuid5(
+                    uuid.NAMESPACE_URL,
+                    f"traffic-analyzer:uav-replay-v2-mission:{self.mission_id}:started",
+                )
+            ),
+        )
+        message["schema_version"] = "uav_replay_mission/v2"
+        self._enqueue(self.mission_topic, message, durable=True)
+        self._replay_start_published = True
+        return 1
+
     def mark_replay_mission_incomplete(self, *, failure_reason: str) -> int:
         """Persist and publish a diagnosable incomplete Mission when EOF is lost."""
 
@@ -769,6 +841,7 @@ class KafkaProducerNode:
         )
         start = float(manifest.get("observed_start_source_sec") or frame.timestamp)
         end = float(manifest.get("observed_end_source_sec") or frame.timestamp)
+        self._replay_source_start_sec = start
         mission_message = self._canonical_envelope(
             "uav_replay_mission",
             {
@@ -823,13 +896,15 @@ class KafkaProducerNode:
             archive = getattr(self, "trajectory_archive", None)
             if archive is None:
                 raise RuntimeError("replay_v2 trajectory archive is not configured")
-            archive.begin_mission(
+            manifest = archive.begin_mission(
                 mission_id=self.mission_id,
                 source_profile_id=self.source_profile_id,
                 intersection_id=self.intersection_id,
                 source_timestamp_sec=frame_element.timestamp,
             )
+            self._replay_source_start_sec = float(manifest["observed_start_source_sec"])
             self._last_replay_frame = frame_element
+            self.publish_replay_mission_started(frame_element, manifest)
 
         current_time = time.time()
         timestamp = frame_element.timestamp
@@ -1023,6 +1098,9 @@ class KafkaProducerNode:
                         "count": lane.count,
                         "avg_speed_kmh": lane.avg_speed_kmh,
                         "queue_length_m": lane.queue_length_m,
+                        "queue_length_px": lane.queue_length_px,
+                        "queue_length_unit": lane.queue_length_unit,
+                        "queue_length_method": lane.queue_length_method,
                         "stopped_count": lane.stopped_count,
                         "flow_per_min": lane.flow_per_min,
                         "avg_headway_sec": lane.avg_headway_sec,
@@ -1037,6 +1115,9 @@ class KafkaProducerNode:
                         "flow_veh_per_min": lane.flow_per_min,
                         "avg_speed_kmh": lane.avg_speed_kmh,
                         "queue_length_m": lane.queue_length_m,
+                        "queue_length_px": lane.queue_length_px,
+                        "queue_length_unit": lane.queue_length_unit,
+                        "queue_length_method": lane.queue_length_method,
                         "stopped_count": lane.stopped_count,
                         "headway_sec": lane.avg_headway_sec,
                     }

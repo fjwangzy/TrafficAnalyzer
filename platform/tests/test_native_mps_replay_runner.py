@@ -1,14 +1,22 @@
 import asyncio
+import inspect
 import os
 import subprocess
 import sys
 from pathlib import Path
 
+from kafka.errors import UnrecognizedBrokerVersion
+
 from scripts.run_native_mps_replays import (
     PlatformClient,
+    RecoveringKafkaCapture,
+    _assign_topics_to_end,
     _capture_message,
+    _distinct_message_count,
     _reconcile_road9_once,
+    _wait_for_road9,
     candidate_isolation_summary,
+    choose_runner_camera_id_base,
     completed_trajectory_summary,
     formal_business_leakage,
     hydra_string,
@@ -16,6 +24,7 @@ from scripts.run_native_mps_replays import (
     lifecycle_summary,
     parse_args,
     recognition_summary,
+    replay_video_port_base,
     resolve_replay_imgsz,
     source_catalog,
     source_result_passed,
@@ -24,7 +33,225 @@ from scripts.run_native_mps_replays import (
     validate_source_assets,
     validate_source_time_stride,
     validate_tcc_events,
+    tcc_eligibility_summary,
+    road_context_leakage,
 )
+
+
+def test_reconciliation_counts_distinct_message_ids_for_at_least_once_delivery():
+    messages = [
+        {"message_id": "m-1"},
+        {"message_id": "m-1"},
+        {"message_id": "m-2"},
+        {"payload_without_message_id": True},
+    ]
+
+    assert _distinct_message_count(messages) == 3
+
+
+def test_road9_reconciliation_default_wait_covers_slow_single_record_drain():
+    timeout = inspect.signature(_wait_for_road9).parameters["timeout_sec"].default
+
+    assert timeout >= 120.0
+
+
+def test_acceptance_consumer_uses_manual_topic_assignment_without_group_heartbeat():
+    class FakeConsumer:
+        def __init__(self):
+            self.assigned = None
+            self.seeked = None
+
+        def partitions_for_topic(self, topic):
+            return {0, 2}
+
+        def assign(self, partitions):
+            self.assigned = partitions
+
+        def seek_to_end(self, *partitions):
+            self.seeked = partitions
+
+    consumer = FakeConsumer()
+
+    assigned = _assign_topics_to_end(consumer, ["uav_statistics_30001"])
+
+    assert [(item.topic, item.partition) for item in assigned] == [
+        ("uav_statistics_30001", 0),
+        ("uav_statistics_30001", 2),
+    ]
+    assert consumer.assigned == assigned
+    assert consumer.seeked == tuple(assigned)
+
+
+def test_acceptance_capture_recovers_invalid_fd_from_the_last_consumed_offset():
+    topic = "uav_statistics_30006"
+    created = []
+
+    class FakeConsumer:
+        def __init__(self, *, fail=False):
+            self.fail = fail
+            self.assigned = []
+            self.seeks = []
+            self.closed = False
+
+        def partitions_for_topic(self, _topic):
+            return {0}
+
+        def assign(self, partitions):
+            self.assigned = list(partitions)
+
+        def seek_to_end(self, *_partitions):
+            return None
+
+        def position(self, _partition):
+            return 41
+
+        def seek(self, partition, offset):
+            self.seeks.append((partition, offset))
+
+        def poll(self, **_kwargs):
+            if self.fail:
+                self.fail = False
+                raise ValueError("Invalid file descriptor: -1")
+            message = type("Message", (), {"offset": 41})()
+            return {self.assigned[0]: [message]}
+
+        def close(self):
+            self.closed = True
+
+    def factory(**_kwargs):
+        consumer = FakeConsumer(fail=not created)
+        created.append(consumer)
+        return consumer
+
+    capture = RecoveringKafkaCapture(
+        "127.0.0.1:9092",
+        [topic],
+        consumer_factory=factory,
+    )
+
+    records = capture.poll(timeout_ms=1000, max_records=1000)
+
+    assert len(created) == 2
+    assert created[0].closed is True
+    assert [(partition.topic, partition.partition, offset) for partition, offset in created[1].seeks] == [
+        (topic, 0, 41)
+    ]
+    assert records[created[1].assigned[0]][0].offset == 41
+    assert capture.recovery_count == 1
+
+
+def test_acceptance_capture_resumes_after_the_last_message_already_consumed():
+    topic = "uav_statistics_30006"
+    created = []
+
+    class FakeConsumer:
+        def __init__(self, *, responses):
+            self.responses = iter(responses)
+            self.assigned = []
+            self.seeks = []
+
+        def partitions_for_topic(self, _topic):
+            return {0}
+
+        def assign(self, partitions):
+            self.assigned = list(partitions)
+
+        def seek_to_end(self, *_partitions):
+            return None
+
+        def position(self, _partition):
+            return 41
+
+        def seek(self, partition, offset):
+            self.seeks.append((partition, offset))
+
+        def poll(self, **_kwargs):
+            response = next(self.responses)
+            if isinstance(response, Exception):
+                raise response
+            message = type("Message", (), {"offset": response})()
+            return {self.assigned[0]: [message]}
+
+        def close(self):
+            return None
+
+    def factory(**_kwargs):
+        responses = [41, ValueError("Invalid file descriptor: -1")] if not created else [42]
+        consumer = FakeConsumer(responses=responses)
+        created.append(consumer)
+        return consumer
+
+    capture = RecoveringKafkaCapture(
+        "127.0.0.1:9092",
+        [topic],
+        consumer_factory=factory,
+    )
+
+    capture.poll(timeout_ms=1000, max_records=1000)
+    records = capture.poll(timeout_ms=1000, max_records=1000)
+
+    assert [(partition.topic, partition.partition, offset) for partition, offset in created[1].seeks] == [
+        (topic, 0, 42)
+    ]
+    assert records[created[1].assigned[0]][0].offset == 42
+
+
+def test_acceptance_capture_waits_for_a_restarting_broker_before_resuming():
+    topic = "uav_statistics_30009"
+    factory_calls = 0
+
+    class FakeConsumer:
+        def __init__(self, *, fail_poll=False):
+            self.fail_poll = fail_poll
+            self.assigned = []
+
+        def partitions_for_topic(self, _topic):
+            return {0}
+
+        def assign(self, partitions):
+            self.assigned = list(partitions)
+
+        def seek_to_end(self, *_partitions):
+            return None
+
+        def position(self, _partition):
+            return 12
+
+        def seek(self, _partition, _offset):
+            return None
+
+        def poll(self, **_kwargs):
+            if self.fail_poll:
+                self.fail_poll = False
+                raise UnrecognizedBrokerVersion()
+            message = type("Message", (), {"offset": 12})()
+            return {self.assigned[0]: [message]}
+
+        def close(self):
+            return None
+
+    def factory(**_kwargs):
+        nonlocal factory_calls
+        factory_calls += 1
+        if factory_calls == 1:
+            return FakeConsumer(fail_poll=True)
+        if factory_calls == 2:
+            raise UnrecognizedBrokerVersion()
+        return FakeConsumer()
+
+    capture = RecoveringKafkaCapture(
+        "127.0.0.1:9092",
+        [topic],
+        consumer_factory=factory,
+        recovery_timeout_sec=1.0,
+        recovery_backoff_sec=0.0,
+    )
+
+    records = capture.poll(timeout_ms=1000, max_records=1000)
+
+    assert factory_calls == 3
+    assert records[capture.consumer.assigned[0]][0].offset == 12
+    assert capture.recovery_count == 1
 
 
 def test_replay_imgsz_defaults_preserve_fixed_history_and_production_fallback():
@@ -41,6 +268,14 @@ def test_native_mps_replay_defaults_to_adaptive_imgsz(monkeypatch):
     assert args.adaptive_imgsz is True
     assert args.frame_stride == 3
     assert args.sample_fps is None
+    assert args.camera_id_base is None
+
+
+def test_native_mps_runner_reserves_unused_topic_and_mjpeg_ranges():
+    base = choose_runner_camera_id_base({30001, 30002, 30004}, 2)
+
+    assert base == 30004
+    assert replay_video_port_base(base) == 16004
 
 
 def test_replay_stride_cannot_cross_the_image_association_time_gap():
@@ -68,14 +303,15 @@ def test_native_mps_runner_is_directly_executable_from_the_repository_root():
     assert "Run mp4new/mp4new2 sources serially" in completed.stdout
 
 
-def test_native_mps_runner_selects_all_thirteen_registered_replay_sources():
+def test_native_mps_runner_selects_all_fifteen_registered_replay_sources():
     catalog = source_catalog()
-    assert len(catalog) == 13
+    assert len(catalog) == 15
     assert "SRC-INTER-XQH-0403-PM" in catalog
     assert "SRC-MP4728-JS-0728-7MS" in catalog
     mapped = [item for item in catalog.values() if item["inter_id"].startswith("011")]
     assert all(item["road_data_version"] == "20260501-IMAGERY-FIT-V1" for item in mapped)
     assert catalog["SRC-MP4728-JS-0728-7MS"]["road_data_version"] is None
+    assert catalog["SRC-MP4820-JS-0813-EW"]["acceptance_mode"] == "geo_tcc_validation"
 
 
 def test_strict_tcc_validation_accepts_zero_events_and_path_intersections():
@@ -267,6 +503,12 @@ def test_tcc_diagnostics_summary_proves_the_detector_funnel_ran():
                     "prediction_candidates": 0,
                     "distance_filtered": 7,
                     "prediction_failed": 5,
+                    "participant_not_fully_visible": 3,
+                    "nested_cross_class_detection": 2,
+                    "class_unstable": 1,
+                    "participant_not_currently_observed": 4,
+                    "heading_unreliable": 6,
+                    "general_crossing_angle_too_shallow": 5,
                     "business_events_emitted": 0,
                 }
             }
@@ -293,6 +535,12 @@ def test_tcc_diagnostics_summary_proves_the_detector_funnel_ran():
         "funnel_rejections": {
             "distance_filtered": 7,
             "evidence_failed": 1,
+            "class_unstable": 1,
+            "nested_cross_class_detection": 2,
+            "participant_not_fully_visible": 3,
+            "participant_not_currently_observed": 4,
+            "heading_unreliable": 6,
+            "general_crossing_angle_too_shallow": 5,
             "prediction_failed": 5,
         },
     }
@@ -441,8 +689,53 @@ def test_telemetry_overrides_disable_mismatched_mp4728_osd_instead_of_reusing_it
         "telemetry.source=file",
         "telemetry.file_path='经十路7米每秒.txt'",
         "telemetry.time_offset_sec=74.373",
-        "telemetry.sync_tolerance_sec=2.5",
-    ]
+            "telemetry.sync_tolerance_sec=2.5",
+            "telemetry.agl_policy=legacy_height",
+        ]
+
+
+def test_geo_tcc_validation_allows_strict_events_without_lane_context():
+    result = {
+        "acceptance_mode": "geo_tcc_validation",
+        "min_tcc_eligible_coverage": 0.90,
+        "return_code": 0,
+        "natural_eof": True,
+        "error": None,
+        "stats_count": 10,
+        "trajectory_count": 1,
+        "tcc_event_count": 1,
+        "invalid_tcc_events": [],
+        "tcc_diagnostics": {"samples": 10, "business_events_emitted": 1},
+        "tcc_eligibility": {"coverage_ratio": 0.9},
+        "candidate_isolation": {
+            "active_formal_tracks_peak": 3,
+            "candidate_point_alignment_failures": 0,
+            "road_activity_frames": 0,
+            "lane_stats_frames": 0,
+        },
+        "trajectory_output": {
+            "eligible_completed_tracks": 1,
+            "point_alignment_failures": 0,
+        },
+        "road9_reconciliation": {"matched": True},
+    }
+    result["road_context_leakage"] = road_context_leakage(result)
+    assert source_result_passed(result) is True
+    result["tcc_eligibility"]["coverage_ratio"] = 0.8999
+    assert source_result_passed(result) is False
+
+
+def test_tcc_eligibility_summary_reports_only_world_tcc_coverage():
+    summary = tcc_eligibility_summary([
+        {"data": {"tcc_analytics_eligible": True}},
+        {"data": {"tcc_analytics_eligible": False, "geo_reference_quality": {"geo_reasons": ["gimbal_roll_out_of_range"]}}},
+    ])
+    assert summary == {
+        "samples": 2,
+        "eligible_samples": 1,
+        "coverage_ratio": 0.5,
+        "ineligible_reason_counts": {"gimbal_roll_out_of_range": 1},
+    }
 
 
 def test_batch_runner_disables_repeated_hover_jpeg_but_keeps_interactive_default():

@@ -71,7 +71,7 @@ describe('AMap browser-direct security configuration', () => {
     expect(AMapLoader.load).toHaveBeenCalledWith({
       key: 'web-key',
       version: '2.0',
-      plugins: ['AMap.Scale'],
+      plugins: ['AMap.Scale', 'AMap.MoveAnimation'],
     })
   })
 
@@ -84,7 +84,7 @@ describe('AMap browser-direct security configuration', () => {
     expect(AMapLoader.load).toHaveBeenCalledWith({
       key: 'web-key',
       version: '2.0',
-      plugins: ['AMap.Scale'],
+      plugins: ['AMap.Scale', 'AMap.MoveAnimation'],
     })
   })
 })

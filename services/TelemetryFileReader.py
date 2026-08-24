@@ -10,10 +10,15 @@
 
 import json
 import logging
-from datetime import datetime
+import math
+from datetime import UTC, datetime
 from bisect import bisect_left
+from zoneinfo import ZoneInfo
+
+from services.dji_telemetry import extract_dji_telemetry
 
 logger = logging.getLogger(__name__)
+DJI_EXPORT_TIMEZONE = ZoneInfo("Asia/Shanghai")
 
 
 class TelemetryFileReader:
@@ -24,10 +29,20 @@ class TelemetryFileReader:
         file_path: str,
         sync_tolerance_sec: float = 0.5,
         time_offset_sec: float = 0.0,
+        agl_policy: str = "legacy_height",
+        interpolation_enabled: bool = True,
+        max_interpolation_gap_sec: float | None = None,
     ) -> None:
         self.file_path = file_path
         self.sync_tolerance_sec = sync_tolerance_sec
         self.time_offset_sec = time_offset_sec  # 视频t=0对应的遥测相对时间（秒）
+        self.agl_policy = agl_policy
+        self.interpolation_enabled = bool(interpolation_enabled)
+        self.max_interpolation_gap_sec = float(
+            sync_tolerance_sec
+            if max_interpolation_gap_sec is None
+            else max_interpolation_gap_sec
+        )
         self._records: list[dict] = []
         self._timestamps: list[float] = []  # 相对时间戳（秒），用于二分查找
         self._load(file_path)
@@ -72,6 +87,13 @@ class TelemetryFileReader:
         for dt, value in records_raw:
             relative_sec = (dt - t0).total_seconds()
             telemetry = self._extract_telemetry(value, relative_sec)
+            # Offline replay must retain the DJI record time. Without this
+            # field KafkaProducerNode falls back to consumer wall-clock time,
+            # making synchronized file replay look ``ingest_only`` and
+            # downgrading otherwise eligible TCC evidence.
+            telemetry["recorded_at"] = dt.replace(
+                tzinfo=DJI_EXPORT_TIMEZONE
+            ).astimezone(UTC).isoformat()
             self._records.append(telemetry)
             self._timestamps.append(relative_sec)
 
@@ -89,6 +111,10 @@ class TelemetryFileReader:
             if is_absolute:
                 ts = ts - first_ts
             telemetry = self._extract_telemetry(entry, ts)
+            if is_absolute:
+                telemetry["recorded_at"] = datetime.fromtimestamp(
+                    float(entry["timestamp"]), tz=UTC
+                ).isoformat()
             self._records.append(telemetry)
             self._timestamps.append(ts)
 
@@ -100,27 +126,89 @@ class TelemetryFileReader:
 
     def _extract_telemetry(self, payload: dict, timestamp: float) -> dict:
         """从DJI OSD消息中提取关键字段（与TelemetrySubscriber._extract_telemetry一致）。"""
-        osd = payload.get("99-0-0", payload)
-        height = payload.get("height", 0) or 0
-        elevation = payload.get("elevation", 0) or 0
-        return {
-            "timestamp": timestamp,
-            "latitude": payload.get("latitude"),
-            "longitude": payload.get("longitude"),
-            "height": height,
-            "elevation": elevation,
-            # height (rel_alt) 是相对起飞点高度，即最佳 AGL 近似
-            # 旧公式 height-elevation 在 DJI 数据中是错误的
-            "altitude_agl": height,
-            "attitude_head": payload.get("attitude_head", 0) or 0,
-            "attitude_pitch": payload.get("attitude_pitch", 0) or 0,
-            "gimbal_pitch": osd.get("gimbal_pitch", -90),
-            "gimbal_yaw": osd.get("gimbal_yaw", 0),
-            "gimbal_roll": osd.get("gimbal_roll", 0),
-            "zoom_factor": osd.get("zoom_factor", 1.0),
-            "horizontal_speed": payload.get("horizontal_speed"),
-            "vertical_speed": payload.get("vertical_speed"),
-        }
+        return extract_dji_telemetry(
+            payload, timestamp, agl_policy=self.agl_policy
+        )
+
+    @staticmethod
+    def _interpolate_number(left, right, ratio: float):
+        if not isinstance(left, (int, float)) or not isinstance(right, (int, float)):
+            return None
+        if not math.isfinite(float(left)) or not math.isfinite(float(right)):
+            return None
+        return float(left) + (float(right) - float(left)) * ratio
+
+    @staticmethod
+    def _interpolate_angle_deg(left, right, ratio: float):
+        if not isinstance(left, (int, float)) or not isinstance(right, (int, float)):
+            return None
+        if not math.isfinite(float(left)) or not math.isfinite(float(right)):
+            return None
+        left_value = float(left)
+        delta = (float(right) - left_value + 180.0) % 360.0 - 180.0
+        return (left_value + delta * ratio + 180.0) % 360.0 - 180.0
+
+    @staticmethod
+    def _interpolate_recorded_at(left, right, ratio: float) -> str | None:
+        if not isinstance(left, str) or not isinstance(right, str):
+            return None
+        try:
+            left_dt = datetime.fromisoformat(left.replace("Z", "+00:00"))
+            right_dt = datetime.fromisoformat(right.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        if left_dt.tzinfo is None or right_dt.tzinfo is None:
+            return None
+        return (left_dt + (right_dt - left_dt) * ratio).astimezone(UTC).isoformat()
+
+    def _interpolate_record(
+        self,
+        left: dict,
+        right: dict,
+        lookup_t: float,
+        ratio: float,
+    ) -> dict:
+        result = dict(left)
+        for key in (
+            "latitude",
+            "longitude",
+            "height",
+            "elevation",
+            "altitude_ellipsoid_m",
+            "altitude_takeoff_relative_m",
+            "laser_target_altitude_m",
+            "laser_range_m",
+            "altitude_agl",
+            "altitude_agl_residual_m",
+            "attitude_pitch",
+            "gimbal_pitch",
+            "gimbal_roll",
+            "horizontal_speed",
+            "vertical_speed",
+        ):
+            value = self._interpolate_number(left.get(key), right.get(key), ratio)
+            if value is not None:
+                result[key] = value
+        for key in ("attitude_head", "gimbal_yaw"):
+            value = self._interpolate_angle_deg(left.get(key), right.get(key), ratio)
+            if value is not None:
+                result[key] = value
+        recorded_at = self._interpolate_recorded_at(
+            left.get("recorded_at"), right.get("recorded_at"), ratio
+        )
+        if recorded_at is not None:
+            result["recorded_at"] = recorded_at
+        result.update(
+            {
+                "timestamp": float(lookup_t),
+                "telemetry_interpolated": True,
+                "telemetry_left_timestamp_sec": float(left["timestamp"]),
+                "telemetry_right_timestamp_sec": float(right["timestamp"]),
+                "telemetry_interpolation_ratio": float(ratio),
+                "telemetry_gap_sec": float(right["timestamp"] - left["timestamp"]),
+            }
+        )
+        return result
 
     def get_nearest(self, frame_timestamp: float) -> dict | None:
         """查找与视频帧时间戳最接近的遥测记录（二分查找）。
@@ -137,8 +225,27 @@ class TelemetryFileReader:
         # 对齐视频时间到遥测时间：video_t=0 → telemetry_t=time_offset_sec
         lookup_t = frame_timestamp + self.time_offset_sec
 
-        # 二分查找最近邻
+        # 二分查找相邻记录；合格间隔内优先返回当前帧时刻的连续遥测。
         idx = bisect_left(self._timestamps, lookup_t)
+
+        if 0 < idx < len(self._timestamps):
+            left_t = float(self._timestamps[idx - 1])
+            right_t = float(self._timestamps[idx])
+            gap = right_t - left_t
+            nearest_diff = min(lookup_t - left_t, right_t - lookup_t)
+            if (
+                self.interpolation_enabled
+                and gap > 0
+                and gap <= self.max_interpolation_gap_sec
+                and nearest_diff <= self.sync_tolerance_sec
+            ):
+                ratio = (lookup_t - left_t) / gap
+                return self._interpolate_record(
+                    self._records[idx - 1],
+                    self._records[idx],
+                    lookup_t,
+                    ratio,
+                )
 
         # 检查 idx-1, idx, idx+1 找到最近的
         best_idx = idx
@@ -151,7 +258,10 @@ class TelemetryFileReader:
                     best_idx = candidate
 
         if best_diff <= self.sync_tolerance_sec:
-            return self._records[best_idx]
+            result = dict(self._records[best_idx])
+            result.setdefault("telemetry_interpolated", False)
+            result.setdefault("telemetry_gap_sec", None)
+            return result
         return None
 
     @property

@@ -76,7 +76,7 @@ class ShowNodeClassColorsTest(unittest.TestCase):
         self.assertTrue(np.array_equal(frame[20, 10], np.array([0, 191, 255])))
         self.assertGreater(np.count_nonzero(frame), 100)
 
-    def test_warning_tcc_prompt_uses_red_instead_of_amber(self):
+    def test_warning_tcc_prediction_uses_participant_trace_colors_and_dashes(self):
         node = self._make_node()
         motor = TrackElement(id=82, timestamp_first=0.0)
         motor.trajectory_points = [(80.0, 100.0)]
@@ -88,6 +88,7 @@ class ShowNodeClassColorsTest(unittest.TestCase):
             timestamp=1.0,
             frame_num=1,
             roads_info={},
+            tracked_cls=["car", "motor"],
             id_list=[82, 3289],
             buffer_tracks={82: motor, 3289: non_motor},
         )
@@ -98,16 +99,193 @@ class ShowNodeClassColorsTest(unittest.TestCase):
             "ttc_sec": 2.4,
         }]
 
-        rendered = node.process(frame_element).frame_result
+        with mock.patch.object(
+            node,
+            "_draw_dashed_line",
+            wraps=node._draw_dashed_line,
+        ) as draw_prediction:
+            rendered = node.process(frame_element).frame_result
 
-        self.assertTrue(np.array_equal(rendered[100, 80], np.array([0, 0, 255])))
-        rendered_int = rendered.astype(np.int16)
-        orange_pixels = (
-            (rendered_int[:, :, 2] > 180)
-            & (rendered_int[:, :, 1] > 100)
-            & (rendered_int[:, :, 1] > rendered_int[:, :, 0] * 2)
+        self.assertEqual(
+            draw_prediction.call_count,
+            2,
+            "the two predicted trajectories must both use dashed rendering",
         )
-        self.assertFalse(np.any(orange_pixels))
+        prediction_colors = [
+            call.args[3]
+            for call in draw_prediction.call_args_list
+        ]
+        self.assertEqual(
+            prediction_colors,
+            [
+                node._formal_trace_color("car", 82, frame_element),
+                node._formal_trace_color("motor", 3289, frame_element),
+            ],
+            "each prediction extension must preserve its source trajectory color",
+        )
+
+        motor_color = np.array(node._formal_trace_color("car", 82, frame_element))
+        self.assertTrue(np.array_equal(rendered[100, 80], motor_color))
+        prediction_corridor = rendered[96:105, 82:135]
+        self.assertTrue(
+            np.any(np.all(prediction_corridor == motor_color, axis=2)),
+            "motor prediction extension does not preserve the motor trace color",
+        )
+        self.assertTrue(
+            np.any(np.all(prediction_corridor == np.array([0, 0, 0]), axis=2)),
+            "predicted trajectory contains no visible dash gap",
+        )
+        burst_roi = rendered[88:113, 138:163]
+        self.assertTrue(np.any(
+            (burst_roi[:, :, 2] > 180)
+            & (burst_roi[:, :, 1] > 120)
+            & (burst_roi[:, :, 0] < 80)
+        ))
+
+    def test_tcc_prompt_resolves_association_ids_to_internal_tracks(self):
+        node = self._make_node()
+        motor = TrackElement(id=70, timestamp_first=0.0)
+        motor.association_id = 7
+        motor.trajectory_points = [(80.0, 100.0)]
+        non_motor = TrackElement(id=80, timestamp_first=0.0)
+        non_motor.association_id = 8
+        non_motor.trajectory_points = [(220.0, 100.0)]
+        frame_element = FrameElement(
+            source="tcc-mapped-identities",
+            frame=np.zeros((240, 320, 3), dtype=np.uint8),
+            timestamp=1.0,
+            frame_num=1,
+            roads_info={},
+            id_list=[7, 8],
+            buffer_tracks={70: motor, 80: non_motor},
+        )
+        frame_element.track_id_by_association = {7: 70, 8: 80}
+        frame_element.conflict_events = [{
+            "motor_id": 7,
+            "non_motor_id": 8,
+            "severity": "critical",
+            "ttc_sec": 1.6,
+        }]
+
+        rendered = frame_element.frame.copy()
+        node._draw_conflicts(rendered, frame_element.conflict_events, frame_element)
+
+        self.assertGreater(
+            np.count_nonzero(rendered),
+            0,
+            "TCC evidence disappeared after association IDs diverged from track IDs",
+        )
+
+    def test_tcc_frame_only_renders_pair_history_predictions_and_collision_burst(self):
+        node = self._make_node()
+        motor = TrackElement(id=1, timestamp_first=0.0)
+        motor.trajectory_points = [(30.0, 150.0), (50.0, 130.0)]
+        non_motor = TrackElement(id=2, timestamp_first=0.0)
+        non_motor.trajectory_points = [(190.0, 150.0), (170.0, 130.0)]
+        unrelated = TrackElement(id=3, timestamp_first=0.0)
+        unrelated.trajectory_points = [(90.0, 190.0), (110.0, 190.0)]
+        frame_element = FrameElement(
+            source="tcc-focus",
+            frame=np.zeros((220, 220, 3), dtype=np.uint8),
+            timestamp=1.0,
+            frame_num=1,
+            roads_info={},
+            tracked_conf=[0.9, 0.9, 0.9],
+            tracked_cls=["car", "motor", "car"],
+            tracked_xyxy=[
+                [40, 105, 60, 130],
+                [160, 105, 180, 130],
+                [100, 175, 120, 205],
+            ],
+            id_list=[1, 2, 3],
+            buffer_tracks={1: motor, 2: non_motor, 3: unrelated},
+        )
+        frame_element.trajectory_association_ids = [1, 2, 3]
+        frame_element.mature_trajectory_association_ids = [1, 2, 3]
+        frame_element.formal_track_ids = [1, 2, 3]
+        frame_element.track_id_by_association = {1: 1, 2: 2, 3: 3}
+        frame_element.pixel_to_world_enu = np.eye(3)
+        frame_element.association_trajectories = [
+            {"association_id": 1, "trajectory_display_px": motor.trajectory_points},
+            {"association_id": 2, "trajectory_display_px": non_motor.trajectory_points},
+            {"association_id": 3, "trajectory_display_px": unrelated.trajectory_points},
+        ]
+        frame_element.conflict_events = [{
+            "motor_id": 1,
+            "non_motor_id": 2,
+            "severity": "critical",
+            "ttc_sec": 1.6,
+            "motor_position_enu_m": [110.0, 100.0],
+            "non_motor_position_enu_m": [110.0, 100.0],
+        }]
+
+        with mock.patch.object(
+            node,
+            "_draw_tracked",
+            wraps=node._draw_tracked,
+        ) as draw_tracked:
+            rendered = node.process(frame_element).frame_result
+
+        focused_frame = draw_tracked.call_args.args[1]
+        self.assertEqual(
+            focused_frame.id_list,
+            [1, 2],
+            "non-TCC target reached box/label/trajectory rendering",
+        )
+        self.assertGreater(np.count_nonzero(rendered[103:133, 38:63]), 0)
+        self.assertGreater(np.count_nonzero(rendered[103:133, 158:183]), 0)
+        self.assertGreater(
+            np.count_nonzero(rendered[100:132, 51:110]),
+            0,
+            "motor prediction trajectory is missing",
+        )
+        self.assertGreater(
+            np.count_nonzero(rendered[100:132, 110:169]),
+            0,
+            "non-motor prediction trajectory is missing",
+        )
+        collision_roi = rendered[88:113, 98:123]
+        yellow_burst = (
+            (collision_roi[:, :, 2] > 180)
+            & (collision_roi[:, :, 1] > 120)
+            & (collision_roi[:, :, 0] < 80)
+        )
+        self.assertTrue(np.any(yellow_burst), "collision point has no burst icon")
+
+    def test_ttc_badge_avoids_participant_boxes_and_prediction_corridors(self):
+        center = ShowNode._select_ttc_badge_center(
+            frame_shape=(240, 320, 3),
+            collision_pt=(160, 120),
+            badge_size=(82, 30),
+            scale=1.0,
+            obstacle_boxes=[(135, 30, 185, 105)],
+            obstacle_segments=[
+                ((160, 70), (160, 120)),
+                ((245, 185), (160, 120)),
+            ],
+            obstacle_points=[(160, 120), (160, 90), (210, 158)],
+        )
+        left = center[0] - 41
+        top = center[1] - 15
+        right = center[0] + 41
+        bottom = center[1] + 15
+
+        self.assertFalse(
+            left < 185 and right > 135 and top < 105 and bottom > 30,
+            "TTC badge overlaps a TCC participant box",
+        )
+        for start, end in (
+            ((160, 70), (160, 120)),
+            ((245, 185), (160, 120)),
+        ):
+            for ratio in np.linspace(0.0, 1.0, 40):
+                x = start[0] + (end[0] - start[0]) * ratio
+                y = start[1] + (end[1] - start[1]) * ratio
+                self.assertFalse(
+                    left - 6 <= x <= right + 6
+                    and top - 6 <= y <= bottom + 6,
+                    "TTC badge overlaps a predicted trajectory corridor",
+                )
 
     def test_process_renders_candidate_trajectory_as_amber_trail(self):
         node = self._make_node()

@@ -2,6 +2,7 @@ import base64
 import copy
 import logging
 import os
+from collections import Counter
 
 import cv2
 import numpy as np
@@ -86,11 +87,48 @@ class TrackerInfoUpdateNode:
         self.class_mapping_version = self.vehicle_classification_cfg.get(
             "mapping_version", "vehicle-classification/v1"
         )
+        self.class_vote_window_frames = max(
+            1,
+            int(self.vehicle_classification_cfg.get("rolling_window_frames", 30)),
+        )
         self._ever_mature_track_ids: set[int] = set()
         self._regressed_candidate_track_ids: set[int] = set()
         self._same_id_mature_to_candidate_count = 0
         self._completed_track_ids: set[int] = set()
         self._last_frame_element: FrameElement | None = None
+
+    def _update_live_vehicle_class(
+        self,
+        track: TrackElement,
+        class_id: int,
+        class_name: str | None,
+        yolo_model_id: str | None,
+    ) -> None:
+        """以最近若干帧的业务类别投票更新活动轨迹，保留同帧原始类别血缘。"""
+        current_class = classify_vehicle(
+            class_id,
+            class_name,
+            self.vehicle_classification_cfg,
+        )
+        track.class_id_history.append(int(class_id))
+        track.class_name_history.append(class_name)
+        track.vehicle_class_history.append(current_class)
+        if len(track.vehicle_class_history) > self.class_vote_window_frames:
+            trim = len(track.vehicle_class_history) - self.class_vote_window_frames
+            del track.class_id_history[:trim]
+            del track.class_name_history[:trim]
+            del track.vehicle_class_history[:trim]
+
+        voted_class, voted_count = Counter(track.vehicle_class_history).most_common(1)[0]
+        raw_pairs = Counter(zip(track.class_id_history, track.class_name_history))
+        voted_id, voted_name = raw_pairs.most_common(1)[0][0]
+        track.current_vehicle_class = current_class
+        track.vehicle_class = voted_class
+        track.vehicle_class_confidence = voted_count / len(track.vehicle_class_history)
+        track.yolo_class_id = voted_id
+        track.yolo_class_name = voted_name
+        track.yolo_model_id = yolo_model_id
+        track.class_mapping_version = self.class_mapping_version
 
     def flush(
         self,
@@ -200,33 +238,23 @@ class TrackerInfoUpdateNode:
                 self.buffer_tracks[id].previous_track_id = (
                     previous_formal_id_by_association.get(association_id)
                 )
-                # 设置YOLO原始类别和车辆分类
-                if tracked_cls_ids and i < len(tracked_cls_ids):
-                    self.buffer_tracks[id].yolo_class_id = tracked_cls_ids[i]
-                    class_name = (
-                        tracked_cls_names[i]
-                        if tracked_cls_names and i < len(tracked_cls_names)
-                        else None
-                    )
-                    self.buffer_tracks[id].yolo_class_name = class_name
-                    self.buffer_tracks[id].yolo_model_id = getattr(
-                        frame_element, "yolo_model_id", None
-                    )
-                    self.buffer_tracks[id].class_mapping_version = self.class_mapping_version
-                    self.buffer_tracks[id].vehicle_class = classify_vehicle(
-                        tracked_cls_ids[i],
-                        class_name,
-                        self.vehicle_classification_cfg,
-                    )
-                    self.buffer_tracks[id].class_id_history.append(tracked_cls_ids[i])
             else:
                 # 更新最后检测时间
                 self.buffer_tracks[id].update(frame_element.timestamp)
-                # 累积分类历史用于多帧投票
-                if tracked_cls_ids and i < len(tracked_cls_ids):
-                    self.buffer_tracks[id].class_id_history.append(tracked_cls_ids[i])
 
             track = self.buffer_tracks[id]
+            if tracked_cls_ids and i < len(tracked_cls_ids):
+                class_name = (
+                    tracked_cls_names[i]
+                    if tracked_cls_names and i < len(tracked_cls_names)
+                    else None
+                )
+                self._update_live_vehicle_class(
+                    track,
+                    tracked_cls_ids[i],
+                    class_name,
+                    getattr(frame_element, "yolo_model_id", None),
+                )
             track.tracking_method = tracking_diagnostics.get(
                 "tracking_method", track.tracking_method
             )
@@ -261,6 +289,11 @@ class TrackerInfoUpdateNode:
 
             # 累积轨迹点（bbox中心像素坐标）
             bbox = frame_element.tracked_xyxy[i]
+            track.current_bbox_xyxy = [float(value) for value in bbox]
+            track.current_observation_timestamp_sec = float(frame_element.timestamp)
+            if frame_element.frame is not None:
+                frame_height, frame_width = frame_element.frame.shape[:2]
+                track.current_frame_size = [int(frame_width), int(frame_height)]
             cx = (bbox[0] + bbox[2]) / 2.0
             cy = (bbox[1] + bbox[3]) / 2.0
             self.buffer_tracks[id].trajectory_points.append((cx, cy))
@@ -484,16 +517,6 @@ class TrackerInfoUpdateNode:
                 and bool(track.termination_reason)
                 and int(track.id) not in self._completed_track_ids
             ):
-                # 多帧分类投票：用轨迹生命周期内积累的类别历史重新判定最终分类
-                if track.class_id_history:
-                    from collections import Counter
-                    voted_class_id = Counter(track.class_id_history).most_common(1)[0][0]
-                    track.yolo_class_id = voted_class_id
-                    track.vehicle_class = classify_vehicle(
-                        voted_class_id,
-                        track.yolo_class_name,
-                        self.vehicle_classification_cfg,
-                    )
                 completed_track_data = {
                     "track_id": track.id,
                     "start_road": track.start_road,

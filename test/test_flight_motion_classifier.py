@@ -7,7 +7,9 @@ from utils_local.flight_motion import FlightMotionClassifier
 ANCHOR = (117.0, 36.0)
 
 
-def _sample(timestamp: float, east_m: float, *, pitch: float = -90.0) -> dict:
+def _sample(
+    timestamp: float, east_m: float, *, pitch: float = -90.0, roll: float = 0.0
+) -> dict:
     lon, lat = enu_to_gcj02(east_m, 0.0, ANCHOR)
     return {
         "timestamp": timestamp,
@@ -15,7 +17,7 @@ def _sample(timestamp: float, east_m: float, *, pitch: float = -90.0) -> dict:
         "coordinate_system": "GCJ02",
         "altitude_agl": 100.0,
         "gimbal_pitch": pitch,
-        "gimbal_roll": 0.0,
+        "gimbal_roll": roll,
         "gimbal_yaw": 0.0,
         "zoom_factor": 1.0,
     }
@@ -51,6 +53,21 @@ def test_rejects_non_nadir_pose_even_when_position_is_stable():
     assert snapshot.phase == "unsupported_pose"
     assert snapshot.formal_pose_eligible is False
     assert "gimbal_pitch_out_of_range" in snapshot.reasons
+
+
+def test_roll_above_default_limit_requires_explicit_visual_validation_policy():
+    telemetry = _sample(0.0, 0.0, roll=10.0)
+
+    default = FlightMotionClassifier().observe(telemetry)
+    visual_checked = FlightMotionClassifier(
+        allow_roll_with_visual_validation=True,
+        max_roll_visual_validation_deg=15.0,
+    ).observe(telemetry)
+
+    assert default.formal_pose_eligible is False
+    assert "gimbal_roll_out_of_range" in default.reasons
+    assert visual_checked.formal_pose_eligible is True
+    assert "gimbal_roll_visual_validation_required" in visual_checked.reasons
 
 
 def test_missing_telemetry_is_explicitly_unavailable():

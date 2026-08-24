@@ -4,7 +4,7 @@ import { DashboardDronePanel } from './DashboardDronePanel'
 
 describe('DashboardDronePanel', () => {
   it('shows last truthful telemetry and honest empty states for an offline UAV', () => {
-    const onClose = vi.fn()
+    const onBack = vi.fn()
     const onOpenMonitoring = vi.fn()
     render(<DashboardDronePanel
       drone={{
@@ -16,7 +16,7 @@ describe('DashboardDronePanel', () => {
       stats={null}
       statsSource='无当前任务数据'
       socketStatus='disconnected'
-      onClose={onClose}
+      onBack={onBack}
       onOpenMonitoring={onOpenMonitoring}
     />)
 
@@ -24,8 +24,8 @@ describe('DashboardDronePanel', () => {
     expect(screen.getByText('117.123456, 36.654321')).toBeInTheDocument()
     expect(screen.getByText('当前无人机未运行检测任务，不展示历史样本冒充实时数据。')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /进入完整实时监测/ })).toBeDisabled()
-    fireEvent.click(screen.getByRole('button', { name: '关闭无人机详情' }))
-    expect(onClose).toHaveBeenCalledOnce()
+    fireEvent.click(screen.getByRole('button', { name: '返回态势面板' }))
+    expect(onBack).toHaveBeenCalledOnce()
     expect(onOpenMonitoring).not.toHaveBeenCalled()
   })
 
@@ -41,7 +41,8 @@ describe('DashboardDronePanel', () => {
       stats={{ vehicles: 18, longestQueueM: 31, avgSpeedKmh: 22.5, tccEvents: 2 }}
       statsSource='实时推送'
       socketStatus='connected'
-      onClose={() => {}}
+      digitalTwin={{ level: 'lane', label: '车道级 · Lane 12 · 活跃车辆 18', dataMode: 'live', availableLayers: { vehicles: true }, pixelVehicles: [] }}
+      onBack={() => {}}
       onOpenMonitoring={onOpenMonitoring}
     />)
 
@@ -50,8 +51,52 @@ describe('DashboardDronePanel', () => {
     expect(screen.getByText('31m')).toBeInTheDocument()
     expect(screen.getByText('22.5km/h')).toBeInTheDocument()
     expect(screen.getByText('2起')).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: /进入完整实时监测/ }))
+    expect(screen.getByText('车道级 · Lane 12 · 活跃车辆 18')).toBeInTheDocument()
+    expect(screen.getByText('已验证车道与车辆世界轨迹独立叠加')).toBeInTheDocument()
+    fireEvent.doubleClick(screen.getByAltText('在航无人机 无人机飞行窗口'))
     expect(onOpenMonitoring).toHaveBeenCalledWith(drone)
+    fireEvent.click(screen.getByRole('button', { name: /进入完整实时监测/ }))
+    expect(onOpenMonitoring).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not navigate when a displayed stream has no complete monitoring context', () => {
+    const onOpenMonitoring = vi.fn()
+    render(<DashboardDronePanel
+      drone={{
+        id: 'UAV-NO-CONTEXT', name: '未绑定监控无人机', is_monitoring: true,
+        can_open_monitoring: false, video_stream_url: 'http://127.0.0.1:8127/video',
+      }}
+      stats={null}
+      statsSource='等待实时数据'
+      socketStatus='connected'
+      onBack={() => {}}
+      onOpenMonitoring={onOpenMonitoring}
+    />)
+
+    fireEvent.doubleClick(screen.getByAltText('未绑定监控无人机 无人机飞行窗口'))
+    expect(onOpenMonitoring).not.toHaveBeenCalled()
+  })
+
+  it('describes the main-map pixel simulation without claiming georeferenced placement', () => {
+    render(<DashboardDronePanel
+      drone={{ id: 'UAV-PIXEL', name: '像素轨迹无人机', is_monitoring: true, can_open_monitoring: true }}
+      stats={null}
+      statsSource='等待实时数据'
+      socketStatus='connected'
+      digitalTwin={{
+        level: 'bev_pixel', label: '3D 覆盖仿真 · 约 142×80m · 活跃车辆 1', dataMode: 'preview',
+        availableLayers: { vehicles: true, simulatedVehicles: true, cameraFootprint: true, pixelVehicles: true },
+        pixelVehicles: [{ id: '7', track_id: 7, trajectory_px: [[10, 20], [20, 30]] }],
+        pixelGroundProjection: { widthM: 142, heightM: 80 },
+      }}
+      onBack={() => {}}
+      onOpenMonitoring={() => {}}
+    />)
+
+    expect(screen.getByText('3D 覆盖仿真 · 约 142×80m · 活跃车辆 1')).toBeInTheDocument()
+    expect(screen.getByText('前端 Mock 预览')).toBeInTheDocument()
+    expect(screen.getByText('车辆按无人机高度、云台航向和相机视场投影到 3D 地面覆盖框；未做 GCP 精配准')).toBeInTheDocument()
+    expect(screen.queryByRole('img', { name: 'BEV 像素坐标车辆轨迹' })).not.toBeInTheDocument()
   })
 
   it('distinguishes an unregistered video address from a stream connection failure', () => {
@@ -61,7 +106,7 @@ describe('DashboardDronePanel', () => {
       stats={null}
       statsSource='等待实时数据'
       socketStatus='connected'
-      onClose={() => {}}
+      onBack={() => {}}
       onOpenMonitoring={() => {}}
     />)
 
@@ -72,7 +117,7 @@ describe('DashboardDronePanel', () => {
       stats={null}
       statsSource='等待实时数据'
       socketStatus='connected'
-      onClose={() => {}}
+      onBack={() => {}}
       onOpenMonitoring={() => {}}
     />)
     fireEvent.error(screen.getByAltText('视频状态无人机 无人机飞行窗口'))
@@ -85,7 +130,7 @@ describe('DashboardDronePanel', () => {
       stats={{ vehicles: null, longestQueueM: null, avgSpeedKmh: null, tccEvents: null }}
       statsSource='等待实时数据'
       socketStatus='connected'
-      onClose={() => {}}
+      onBack={() => {}}
       onOpenMonitoring={() => {}}
     />)
 

@@ -60,6 +60,7 @@
 - 未命中的已知类别默认归类为 `motor`；完全缺失类别名和类别 ID 时保持 `unknown`。
 - 由于摩托车和电动车无法稳定区分，`motor/motorcycle/motorbike/e-bike/electric-bike/electric-bicycle/ebike/scooter/electric-scooter` 默认归类为 `non_motor`。
 - 当前 VisDrone 默认非机动车 ID 为 `[0, 1, 2, 6, 7, 9]`，覆盖 `pedestrian/people/bicycle/tricycle/awning-tricycle/motor`。
+- 活动轨迹不再沿用首帧类别直到结束。`TrackerInfoUpdateNode` 对最近 `rolling_window_frames`（默认 30）帧的业务类别滚动投票，同时保留当前帧类别；正式 TCC 要求当前帧业务类别与投票结果一致且投票置信度不低于 `min_vehicle_class_confidence`（默认 0.8）。原始标签 `motor` 表示 VisDrone 摩托车类别，不等同于业务分类 `motor`。
 
 ### 2. 多目标跟踪（ByteTrack）
 
@@ -420,7 +421,8 @@ PostgreSQL/TimescaleDB 读取。分区粒度、压缩、保留期、连续聚合
 - `trajectory_px` 保存每个源帧中的车辆底边接触点，`trajectory_enu_m/trajectory_gcj02` 保存 ByteTrack 后由同一源帧 H 得到的世界事实；`trajectory_bbox_center_px` 单独保留 bbox 中心。检测画面的 `trajectory_display_px` 使用 bbox 中心并由背景视觉 `camera_motion_warp` 将旧显示点递推到当前帧，避免固定底边在横向/斜向车辆上表现为车身侧边；ShowNode 的 legacy 回退同样使用 `TrackElement.trajectory_points` 中心点。显示锚点与业务投影接地点必须保持分离，ShowNode 不使用当前 H 反投影历史。
 - 正式和候选尾迹最多绘制最近30点；空值、NaN/Inf、越界点和不足两点的历史不产生连线。小于 `max(4px, 画面对角线×0.1%)` 的往返抖动只在绘制副本中简化；单段跳变超过 `max(60px, 画面对角线×4%)` 或当前尾迹累计超过 `max(80px, 画面对角线×8%)` 时截断。原始图像/世界坐标不被平滑或改写。
 - 候选框和尾迹固定为琥珀虚线；每目标使用深色半透明底、琥珀描边的紧凑 `#ID class C` 标签，画面右上角统一解释 `AMBER DASHED = CANDIDATE / NO STATS-TCC`。标签字号、边框、尾迹线宽和虚线节距按4K源到1280×720交付视口比例缩放。候选可在 `buffer_tracks` 中保留图像生命周期，但必须保持 `trajectory_output_eligible=false`，不得参与速度、车道、流量、TCC 和事件投递；成熟像素轨迹即使 `road_analytics_eligible=false` 也必须继续显示，其 `P` 只表示当前无道路业务资格。
-- 正式 TCC 告警的参与目标端点、连接线和 TTC 徽章统一使用红色系；warning 使用高对比纯红，critical 使用深红/亮红组合，不再以橙色表达正式告警。该规则只影响 `ShowNode` 后续生成的检测器画面，已按内容寻址保存的历史证据保持字节不变。
+- 正式 TCC 帧进入独立的聚焦渲染路径：先按当前事件/余辉中的 association ID 筛出冲突双方，再绘制双方检测框、标签和各自历史轨迹；所有非 TCC 目标的框、标签、候选/正式轨迹，以及道路、车道、FPS、方向和统计叠加均不绘制。双方当前轨迹端点分别以虚线连接到事件预测 ENU 冲突点反投影后的像素位置，虚线必须继承各自检测框和历史轨迹的配色，既表达“预测轨迹”而非已发生轨迹，也保持对象身份连续；冲突点绘制红黄爆点图形（等价于 💥）。TTC 徽章在爆点周围动态选位，优先避开冲突双方检测框、标签、历史轨迹与预测轨迹，不得固定覆盖关键证据。warning 使用高对比纯红，critical 使用深红/亮红组合，不再以橙色表达正式告警。
+- 上述规则默认只影响后续 `ShowNode` 检测器帧。确需重建既有事件时，必须先以相同 SourceProfile、offset、轨迹对和 TCC 数值重放，并证明新旧 `conflict_original_frame` SHA-256 完全一致；只允许换版该事件的派生 `conflict_detector_frame`，原始帧、事件 ID 和业务事实不变，EvidencePackage revision/manifest 必须同步更新。不得用相近帧或其他事件图片替换。
 - 显式四级能力契约下，跟踪模式显示所有成熟像素轨迹，不用道路 ROI 过滤图像身份；道路 ROI 只控制 Lane/Link 与路网研判。旧帧没有 `trajectory_association_ids` 时才保留历史道路 ROI 显示过滤，避免改变 legacy 兼容路径。
 - 当未配置道路标注文件时，`roads_info={}`，可视化保留有效跟踪框，但道路分配、道路流量统计和人工道路 ROI 过滤不可用；自动推断车道仍可绘制中心线/箭头，但不绘制左上角车道统计黑底面板，避免无道路模式下的 overlay 堆积。
 10. 统计面板（独立黑色窗口，拼接在主帧右侧）
@@ -450,7 +452,7 @@ PostgreSQL/TimescaleDB 读取。分区粒度、压缩、保留期、连续聚合
 
 冲突检测默认启用，但要求存在有效单应性矩阵；无米级世界坐标时自动跳过，避免像素距离误报。节点只比较 `motor` 与 `non_motor` 轨迹，两个机动车或两个非机动车不会生成机非冲突。
 
-冲突不再等同于“未来轨迹几何交汇”。节点先使用双方世界坐标运动趋势，在 `0-5s` 预测窗口内生成候选交汇，再通过专项场景和 near-miss 证据过滤误报。有足够历史轨迹时，预测方向优先取最近一个有效轨迹段，速度大小沿用 `SpeedEstimationNode` 的米/秒估计；这样保留测速线性回归的平滑性，同时避免转弯或历史回归向量把未来轨迹拉向虚假交点。历史不足时才回退到 `track.velocity_ms`。
+冲突不再等同于“未来轨迹几何交汇”。节点先使用双方世界坐标运动趋势，在 `0-5s` 预测窗口内生成候选交汇，再通过专项场景和 near-miss 证据过滤误报。有足够历史轨迹时先剔除超过 `max_segment_speed_ms` 的异常世界段；连续两次以上同向转弯才采用末段方向，近直行或仅末段偏折则采用分段速度中位方向，速度大小沿用 `SpeedEstimationNode` 的米/秒估计。历史不足时才回退到 `track.velocity_ms`。这既保留真实转弯召回，也阻止单帧投影跳变把同向车制造成垂直交叉。
 
 ```
 motor_future(t) = motor_pos + motor_velocity * t
@@ -460,9 +462,17 @@ d(t) = |motor_future(t) - non_motor_future(t)|
 
 候选交汇：
 
+在进入机非配对前，双方还必须通过活动轨迹类别与视觉可复核性门禁：当前检测帧映射出的业务类别与滚动投票结果一致，且双方投票置信度均达到配置门槛；双方必须在当前采样帧被观测且检测框完整处于画面内；跨类别框的交集占较小框比例达到 `max_cross_class_bbox_containment`（默认 0.8）时，按同一物体上的重复/嵌套检测拒绝。普通 `general_crossing` 还要求双方稳健世界方向置信度不低于 0.6、冲突夹角不小于 60°；低夹角汇入/超车不再借速度差和短时减速升级为横向 TCC。失败分别计入 `class_unstable`、`participant_not_currently_observed`、`participant_not_fully_visible`、`nested_cross_class_detection`、`heading_unreliable` 或 `general_crossing_angle_too_shallow`。
+
 1. 路径交叉点：两条恒速预测轨迹在未来窗口内存在空间交点，双方到达该交点的时间差不超过 `arrival_time_tolerance_sec`（默认 `1.0s`），且在双方到达交点这段时间内连续同刻中心距必须进入 `same_time_collision_radius_m`（默认 `0.8m`）共同冲突区。这是默认业务口径，要求既有明确冲突点，也有同一时空占用概率；只有数学射线交点但同刻距离仍偏大的轨迹会被过滤。
 2. 同刻 CPA 扩展：`enable_same_time_cpa` 默认关闭，避免只因中心点擦肩距离为 0.9m~1.7m 就判成相撞。显式开启后，对双方相对运动求最近接近点（CPA），只有最近距离进入 `same_time_collision_radius_m`（默认 `0.8m`）才作为 TTC 候选；`collision_radius_m` 不再直接用于同刻触发。CPA 候选中的 `pet_sec=0` 只表示同一预测时刻测距，不作为 PET 侵占证据。
 3. 冲突角过滤：只保留 `30°~150°` 的横向/斜向交叉冲突，过滤同向并行、追尾类和近似正面对向场景。
+
+XQH 实拍复验补充一条严格高夹角分支：标准冲突角仍为 `30°~150°`；仅当
+`enable_high_angle_path_intersection=true` 时，`150°~170°` 候选才继续判定，而且必须同时满足
+路径交点、`TTC <= critical_horizon_sec`、`PET <= hard_pet_sec`、急减速/急转/停车让行之一，以及
+`suspected_unprotected_left_turn` 的可观测左转弧线。近对向直行即使数学射线相交也以
+`high_angle_scene_ambiguous` 拒绝，避免把视觉上不明确的对向通行升格为正式 TCC；CPA 不参与该分支。
 
 前端业务回放只展示 canonical `prediction_type=path_intersection` 且 `distance_m` 近似
 `0.0` 的事件；缺少 canonical 类型或使用旧 Kafka/WebSocket shape 的消息直接拒绝，不恢复
@@ -481,7 +491,7 @@ near-miss 证据：
 - `hard_pet_sec`（默认 `1.0s`）以内只表示极近 PET 抢行强度，需叠加至少一种避险行为证据才触发事件，避免仅凭数学路径交点把“近距离错位经过”报成 near-miss。
 - 普通 TTC/PET 风险同样必须叠加至少一种避险行为证据：`hard_deceleration`（默认最大减速度 `<= -3.0m/s²`）、`hard_steering`（非机动车短窗口 heading 突变；机动车正常右/左转不计作避险急转向）、`stop_or_yield`（从移动降到低速停止/让行）。
 
-`ttc_sec` 表示预测冲突时间；`pet_sec` 表示双方到达冲突点的时间差近似值；路径交叉点场景下同时输出 `motor_arrival_ttc_sec` / `non_motor_arrival_ttc_sec` 和 `arrival_time_delta_sec`。事件附加输出 `conflict_scene`、`conflict_angle_deg`、`evidence`、`risk_score`。`motor_id` / `non_motor_id` 轨迹对同级别事件不重复上报，但允许从 `warning` 升级为 `critical` 再次上报；直到任一轨迹从 `buffer_tracks` 清理后释放状态。
+`ttc_sec` 表示预测冲突时间；`pet_sec` 表示双方到达冲突点的时间差近似值；路径交叉点场景下同时输出 `motor_arrival_ttc_sec` / `non_motor_arrival_ttc_sec`、`arrival_time_delta_sec` 与 `min_same_time_distance_m`。事件还固化双方 ENU 速度、方向置信度、投影质量、运动段和算法版本。急减速、急转向和停车让行是同一短窗口内的相关行为证据，风险分只计其中最强一项。`motor_id` / `non_motor_id` 轨迹对同级别事件不重复上报，但允许从 `warning` 升级为 `critical` 再次上报；直到任一轨迹从 `buffer_tracks` 清理后释放状态。
 
 冲突事件不在 `KafkaProducerNode` 阶段生成图片。该节点只冻结待发布信封；显示进程保留 `ShowNode` 就地绘制前的原始帧，再以 `ShowNode.frame_result` 作为唯一检测器 TCC 画面，交给 `TccEvidencePublisherNode` 写盘后发布。后者必须复用 `KafkaProducerNode._topics_for_profile()`，live 发布 canonical conflict，Replay V2 只发布 `uav_replay_v2_conflicts_{source_key}`；不得按 camera id 另行推导 Topic。`utils_local/event_evidence.py` 严禁重绘目标框、类别、轨迹 ID 或冲突标记，也不缩放新证据；`conflict_detector_frame` 必须与检测器原有 `conflict_*.jpg` 使用同一个真实 `frame_result`。两图以 SHA-256 内容地址原子写入检测任务继承的 `SURVEY_STORAGE_DIR`，事件只发布相对存储键、哈希、大小和尺寸。Platform 完整校验两项后登记证据包并由检测图回指原图；写入或校验失败时冲突事实仍入库，但必须标记 `evidence_status=incomplete` 且不伪造引用。
 
@@ -495,7 +505,7 @@ Console2 对新事件展示 `conflict_original_frame`“原始画面”和 `conf
 新飞行或伪造常规采集前置核验，任务 `precheck.mode=event_evidence_reuse` 且质量保持
 `unverified`。同一事件和幂等键重复操作复用原任务。
 
-节点每帧同时写入 `FrameElement.tcc_diagnostics`，记录检测开关、单应性有效性、motor/non_motor 输入数、双方合格轨迹数、候选配对、预测候选、证据通过、去重、正式路径交点事件和实验事件数量。诊断状态区分 `disabled`、`missing_calibration`、`no_eligible_candidates`、`no_prediction_candidates`、`no_evidence`、`deduplicated` 与 `events_emitted`。该漏斗随 `uav_stats.data.tcc_diagnostics` 发布，用于解释合法零检出；它只描述检测过程，不替代事件事实或召回率真值。
+节点每帧同时写入 `FrameElement.tcc_diagnostics`，记录检测开关、单应性有效性、motor/non_motor 输入数、双方合格轨迹数、候选配对、预测候选、证据通过、去重、正式路径交点事件和实验事件数量。高夹角分支另计 `high_angle_candidates/emitted/rejected`，并在 `rejection_reasons` 中保留角度、路径、TTC/PET、避险行为和场景拒绝原因。诊断状态区分 `disabled`、`missing_calibration`、`no_eligible_candidates`、`no_prediction_candidates`、`no_evidence`、`deduplicated` 与 `events_emitted`。该漏斗随 `uav_stats.data.tcc_diagnostics` 发布，用于解释合法零检出；它只描述检测过程，不替代事件事实或召回率真值。
 
 ## 事故测绘业务闭环（S3）
 
@@ -605,7 +615,11 @@ Console2 实时监测的 BEV 采用“最近 5 分钟或至少 150 条”的混�
 - 持续拥堵只在拥堵指数连续 30 个发布样本超过 4.0 时生成事件，证据快照与触发样本同时定格。
 - 完整性以 `expected_samples / actual_samples / dropped_samples / coverage_ratio / drop_reason` 表达；低覆盖数据保留事实但必须降质，不得伪装为完整时段。
 - 事件中心不把告警、冲突、拥堵、质量下降和测绘成果压成同一指标；每类事件保留各自的规则、质量和证据。
-- 事件中心页面和 REST 查询只返回业务时间倒序的最近 150 条；`replay_v2` 列表读取不在请求内重复生成质量事件，但完整运行模式允许告警/测绘同步与技术复核写入。清理前必须先按 `uav_ai_events + uav_conflict_events` 合并计数；总量不超过 150 时不得删除。
+- 冲突检测输出在人工复核前只是“待复核冲突候选”，不得用“真实事件”标题提前宣告真实性。`review_status=confirmed` 才展示“已确认机非冲突”，`rejected` 展示“已驳回冲突候选”；只读 Replay V2 事实展示为“只读冲突候选”，历史检测器复现展示为“历史检测口径复现 · 冲突候选”。质量状态与人工复核状态相互独立，`unverified` 不因标题或页面展示升级。
+- “冲突事件频发”属于一分钟聚合告警。历史告警未直接保存子事件 ID 时，只允许用告警业务时间前 60 秒内的 `uav_replay_v2_message_inbox.received_at + fact_refs` 恢复同路口子冲突，并按 inbox 顺序投影其受管证据；禁止按 JPEG 文件名、近似 TTC 或其他时刻事件猜测关联。早期 Replay V2 事实若没有源帧、轨迹对、可靠源时间且原消息已过保留期，必须显式标记 `historical_managed_evidence_unavailable`，不得拿其他事件图片冒充。
+- 旧检测器图片只有在反查到同一源视频帧，并用对应 Git commit、模型、stride、遥测和历史冲突配置实际重跑复现后，才可恢复为 `historical_detector_output`。恢复事实必须保留源帧、旧/复现图 SHA-256、像素匹配指标、历史算法版本和 `reconstructed` 时间质量；跟踪 ID 只属于单次运行，跨运行变化不能伪装成同一身份。当前口径在同帧未触发时必须明确披露，历史事实不得进入当前口径效果统计。
+- 事件中心按 media kind 展示证据：冲突帧和 `survey_report_annotated_image` 才进入图片预览；PDF、JSON、GeoJSON 作为可鉴权附件打开，不能送入 `<img>` 解码。
+- 事件中心页面和 REST 查询只返回业务时间倒序的最近 150 条，且始终是只读路径；质量下降事件的物化是显式维护作业，不得在 `GET /events` 内扫描遥测或写入事件。告警/测绘同步与技术复核可写入各自的明确工作流。清理前必须先按 `uav_ai_events + uav_conflict_events` 合并计数；总量不超过 150 时不得删除。
 - 当真实检测没有产生冲突时，轨迹研判显示 0 和真实空态，禁止为展示向正式 `road9` 注入伪冲突。
 
 ### 历史轨迹流向研判（2026-07-21）
@@ -679,7 +693,9 @@ GCJ-02/ENU 最大往返误差为 0.0068m。该口径不得写成 100 条人工�
 
 飞行阶段由共享 `FlightMotionClassifier.observe()` 判定，离线视频发现和实时检测不能各自实现悬停逻辑。状态为 `hover_candidate`、`hover_verified`、`cruise_nadir`、`transition`、`unsupported_pose`、`telemetry_unavailable`。默认进入悬停要求连续 15 秒、GPS 覆盖率不低于 90%、派生速度 P95 不高于 1m/s、位置半径 P95 不高于 5m、云台俯角不高于 -80°；退出使用速度 1.5m/s、半径 8m、俯角 -78°和 2 秒迟滞。
 
-巡航正式包线为地速 1–12m/s、AGL 60–150m、云台俯角不高于 -80°、滚转绝对值不高于 5°、垂直速度不高于 2m/s、偏航角速度不高于 15°/s、变焦漂移不高于 2%。SRT/JSON 缷失速度时使用约 1 秒 GCJ-02 位置窗口派生；报告速度与派生速度持续相差超过 3m/s时标记不一致。所有文件与 MQTT 遥测超过同步容忍窗口都返回空，不复用超窗最近值。
+巡航正式包线为地速 1–12m/s、AGL 60–150m、云台俯角不高于 -80°、滚转绝对值不高于 5°、垂直速度不高于 2m/s、偏航角速度不高于 15°/s、变焦漂移不高于 2%。SRT/JSON 缺失速度时使用约 1 秒 GCJ-02 位置窗口派生；报告速度与派生速度持续相差超过 3m/s 时标记不一致。DJI Cloud 文件在相邻记录间隔不超过 `max_interpolation_gap_sec` 时按帧源时间连续化位置、姿态、速度和 `recorded_at`，并保留左右记录血缘；跨 `±180°` 的航向取最短角。所有文件与 MQTT 遥测超过同步容忍窗口都返回空，Cloud 文件超过最大插值间隔也返回空，不外推或复用超窗最近值。
+
+DJI Cloud 语义下的 `height` 是椭球绝对高度，`elevation` 是相对起飞点高度；二者都不得在严格巡航 TCC 中直接冒充 AGL。`telemetry_agl_policy=laser_target` 只接受激光状态正常且 `height - target_altitude` 与 `laser_range × |sin(gimbal_pitch)|` 残差达标的样本，并把来源和残差随帧保留。录制视频必须确认唯一的 `vision` 广角镜头后才采用该镜头的 zoom；镜头不明、激光异常或高度残差越界时，世界坐标和 TCC 资格下降为不可用，不使用 `elevation` 兜底。
 
 遥测、当前帧矩阵或地图质量短缺不得终止图像业务轨迹。ByteTrack 确认关联后分配稳定
 `track_id`，该 ID 只因关联消失、源时间断点、超时或自然 EOF 结束；地理质量恢复时沿用原 ID。
@@ -689,6 +705,8 @@ GCJ-02/ENU 最大往返误差为 0.0068m。该口径不得写成 100 条人工�
 `road_context_status=missing / quality_status=degraded`，但成熟像素轨迹必须进入活动列表与完成事件。
 Lane ID、Link ID 与匹配质量为不可用，不能用零值伪装；方向、Movement、通用车辆计数和统计继续按自身证据输出。TCC 由可信世界坐标、时间和
 跟踪证据独立门禁。
+
+`geo_tcc_validation` 是专用于独立视频验真的验收模式：它要求可信世界轨迹、时间/AGL/镜头/视觉位姿质量和 TCC 漏斗覆盖率，但不要求也不生成 Lane、Link、地图转向或渠化事实。任何地图字段在该模式下出现都属于道路上下文泄漏；缺图不会降低已独立证明的世界 TCC，世界证据不足则正式 TCC 必须为零。
 
 正式业务门禁按以下边界执行：
 
@@ -730,15 +748,30 @@ Console2 普通模式使用服务器典型时段读模型与固定演示样例�
 
 - 首页按星期与 5 分钟时槽只读展示 `ycx.xianchang` 典型矩阵，明确标记“服务器典型时段态势”，不得称为实时观测。普通模式固定以周五 07:55 作为首次进入时段，保证演示时稳定呈现绿、黄、红、灰分级；用户仍可手动切换全部星期和 5 分钟时槽。
 - 路口按最大饱和度着色：`<0.85` 绿色、`0.85–0.95` 黄色、`>0.95` 红色、无当槽指标灰色。路段按延误指数着色：`<1.5` 绿色、`1.5–2.0` 黄色、`>2.0` 红色、无当槽指标灰色。本地项目路口只增加外圈强调，不覆盖指标颜色。
-- 首页采用与实时监测一致的沉浸式地图工作区：右侧默认保留重点路口、重点事件和治理复盘并可收起；左侧默认关闭。具有真实坐标的无人机标均可通过鼠标或键盘先打开飞行详情，不再因未运行 Pipeline 而禁止查看，也不再从地图直接跳转实时监测。
+- 首页采用与实时监测一致的沉浸式地图工作区：左侧默认展示重点路口、重点事件和治理复盘；选择无人机后同一上下文区域整体切换为飞行详情，返回、选择普通路口/路段或点击地图空白处恢复治理摘要。具有真实坐标的无人机标均可通过鼠标或键盘打开详情，不再因未运行 Pipeline 而禁止查看，也不再从地图直接跳转实时监测。
 - 首页不使用前端循环历史坐标伪装巡航。只有运行中的 Pipeline 才按实时 `uav_telemetry` 与 `/drones/{drone_id}/trajectory` 新增点推进标记和航迹；选中运行中的本地回放巡航后，地图将当前真实标记与真实航迹共同纳入安全边距并放大到可观察尺度。未运行任务仍停留在最后真实位置。
 - 首页遥测、轨迹及 Pipeline 的轮询/推送只更新无人机覆盖物；当路口与数据源坐标未变化时不得销毁重建高德地图实例，避免把数据刷新表现为整张底图闪烁。
-- 无人机详情的飞行窗口只读取当前 Pipeline 登记的 `video_stream_url`，并区分未启动任务、未登记地址、连接失败和实时画面；飞行数据只展示当前或最后真实遥测。核心指标优先使用严格匹配 `pipeline_id + source_profile_id + intersection_id` 的实时 `uav_stats`，同 SourceProfile 范围的 REST 最近样本只作为明确标注的降级；切换无人机或 Pipeline 必须先清空上一任务指标。
+- 选择运行中无人机后，首页只消费严格匹配当前 Pipeline、SourceProfile 和路口的成熟 `active_trajectories`，按 `track_id` 原位更新小车、短尾迹与方向，不消费 `candidate_trajectories`，不随机生成车辆。刷新使用高德 `MoveAnimation` 平滑衔接约 1 秒的 Stats 样本；减少动态效果时直接更新位置，离开数字孪生模式后恢复高德实时路况层。开发态可用 `?twinPreview=1` 显式进入 120 车前端 Mock 视觉预览；它标记为 `preview`、不启动 Pipeline、不写业务存储，也不得作为真实检测证据。
+- 数字孪生能力逐层降级且图层互不绑架：`lane_verified` 且有车道中心线或车道面时为车道级；无 Lane 但有 `lane_verified/link_verified` Link 时为道路级；仅有连续合法 `trajectory_gcj02` 时为空间轨迹；仅有 `trajectory_px` 时，只有无人机 GCJ-02、高度、近垂直云台航向及相机视场同时有效，才按相机地面覆盖框进入高德 3D 的“近似覆盖仿真”；缺参时不投放。该近似坐标只供当前帧显示，不写回轨迹、不产生 Lane/Link/速度/TCC，也不冒充经过 GCP 验证的世界坐标。停止线、渠化区域和 Link 均为独立增强层，缺失不使有效 Lane 降级；候选地图始终不能冒充正式车道。
+- 像素覆盖模式以高德卫星影像加 RoadNet 呈现；仅在没有正式 Lane/Link 和车辆 GCJ-02 时按实时云台偏航旋转地图，使检测画面前向与地图屏幕前向一致，已有正式世界图层时始终保持北向 3D，能力短暂降级不得带动相机往返旋转。车辆朝向取最近 8 个轨迹点的地理切线，减去/合成地图旋转后以最短角度连续变化。首次进入任务时，车道/道路/空间级只按活跃车辆当前位置取景，纯像素级按相机覆盖框取景；完整 Lane/Link 范围和历史尾迹只绘制、不参与缩放。随后以选中无人机为锚点把目标放在地图宽度 70% 处，使其位于左侧详情面板之外的可视区域中心；同一任务的后续 Stats/遥测只更新 Marker 和覆盖物。覆盖尺寸复用测绘链路的逆缩放契约：`effective_focal = focal_length / zoom_factor`，随高度、焦距和缩放变化。没有 GCP 或正式 Lane/Link 时允许仍有卫星视觉残差，必须标记“近似投影”，不得通过道路吸附伪造车道归属。
+- 进入数字孪生后，无人机标记不再渲染地图 hover 详情卡，避免遮挡车流或拦截车辆交互；飞行详情只在左侧上下文面板展示。选中无人机层级固定高于小车和其他无人机，退出数字孪生后立即恢复 hover 卡片，模式切换继续复用同一 AMap 实例。
+- 无人机详情的飞行窗口只读取当前 Pipeline 登记的 `video_stream_url`，并区分未启动任务、未登记地址、连接失败和实时画面；具备运行 Pipeline、SourceProfile 和路口时，双击画面与底部按钮复用同一 `intersection_id + source_profile_id` 深链进入实时监控大屏。监控页加载注册源期间必须保留请求深链，不得先用固定演示源覆盖。飞行数据只展示当前或最后真实遥测。核心指标优先使用严格匹配 `pipeline_id + source_profile_id + intersection_id` 的实时 `uav_stats`，同 SourceProfile 范围的 REST 最近样本只作为明确标注的降级；切换无人机或 Pipeline 必须先清空上一任务指标。
 - “进入完整实时监测”只在路口、SourceProfile 与运行 Pipeline 同时具备时启用，并携带 `intersection_id + source_profile_id` 进入既有监测页。普通路口点击仍只更新地图路口与关联路段的选中态，重点指标继续由右侧路口榜单承载。服务器首次不可用时明确空态且不回退态势 mock；只有同槽成功缓存可作为 stale 降级。
 - 实时监测页有运行中 Pipeline 时优先展示真实视频与指标；没有运行中 Pipeline 时展示固定路口悬停指标、车道饱和度、交通流趋势和事件列表，并明确标记为固定演示指标。
 - “路口悬停”“路段航拍”“治理复盘”切换当前演示任务叙事；“保存事件与流量快照”会把当前车辆、排队、速度、饱和度、车道、事件、近六个 5 分钟流量桶和治理前后对比写入浏览器本地台账 `uav.console.demo-analysis-snapshots.v1`。同一路口与任务阶段使用稳定主键覆盖保存；保存后通过 `snapshot_id` 深链打开事后分析，AI 事件中心顶部不再展示本机快照台账。
 - 本地演示快照不混入 road9 真实事件列表，不写入 `uav_*` 业务表，也不构成服务端、跨浏览器或生产持久化承诺；需要生产留档时应另行接入正式事件/指标持久化 API。
 - 固定事件与复盘值只用于功能演示，不作为生产现状、模型精度或治理效果证据；服务器典型矩阵只证明数据读取和展示口径，也不构成实时运行或生产效果声明。
+
+### 实时监测方向流量与场景策略（2026-08-24）
+
+- `/monitoring` 保持既有双层左侧结构：最左侧是全局业务导航，第二层是可收缩、可固定的实时态势面板；中央视频和右侧可收缩分析面板不改为新的页面骨架。实时指标统一放入左侧态势面板；超出可视高度时只滚动指标内容，面板标题、收缩与固定控制保持可用。右侧只承载 BEV、场景策略和近期事件。
+- 按方向实时流量以物理 Movement 为展示单位，字段包括进口、出口、5 分钟流量、平均速度、排队长度和饱和度，并作为左侧态势指标展示。真实源的事实优先级固定为：服务端显式 `movement_flows/direction_movements/movements`；包含物理起终方向的正式 Lane 或 AutoLane 观测；活动 `trajectory_gcj02` 首尾方位推断；最后才是明确空态。只有显式固定演示源允许使用 `Mock` 样例，已登记实时/回放源不得用 Mock 补空。AutoLane 以 `flow_veh_per_min` 为 5 分钟滑窗流率，按进口/出口求和；正速度按流率加权，0 或负值视为不可用。活动轨迹总数使用消息中的权威 `active_tracks`，不得用为传输限长的 `active_trajectories` 数组长度替代。
+- 正式 Lane 排队与饱和度仍要求 `road_analytics_eligible=true`。当 xqh 等来源缺少 `lane_verified`、但 AutoLane 具有有效 H 换算的 `queue_length_m` 时，Console 允许按物理进口→出口聚合为“方向估算”：同方向多条自动车道取最大排队长度，顶部最长排队取各方向最大值，并明确标记“降级观测 / 方向估算”。饱和度仍显示“未标定”。检测管道不得把像素距离写入 `queue_length_m`；无有效 H 时只输出 `queue_length_px`、`queue_length_unit=px`、`queue_length_method=pixel_fallback`，Console 不以米展示。方向流量、正速度、世界轨迹和 TCC 继续按各自独立门禁工作。
+- 重点场景固定覆盖行人感应、动态控右、动态控左、动态黄闪、动态可变车道和溢流拥堵。每个场景必须完整说明适用点位、业务目标、三类联合触发判据、顺序处置链、控制边界、退出规则和复盘指标；点位阈值由路口几何、有效蓄车长度、信控方案和属地规则标定，不能把统一的“绿灯加 N 秒”作为真实控制策略。
+- 六类策略的业务边界分别为：行人感应以安全过街与清空时间为先；动态控右以分离右转和慢行冲突路权为先；动态控左必须同时校核对向直行与出口承接；动态黄闪只适用于交管批准的夜间低流量点位，且不能仅凭无人机未发现车辆触发；动态可变车道必须执行“预告—清空—切换—确认”；溢流拥堵遵循“以出量进”，下游无接收空间时禁止简单增加上游绿灯。
+- 策略面板把当前事实与业务判据分开：已登记真实/回放源缺证据时显示“证据未齐 · 不触发”，只把可信实时指标标为观测；显式固定演示源才可显示“演示样例 · 非实时”，不得出现含混的“基于 Mock 数据”。当前尚未接入正式信控下发接口，页面固定为“仅生成建议 / 交警或信控平台确认”，任何信号、车道或警示控制都不得从前端选择状态推断为现场执行结果。
+- 右侧“场景策略 / 近期事件”页签复用同一监测上下文。真实事件到达时可自动切到事件页一次，但操作员手动选择后不得被后续轮询持续抢占。
+- `/monitoring` 不再提供底部实时数据时间轴和暂停/冻结控制；页面始终消费当前 Pipeline 的实时事实。需要事后停帧、历史定位或倍速回放时进入 `/gis` sealed Mission 回放，不在实时页维护第二套时间控制语义。
 
 ## Replay V2 Mission 复盘规则（2026-08-04）
 

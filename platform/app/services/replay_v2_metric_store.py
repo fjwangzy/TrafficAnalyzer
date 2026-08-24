@@ -10,6 +10,7 @@ from typing import Any
 
 from sqlalchemy import delete, func, select, update
 
+from app.core.config import settings
 from app.models.replay_v2 import (
     ReplayV2ConflictEvent,
     ReplayV2Episode,
@@ -37,6 +38,9 @@ from app.services.metric_store import (
     _period_start,
 )
 from app.services.replay_v2_aggregates import build_mission_aggregates
+from app.services.replay_v2_conflict_evidence import (
+    register_replay_v2_conflict_evidence,
+)
 
 
 REPLAY_V2_TOPIC_PATTERN = re.compile(
@@ -70,11 +74,27 @@ def _fact_id(*parts: Any) -> str:
     return hashlib.sha256(":".join(str(part) for part in parts).encode()).hexdigest()[:40]
 
 
+def _required_offset_ms(data: dict) -> int:
+    raw_offset = data.get("offset_ms")
+    if raw_offset is None or isinstance(raw_offset, bool):
+        raise MetricContractError("replay timed fact requires offset_ms")
+    try:
+        offset_ms = int(raw_offset)
+    except (TypeError, ValueError) as exc:
+        raise MetricContractError("replay timed fact offset_ms is invalid") from exc
+    if offset_ms < 0 or (
+        isinstance(raw_offset, float) and not raw_offset.is_integer()
+    ):
+        raise MetricContractError("replay timed fact offset_ms is invalid")
+    return offset_ms
+
+
 class ReplayV2MetricStoreAdapter:
     """Replay-v2 MetricStore adapter; it never writes canonical fact tables."""
 
-    def __init__(self, session_maker) -> None:
+    def __init__(self, session_maker, *, evidence_storage_root: str | None = None) -> None:
         self._session_maker = session_maker
+        self._evidence_storage_root = evidence_storage_root or settings.survey_storage_dir
 
     def _normalize(self, envelope: MessageEnvelope) -> dict:
         match = REPLAY_V2_TOPIC_PATTERN.fullmatch(envelope.topic)
@@ -328,6 +348,7 @@ class ReplayV2MetricStoreAdapter:
         period: str,
         grain_type: str | None = None,
         source_profile_id: str | None = None,
+        pipeline_id: str | None = None,
         granularity: str | None = None,
     ) -> list[dict]:
         """Read live Replay V2 samples without persisting transient trajectory tails."""
@@ -348,6 +369,8 @@ class ReplayV2MetricStoreAdapter:
             statement = statement.where(
                 ReplayV2TrafficMetricSample.source_profile_id == source_profile_id
             )
+        if pipeline_id:
+            statement = statement.where(ReplayV2Mission.pipeline_id == pipeline_id)
         async with self._session_maker() as session:
             rows = (
                 await session.execute(
@@ -420,7 +443,7 @@ class ReplayV2MetricStoreAdapter:
             rows = (
                 await session.execute(
                     statement.order_by(
-                        ReplayV2Mission.started_at.desc(),
+                        ReplayV2Mission.created_at.desc(),
                         ReplayV2ConflictEvent.offset_ms.desc(),
                     ).limit(max(limit * 4, limit))
                 )
@@ -442,6 +465,10 @@ class ReplayV2MetricStoreAdapter:
                     "offset_ms": conflict.offset_ms,
                     "severity": conflict.severity,
                     "prediction_type": conflict.prediction_type,
+                    "motor_id": conflict.motor_track_id,
+                    "non_motor_id": conflict.non_motor_track_id,
+                    "distance_m": conflict.distance_m,
+                    "conflict_scene": conflict.conflict_scene,
                     "ttc_sec": conflict.ttc_sec,
                     "pet_sec": conflict.pet_sec,
                     "evidence": conflict.evidence,
@@ -459,20 +486,59 @@ class ReplayV2MetricStoreAdapter:
 
     def _add_conflict(self, session, value: dict, data: dict) -> list[str]:
         fact_id = _fact_id("conflict", value["message_id"])
+        evidence_files = data.pop("evidence_files", None)
+        evidence_fact_refs: list[str] = []
+        if evidence_files:
+            try:
+                evidence_refs, evidence_fact_refs = register_replay_v2_conflict_evidence(
+                    session,
+                    fact_id=fact_id,
+                    source_message_id=value["message_id"],
+                    evidence_files=evidence_files,
+                    storage_root=self._evidence_storage_root,
+                    source_time_raw={
+                        **(value.get("source_time_raw") or {}),
+                        "mission_offset_ms": data.get("offset_ms"),
+                    },
+                )
+                data["evidence_refs"] = evidence_refs
+                data["evidence_status"] = "complete"
+                data.pop("evidence_error", None)
+            except (OSError, TypeError, ValueError) as exc:
+                data["evidence_refs"] = []
+                data["evidence_status"] = "incomplete"
+                data["evidence_error"] = str(exc)
+        else:
+            data["evidence_refs"] = []
+            data["evidence_status"] = "incomplete"
+            data.setdefault("evidence_error", "evidence_files_missing")
         session.add(
             ReplayV2ConflictEvent(
                 id=fact_id,
                 mission_id=str(data.get("mission_id") or ""),
                 inter_id=str(value.get("inter_id") or value.get("intersection_id") or ""),
-                offset_ms=int(data.get("offset_ms") or 0),
+                offset_ms=_required_offset_ms(data),
                 severity=data.get("severity"),
                 prediction_type=data.get("prediction_type"),
+                motor_track_id=(
+                    str(data["motor_id"]) if data.get("motor_id") is not None else None
+                ),
+                non_motor_track_id=(
+                    str(data["non_motor_id"])
+                    if data.get("non_motor_id") is not None
+                    else None
+                ),
+                distance_m=data.get("distance_m"),
+                conflict_scene=data.get("conflict_scene"),
                 ttc_sec=data.get("ttc_sec"),
                 pet_sec=data.get("pet_sec"),
                 evidence=data.get("evidence"),
             )
         )
-        return [f"uav_replay_v2_conflict_events:{fact_id}"]
+        return [
+            f"uav_replay_v2_conflict_events:{fact_id}",
+            *evidence_fact_refs,
+        ]
 
     def _add_telemetry(self, session, value: dict, data: dict) -> list[str]:
         fact_id = _fact_id("telemetry", value["message_id"])
@@ -481,7 +547,7 @@ class ReplayV2MetricStoreAdapter:
             ReplayV2TelemetryMetric(
                 id=fact_id,
                 mission_id=str(data.get("mission_id") or ""),
-                offset_ms=int(data.get("offset_ms") or 0),
+                offset_ms=_required_offset_ms(data),
                 drone_id=value.get("drone_id"),
                 longitude_gcj02=position.get("longitude"),
                 latitude_gcj02=position.get("latitude"),

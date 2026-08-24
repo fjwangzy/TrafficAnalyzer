@@ -25,6 +25,7 @@ dependencies = [
 
     # ── Kafka ──
     "aiokafka>=0.11.0",
+    "cramjam>=2.11.0,<3",
 
     # ── WebSockets ──
     "websockets>=12.0",

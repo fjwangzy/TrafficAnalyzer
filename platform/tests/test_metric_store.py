@@ -13,6 +13,7 @@ from app.services.metric_store import (
     InMemoryMetricStoreAdapter,
     MessageEnvelope,
     MetricContractError,
+    MessageTransportConflict,
     PostgresMetricStoreAdapter,
     _period_start,
 )
@@ -614,6 +615,29 @@ class MetricStoreContractTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             store.dead_letters[("uav_statistics_1", 0, 11)]["reason_code"],
             "MessageIdentityConflict",
+        )
+
+    async def test_transport_offset_reuse_is_quarantined_without_pinning_consumer(self):
+        ws = _RecordingWS()
+        store = InMemoryMetricStoreAdapter()
+        service = KafkaConsumerService(
+            bootstrap_servers="localhost:9092",
+            group_id="test",
+            topics_pattern="uav_statistics_.*",
+            ws_manager=ws,
+            metric_store=store,
+        )
+        first = self._stats_payload("transport-first", 2)
+        reused_offset = self._stats_payload("transport-second", 9)
+
+        await service._process_message(first, "uav_statistics_1", 0, 10)
+        await service._process_message(reused_offset, "uav_statistics_1", 0, 10)
+
+        self.assertEqual(len(ws.messages), 1)
+        self.assertEqual(len(store.dead_letters), 1)
+        self.assertEqual(
+            store.dead_letters[("uav_statistics_1", 0, 10)]["reason_code"],
+            "MessageTransportConflict",
         )
 
 

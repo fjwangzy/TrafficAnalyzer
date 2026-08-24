@@ -86,3 +86,16 @@ def test_world_matrix_is_identical_with_or_without_road_map(monkeypatch):
     np.testing.assert_allclose(
         with_map.drone_displacement_m, without_map.drone_displacement_m, atol=1e-6
     )
+
+
+def test_missing_strict_agl_fails_closed_without_crashing_calibration(monkeypatch):
+    monkeypatch.delenv("RUNTIME_MAP_BUNDLE_JSON", raising=False)
+    frame = _frame()
+    frame.telemetry["altitude_agl"] = None
+
+    result = HomographyCalibrationNode(
+        {"calibration": {"mode": "auto", "camera_intrinsics": INTRINSICS}}
+    ).process(frame)
+
+    assert result.homography_matrix is None
+    assert result.calibration_mode is None

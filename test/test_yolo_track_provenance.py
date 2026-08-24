@@ -53,6 +53,37 @@ class YoloTrackProvenanceTest(unittest.TestCase):
         self.assertEqual(track["yolo_model_id"], "yolo11s-visdrone.pt@0123456789ab")
         self.assertEqual(track["class_mapping_version"], "visdrone-business/v1")
 
+    def test_active_track_uses_rolling_business_class_vote(self):
+        node = TrackerInfoUpdateNode({
+            "trajectory": {"min_track_duration_sec": 2},
+            "vehicle_classification": {
+                "mapping_version": "visdrone-business/v1",
+                "rolling_window_frames": 5,
+            },
+        })
+        frame = np.zeros((100, 100, 3), dtype=np.uint8)
+
+        observations = [
+            (6, "motor"),
+            (3, "car"),
+            (3, "car"),
+            (3, "car"),
+        ]
+        for index, (class_id, class_name) in enumerate(observations):
+            item = FrameElement("video", frame, index * 0.1, index + 1, {})
+            item.id_list = [17]
+            item.tracked_xyxy = [[10, 10, 20, 20]]
+            item.tracked_cls_ids = [class_id]
+            item.tracked_cls = [class_name]
+            item.tracked_conf = [0.9]
+            node.process(item)
+
+        track = node.buffer_tracks[17]
+        self.assertEqual(track.current_vehicle_class, "motor")
+        self.assertEqual(track.vehicle_class, "motor")
+        self.assertEqual(track.vehicle_class_history, ["non_motor", "motor", "motor", "motor"])
+        self.assertEqual(track.vehicle_class_confidence, 0.75)
+
 
 if __name__ == "__main__":
     unittest.main()

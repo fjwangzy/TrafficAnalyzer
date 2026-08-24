@@ -93,6 +93,17 @@ class HomographyCalibrationNode:
             return self._gcp_refiner.refine(H)
         return H
 
+    def _telemetry_projection_eligible(self, telemetry: dict | None) -> bool:
+        if not telemetry or not self.camera_intrinsics:
+            return False
+        altitude_agl = telemetry.get("altitude_agl")
+        return (
+            isinstance(altitude_agl, (int, float))
+            and not isinstance(altitude_agl, bool)
+            and np.isfinite(float(altitude_agl))
+            and float(altitude_agl) > 0.0
+        )
+
     def _log_gcp_residuals(self, H: np.ndarray) -> None:
         """首次成功时输出GCP残差报告（仅一次）。"""
         if self._logged_gcp_report or not self._gcp_refiner:
@@ -127,7 +138,7 @@ class HomographyCalibrationNode:
             frame_element.road_context_status = "complete"
 
         if self.mode == "auto":
-            if telemetry and telemetry.get("altitude_agl", 0) > 0 and self.camera_intrinsics:
+            if self._telemetry_projection_eligible(telemetry):
                 frame_element.homography_matrix = compute_homography_from_telemetry(
                     telemetry,
                     self.camera_intrinsics,
@@ -147,7 +158,7 @@ class HomographyCalibrationNode:
                 )
 
         elif self.mode == "telemetry":
-            if telemetry and telemetry.get("altitude_agl", 0) > 0 and self.camera_intrinsics:
+            if self._telemetry_projection_eligible(telemetry):
                 frame_element.homography_matrix = compute_homography_from_telemetry(
                     telemetry,
                     self.camera_intrinsics,

@@ -37,6 +37,12 @@ class FlightGeoReferenceNode:
             max_agl_m=motion.get("max_agl_m", 150.0),
             max_nadir_deviation_deg=motion.get("max_nadir_deviation_deg", 10.0),
             max_roll_deg=motion.get("max_roll_deg", 5.0),
+            allow_roll_with_visual_validation=motion.get(
+                "allow_roll_with_visual_validation", False
+            ),
+            max_roll_visual_validation_deg=motion.get(
+                "max_roll_visual_validation_deg", 15.0
+            ),
             max_vertical_speed_mps=motion.get("max_vertical_speed_mps", 2.0),
             max_yaw_rate_dps=motion.get("max_yaw_rate_dps", 15.0),
             max_zoom_drift_ratio=motion.get("max_zoom_drift_ratio", 0.02),
@@ -156,6 +162,7 @@ class FlightGeoReferenceNode:
             geo_reasons.append("flight_phase_not_verified")
         if self._require_visual and visual.get("status") not in {"verified", "bootstrap"}:
             visual.setdefault("reasons", []).append("visual_warp_not_verified")
+            geo_reasons.extend(visual.get("reasons") or [])
         detection_diagnostics = (
             getattr(frame_element, "detection_diagnostics", None) or {}
         )
@@ -165,6 +172,9 @@ class FlightGeoReferenceNode:
             "current_frame_matrix_invalid",
             "flight_pose_not_eligible",
             "flight_phase_not_verified",
+            "visual_warp_not_verified",
+            "pose_visual_residual_exceeded",
+            "verified_visual_motion_missing_warp",
         }
         geo_reasons = list(dict.fromkeys(geo_reasons))
         geo_eligible = not any(reason in geo_blocking for reason in geo_reasons)

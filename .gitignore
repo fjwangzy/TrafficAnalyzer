@@ -10,6 +10,7 @@ test.ipynb
 myenv
 web.py
 **env**
+!platform/alembic_replay_v2/env.py
 test.ipynb
 .env
 secrets.txt

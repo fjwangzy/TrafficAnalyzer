@@ -11,7 +11,7 @@ from kafka import KafkaProducer
 
 from elements.VideoEndBreakElement import VideoEndBreakElement
 from nodes.KafkaProducerNode import KafkaProducerNode
-from nodes.ReliableKafkaPublisher import ReliableKafkaPublisher
+from nodes.ReliableKafkaPublisher import ReliableKafkaPublisher, kafka_compression_type
 from utils_local.event_evidence import save_conflict_evidence_files
 
 
@@ -46,7 +46,7 @@ class TccEvidencePublisherNode:
             value_serializer=lambda value: dumps(value).encode("utf-8"),
             retries=3,
             request_timeout_ms=5000,
-            compression_type="zstd" if storage_profile == "replay_v2" else None,
+            compression_type=kafka_compression_type(storage_profile),
         )
         pipeline_id = os.environ.get("PIPELINE_ID")
         spool_name = re.sub(

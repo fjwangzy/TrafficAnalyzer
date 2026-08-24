@@ -92,6 +92,8 @@ flight_motion:
   max_agl_m: 150.0
   max_nadir_deviation_deg: 10.0
   max_roll_deg: 5.0
+  allow_roll_with_visual_validation: false # opt-in source policy; full pose + visual warp仍须通过
+  max_roll_visual_validation_deg: 15.0
   max_vertical_speed_mps: 2.0
   max_yaw_rate_dps: 15.0
   max_zoom_drift_ratio: 0.02
@@ -111,6 +113,7 @@ geo_reference:
 vehicle_classification:
   # 只配置非机动车类别；未命中的检测类别默认按机动车处理。
   # 新模型中摩托车/电动车难以区分，统一归入非机动车。
+  rolling_window_frames: 30  # 活动轨迹实时滚动投票；TCC 不等待轨迹结束后才定类
   non_motor_class_names:
     - pedestrian
     - person
@@ -207,12 +210,16 @@ telemetry:
   sync_tolerance_sec: 0.05   # 帧↔遥测时间戳同步容忍窗口(秒)
   file_path: ""              # source="file/srt"时的遥测文件路径
   time_offset_sec: 0.0       # source="file"时视频t=0对应的遥测相对时间偏移(秒)
+  agl_policy: "legacy_height" # legacy_height | laser_target；严格激光来源不得回退 elevation
+  interpolation_enabled: true # file 回放在相邻有效记录间按帧时刻连续化位置/姿态
+  max_interpolation_gap_sec: 2.5 # 超过该间隔不得插值，回退同步容忍门禁
 
 speed_estimation:
   enabled: true
   history_frames: 15      # 速度计算所基于的历史帧数
   smoothing_window: 5      # EMA平滑窗口
   min_displacement_px: 2.0 # 最小位移阈值(像素)
+  max_segment_speed_ms: 45.0 # 单段物理上限；异常世界坐标跳变不进入速度事实
 
 direction_flow:
   enabled: true
@@ -280,9 +287,18 @@ conflict_detection:
   same_time_collision_radius_m: 0.8 # 双方连续同刻进入的共同冲突区半径（米）
   arrival_time_tolerance_sec: 1.0 # 路径交点预测的到达时间差上限
   relative_speed_min_ms: 0.5     # 相对速度低于该值时不计算 TTC，避免抖动误报
+  max_segment_speed_ms: 45.0     # 异常世界坐标段不参与方向、加速度和行为证据
+  min_vehicle_class_confidence: 0.8 # 当前帧须与滚动业务类别一致，且投票置信度达到门槛
+  min_heading_confidence: 0.6    # 双方稳健世界方向低于该置信度时不外推冲突
+  min_general_crossing_angle_deg: 60.0 # 普通交叉低于该夹角按汇入/超车而非横向TCC处理
+  min_participant_border_clearance_px: 8.0 # 冲突双方当前框须完整可见，出画/贴边目标只保留诊断
+  max_cross_class_bbox_containment: 0.8 # 小框被另一类别框包裹时按同一物体重复检测拒绝
+  max_current_observation_age_sec: 0.05 # 双方必须在当前采样帧被观测，禁止用 lost-buffer 历史框外推
   min_history_points: 4          # 场景/避险证据需要的最少历史轨迹点
   min_conflict_angle_deg: 30.0  # 过滤同向行驶/追尾
-  max_conflict_angle_deg: 150.0 # 过滤近反向误交点
+  max_conflict_angle_deg: 150.0 # 标准交汇角上限；更高角度必须走下方严格分支
+  enable_high_angle_path_intersection: true # 召回视觉明确的近对向路径交点，CPA 不适用
+  high_angle_max_conflict_angle_deg: 170.0 # 高夹角严格分支上限；还需 TTC/PET 与避险行为
   turn_angle_threshold_deg: 45.0 # 无标注轨迹几何近似右转/左转
   min_turn_leg_m: 2.0            # 转弯前后两段投影位移都需达到该值，过滤短窗口小折线
   straight_angle_threshold_deg: 25.0 # NMV 近似直行阈值
@@ -292,6 +308,7 @@ conflict_detection:
   moving_speed_ms: 2.0           # 从移动降到低速才算停止/让行
   max_pair_distance_m: 15.0      # 新增：距离预过滤，两车距离超过此值直接跳过
   emit_cooldown_sec: 2.0         # 同一配对同级别事件的重发冷却时间（秒）
+  algorithm_version: "tcc-path-intersection/v2"
 
 geojson_export:
   enabled: true                      # 启用 BEV 轨迹 GeoJSON 导出

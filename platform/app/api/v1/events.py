@@ -101,6 +101,11 @@ async def review_event(event_id: str, body: EventReviewRequest, request: Request
             pass
     try:
         event = await _center(request).get_event(event_id)
+        if event["source_kind"] == "replay_v2_conflict":
+            raise HTTPException(
+                status_code=422,
+                detail="Replay V2 conflict review is read-only",
+            )
         if event["source_kind"] == "conflict":
             metric_store = getattr(request.app.state, "metric_store", None)
             if metric_store is None:

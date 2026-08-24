@@ -103,7 +103,14 @@ def compute_homography_from_telemetry(
     g_yaw = math.radians(telemetry.get("gimbal_yaw", 0))
     g_roll = math.radians(telemetry.get("gimbal_roll", 0))
 
-    if abs(g_pitch + math.pi / 2) < math.radians(10):
+    # The nadir similarity shortcut has no roll term.  Use the full pose
+    # transform when a meaningful roll is present so a later visual-warp gate
+    # can validate the roll-aware projection instead of accepting a rotated
+    # image with an unrotated world scale.
+    if (
+        abs(g_pitch + math.pi / 2) < math.radians(10)
+        and abs(g_roll) <= math.radians(0.5)
+    ):
         # === Nadir 模式：简化 2D 相似变换 ===
         gsd_x = agl * sw / (effective_fl * img_w)
         gsd_y = agl * sh / (effective_fl * img_h)

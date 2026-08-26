@@ -33,8 +33,6 @@ class FlightGeoReferenceNode:
             cruise_max_speed_mps=motion.get(
                 "max_cruise_speed_mps", motion.get("cruise_max_speed_mps", 12.0)
             ),
-            min_agl_m=motion.get("min_agl_m", 60.0),
-            max_agl_m=motion.get("max_agl_m", 150.0),
             max_nadir_deviation_deg=motion.get("max_nadir_deviation_deg", 10.0),
             max_roll_deg=motion.get("max_roll_deg", 5.0),
             allow_roll_with_visual_validation=motion.get(

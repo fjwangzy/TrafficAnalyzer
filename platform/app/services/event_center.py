@@ -12,7 +12,7 @@ from collections import defaultdict
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.models.alert import AlertRecord
@@ -328,14 +328,36 @@ class EventCenter:
         if self._materialize_on_list:
             await self.materialize_quality_events()
         async with self._sessions() as session:
-            ai_rows = (
-                await session.execute(select(AiEvent).order_by(AiEvent.occurred_at.desc()).limit(limit * 2))
-            ).scalars().all()
-            conflict_rows = (
-                await session.execute(
-                    select(ConflictEvent).order_by(ConflictEvent.occurred_at.desc()).limit(limit * 2)
-                )
-            ).scalars().all()
+            ai_rows = []
+            if event_type != "conflict":
+                ai_statement = select(AiEvent)
+                if event_type:
+                    ai_statement = ai_statement.where(AiEvent.event_type == event_type)
+                if inter_id:
+                    ai_statement = ai_statement.where(AiEvent.inter_id == inter_id)
+                if review_status:
+                    ai_statement = ai_statement.where(AiEvent.review_status == review_status)
+                ai_rows = (
+                    await session.execute(
+                        ai_statement.order_by(AiEvent.occurred_at.desc()).limit(limit * 2)
+                    )
+                ).scalars().all()
+            conflict_rows = []
+            if event_type in {None, "conflict"}:
+                conflict_statement = select(ConflictEvent)
+                if inter_id:
+                    conflict_statement = conflict_statement.where(ConflictEvent.inter_id == inter_id)
+                if source_profile_id:
+                    conflict_statement = conflict_statement.where(
+                        ConflictEvent.source_profile_id == source_profile_id
+                    )
+                if mission_id:
+                    conflict_statement = conflict_statement.where(ConflictEvent.mission_id == mission_id)
+                conflict_rows = (
+                    await session.execute(
+                        conflict_statement.order_by(ConflictEvent.occurred_at.desc()).limit(limit * 2)
+                    )
+                ).scalars().all()
             replay_rows = []
             if event_type in {None, "conflict"}:
                 replay_statement = (
@@ -429,7 +451,10 @@ class EventCenter:
                 conflict = (
                     await session.execute(
                         select(ConflictEvent)
-                        .where(ConflictEvent.id == event_id)
+                        .where(or_(
+                            ConflictEvent.id == event_id,
+                            ConflictEvent.source_message_id == event_id,
+                        ))
                         .order_by(ConflictEvent.occurred_at.desc())
                         .limit(1)
                     )
@@ -458,7 +483,7 @@ class EventCenter:
                 else:
                     review = (
                         await session.execute(
-                            select(ConflictReview).where(ConflictReview.event_id == event_id)
+                            select(ConflictReview).where(ConflictReview.event_id == conflict.id)
                         )
                     ).scalar_one_or_none()
                     result = self._conflict_dict(conflict, review)

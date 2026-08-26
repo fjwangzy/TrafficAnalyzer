@@ -55,6 +55,16 @@ def test_rejects_non_nadir_pose_even_when_position_is_stable():
     assert "gimbal_pitch_out_of_range" in snapshot.reasons
 
 
+def test_altitude_value_does_not_gate_formal_pose_without_confirmed_agl_semantics():
+    snapshot = FlightMotionClassifier().observe(
+        _sample(0.0, 0.0) | {"altitude_agl": 202.5, "horizontal_speed": 2.0}
+    )
+
+    assert "agl_out_of_range" not in snapshot.reasons
+    assert snapshot.phase == "cruise_nadir"
+    assert snapshot.formal_pose_eligible is True
+
+
 def test_roll_above_default_limit_requires_explicit_visual_validation_policy():
     telemetry = _sample(0.0, 0.0, roll=10.0)
 

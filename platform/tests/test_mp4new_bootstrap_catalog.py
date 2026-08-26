@@ -33,6 +33,11 @@ def test_mp4new_catalog_preserves_known_offsets_and_degradation():
     assert sources["SRC-MP4NEW2-HY-0715-PM"]["time_offset_sec"] == 169.004
     assert sources["SRC-MP4NEW2-LS-0715-PM"]["time_offset_sec"] == 691.247
     assert sources["SRC-MP4NEW2-CH-0715-PM"]["time_offset_sec"] == 334.868
+    assert all(
+        source.get("camera_lens_policy", "standard_wide_1x")
+        == "standard_wide_1x"
+        for source in sources.values()
+    )
     assert sources["SRC-MP4NEW-LS-0624-PM"]["known_degradation"] == "telemetry_gap_34s"
 
 

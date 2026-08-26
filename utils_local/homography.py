@@ -166,8 +166,10 @@ def compute_homography_from_telemetry(
             [0,  0, -1],
         ], dtype=np.float64)
 
-        # 旋转矩阵（云台角度 + 基底翻转）
-        Rz = _rotation_z(g_yaw)
+        # DJI yaw is clockwise from North, while the mathematical Z rotation
+        # used here is counter-clockwise in the ENU East/North plane. Negate
+        # it so this branch matches the Nadir shortcut's yaw convention.
+        Rz = _rotation_z(-g_yaw)
         Ry = _rotation_y(g_pitch + math.pi / 2)  # 修正：-90度为正下方
         Rx = _rotation_x(g_roll)
         R = Rz @ Ry @ Rx @ R_flip

@@ -12,6 +12,10 @@ const liveMocks = vi.hoisted(() => ({
     intersectionStats: vi.fn(),
     alerts: vi.fn(),
     conflicts: vi.fn(),
+    event: vi.fn(),
+    reviewEvent: vi.fn(),
+    createEventSurvey: vi.fn(),
+    surveyEvidence: vi.fn(),
     trajectories: vi.fn(),
     acknowledgeAlert: vi.fn(),
     createMission: vi.fn(),
@@ -84,7 +88,7 @@ vi.mock('./components/MonitoringBevMap', () => ({
 }))
 
 import { RouterApp } from './RouterApp'
-import { monitoringEventCenterUrl } from './App'
+import { MonitoringEvidenceThumb, monitoringEventCenterUrl } from './App'
 import { readDemoSnapshots } from './lib/demoSnapshots'
 
 function open(path) {
@@ -121,6 +125,18 @@ function mockSuccessfulApis() {
     { id: 'DB-C-1', message_id: 'C-1', mission_id: 'MSN-XQH-1', source_profile_id: 'SRC-1', pipeline_id: 'P-old', prediction_type: 'path_intersection', distance_m: 0.0, motor_id: 96, non_motor_id: 88, severity: 'critical', title: '历史路径交点事件', occurred_at: '2026-07-14T09:59:58Z', ttc_sec: 1.1, pet_sec: 0.3 },
     { id: 'C-CPA', source_profile_id: 'SRC-1', prediction_type: 'same_time_cpa', distance_m: 0.4, motor_id: 7, non_motor_id: 8, severity: 'warning', title: '实验 CPA 事件', occurred_at: '2026-07-14T09:59:57Z' },
   ])
+  liveMocks.api.event.mockImplementation(async (eventId) => ({
+    id: eventId,
+    event_type: 'conflict',
+    source_kind: 'conflict',
+    review_status: 'pending',
+    review_revision: 1,
+    review_supported: true,
+    payload: { motor_id: 96, non_motor_id: 88, ttc_sec: 1.1, pet_sec: 0.3, evidence_refs: [] },
+  }))
+  liveMocks.api.reviewEvent.mockImplementation(async (eventId, body) => ({ id: eventId, review_status: body.review_status, review_revision: body.expected_revision + 1 }))
+  liveMocks.api.createEventSurvey.mockResolvedValue({ task: { id: 'SVY-EVENT-1' } })
+  liveMocks.api.surveyEvidence.mockResolvedValue(new Blob(['jpeg'], { type: 'image/jpeg' }))
   liveMocks.api.trajectories.mockResolvedValue([
     { id: 'TRK-HIST-1', track_id: 96, source_profile_id: 'SRC-1', pipeline_id: 'P-old', trajectory_gcj02: [[117, 36.7], [117.0001, 36.7001], [117.0002, 36.7002]], anchor_gcj02: [117, 36.7] },
     { id: 'TRK-HIST-2', track_id: 88, source_profile_id: 'SRC-1', pipeline_id: 'P-old', trajectory_gcj02: [[117.0001, 36.7], [117.0002, 36.7001], [117.0003, 36.7002]], anchor_gcj02: [117, 36.7] },
@@ -489,6 +505,74 @@ describe('Console2 live module migration', () => {
     expect(params.get('event_id')).toBe('C-1')
   })
 
+  it('shows clustered risk counts, loads event evidence and writes review through the canonical ledger', async () => {
+    liveMocks.api.event.mockResolvedValueOnce({
+      id: 'C-1',
+      event_type: 'conflict',
+      source_kind: 'conflict',
+      review_status: 'pending',
+      review_revision: 3,
+      review_supported: true,
+      payload: {
+        motor_id: 96,
+        non_motor_id: 88,
+        ttc_sec: 1.1,
+        pet_sec: .3,
+        evidence_refs: [{ id: 'E-C-1', kind: 'conflict_original_frame' }],
+      },
+    })
+    open('/monitoring?intersection_id=INT-1&source_profile_id=SRC-1')
+
+    const summary = await screen.findByLabelText('风险事件统计')
+    expect(summary).toHaveTextContent('触发1')
+    expect(summary).toHaveTextContent('事件1')
+    expect(summary).toHaveTextContent('待复核1')
+    expect(await screen.findByAltText('原始画面')).toBeInTheDocument()
+
+    const confirm = screen.getByRole('button', { name: '技术确认' })
+    await waitFor(() => expect(confirm).toBeEnabled())
+    fireEvent.click(confirm)
+    await waitFor(() => expect(liveMocks.api.reviewEvent).toHaveBeenCalledWith('C-1', {
+      review_status: 'confirmed',
+      expected_revision: 3,
+      reason: '实时监控技术复核',
+    }))
+  })
+
+  it('opens a loaded TCC evidence image for inspection', async () => {
+    render(<MonitoringEvidenceThumb reference={{ id: 'E-C-1', kind: 'conflict_original_frame' }} />)
+
+    expect(await screen.findByAltText('原始画面')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '查看原始画面大图' }))
+    expect(screen.getByRole('dialog', { name: '原始画面大图' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '关闭证据大图' }))
+    expect(screen.queryByRole('dialog', { name: '原始画面大图' })).not.toBeInTheDocument()
+  })
+
+  it('creates a local evidence-review task from the selected canonical event', async () => {
+    liveMocks.api.event.mockResolvedValueOnce({
+      id: 'C-1',
+      event_type: 'conflict',
+      source_kind: 'conflict',
+      review_status: 'pending',
+      review_revision: 3,
+      review_supported: true,
+      payload: {
+        motor_id: 96,
+        non_motor_id: 88,
+        evidence_refs: [{ id: 'E-C-1', kind: 'conflict_original_frame' }],
+      },
+    })
+    open('/monitoring?intersection_id=INT-1&source_profile_id=SRC-1')
+
+    const createTask = await screen.findByRole('button', { name: '建立证据复核任务' })
+    await waitFor(() => expect(createTask).toBeEnabled())
+    fireEvent.click(createTask)
+
+    await waitFor(() => expect(liveMocks.api.createEventSurvey).toHaveBeenCalledWith('C-1', 'monitoring-event-survey-C-1'))
+    await waitFor(() => expect(window.location.pathname).toBe('/survey/SVY-EVENT-1/measure'))
+  })
+
   it('keeps realtime monitoring BEV free of historical Mission replay', async () => {
     liveMocks.api.pipelines.mockResolvedValue([])
     liveMocks.api.trajectories.mockClear()
@@ -720,12 +804,14 @@ describe('Console2 live module migration', () => {
     expect(within(scenarioGroup).getAllByRole('button')).toHaveLength(6)
     expect(screen.getByRole('tabpanel', { name: '场景策略' })).not.toHaveTextContent('Mock 控制链路')
     expect(screen.getByRole('tabpanel', { name: '场景策略' })).not.toHaveTextContent('基于 Mock 数据')
-    expect(screen.getByRole('tabpanel', { name: '场景策略' })).toHaveTextContent('证据未齐 · 不触发')
+    expect(screen.getByRole('tabpanel', { name: '场景策略' })).not.toHaveTextContent('一次仅研判 1 项')
+    expect(screen.getByRole('tabpanel', { name: '场景策略' })).not.toHaveTextContent('开发测试')
+    expect(screen.getByRole('tabpanel', { name: '场景策略' })).toHaveTextContent('不形成在线建议')
     expect(screen.getByRole('tabpanel', { name: '场景策略' })).toHaveTextContent('仅生成建议')
     expect(screen.getByRole('tabpanel', { name: '场景策略' })).toHaveTextContent('交警 / 信控平台确认')
 
     fireEvent.click(within(scenarioGroup).getByRole('button', { name: '行人感应' }))
-    expect(screen.getByRole('tabpanel', { name: '场景策略' })).toHaveTextContent('有效请求：待接 行人检测 / 按钮')
+    expect(screen.getByRole('tabpanel', { name: '场景策略' })).toHaveTextContent('等待人数 12 人，已超过演示阈值 8 人')
     expect(screen.getByRole('tabpanel', { name: '场景策略' })).toHaveTextContent('已进入人行横道的行人清空时间不得因机动车排队提前结束')
 
     fireEvent.click(screen.getByRole('tab', { name: /近期事件/ }))

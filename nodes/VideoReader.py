@@ -110,6 +110,9 @@ class VideoReader:
                     max_interpolation_gap = telemetry_config.get(
                         "max_interpolation_gap_sec", sync_tol
                     )
+                    camera_lens_policy = telemetry_config.get(
+                        "camera_lens_policy", "standard_wide_1x"
+                    )
                     self.telemetry_subscriber = TelemetryFileReader(
                         file_path,
                         sync_tol,
@@ -117,6 +120,7 @@ class VideoReader:
                         agl_policy,
                         interpolation_enabled,
                         max_interpolation_gap,
+                        camera_lens_policy,
                     )
                     self.telemetry_subscriber.start()
                     logger.info(f"VideoReader: 文件遥测加载已启动 ({file_path}, offset={time_offset}s)")

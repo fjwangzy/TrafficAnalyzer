@@ -141,6 +141,7 @@ class _ConflictSession:
                     mission_id="mission-1",
                     pipeline_id="pipeline-1",
                     source_profile_id="source-1",
+                    source_message_id="message-1",
                 )
             ])
         if "uav_conflict_reviews" in sql:
@@ -178,6 +179,14 @@ class _RejectedConflictSession(_ConflictSession):
         return await super().execute(statement)
 
 
+class _RealtimeAliasConflictSession(_ConflictSession):
+    async def execute(self, statement):
+        sql = str(statement)
+        if "uav_conflict_events" in sql and "source_message_id" not in sql.split("WHERE", 1)[-1]:
+            return _Result([])
+        return await super().execute(statement)
+
+
 class _ConfirmedConflictSession(_ConflictSession):
     async def execute(self, statement):
         sql = str(statement)
@@ -204,6 +213,15 @@ async def test_conflict_detail_separates_exact_participants_from_context_tracks(
     assert "真实" not in event["title"]
     assert [track["track_id"] for track in event["related_tracks"]] == [11, 22]
     assert [track["track_id"] for track in event["context_tracks"]] == [33]
+
+
+@pytest.mark.asyncio
+async def test_conflict_detail_accepts_realtime_source_message_id():
+    center = EventCenter(lambda: _RealtimeAliasConflictSession(), materialize_on_list=False)
+
+    event = await center.get_event("message-1")
+
+    assert event["id"] == "conflict-1"
 
 
 @pytest.mark.asyncio

@@ -32,11 +32,13 @@ class TelemetryFileReader:
         agl_policy: str = "legacy_height",
         interpolation_enabled: bool = True,
         max_interpolation_gap_sec: float | None = None,
+        camera_lens_policy: str = "standard_wide_1x",
     ) -> None:
         self.file_path = file_path
         self.sync_tolerance_sec = sync_tolerance_sec
         self.time_offset_sec = time_offset_sec  # 视频t=0对应的遥测相对时间（秒）
         self.agl_policy = agl_policy
+        self.camera_lens_policy = camera_lens_policy
         self.interpolation_enabled = bool(interpolation_enabled)
         self.max_interpolation_gap_sec = float(
             sync_tolerance_sec
@@ -127,7 +129,10 @@ class TelemetryFileReader:
     def _extract_telemetry(self, payload: dict, timestamp: float) -> dict:
         """从DJI OSD消息中提取关键字段（与TelemetrySubscriber._extract_telemetry一致）。"""
         return extract_dji_telemetry(
-            payload, timestamp, agl_policy=self.agl_policy
+            payload,
+            timestamp,
+            agl_policy=self.agl_policy,
+            camera_lens_policy=self.camera_lens_policy,
         )
 
     @staticmethod

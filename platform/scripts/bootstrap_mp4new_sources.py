@@ -415,6 +415,9 @@ async def bootstrap(check_only: bool = False) -> dict:
                         "format": "dji_srt" if source.get("telemetry_type") == "srt" else "dji_cloud_json",
                         "time_offset_sec": source["time_offset_sec"],
                         "sync_tolerance_sec": source.get("sync_tolerance_sec", 2.5),
+                        "camera_lens_policy": source.get(
+                            "camera_lens_policy", "standard_wide_1x"
+                        ),
                         "telemetry_enabled": source.get("telemetry_enabled", True),
                         "known_degradation": source.get("known_degradation"),
                         "acceptance_mode": source.get("acceptance_mode", "formal_world_trajectory"),

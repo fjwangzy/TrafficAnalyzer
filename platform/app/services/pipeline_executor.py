@@ -47,6 +47,7 @@ class PipelineLaunchSpec:
     telemetry_file_path: str | None = None
     telemetry_time_offset_sec: float | None = None
     telemetry_sync_tolerance_sec: float | None = None
+    telemetry_camera_lens_policy: str | None = None
 
 
 @dataclass
@@ -130,6 +131,11 @@ class LocalPipelineExecutor:
             command.append(
                 "telemetry.sync_tolerance_sec="
                 f"{spec.telemetry_sync_tolerance_sec}"
+            )
+        if spec.telemetry_camera_lens_policy is not None:
+            command.append(
+                "telemetry.camera_lens_policy="
+                f"{spec.telemetry_camera_lens_policy}"
             )
         return command
 

@@ -206,7 +206,7 @@ def test_invalid_current_frame_matrix_blocks_world_and_tcc_with_reason():
     ("telemetry_mutation", "expected_reason"),
     [
         (None, "telemetry_unavailable"),
-        ({"altitude_agl": 10.0}, "agl_out_of_range"),
+        ({"altitude_agl_source": "unavailable"}, "agl_source_unverified"),
         ({"gimbal_pitch": -60.0}, "gimbal_pitch_out_of_range"),
     ],
 )

@@ -620,6 +620,7 @@ Console2 实时监测的 BEV 采用“最近 5 分钟或至少 150 条”的混�
 - 旧检测器图片只有在反查到同一源视频帧，并用对应 Git commit、模型、stride、遥测和历史冲突配置实际重跑复现后，才可恢复为 `historical_detector_output`。恢复事实必须保留源帧、旧/复现图 SHA-256、像素匹配指标、历史算法版本和 `reconstructed` 时间质量；跟踪 ID 只属于单次运行，跨运行变化不能伪装成同一身份。当前口径在同帧未触发时必须明确披露，历史事实不得进入当前口径效果统计。
 - 事件中心按 media kind 展示证据：冲突帧和 `survey_report_annotated_image` 才进入图片预览；PDF、JSON、GeoJSON 作为可鉴权附件打开，不能送入 `<img>` 解码。
 - 事件中心页面和 REST 查询只返回业务时间倒序的最近 150 条，且始终是只读路径；质量下降事件的物化是显式维护作业，不得在 `GET /events` 内扫描遥测或写入事件。告警/测绘同步与技术复核可写入各自的明确工作流。清理前必须先按 `uav_ai_events + uav_conflict_events` 合并计数；总量不超过 150 时不得删除。
+- 事件中心的路口、SourceProfile 与 Mission 条件必须在数据库分页前应用，避免较早回放事件被全局新事件截断；实时冲突的 `source_message_id` 可作为查询入口，但复核始终写入解析后的持久 `ConflictEvent.id`。监测页图片证据必须可打开原图，不把缩略图当作完整复核视图。
 - 当真实检测没有产生冲突时，轨迹研判显示 0 和真实空态，禁止为展示向正式 `road9` 注入伪冲突。
 
 ### 历史轨迹流向研判（2026-07-21）
@@ -693,9 +694,9 @@ GCJ-02/ENU 最大往返误差为 0.0068m。该口径不得写成 100 条人工�
 
 飞行阶段由共享 `FlightMotionClassifier.observe()` 判定，离线视频发现和实时检测不能各自实现悬停逻辑。状态为 `hover_candidate`、`hover_verified`、`cruise_nadir`、`transition`、`unsupported_pose`、`telemetry_unavailable`。默认进入悬停要求连续 15 秒、GPS 覆盖率不低于 90%、派生速度 P95 不高于 1m/s、位置半径 P95 不高于 5m、云台俯角不高于 -80°；退出使用速度 1.5m/s、半径 8m、俯角 -78°和 2 秒迟滞。
 
-巡航正式包线为地速 1–12m/s、AGL 60–150m、云台俯角不高于 -80°、滚转绝对值不高于 5°、垂直速度不高于 2m/s、偏航角速度不高于 15°/s、变焦漂移不高于 2%。SRT/JSON 缺失速度时使用约 1 秒 GCJ-02 位置窗口派生；报告速度与派生速度持续相差超过 3m/s 时标记不一致。DJI Cloud 文件在相邻记录间隔不超过 `max_interpolation_gap_sec` 时按帧源时间连续化位置、姿态、速度和 `recorded_at`，并保留左右记录血缘；跨 `±180°` 的航向取最短角。所有文件与 MQTT 遥测超过同步容忍窗口都返回空，Cloud 文件超过最大插值间隔也返回空，不外推或复用超窗最近值。
+巡航正式姿态包线为地速 1–12m/s、云台俯角不高于 -80°、滚转绝对值不高于 5°、垂直速度不高于 2m/s、偏航角速度不高于 15°/s、变焦漂移不高于 2%。高度数值不再参与飞行姿态或 TCC 的固定区间门禁，因为来源字段可能表示椭球海拔、相对起飞高度或经验证 AGL；世界投影仍必须独立满足高度来源和矩阵质量要求。SRT/JSON 缺失速度时使用约 1 秒 GCJ-02 位置窗口派生；报告速度与派生速度持续相差超过 3m/s 时标记不一致。DJI Cloud 文件在相邻记录间隔不超过 `max_interpolation_gap_sec` 时按帧源时间连续化位置、姿态、速度和 `recorded_at`，并保留左右记录血缘；跨 `±180°` 的航向取最短角。所有文件与 MQTT 遥测超过同步容忍窗口都返回空，Cloud 文件超过最大插值间隔也返回空，不外推或复用超窗最近值。
 
-DJI Cloud 语义下的 `height` 是椭球绝对高度，`elevation` 是相对起飞点高度；二者都不得在严格巡航 TCC 中直接冒充 AGL。`telemetry_agl_policy=laser_target` 只接受激光状态正常且 `height - target_altitude` 与 `laser_range × |sin(gimbal_pitch)|` 残差达标的样本，并把来源和残差随帧保留。录制视频必须确认唯一的 `vision` 广角镜头后才采用该镜头的 zoom；镜头不明、激光异常或高度残差越界时，世界坐标和 TCC 资格下降为不可用，不使用 `elevation` 兜底。
+DJI Cloud 语义下的 `height` 是椭球绝对高度，`elevation` 是相对起飞点高度；二者都不得在严格巡航 TCC 中直接冒充 AGL。`telemetry_agl_policy=laser_target` 只接受激光状态正常且 `height - target_altitude` 与 `laser_range × |sin(gimbal_pitch)|` 残差达标的样本，并把来源和残差随帧保留。镜头全局默认按标准广角 1x 组处理并记录 `source_profile_standard_wide_1x` 血缘；特殊来源必须显式配置 `camera_lens_policy=auto_from_telemetry`，此时只有唯一确认的 `vision` 1x 镜头可通过。激光异常、高度来源不可用或特殊镜头无法确认时，世界坐标和 TCC 资格下降为不可用，不使用 `elevation` 兜底。
 
 遥测、当前帧矩阵或地图质量短缺不得终止图像业务轨迹。ByteTrack 确认关联后分配稳定
 `track_id`，该 ID 只因关联消失、源时间断点、超时或自然 EOF 结束；地理质量恢复时沿用原 ID。

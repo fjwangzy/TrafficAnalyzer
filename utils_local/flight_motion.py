@@ -30,8 +30,6 @@ class FlightMotionClassifier:
         hover_speed_mps: float = 1.0,
         hover_confirm_sec: float = 15.0,
         cruise_max_speed_mps: float = 12.0,
-        min_agl_m: float = 60.0,
-        max_agl_m: float = 150.0,
         max_nadir_deviation_deg: float = 10.0,
         max_roll_deg: float = 5.0,
         allow_roll_with_visual_validation: bool = False,
@@ -49,8 +47,6 @@ class FlightMotionClassifier:
         self.hover_speed_mps = float(hover_speed_mps)
         self.hover_confirm_sec = float(hover_confirm_sec)
         self.cruise_max_speed_mps = float(cruise_max_speed_mps)
-        self.min_agl_m = float(min_agl_m)
-        self.max_agl_m = float(max_agl_m)
         self.max_nadir_deviation_deg = float(max_nadir_deviation_deg)
         self.max_roll_deg = float(max_roll_deg)
         self.allow_roll_with_visual_validation = bool(allow_roll_with_visual_validation)
@@ -212,7 +208,6 @@ class FlightMotionClassifier:
             [item[2] for item in self._hover_window if item[2] is not None], 0.95
         )
 
-        agl = float(telemetry.get("altitude_agl", 0.0) or 0.0)
         pitch = float(telemetry.get("gimbal_pitch", -90.0) or -90.0)
         roll = abs(float(telemetry.get("gimbal_roll", 0.0) or 0.0))
         vertical_speed = abs(float(telemetry.get("vertical_speed", 0.0) or 0.0))
@@ -227,8 +222,6 @@ class FlightMotionClassifier:
 
         if current_position is None:
             reasons.append("gps_unavailable")
-        if not self.min_agl_m <= agl <= self.max_agl_m:
-            reasons.append("agl_out_of_range")
         if telemetry.get("altitude_agl_source") == "unavailable":
             reasons.append("agl_source_unverified")
         if telemetry.get("camera_lens_verified") is False:

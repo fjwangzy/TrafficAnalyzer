@@ -46,6 +46,7 @@ def extract_dji_telemetry(
     *,
     agl_policy: str = "legacy_height",
     laser_residual_max_m: float = 0.2,
+    camera_lens_policy: str = "standard_wide_1x",
 ) -> dict:
     """Return one canonical telemetry record with provenance-rich quality fields.
 
@@ -84,16 +85,24 @@ def extract_dji_telemetry(
         and residual <= laser_residual_max_m
     )
 
-    camera, camera_stream = _camera_for_recording(payload, osd)
+    camera, detected_camera_stream = _camera_for_recording(payload, osd)
     camera_zoom = _number(camera.get("zoom_factor")) if camera else None
-    # A recorded ``vision`` stream is treated as wide only when its declared
-    # zoom factor agrees with a 1x optical setting.  Any ambiguity blocks TCC
-    # rather than importing the thermal/zoom OSD factor into wide-video scale.
-    camera_lens_verified = bool(
-        camera_stream == "vision"
-        and camera_zoom is not None
-        and abs(camera_zoom - 1.0) <= 0.05
-    )
+    if camera_lens_policy == "standard_wide_1x":
+        camera_stream = "vision"
+        camera_lens_verified = True
+        zoom_factor = 1.0
+        zoom_factor_source = "source_profile_standard_wide_1x"
+    elif camera_lens_policy == "auto_from_telemetry":
+        camera_stream = detected_camera_stream
+        camera_lens_verified = bool(
+            camera_stream == "vision"
+            and camera_zoom is not None
+            and abs(camera_zoom - 1.0) <= 0.05
+        )
+        zoom_factor = 1.0 if camera_lens_verified else None
+        zoom_factor_source = "vision_wide_1x" if camera_lens_verified else "unavailable"
+    else:
+        raise ValueError(f"unsupported camera lens policy: {camera_lens_policy}")
     if agl_policy == "laser_target":
         altitude_agl = target_gap if laser_verified else None
         agl_source = "laser_target_altitude" if laser_verified else "unavailable"
@@ -127,8 +136,8 @@ def extract_dji_telemetry(
         "gimbal_roll": osd.get("gimbal_roll", 0),
         "camera_stream": camera_stream or "unresolved",
         "camera_lens_verified": camera_lens_verified,
-        "zoom_factor": 1.0 if camera_lens_verified else None,
-        "zoom_factor_source": "vision_wide_1x" if camera_lens_verified else "unavailable",
+        "zoom_factor": zoom_factor,
+        "zoom_factor_source": zoom_factor_source,
         "horizontal_speed": payload.get("horizontal_speed"),
         "vertical_speed": payload.get("vertical_speed"),
     }

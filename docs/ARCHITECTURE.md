@@ -546,7 +546,7 @@ DJI Cloud 文件是低频离散采样，`TelemetryFileReader` 在相邻记录间
 高度、线速度和姿态；航向使用跨 `±180°` 的最短角插值，`recorded_at` 同步插值并保留左右记录
 时间、比例和间隔血缘。超过最大间隔、缺失任一端或超出同步容忍窗口时不外推、不沿用超窗旧值。
 
-DJI Cloud 文件回放与 MQTT 订阅必须经同一字段归一化：`altitude_ellipsoid_m`、`altitude_takeoff_relative_m`、`laser_target_altitude_m`、`laser_range_m`、`laser_state`、`altitude_agl`、`altitude_agl_source`、`altitude_agl_residual_m`、`camera_stream` 与 `camera_lens_verified`。`elevation` 只表示相对起飞点高度，不能静默当作 AGL。需要米制世界 TCC 的 SourceProfile 必须选择 `telemetry_agl_policy=laser_target`：仅激光状态正常、绝对高度与激光目标高度之差和激光垂直分量相符（残差不超过配置门槛）时产生 AGL；否则 AGL 为空并关闭地理/TCC 能力。回放流还必须唯一确认正在录制的 `vision` 广角镜头；未知或歧义镜头不得借用其他镜头的 zoom 值。
+DJI Cloud 文件回放与 MQTT 订阅必须经同一字段归一化：`altitude_ellipsoid_m`、`altitude_takeoff_relative_m`、`laser_target_altitude_m`、`laser_range_m`、`laser_state`、`altitude_agl`、`altitude_agl_source`、`altitude_agl_residual_m`、`camera_stream` 与 `camera_lens_verified`。`elevation` 只表示相对起飞点高度，不能静默当作 AGL；高度数值本身不再接受 60–150m 固定 TCC 区间门禁。需要米制世界 TCC 的 SourceProfile 必须选择 `telemetry_agl_policy=laser_target`：仅激光状态正常、绝对高度与激光目标高度之差和激光垂直分量相符（残差不超过配置门槛）时产生 AGL；否则 AGL 为空并关闭地理/TCC 能力。镜头组全局默认 `standard_wide_1x`；特殊来源显式选择 `auto_from_telemetry` 后，才要求遥测唯一确认正在录制的 `vision` 1x 镜头，且不得借用其他镜头的 zoom 值。
 
 标准巡航滚转仍为 `|roll| <= 5°`。仅 SourceProfile 显式启用时，`5° < |roll| <= 15°` 可进入“需要视觉一致性验证”的候选状态：完整含 roll 的相机位姿投影必须与背景视觉运动方向一致才保留地理/TCC 能力；它不是放宽滚转门禁，未通过或缺视觉证据的帧仍明确降级并计入覆盖率。
 

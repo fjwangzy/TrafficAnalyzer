@@ -223,10 +223,26 @@ def test_laser_target_policy_fails_closed_for_bad_laser_or_ambiguous_lens():
         _mp4820_payload(laser_state=1), 12.0, agl_policy="laser_target"
     )
     ambiguous_lens = extract_dji_telemetry(
-        _mp4820_payload(camera_zoom=7.0), 12.0, agl_policy="laser_target"
+        _mp4820_payload(camera_zoom=7.0),
+        12.0,
+        agl_policy="laser_target",
+        camera_lens_policy="auto_from_telemetry",
     )
 
     assert bad_laser["altitude_agl"] is None
     assert bad_laser["altitude_agl_source"] == "unavailable"
     assert ambiguous_lens["zoom_factor"] is None
     assert ambiguous_lens["camera_lens_verified"] is False
+
+
+def test_declared_standard_lens_group_sets_verified_wide_1x_lineage():
+    record = extract_dji_telemetry(
+        _mp4820_payload(camera_zoom=7.0),
+        12.0,
+        agl_policy="legacy_height",
+    )
+
+    assert record["camera_stream"] == "vision"
+    assert record["camera_lens_verified"] is True
+    assert record["zoom_factor"] == 1.0
+    assert record["zoom_factor_source"] == "source_profile_standard_wide_1x"

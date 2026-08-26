@@ -39,6 +39,9 @@ class SourceInput(BaseModel):
     credential_ref: str | None = Field(default=None, max_length=300)
     time_offset_sec: float | None = Field(default=None, ge=-86400, le=86400)
     sync_tolerance_sec: float | None = Field(default=None, gt=0, le=60)
+    camera_lens_policy: Literal[
+        "standard_wide_1x", "auto_from_telemetry"
+    ] | None = None
 
 
 class SourcePairCreate(BaseModel):

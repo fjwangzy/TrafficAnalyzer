@@ -88,8 +88,6 @@ flight_motion:
   hover_max_radius_p95_m: 5.0
   hover_exit_radius_m: 8.0
   hover_exit_confirm_sec: 2.0
-  min_agl_m: 60.0
-  max_agl_m: 150.0
   max_nadir_deviation_deg: 10.0
   max_roll_deg: 5.0
   allow_roll_with_visual_validation: false # opt-in source policy; full pose + visual warp仍须通过
@@ -211,6 +209,7 @@ telemetry:
   file_path: ""              # source="file/srt"时的遥测文件路径
   time_offset_sec: 0.0       # source="file"时视频t=0对应的遥测相对时间偏移(秒)
   agl_policy: "legacy_height" # legacy_height | laser_target；严格激光来源不得回退 elevation
+  camera_lens_policy: "standard_wide_1x" # 全局默认标准广角1x；特殊来源显式改为 auto_from_telemetry
   interpolation_enabled: true # file 回放在相邻有效记录间按帧时刻连续化位置/姿态
   max_interpolation_gap_sec: 2.5 # 超过该间隔不得插值，回退同步容忍门禁
 

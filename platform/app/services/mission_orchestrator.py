@@ -921,6 +921,9 @@ class MissionOrchestrator:
             "telemetry_file_path": telemetry.location if telemetry.mode == "local" else None,
             "telemetry_time_offset_sec": (telemetry.config or {}).get("time_offset_sec", 0.0),
             "telemetry_sync_tolerance_sec": (telemetry.config or {}).get("sync_tolerance_sec", 0.5),
+            "telemetry_camera_lens_policy": (telemetry.config or {}).get(
+                "camera_lens_policy", "standard_wide_1x"
+            ),
             "mission_id": mission.id,
             "source_profile_id": video.profile_id,
             "inter_id": mission.inter_id,
@@ -994,6 +997,7 @@ class MissionOrchestrator:
         return {
             "time_offset_sec": source.time_offset_sec if source.time_offset_sec is not None else 0.0,
             "sync_tolerance_sec": source.sync_tolerance_sec if source.sync_tolerance_sec is not None else 0.5,
+            "camera_lens_policy": source.camera_lens_policy or "standard_wide_1x",
         }
 
     async def _occurrence_mission(
@@ -1082,6 +1086,9 @@ class MissionOrchestrator:
                 "credential_ref_present": bool(telemetry.credential_ref),
                 "time_offset_sec": (telemetry.config or {}).get("time_offset_sec", 0.0),
                 "sync_tolerance_sec": (telemetry.config or {}).get("sync_tolerance_sec", 0.5),
+                "camera_lens_policy": (telemetry.config or {}).get(
+                    "camera_lens_policy", "standard_wide_1x"
+                ),
             },
         }
 

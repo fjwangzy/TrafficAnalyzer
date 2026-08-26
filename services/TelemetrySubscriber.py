@@ -34,6 +34,9 @@ class TelemetrySubscriber:
         self.buffer_size = config.get("buffer_size", 100)
         self.sync_tolerance_sec = config.get("sync_tolerance_sec", 0.05)
         self.agl_policy = config.get("agl_policy", "legacy_height")
+        self.camera_lens_policy = config.get(
+            "camera_lens_policy", "standard_wide_1x"
+        )
         self._buffer: deque[dict] = deque(maxlen=self.buffer_size)
         self._lock = threading.Lock()
         self._client: mqtt.Client | None = None
@@ -93,6 +96,7 @@ class TelemetrySubscriber:
             payload,
             payload.get("timestamp", time.time()),
             agl_policy=self.agl_policy,
+            camera_lens_policy=self.camera_lens_policy,
         )
 
     def get_nearest(self, frame_timestamp: float) -> dict | None:

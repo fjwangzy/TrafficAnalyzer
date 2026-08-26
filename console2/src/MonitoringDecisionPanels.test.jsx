@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest'
 
-import { MONITORING_SCENARIOS, buildMonitoringMovements } from './App'
+import {
+  MONITORING_SCENARIOS,
+  buildMonitoringMovements,
+  buildMonitoringRiskSummary,
+  buildMonitoringScenarioAssessments,
+  buildMonitoringSourceHealth,
+  clusterMonitoringConflictEpisodes,
+} from './App'
 
 describe('monitoring decision panels', () => {
   it('keeps the six approved business scenarios in one stable catalog', () => {
@@ -35,6 +42,48 @@ describe('monitoring decision panels', () => {
     expect(yellowFlash.guardrails.join('')).toContain('不得仅凭无人机')
     expect(variableLane.actions.join('')).toContain('完全清空')
     expect(variableLane.guardrails.join('')).toContain('禁止切换')
+  })
+
+  it('separates healthy, delayed, stale, interrupted and development source states', () => {
+    const base = { sourceMode: 'live', streamActive: true, wsStatus: 'connected', now: 100_000 }
+    expect(buildMonitoringSourceHealth({ ...base, lastStatsAt: 95_000 })).toMatchObject({ id: 'healthy', adviceAllowed: true })
+    expect(buildMonitoringSourceHealth({ ...base, lastStatsAt: 80_000 })).toMatchObject({ id: 'delayed', adviceAllowed: false })
+    expect(buildMonitoringSourceHealth({ ...base, lastStatsAt: 40_000 })).toMatchObject({ id: 'stale', adviceAllowed: false })
+    expect(buildMonitoringSourceHealth({ ...base, lastStatsAt: 99_000, endToEndLatencyMs: 20_000 })).toMatchObject({ id: 'delayed', adviceAllowed: false })
+    expect(buildMonitoringSourceHealth({ ...base, lastStatsAt: 99_000, endToEndLatencyMs: 60_000 })).toMatchObject({ id: 'stale', adviceAllowed: false })
+    expect(buildMonitoringSourceHealth({ ...base, lastStatsAt: 95_000, wsStatus: 'disconnected' })).toMatchObject({ id: 'interrupted', adviceAllowed: false })
+    expect(buildMonitoringSourceHealth({ ...base, sourceMode: 'local', lastStatsAt: 95_000 })).toMatchObject({ id: 'development', adviceAllowed: false })
+  })
+
+  it('clusters repeated pair triggers into one reviewable risk episode', () => {
+    const events = [
+      { id: 'C-1', type: 'conflict', level: 'warning', occurredAtMs: 10_000, raw: { source_profile_id: 'SRC-1', pipeline_id: 'P-1', motor_id: 9, non_motor_id: 4, ttc_sec: 1.8, pet_sec: .7, review_status: 'confirmed', evidence_refs: [{ id: 'E-1', kind: 'conflict_original_frame' }] } },
+      { id: 'C-2', type: 'conflict', level: 'critical', occurredAtMs: 35_000, raw: { source_profile_id: 'SRC-1', pipeline_id: 'P-1', motor_id: 9, non_motor_id: 4, ttc_sec: 1.1, pet_sec: .3, review_status: 'pending', evidence_refs: [{ id: 'E-2', kind: 'conflict_detector_frame' }] } },
+      { id: 'C-3', type: 'conflict', level: 'warning', occurredAtMs: 36_000, raw: { source_profile_id: 'SRC-1', pipeline_id: 'P-1', motor_id: 12, non_motor_id: 6, ttc_sec: 2.2, pet_sec: 1.0, review_status: 'rejected' } },
+    ]
+    const episodes = clusterMonitoringConflictEpisodes(events)
+
+    expect(episodes).toHaveLength(2)
+    expect(episodes.find((item) => item.motorId === '9')).toMatchObject({ triggerCount: 2, minTtcSec: 1.1, minPetSec: .3, reviewStatus: 'pending', level: 'critical' })
+    expect(episodes.find((item) => item.motorId === '9').evidenceRefs.map((item) => item.id)).toEqual(['E-1', 'E-2'])
+    expect(buildMonitoringRiskSummary(episodes)).toEqual({ triggers: 3, episodes: 2, reviewed: 1, pending: 1, confirmed: 0, rejected: 1 })
+  })
+
+  it('ranks evidence-bearing scenarios without claiming any control execution', () => {
+    const sourceHealth = buildMonitoringSourceHealth({ sourceMode: 'live', streamActive: true, wsStatus: 'connected', lastStatsAt: 98_000, now: 100_000 })
+    const assessments = buildMonitoringScenarioAssessments({
+      scenarios: MONITORING_SCENARIOS,
+      sourceHealth,
+      longestQueue: 128,
+      maxSaturation: null,
+      queueMetricMode: 'direction-estimate',
+      episodes: [{ type: 'conflict', reviewStatus: 'pending' }],
+    })
+
+    expect(assessments.slice(0, 2).map((item) => item.id)).toEqual(['right-control', 'overflow'])
+    expect(assessments.find((item) => item.id === 'right-control')).toMatchObject({ status: 'review', executable: false })
+    expect(assessments.find((item) => item.id === 'overflow')).toMatchObject({ status: 'partial', executable: false })
+    expect(assessments.every((item) => item.executable === false)).toBe(true)
   })
 
   it('uses explicit physical movements when the realtime contract provides them', () => {

@@ -97,11 +97,16 @@ class HomographyCalibrationNode:
         if not telemetry or not self.camera_intrinsics:
             return False
         altitude_agl = telemetry.get("altitude_agl")
+        zoom_factor = telemetry.get("zoom_factor", 1.0)
         return (
             isinstance(altitude_agl, (int, float))
             and not isinstance(altitude_agl, bool)
             and np.isfinite(float(altitude_agl))
             and float(altitude_agl) > 0.0
+            and isinstance(zoom_factor, (int, float))
+            and not isinstance(zoom_factor, bool)
+            and np.isfinite(float(zoom_factor))
+            and float(zoom_factor) > 0.0
         )
 
     def _log_gcp_residuals(self, H: np.ndarray) -> None:

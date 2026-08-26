@@ -381,6 +381,7 @@ class PipelineManager:
         telemetry_file_path: str | None = None,
         telemetry_time_offset_sec: float | None = None,
         telemetry_sync_tolerance_sec: float | None = None,
+        telemetry_camera_lens_policy: str | None = None,
         kafka_bootstrap: str | None = None,
         topic_name: str | None = None,
         mission_id: str | None = None,
@@ -475,6 +476,7 @@ class PipelineManager:
             telemetry_file_path=telemetry_file_path,
             telemetry_time_offset_sec=telemetry_time_offset_sec,
             telemetry_sync_tolerance_sec=telemetry_sync_tolerance_sec,
+            telemetry_camera_lens_policy=telemetry_camera_lens_policy,
         )
 
         try:

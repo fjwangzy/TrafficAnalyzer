@@ -99,6 +99,7 @@ class PipelineManagerTest(unittest.IsolatedAsyncioTestCase):
                 telemetry_file_path="test_videos/mp4new/srt/海右路 0624.txt",
                 telemetry_time_offset_sec=12.25,
                 telemetry_sync_tolerance_sec=2.5,
+                telemetry_camera_lens_policy="standard_wide_1x",
                 kafka_bootstrap="kafka:29092",
                 mission_id="MIS-REAL-001",
                 source_profile_id="SRC-REAL-001",
@@ -126,6 +127,7 @@ class PipelineManagerTest(unittest.IsolatedAsyncioTestCase):
                 f"telemetry.file_path='{telemetry_path.resolve()}'",
                 "telemetry.time_offset_sec=12.25",
                 "telemetry.sync_tolerance_sec=2.5",
+                "telemetry.camera_lens_policy=standard_wide_1x",
             ),
         )
         self.assertEqual(captured["env"]["VIDEO_SRC"], str(video_path.resolve()))

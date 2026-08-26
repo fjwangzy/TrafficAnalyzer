@@ -99,3 +99,16 @@ def test_missing_strict_agl_fails_closed_without_crashing_calibration(monkeypatc
 
     assert result.homography_matrix is None
     assert result.calibration_mode is None
+
+
+def test_missing_zoom_fails_closed_without_crashing_calibration(monkeypatch):
+    monkeypatch.delenv("RUNTIME_MAP_BUNDLE_JSON", raising=False)
+    frame = _frame()
+    frame.telemetry["zoom_factor"] = None
+
+    result = HomographyCalibrationNode(
+        {"calibration": {"mode": "auto", "camera_intrinsics": INTRINSICS}}
+    ).process(frame)
+
+    assert result.homography_matrix is None
+    assert result.calibration_mode is None

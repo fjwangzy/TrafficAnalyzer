@@ -111,7 +111,7 @@ async def review_event(event_id: str, body: EventReviewRequest, request: Request
             if metric_store is None:
                 raise HTTPException(status_code=503, detail="MetricStore unavailable")
             return await metric_store.review_conflict(
-                event["inter_id"], event_id, body.review_status,
+                event["inter_id"], event["id"], body.review_status,
                 body.expected_revision, reviewed_by, body.reason,
             )
         return await _center(request).review_ai_event(

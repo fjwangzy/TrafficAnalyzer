@@ -52,6 +52,7 @@ export function trajectoryOverlaySignature(trajectories = []) {
   return JSON.stringify(trajectories.map((item, index) => [
     Number(item?.color_index ?? index) % TRACK_COLORS.length,
     Boolean(item?.selected),
+    Boolean(item?.dimmed),
     isCandidateTrajectory(item),
     trajectoryGcj02(item),
   ]))
@@ -123,13 +124,13 @@ export function MonitoringBevMap({ centerLat, centerLon, trajectories = [], pixe
       const color = candidate ? '#ffb454' : TRACK_COLORS[Number(item.color_index ?? index) % TRACK_COLORS.length]
       if (path.length >= 2) overlays.push(new AMap.Polyline({
         path, strokeColor: color, strokeWeight: item.selected ? 5 : (item.selected || index < activeCount ? 3.5 : 2.5),
-        strokeOpacity: candidate ? 0.82 : 0.92,
+        strokeOpacity: item.dimmed ? 0.16 : candidate ? 0.82 : 0.92,
         strokeStyle: candidate ? 'dashed' : 'solid',
         strokeDasharray: candidate ? [10, 7] : undefined,
         lineJoin: 'round', lineCap: 'round', zIndex: candidate ? 19 : 20,
       }))
       if (showEndpoints || item.selected) overlays.push(new AMap.CircleMarker({
-        center: path.at(-1), radius: 4.5, fillColor: color, fillOpacity: 1,
+        center: path.at(-1), radius: 4.5, fillColor: color, fillOpacity: item.dimmed ? 0.18 : 1,
         strokeColor: '#eef6ff', strokeWeight: 1.4, zIndex: 30,
       }))
     })
@@ -157,13 +158,13 @@ export function MonitoringBevMap({ centerLat, centerLon, trajectories = [], pixe
             fill='none'
             stroke={color}
             strokeWidth={item.selected ? 5 : 3}
-            strokeOpacity={candidate ? .82 : .94}
+            strokeOpacity={item.dimmed ? .16 : candidate ? .82 : .94}
             strokeDasharray={candidate ? '10 7' : undefined}
             strokeLinecap='round'
             strokeLinejoin='round'
             vectorEffect='non-scaling-stroke'
           />
-          {showEndpoints || item.selected ? <circle cx={path.at(-1)[0]} cy={path.at(-1)[1]} r='5' fill={color} stroke='#eef6ff' strokeWidth='1.4' vectorEffect='non-scaling-stroke' /> : null}
+          {showEndpoints || item.selected ? <circle cx={path.at(-1)[0]} cy={path.at(-1)[1]} r='5' fill={color} fillOpacity={item.dimmed ? .18 : 1} stroke='#eef6ff' strokeWidth='1.4' vectorEffect='non-scaling-stroke' /> : null}
         </g>
       })}
     </svg>

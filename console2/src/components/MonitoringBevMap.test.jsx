@@ -125,6 +125,21 @@ describe('MonitoringBevMap GCJ-02 contract', () => {
     expect(overlays[0].options.strokeStyle).toBe('solid')
   })
 
+  it('dims non-participant trajectories while preserving the selected event pair', async () => {
+    render(
+      <MonitoringBevMap compact trajectories={[
+        { id: 'FOCUS-1', selected: true, trajectory_gcj02: [[117.1, 36.7], [117.2, 36.8]] },
+        { id: 'OTHER-1', dimmed: true, trajectory_gcj02: [[117.2, 36.7], [117.3, 36.8]] },
+      ]} label='focused BEV map' />,
+    )
+
+    await waitFor(() => expect(mapMocks.add).toHaveBeenCalledTimes(1))
+    const overlays = mapMocks.add.mock.calls[0][0]
+    expect(overlays[0].options.strokeWeight).toBe(5)
+    expect(overlays[0].options.strokeOpacity).toBe(.92)
+    expect(overlays[2].options.strokeOpacity).toBe(.16)
+  })
+
   it('does not rebuild and refit unchanged trajectory overlays', async () => {
     const trajectory = { id: 'TRK-1', trajectory_gcj02: [[117.1, 36.7], [117.2, 36.8]] }
     const { rerender } = render(

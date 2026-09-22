@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.config import settings
 from app.core.pipeline_options import DEFAULT_FRAME_STRIDE
+from app.models.enforcement import EnforcementRule, EnforcementZone
 from app.models.mission import (
     DroneRecord,
     FlightPlanRecord,
@@ -896,6 +897,24 @@ class MissionOrchestrator:
             and context.runtime_map_bundle
             else None
         )
+        enforcement_result = await session.execute(
+            select(EnforcementRule, EnforcementZone)
+            .join(EnforcementZone, EnforcementRule.zone_id == EnforcementZone.id)
+            .where(EnforcementRule.status == "candidate", EnforcementZone.status == "candidate")
+        )
+        rows = enforcement_result.all() if hasattr(enforcement_result, "all") else []
+        zones = {}
+        rules = []
+        for rule, zone in rows:
+            zones[zone.id] = {
+                "id": zone.id, "version": f"candidate-r{zone.revision}",
+                "geometry": zone.geometry, "coordinate_system": zone.coordinate_system,
+            }
+            rules.append({
+                "id": rule.id, "version": f"candidate-r{rule.revision}", "zone_id": zone.id,
+                "clue_type": rule.clue_type, "definition": rule.definition,
+            })
+        enforcement_snapshot = {"zones": list(zones.values()), "rules": rules}
         mission.context_snapshot = {
             **mission.context_snapshot,
             **(
@@ -913,6 +932,7 @@ class MissionOrchestrator:
                 else {}
             ),
             "source_profile_id": video.profile_id,
+            "enforcement_snapshot": enforcement_snapshot,
         }
         return {
             "drone_id": mission.drone_id, "intersection_id": mission.inter_id,
@@ -933,6 +953,7 @@ class MissionOrchestrator:
             "road_context_status": "complete" if runtime_map_bundle else "missing",
             "quality_status": context.quality_status if runtime_map_bundle else "degraded",
             "runtime_map_bundle": runtime_map_bundle,
+            "enforcement_snapshot": enforcement_snapshot,
             "tracking_profile": mission.context_snapshot.get(
                 "tracking_profile", "hover_cruise_v1"
             ),

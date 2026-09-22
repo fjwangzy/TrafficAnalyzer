@@ -62,6 +62,9 @@ class KafkaProducerNode:
             self.source_profile_id,
             self.camera_id,
         )
+        self.enforcement_topic = self._enforcement_topic_for_profile(
+            self.storage_profile, self.source_profile_id, self.camera_id
+        )
         self.how_often_sec = config_kafka["how_often_sec"]
         self.last_send_time = None
         self.kafka_producer = KafkaProducer(
@@ -205,6 +208,19 @@ class KafkaProducerNode:
             )
         canonical = KafkaProducerNode._canonical_topics(camera_id)
         return (*canonical, None)
+
+    @staticmethod
+    def _enforcement_topic_for_profile(
+        storage_profile: str, source_profile_id: str | None, camera_id
+    ) -> str:
+        if storage_profile == "replay_v2":
+            if not source_profile_id:
+                raise ValueError("SOURCE_PROFILE_ID is required for replay_v2 enforcement Topic")
+            return f"uav_replay_v2_enforcement_clues_{source_profile_id}"
+        value = str(camera_id)
+        if not value or len(value) > 64 or not re.fullmatch(r"[A-Za-z0-9_-]+", value):
+            raise ValueError("camera_id contains unsupported Topic characters")
+        return f"uav_enforcement_clues_{value}"
 
     def _canonical_envelope(
         self,
@@ -1173,6 +1189,14 @@ class KafkaProducerNode:
                 event_msg = self._canonical_envelope("uav_conflict", event_msg, frame_element)
                 pending_tcc_envelopes.append(event_msg)
         frame_element.pending_tcc_envelopes = pending_tcc_envelopes
+
+        pending_enforcement_envelopes = []
+        for clue in getattr(frame_element, "enforcement_clues", None) or []:
+            event_msg = {"intersection_id": self.intersection_id, **clue}
+            pending_enforcement_envelopes.append(
+                self._canonical_envelope("uav_enforcement_clue", event_msg, frame_element)
+            )
+        frame_element.pending_enforcement_envelopes = pending_enforcement_envelopes
 
         # ── T-103: 遥测发布（5Hz 节流） ──
         telemetry = normalize_telemetry_position(getattr(frame_element, "telemetry", None))

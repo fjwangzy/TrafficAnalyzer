@@ -57,7 +57,7 @@ class Settings(BaseSettings):
     # ── Kafka ──
     kafka_bootstrap: str = "kafka:9092"
     kafka_consumer_group: str = "vision-service"
-    kafka_topics_pattern: str = "(uav_(statistics|track_complete|conflicts|telemetry)_.*|uav_system_metrics)"
+    kafka_topics_pattern: str = "(uav_(statistics|track_complete|conflicts|telemetry|enforcement_clues)_.*|uav_system_metrics)"
 
     # ── JWT ──
     jwt_secret_key: str = "your-secret-key-change-in-production"

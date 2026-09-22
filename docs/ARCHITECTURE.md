@@ -104,6 +104,8 @@ TrafficAnalyzer 是智慧交通大项目下的无人机 AI 交通分析子系统
                       ▼
 ┌─────────────────────────────────────────────────────────┐
 │             ConflictDetectionNode（默认启用）             │
+│             LaneChangeDetectionNode（原始轨迹线）          │
+│             EnforcementDetectionNode（冻结候选规则）       │
 │  右转/左转机非 near-miss 证据漏斗 + 冲突点 ENU/GCJ-02 输出 │
 │  同帧输出标定/轨迹/配对/预测/证据/去重/事件诊断漏斗         │
 └─────────────────────┬───────────────────────────────────┘
@@ -117,6 +119,7 @@ TrafficAnalyzer 是智慧交通大项目下的无人机 AI 交通分析子系统
 │             KafkaProducerNode                            │
 │  uav_statistics_{n} / uav_track_complete_{n}              │
 │  uav_conflicts_{n} / uav_telemetry_{n}                     │
+│  uav_enforcement_clues_{n} / uav_enforcement_clue          │
 │  含方向流量/车道统计/车速/无人机位置/正式冲突计数与 TCC 诊断│
 └─────────────────────┬───────────────────────────────────┘
                       ▼

@@ -257,6 +257,8 @@ class KafkaConsumerService:
                 await self._handle_track_complete(data, intersection_id)
             elif msg_type == "uav_conflict":
                 await self._handle_conflict(data, intersection_id)
+            elif msg_type == "uav_enforcement_clue":
+                await self._handle_enforcement_clue(data, intersection_id)
             elif msg_type == "uav_vlm_analysis":
                 await self._handle_vlm(data, intersection_id)
             elif msg_type == "uav_system_metrics":
@@ -499,10 +501,17 @@ class KafkaConsumerService:
         }
         await self._ws.broadcast(f"uav_telemetry:{drone_id}", ws_msg)
 
+    async def _handle_enforcement_clue(self, data: dict, intersection_id: str):
+        await self._ws.broadcast(f"uav_intersection:{intersection_id}", {
+            "channel": f"uav_intersection:{intersection_id}", "type": "uav_enforcement_clue",
+            "data": data, "ts": time.time(),
+        })
+
     def _extract_intersection(self, topic: str) -> str:
         """Extract intersection ID from topic name."""
         for prefix in (
             "uav_statistics_", "uav_track_complete_", "uav_conflicts_",
+            "uav_enforcement_clues_",
         ):
             if topic.startswith(prefix):
                 cam_id = topic[len(prefix):]

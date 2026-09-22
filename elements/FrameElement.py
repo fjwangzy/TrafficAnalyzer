@@ -109,6 +109,8 @@ class FrameElement:
         self.lane_polygons: dict | None = None  # 车道多边形数据（VideoReader加载）
         self.queue_count: int = 0  # 当前排队车辆数
         self.conflict_events: list[dict] | None = None  # 冲突事件列表
+        self.lane_change_events: list[dict] | None = None  # 原始轨迹线换道事件，不依赖车道几何
+        self.enforcement_clues: list[dict] | None = None  # 未经法律认定的视频规则事实候选
         self.completed_tracks: list[dict] | None = None  # 本帧完成的轨迹数据
         self.inferred_lanes: dict | None = None  # 自动推断的车道（AutoLaneInferenceNode输出）
         self.lane_source: str | None = None       # 车道数据来源: "manual" | "model" | "auto" | None

@@ -23,6 +23,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.config import settings
+from app.models.enforcement import EnforcementClue
 from app.models.metrics import (
     ConflictEvent,
     ConflictReview,
@@ -33,7 +34,7 @@ from app.models.metrics import (
     TrafficMetric,
 )
 from app.models.mission import MessageDeadLetter, MessageInbox, PipelineRecord
-from app.models.survey import EvidenceItem, EvidencePackage
+from app.models.survey import AiEvent, EvidenceItem, EvidencePackage
 from app.services.runtime_capabilities import capability_report_from_stats
 from app.services.survey_storage import ContentAddressedStore
 from app.services.trajectory_analysis import build_trajectory_analysis
@@ -45,6 +46,7 @@ CANONICAL_TYPES = {
     "uav_conflict",
     "uav_telemetry",
     "uav_system_metrics",
+    "uav_enforcement_clue",
 }
 CANONICAL_TOPIC_PATTERNS = {
     "uav_stats": r"uav_statistics_[A-Za-z0-9._-]+",
@@ -52,10 +54,15 @@ CANONICAL_TOPIC_PATTERNS = {
     "uav_conflict": r"uav_conflicts_[A-Za-z0-9._-]+",
     "uav_telemetry": r"uav_telemetry_[A-Za-z0-9._-]+",
     "uav_system_metrics": r"uav_system_metrics",
+    "uav_enforcement_clue": r"uav_enforcement_clues_[A-Za-z0-9._-]+",
 }
 CONFLICT_EVIDENCE_KINDS = (
     "conflict_original_frame",
     "conflict_detector_frame",
+)
+ENFORCEMENT_EVIDENCE_KINDS = (
+    "enforcement_original_frame",
+    "enforcement_detector_frame",
 )
 
 
@@ -573,8 +580,95 @@ class PostgresMetricStoreAdapter:
             "uav_conflict": self._add_conflict,
             "uav_telemetry": self._add_telemetry,
             "uav_system_metrics": self._add_system_metrics,
+            "uav_enforcement_clue": self._add_enforcement_clue,
         }
         return handlers[value["msg_type"]](session, envelope, value)
+
+    def _add_enforcement_clue(self, session: AsyncSession, envelope: MessageEnvelope, value: dict[str, Any]) -> list[str]:
+        data = value["data"]
+        source_event_id = str(data.get("source_event_id") or "")
+        track_id = str(data.get("track_id") or "")
+        vehicle_class = str(data.get("vehicle_class") or "")
+        clue_type = str(data.get("clue_type") or "")
+        if not source_event_id or not track_id:
+            raise MetricContractError("enforcement clue identity is incomplete")
+        if vehicle_class not in {"truck", "non_truck", "unknown"}:
+            raise MetricContractError("enforcement clue vehicle_class is invalid")
+        if clue_type not in {"truck_restriction", "speed_observation", "no_parking", "dwell", "occupation"}:
+            raise MetricContractError("enforcement clue type is invalid")
+        if value["quality_status"] not in {"unverified", "degraded"}:
+            raise MetricContractError("enforcement clue quality must remain unverified or degraded")
+
+        fact_id = hashlib.sha256(f"enforcement:{value['message_id']}".encode()).hexdigest()[:40]
+        evidence_files = data.pop("evidence_files", None)
+        evidence_package_id = None
+        evidence_status = "missing"
+        references: list[str] = []
+        if evidence_files is not None:
+            try:
+                if not isinstance(evidence_files, list) or tuple(
+                    item.get("kind") for item in evidence_files if isinstance(item, dict)
+                ) != ENFORCEMENT_EVIDENCE_KINDS:
+                    raise ValueError("invalid_evidence_kinds")
+                storage = ContentAddressedStore(settings.survey_storage_dir)
+                verified = []
+                for item in evidence_files:
+                    storage_key = str(item.get("storage_key") or "")
+                    sha256 = str(item.get("sha256") or "")
+                    size_bytes = _int(item.get("size_bytes"))
+                    if (
+                        item.get("storage_backend") != "managed"
+                        or item.get("media_type") != "image/jpeg"
+                        or re.fullmatch(r"objects/[0-9a-f]{2}/[0-9a-f]{64}", storage_key) is None
+                        or re.fullmatch(r"[0-9a-f]{64}", sha256) is None
+                        or not storage_key.endswith(sha256)
+                        or size_bytes is None or size_bytes <= 0
+                        or not storage.verify(storage_key, sha256, size_bytes)
+                    ):
+                        raise ValueError("content_verification_failed")
+                    verified.append({**item, "storage_key": storage_key, "sha256": sha256, "size_bytes": size_bytes})
+                evidence_package_id = hashlib.sha256(f"enforcement-package:{fact_id}".encode()).hexdigest()[:40]
+                manifest_hash = _json_hash({"items": [{"kind": item["kind"], "sha256": item["sha256"]} for item in verified]})
+                package = EvidencePackage(
+                    id=evidence_package_id, task_id=None, owner_type="enforcement_clue", owner_id=fact_id,
+                    source_event_id=source_event_id, integrity_status="hash_verified", manifest_hash=manifest_hash,
+                )
+                session.add(package)
+                for item in verified:
+                    evidence_id = hashlib.sha256(f"enforcement-frame:{item['kind']}:{fact_id}".encode()).hexdigest()[:40]
+                    session.add(EvidenceItem(
+                        id=evidence_id, package_id=evidence_package_id, package=package, task_id=None,
+                        kind=item["kind"], storage_backend="managed", storage_key=item["storage_key"],
+                        sha256=item["sha256"], media_type="image/jpeg", size_bytes=item["size_bytes"],
+                        item_metadata={"width": item.get("width"), "height": item.get("height"),
+                                       "frame_timestamp_sec": (value.get("source_time_raw") or {}).get("frame_timestamp_sec")},
+                    ))
+                    references.append(f"uav_evidence_items:{evidence_id}")
+                evidence_status = "hash_verified"
+            except (OSError, TypeError, ValueError) as exc:
+                data["evidence_error"] = str(exc)
+        data["evidence_integrity_status"] = evidence_status
+        session.add(AiEvent(
+            id=fact_id, source_system=SOURCE_SYSTEM, source_event_id=source_event_id,
+            idempotency_key=value["message_id"], event_type="enforcement_clue", review_status="pending",
+            review_revision=1, occurred_at=value["occurred_at"],
+            inter_id=value.get("inter_id") or value.get("intersection_id"),
+            road_data_version=value.get("road_data_version"), quality_status=value["quality_status"],
+            payload_hash=_json_hash(data), delivery_status="blocked", payload=_json_safe(data),
+        ))
+        session.add(EnforcementClue(
+            event_id=fact_id, event_revision=1, track_id=track_id, vehicle_class=vehicle_class,
+            class_confidence=_float(data.get("class_confidence")),
+            classification_model_version=data.get("classification_model_version"), clue_type=clue_type,
+            zone_id=data.get("zone_id"), zone_version=data.get("zone_version"), rule_id=data.get("rule_id"),
+            rule_version=data.get("rule_version"), matched_facts=data.get("matched_facts") or {},
+            exclusion_result=data.get("exclusion_result") or {}, video_speed_kmh=_float(data.get("video_speed_kmh")),
+            video_speed_method=data.get("video_speed_method"), video_speed_quality=data.get("video_speed_quality"),
+            video_speed_uncertainty=_float(data.get("video_speed_uncertainty")),
+            radar_speed_kmh=None, radar_device_id=None, radar_metadata={}, fused_speed_kmh=None,
+            fusion_method=None, evidence_package_id=evidence_package_id, evidence_integrity_status=evidence_status,
+        ))
+        return [f"uav_ai_events:{fact_id}", *references]
 
     def _add_stats(self, session: AsyncSession, envelope: MessageEnvelope, value: dict[str, Any]) -> list[str]:
         data = value["data"]

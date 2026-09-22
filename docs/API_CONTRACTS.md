@@ -26,6 +26,7 @@
 | `uav_statistics_{camera_id}` | `uav_stats` | 路口/道路/车道实时统计 |
 | `uav_track_complete_{camera_id}` | `uav_track_complete` | 完成轨迹 |
 | `uav_conflicts_{camera_id}` | `uav_conflict` | 换道/机非冲突事件 |
+| `uav_enforcement_clues_{camera_id}` | `uav_enforcement_clue` | 视频端生成的未认定执法候选线索 |
 | `uav_telemetry_{camera_id}` | `uav_telemetry` | 无人机遥测 |
 | `uav_system_metrics` | `uav_system_metrics` | GPU、CPU、管道和消息链路指标 |
 
@@ -36,7 +37,7 @@ Topic 的单复数按上表固定。`msg_type` 必须与 Topic 映射一致；�
 当前 Platform 订阅正则：
 
 ```text
-^(uav_statistics_|uav_track_complete_|uav_conflicts_|uav_telemetry_).+$|^uav_system_metrics$
+^(uav_statistics_|uav_track_complete_|uav_conflicts_|uav_enforcement_clues_|uav_telemetry_).+$|^uav_system_metrics$
 ```
 
 #### Topic builder 实施约束

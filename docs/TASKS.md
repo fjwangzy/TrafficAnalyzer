@@ -247,6 +247,7 @@
 - [ ] I3 生产门禁：冻结生产扩展/容量/保留/压缩/HA，完成多实例故障注入和正式业务指标验收；本机旧数据明确不迁移。
 - [x] I4：完成 S4 本地 candidate 围栏/规则、统一 AI 线索、证据引用/哈希、技术复核审计和 Console2 三视图真实化；权威发布与主平台投递保持 503/blocked。
 - [ ] I4 正式门禁：冻结权威围栏/规则、执法类型与阈值、雷达设备/检定/融合、法制证据、统一身份与主平台合同，完成批准验收集和性能容量验收。
+- [ ] 无人机换道与视频执法算法：2026-09-07 已实施 P0-P2 [方案](LANE_CHANGE_ENFORCEMENT_ALGORITHM_PLAN_20260907.md)：原始 ENU/悬停像素轨迹线换道状态机、冻结 ENU/GCJ-02 围栏规则、候选货车限行/速度/禁停/滞留/占用、真实帧证据与 Platform inbox 事务已贯通。聚焦回归 45 passed，Platform 327 passed/6 skipped/10 subtests，Console2 252 passed且 production build 成功；XQH 真实 MP4/SRT 基线现已调用换道节点，在 `PYTORCH_ENABLE_MPS_FALLBACK=1` 下为 55 PASS/0 FAIL/1 WARN，前 100 帧换道事件为 0。货车细分类训练、LSTM 预测、真实雷达融合和有批准真值的精度验收依赖外部数据/设备，仍未实施；I4 契约样例不计为算法检出，巡航继续仅做自动化工程验收。
 - [x] I5-A：完成 DashboardReadModel、4 个真实聚合 API、正式 `/` Mock 清除、未冻结 KPI null 门禁、权威坐标隔离和 empty/blocked 视觉验收。
 - [ ] I5-B：内部风险/监测/质量筛选、GCJ-02 bbox、搜索、offset/limit、422/503、REST 保留快照/有限重试和高德加载失败降级已实现；项目范围/KPI/权限、点位聚合/zoom、全局增量/断线缺口回补、获批正常/混合质量数据及 5 秒/30 秒正式验收仍待外部冻结。
 - [x] I6：根 Compose 已收敛为唯一 `road9/TimescaleDB + Apache Kafka KRaft + Platform + Console2 + Nginx` 拓扑；`traffic_road9_data` 从空库迁移到 `20260715_0010`，管理员 1 条、业务 0 条；旧数据不迁移，旧容器已删除，指定旧资产未挂载并保留到北京时间 2026-07-23 11:11:54。独立目标栈、断库恢复、正式端口切换、61/61 样本的 30 分钟健康探测和 `--scope local --strict` 均通过；生产镜像/秘密/TLS/SASL/HA、容量、RPO/RTO、试点和主平台联调继续 blocked。

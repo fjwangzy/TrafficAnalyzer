@@ -81,6 +81,21 @@ tracking_shadow:
   offline_only: true
   report_path: ${oc.env:TRACKING_SHADOW_REPORT,output/tracking-shadow.jsonl}
 
+# 只使用同一参考系的车辆原始轨迹线；不依赖车道几何。ENU 不可用时仅允许悬停像素轨迹降级判定。
+lane_change_detection:
+  enabled: true
+  stable_window_sec: 2.0
+  min_lateral_displacement_m: 2.0
+  min_lateral_displacement_px: 12.0
+  min_lateral_speed_mps: 0.2
+  max_heading_change_deg: 20.0
+
+# Platform 在 Mission 启动时注入已冻结的 ENU 区域与候选规则。默认空集合不产生执法线索。
+enforcement_detection:
+  enabled: true
+  zones: []
+  rules: []
+
 flight_motion:
   hover_confirm_sec: 15.0
   hover_enter_speed_mps: 1.0

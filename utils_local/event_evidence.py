@@ -79,9 +79,9 @@ def _store_jpeg(
     }
 
 
-def save_conflict_evidence_files(
+def save_event_evidence_files(
     frame_element,
-    _event: dict | None = None,
+    kinds: tuple[str, str],
     *,
     storage_root: str | Path,
     max_width: int | None = None,
@@ -97,7 +97,7 @@ def save_conflict_evidence_files(
         np.asarray(detector_frame),
     )
     result = []
-    for kind, image in zip(CONFLICT_EVIDENCE_KINDS, rendered):
+    for kind, image in zip(kinds, rendered):
         content, width, height = _encode(
             image,
             max(1, int(max_width)) if max_width is not None else None,
@@ -105,3 +105,8 @@ def save_conflict_evidence_files(
         )
         result.append(_store_jpeg(storage_root, kind, content, width, height))
     return result
+
+
+def save_conflict_evidence_files(frame_element, _event: dict | None = None, **kwargs) -> list[dict]:
+    """Backward-compatible conflict evidence wrapper."""
+    return save_event_evidence_files(frame_element, CONFLICT_EVIDENCE_KINDS, **kwargs)

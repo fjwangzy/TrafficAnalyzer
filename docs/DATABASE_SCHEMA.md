@@ -98,6 +98,7 @@ CREATE EXTENSION IF NOT EXISTS timescaledb;
 | `uav_conflict_reviews` | `event_id` | 冲突事实的可变技术复核状态与 revision；不代表警情处置或违法认定。`20260715_0009` 以 existence guard + delete cascade trigger 替代不可可靠恢复的 regular→Hypertable FK |
 | `uav_enforcement_zones` | `id`；候选配置 revision | 本地候选电子围栏及几何快照；权威 Adapter 未冻结时不能发布为权威配置 |
 | `uav_enforcement_rules` | `id`；`rule_version_id` | 执法候选规则领域内容，引用 `uav_rule_versions`，不得保存违法或处罚结论 |
+| `uav_enforcement_clues` | `event_id` | `uav_enforcement_clue` 在 inbox 同一事务内写入的候选事实；证据只有受管对象大小和 SHA-256 均复核通过时才为 `hash_verified` |
 | `uav_enforcement_clues` | `event_id`；`source_event_id` 唯一 | `uav_ai_events(event_type=enforcement_clue)` 的执法专属事实，不复制事件状态机 |
 | `uav_enforcement_review_audits` | `id`；`event_id/revision` 索引 | AI 线索技术确认/驳回的追加型审计；不代表违法认定、案件或处罚状态 |
 | `uav_ai_events` | `(source_system, source_event_id)`；`(source_system, idempotency_key)` 唯一 | 向智慧交通主平台交付的 AI 事件主记录 |
@@ -430,6 +431,7 @@ CREATE EXTENSION IF NOT EXISTS timescaledb;
 | `uav_statistics_{camera_id}` | `uav_stats` | Platform/TimescaleDB writer | 24 小时候选 |
 | `uav_track_complete_{camera_id}` | `uav_track_complete` | Platform/TimescaleDB writer | 24 小时候选 |
 | `uav_conflicts_{camera_id}` | `uav_conflict` | Platform/TimescaleDB writer、告警引擎 | 24 小时候选 |
+| `uav_enforcement_clues_{camera_id}` | `uav_enforcement_clue` | Platform inbox + 执法候选事实 writer | 24 小时候选 |
 | `uav_telemetry_{camera_id}` | `uav_telemetry` | Platform/TimescaleDB writer | 24 小时候选 |
 | `uav_system_metrics` | `uav_system_metrics` | Platform/TimescaleDB writer | 24 小时候选 |
 

@@ -7,7 +7,7 @@ from dataclasses import astuple, dataclass
 
 
 CANONICAL_CONSUMER_PATTERN = (
-    r"(?:uav_(?:statistics|track_complete|conflicts|telemetry)_[A-Za-z0-9._-]+"
+    r"(?:uav_(?:statistics|track_complete|conflicts|telemetry|enforcement_clues)_[A-Za-z0-9._-]+"
     r"|uav_system_metrics)"
 )
 REPLAY_V2_CONSUMER_PATTERN = (

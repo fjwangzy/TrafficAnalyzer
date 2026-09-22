@@ -537,6 +537,8 @@ def main():
         direction_node = DirectionFlowNode(config)
         lane_node = LaneAnalysisNode(config)
         trajectory_node = TrajectoryNode(config)
+        from nodes.LaneChangeDetectionNode import LaneChangeDetectionNode
+        lane_change_node = LaneChangeDetectionNode(config)
         conflict_node = ConflictDetectionNode(config)
         calc_node = CalcStatisticsNode(config)
         results.check("ConflictDetectionNode启用", conflict_node.enabled is True)
@@ -551,6 +553,7 @@ def main():
         motion_comp_count = 0
         completed_tracks_total = 0
         conflict_events_total = 0
+        lane_change_events_total = 0
 
         t0 = time.time()
 
@@ -597,6 +600,10 @@ def main():
             if fe.completed_tracks:
                 completed_tracks_total += len(fe.completed_tracks)
 
+            # 原始轨迹线换道识别不依赖 LaneAnalysisNode 的车道几何。
+            fe = lane_change_node.process(fe)
+            lane_change_events_total += len(fe.lane_change_events or [])
+
             # Conflict Detection
             fe = conflict_node.process(fe)
             if fe.conflict_events:
@@ -613,6 +620,7 @@ def main():
                 print(f"  帧 {frame_count2}/{max_frames}: "
                       f"detections={len(fe.tracked_xyxy) if fe.tracked_xyxy else 0}, "
                       f"tracks={tracks}, "
+                      f"lane_changes={len(fe.lane_change_events or [])}, "
                       f"conflicts={len(fe.conflict_events) if fe.conflict_events else 0}, "
                       f"telemetry={'Y' if fe.telemetry else 'N'}, "
                       f"H={'Y' if fe.homography_matrix is not None else 'N'}, "
@@ -635,6 +643,7 @@ def main():
         print(f"  H矩阵有效帧数: {h_matrix_count}/{frame_count2}")
         print(f"  运动补偿有效帧数: {motion_comp_count}/{frame_count2}")
         print(f"  完成轨迹数: {completed_tracks_total}")
+        print(f"  换道事件数: {lane_change_events_total}")
         print(f"  机非冲突事件数: {conflict_events_total}")
 
         results.check("检测+跟踪工作正常", detection_count > 0,

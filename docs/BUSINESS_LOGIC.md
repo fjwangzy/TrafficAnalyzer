@@ -11,6 +11,11 @@
 - 视频、雷达和融合速度是三个独立来源字段。没有真实雷达设备 ID 和有效检定元数据时雷达值为空；没有独立视频/雷达测量和融合方法时融合值为空，禁止相互回填。
 - 本地围栏与规则只保存版本化候选配置。权威 RoadContext、围栏发布和业务审批合同未冻结时，发布请求返回 503，页面必须明确 `unverified/blocked`。
 - `platform/scripts/validate_i4_inter_xqh.py` 使用真实 MP4/SRT 的字节数和 SHA-256 验证证据/幂等/复核接缝，但固定 `validation_fixture=true`、`detected_enforcement_clue=false`；该样本不是检测算法产生的执法线索。
+- `EnforcementDetectionNode` 只读取 Mission 启动时冻结的 ENU 或 GCJ-02 候选围栏和规则快照，并选择同坐标系轨迹点。货车限行、速度观测、禁停、滞留和占用均输出 `unverified` 技术事实；空快照、未知车型、无位置或证据失败不会产生完整执法结论。ShowNode 后保存原始帧与检测器输出帧，Platform 复算受管对象哈希后才标记证据完整。
+
+## 原始轨迹线换道识别
+
+`LaneChangeDetectionNode` 在轨迹更新后、RoadMapMatching 前运行，不读取车道几何、`lane_history` 或 AutoLane。它在同一参考系的 ENU 原始轨迹中识别“稳定前进→持续横移→恢复稳定前进”；没有 ENU 时只允许悬停像素轨迹降级判断。普通转弯、源时间倒退、短轨迹和未完成横移不会输出事件；车道编号、线型和压线规则仍是可选的后续解释，不能由轨迹形态推导。
 
 ## 核心业务流程
 

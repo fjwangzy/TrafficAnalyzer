@@ -7,7 +7,8 @@ from unittest.mock import AsyncMock, patch
 
 from app.kafka.consumer import KafkaConsumerService
 from app.models.metrics import ConflictEvent, TrackEvent
-from app.models.survey import EvidenceItem, EvidencePackage
+from app.models.enforcement import EnforcementClue
+from app.models.survey import AiEvent, EvidenceItem, EvidencePackage
 from app.services.alert_engine import AlertEngine
 from app.services.metric_store import (
     InMemoryMetricStoreAdapter,
@@ -100,6 +101,46 @@ class MetricStoreContractTest(unittest.IsolatedAsyncioTestCase):
             self.adapter._normalize(MessageEnvelope(payload, "statistics_1", 0, 1))
         with self.assertRaisesRegex(MetricContractError, "unsupported canonical topic"):
             self.adapter._normalize(MessageEnvelope(payload, "uav_conflicts_1", 0, 2))
+
+    def test_enforcement_clue_uses_its_own_prefixed_topic_and_contract(self):
+        now = datetime.now(UTC).isoformat()
+        payload = {
+            "message_id": "enforcement-contract-1",
+            "msg_type": "uav_enforcement_clue",
+            "schema_version": "uav_enforcement_clue/v1",
+            "occurred_at": now,
+            "produced_at": now,
+            "source_system": "uav_traffic_analyzer_ai",
+            "data": {"source_event_id": "event-1", "track_id": "7", "vehicle_class": "truck", "clue_type": "truck_restriction"},
+        }
+
+        normalized = self.adapter._normalize(MessageEnvelope(payload, "uav_enforcement_clues_1", 0, 3))
+
+        self.assertEqual(normalized["msg_type"], "uav_enforcement_clue")
+
+    def test_enforcement_clue_creates_unverified_fact_without_evidence(self):
+        now = datetime.now(UTC).isoformat()
+        payload = {
+            "message_id": "enforcement-store-1", "msg_type": "uav_enforcement_clue",
+            "schema_version": "uav_enforcement_clue/v1", "occurred_at": now, "produced_at": now,
+            "source_system": "uav_traffic_analyzer_ai", "inter_id": "INT-1", "quality_status": "unverified",
+            "data": {
+                "source_event_id": "event-store-1", "track_id": "7", "vehicle_class": "truck",
+                "clue_type": "truck_restriction", "matched_facts": {"inside_zone": True},
+                "exclusion_result": {},
+            },
+        }
+        envelope = MessageEnvelope(payload, "uav_enforcement_clues_1", 0, 4)
+        session = _RecordingSession()
+
+        self.adapter._add_enforcement_clue(session, envelope, self.adapter._normalize(envelope))
+
+        event = next(row for row in session.rows if isinstance(row, AiEvent))
+        clue = next(row for row in session.rows if isinstance(row, EnforcementClue))
+        self.assertEqual(event.event_type, "enforcement_clue")
+        self.assertEqual(event.delivery_status, "blocked")
+        self.assertEqual(clue.track_id, "7")
+        self.assertEqual(clue.evidence_integrity_status, "missing")
 
     def test_all_period_includes_offline_replay_business_time(self):
         self.assertEqual(_period_start("all"), datetime.min.replace(tzinfo=UTC))

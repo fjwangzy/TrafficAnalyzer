@@ -31,6 +31,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
+from utils_local.replay_topics import build_replay_v2_topics
+
 from app.core.config import settings
 from app.core.pipeline_options import resolve_frame_stride
 from app.models.drone_store import assign_drone_to_intersection
@@ -40,7 +42,6 @@ from app.services.pipeline_executor import (
     PipelineLaunchSpec,
 )
 from app.services.runtime_capabilities import pending_capability_report
-from utils_local.replay_topics import build_replay_v2_topics
 
 logger = logging.getLogger(__name__)
 
@@ -377,6 +378,7 @@ class PipelineManager:
         intersection_id: str,
         video_src: str,
         runtime_map_bundle: dict | None = None,
+        enforcement_snapshot: dict | None = None,
         telemetry_source: str | None = None,
         telemetry_file_path: str | None = None,
         telemetry_time_offset_sec: float | None = None,
@@ -470,6 +472,7 @@ class PipelineManager:
             quality_status=quality_status,
             tracking_profile=tracking_profile,
             runtime_map_bundle=runtime_map_bundle,
+            enforcement_snapshot=enforcement_snapshot,
             frame_stride=resolved_frame_stride,
             kafka_bootstrap=kafka_bootstrap or self._kafka_bootstrap,
             telemetry_source=telemetry_source,

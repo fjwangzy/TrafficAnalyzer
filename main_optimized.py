@@ -47,11 +47,14 @@ from nodes.CalcStatisticsNode import CalcStatisticsNode
 from nodes.FlaskServerVideoNode import VideoServer
 from nodes.KafkaProducerNode import KafkaProducerNode
 from nodes.TccEvidencePublisherNode import TccEvidencePublisherNode
+from nodes.EnforcementEvidencePublisherNode import EnforcementEvidencePublisherNode
 from nodes.HomographyCalibrationNode import HomographyCalibrationNode
 from nodes.ImageMotionEstimationNode import ImageMotionEstimationNode
 from nodes.SpeedEstimationNode import SpeedEstimationNode
 from nodes.DirectionFlowNode import DirectionFlowNode
 from nodes.LaneAnalysisNode import LaneAnalysisNode
+from nodes.LaneChangeDetectionNode import LaneChangeDetectionNode
+from nodes.EnforcementDetectionNode import EnforcementDetectionNode
 from nodes.LaneDetectionNode import LaneDetectionNode
 from nodes.AutoLaneInferenceNode import AutoLaneInferenceNode
 from nodes.TrajectoryNode import TrajectoryNode
@@ -260,6 +263,8 @@ def proc_tracker_update_and_calc(
     lane_detection_node = LaneDetectionNode(config)
     lane_analysis_node = LaneAnalysisNode(config)
     trajectory_node = TrajectoryNode(config)
+    lane_change_node = LaneChangeDetectionNode(config)
+    enforcement_node = EnforcementDetectionNode(config)
     road_map_matching_node = RoadMapMatchingNode(config)
     auto_lane_node = AutoLaneInferenceNode(config)
     conflict_node = ConflictDetectionNode(config)
@@ -318,7 +323,9 @@ def proc_tracker_update_and_calc(
         frame_element = direction_flow_node.process(frame_element)
         frame_element = lane_detection_node.process(frame_element)
         frame_element = trajectory_node.process(frame_element)
+        frame_element = lane_change_node.process(frame_element)
         frame_element = road_map_matching_node.process(frame_element)
+        frame_element = enforcement_node.process(frame_element)
         frame_element = lane_analysis_node.process(frame_element)
         frame_element = auto_lane_node.process(frame_element)
         frame_element = conflict_node.process(frame_element)
@@ -402,6 +409,10 @@ def proc_show_node(queue_in: Queue, config: dict, tracker_pid: int):
         video_saver_node = VideoSaverNode(config["video_saver_node"])
     if send_info_kafka:
         tcc_evidence_publisher_node = TccEvidencePublisherNode(config)
+        enforcement_evidence_publisher_node = (
+            EnforcementEvidencePublisherNode(config)
+            if "kafka_producer_node" in config else None
+        )
     if show_in_web:
         video_server_node = VideoServer(config)
     while True:
@@ -419,7 +430,11 @@ def proc_show_node(queue_in: Queue, config: dict, tracker_pid: int):
             not isinstance(frame_element, VideoEndBreakElement)
             and getattr(frame_element, "pending_tcc_envelopes", None)
         )
-        needs_render = render_output or pending_tcc
+        pending_enforcement = bool(
+            not isinstance(frame_element, VideoEndBreakElement)
+            and getattr(frame_element, "pending_enforcement_envelopes", None)
+        )
+        needs_render = render_output or pending_tcc or pending_enforcement
         original_tcc_frame = None
         
         # 只有确实需要预览/保存时才渲染 4K 标注。批量数据回放仍消费并释放
@@ -438,7 +453,7 @@ def proc_show_node(queue_in: Queue, config: dict, tracker_pid: int):
             except Exception as e:
                 print(f"[proc_show] Failed to attach shm: {e}")
                 frame_element.frame = None
-        if pending_tcc and frame_element.frame is not None:
+        if (pending_tcc or pending_enforcement) and frame_element.frame is not None:
             # ShowNode renders in place. Preserve the exact unannotated source before
             # rendering so the evidence pair is raw input + the real detector output.
             original_tcc_frame = frame_element.frame.copy()
@@ -450,6 +465,8 @@ def proc_show_node(queue_in: Queue, config: dict, tracker_pid: int):
             if pending_tcc and original_tcc_frame is not None:
                 frame_element.frame = original_tcc_frame
             frame_element = tcc_evidence_publisher_node.process(frame_element)
+            if enforcement_evidence_publisher_node is not None:
+                frame_element = enforcement_evidence_publisher_node.process(frame_element)
         if show_in_web:
             video_server_node.process(frame_element)
         ts2 = time()

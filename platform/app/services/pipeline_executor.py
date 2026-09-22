@@ -41,6 +41,7 @@ class PipelineLaunchSpec:
     quality_status: str = "unverified"
     tracking_profile: str = "hover_cruise_v1"
     runtime_map_bundle: dict | None = None
+    enforcement_snapshot: dict | None = None
     frame_stride: int | None = None
     kafka_bootstrap: str = "kafka:9092"
     telemetry_source: str | None = None
@@ -168,6 +169,12 @@ class LocalPipelineExecutor:
             )
         else:
             environment.pop("RUNTIME_MAP_BUNDLE_JSON", None)
+        if spec.enforcement_snapshot is not None:
+            environment["ENFORCEMENT_RUNTIME_SNAPSHOT_JSON"] = json.dumps(
+                spec.enforcement_snapshot, ensure_ascii=False, separators=(",", ":")
+            )
+        else:
+            environment.pop("ENFORCEMENT_RUNTIME_SNAPSHOT_JSON", None)
         environment.pop("RUNTIME_GEO_REGISTRATION_JSON", None)
         return environment
 

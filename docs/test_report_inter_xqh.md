@@ -853,3 +853,31 @@ build 成功；xqh 基线 `56 PASS / 0 FAIL / 0 WARN`。`git diff --check` 无�
   `1 passed`、production build 通过。Console2 全量为 `243 passed / 2 failed`；剩余两项均为本轮未修改的
   “启动演示检测”用例（未绑定无人机/路口时按钮被禁用，因而无法进入 Mission 失败提示），已单独复现，
   不将其误报为本轮通过。
+
+### 2026-10-04 按用户需求版执行当前项目回归
+
+- 范围按 V1.2-commit 第四章五个模块、50项功能对齐；完整结果见
+  `docs/test_report_regression_20261004.md`，逐项证据索引见
+  `docs/regression_requirement_matrix_20261004.csv`。
+- 原生 `.venv-mps` arm64 / PyTorch 2.2.2 / MPS，以显式
+  `PYTORCH_ENABLE_MPS_FALLBACK=1` 执行前100帧基线，结果为
+  `55 PASS / 0 FAIL / 1 WARN`。100/100帧有检测，累计8044个目标；遥测和H矩阵均100/100，
+  运动补偿90/100，完成轨迹/换道/冲突均0，最终车辆数87。方向统计为空产生既有警告。
+  处理耗时13.7秒（7.3fps），仅是单进程有限帧观测，不代表完整EOF或生产吞吐。
+- 初轮未设置算子fallback时因 `torchvision::nms` 不支持MPS而失败（49 PASS/1 FAIL）；
+  复测仍在MPS检测，只允许不支持的算子显式回退，未将检测设备改为CPU。
+- Platform `327 passed / 6 skipped / 10 subtests passed`；根级 `283 passed / 1 failed`；
+  Console2 `252 passed` 与production build通过。根级失败为绕过构造函数的遥测夹具未初始化
+  `camera_lens_policy`；两个独立脚本因对可空 `speed_kmh` 运算而中断。
+- 真实页面/API发现 `/gis` 的Replay V2 Mission列表503 `ReplayRepository unavailable`，
+  历史回放按钮不可用，且 `/ready` 仍200；ADR-019九项通过，但既有
+  `local_runtime_evidence` 仍阻断。因此本轮整体回归未通过，未宣称50项需求正式验收完成。
+  六项真库集成和完整三进程EOF对账未执行，精度指标仍 `not_evaluated`。
+
+### 2026-10-04 修复后功能工程验收
+
+- 详情见 `docs/test_report_functional_acceptance_20261004.md`。最终根级298、Platform339（七项真库启用、0 skipped、10 subtests）和Console2 252/build全部通过；合计889/0/0。旧独立入口改为维护契约套件118 passed，无YOLO真实200帧链路37/0/0。
+- 原始全992秒stride10自然EOF；首轮因EOF十秒关闭窗口留下3415条spool，原始失败报告不覆盖。新发送器缓存有序待发队列、配置120秒排空并把残留持久消息作为EOF失败。恢复3415/3415条耗时4.421秒、剩余0；最终4644 journey、10冲突候选、1111统计、2479遥测与road9精确一致，Mission sealed，128888点对齐失败0，canonical Topic变化0。
+- 当前代码使用前20秒派生片段另跑完整三进程/Kafka/真库：自然EOF、191 journey、生命周期running→sealed、发送231/231/剩余0，DWS实际/典型聚合与对账通过，无resource_tracker KeyError；该短片验证不代替全片再次推理。
+- 同片段通过REST测绘实际处理600帧、6/6关键帧可量算，完成退回与revision2修订、面积/周长及PDF下载；质量保持unverified，交付422门禁保留。真实页面历史回放已恢复并推进T+10至27秒。
+- 首100帧基线仍55 PASS/0 FAIL/1 WARN，方向统计为空；ADR-019既有证据与生产门禁、正式精度not_evaluated继续保留，不将工程回归数量当作50项用户需求全部正式签署。

@@ -92,6 +92,7 @@ class KafkaProducerNode:
             os.path.join(spool_dir, spool_name),
             queue_size=int(config_kafka.get("send_queue_size", 200)),
         )
+        self.shutdown_drain_timeout_sec = float(config_kafka.get("shutdown_drain_timeout_sec", 120.0))
         self.trajectory_archive = None
         self._last_replay_frame = None
         self._replay_source_start_sec = None
@@ -904,8 +905,12 @@ class KafkaProducerNode:
         if isinstance(frame_element, VideoEndBreakElement):
             publisher = getattr(self, "publisher", None)
             if publisher is not None:
-                final_delivery = publisher.close()
+                final_delivery = publisher.close(timeout_sec=getattr(self, "shutdown_drain_timeout_sec", 120.0))
                 logger.info("Kafka publisher closed: %s", final_delivery)
+                if final_delivery.get("durable_pending", 0):
+                    raise RuntimeError(
+                        f"Kafka EOF drain incomplete: {final_delivery['durable_pending']} durable messages remain in spool"
+                    )
             return frame_element
 
         if getattr(self, "storage_profile", "live") == "replay_v2":

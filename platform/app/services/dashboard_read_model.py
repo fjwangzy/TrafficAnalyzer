@@ -341,8 +341,8 @@ class DashboardReadModel:
             rows = [
                 row for row in rows
                 if row["map_eligible"]
-                and min_lon <= row["lon"] <= max_lon
-                and min_lat <= row["lat"] <= max_lat
+                and min_lon <= row["center_gcj02"]["longitude"] <= max_lon
+                and min_lat <= row["center_gcj02"]["latitude"] <= max_lat
             ]
         if query:
             needle = query.casefold().strip()

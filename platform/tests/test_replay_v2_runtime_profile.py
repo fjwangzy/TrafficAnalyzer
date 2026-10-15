@@ -1,5 +1,10 @@
-from app.core.config import Settings
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+
+import pytest
 from fastapi.testclient import TestClient
+
+from app.core.config import Settings
 
 
 def test_replay_v2_runtime_profile_uses_v2_topics_with_full_control_plane():
@@ -68,3 +73,28 @@ def test_replay_v2_pipeline_children_use_v2_storage_profile(monkeypatch, tmp_pat
     assert manager._topic_for_runtime(None, 10, "SRC-REPLAY-V2") == (
         "uav_replay_v2_statistics_SRC-REPLAY-V2"
     )
+
+
+@pytest.mark.asyncio
+async def test_replay_readiness_detects_missing_repository_without_changing_live_readiness(monkeypatch):
+    from app.main import app, readiness_check, settings
+
+    for key, value in {
+        "db_available": True,
+        "kafka_service": SimpleNamespace(_running=True, _consumer=object()),
+        "metric_store": SimpleNamespace(capabilities=AsyncMock(return_value={"timescaledb": True})),
+        "pipeline_manager": SimpleNamespace(get_active_count=lambda: 0),
+        "replay_repository": None,
+    }.items():
+        monkeypatch.setattr(app.state, key, value, raising=False)
+    monkeypatch.setattr(settings, "app_runtime_profile", "replay_v2")
+    missing = await readiness_check()
+    assert missing["status"] == "degraded"
+    assert missing["runtime_profile"] == "replay_v2"
+    assert missing["services"]["trajectory_replay"] == "not_configured"
+
+    monkeypatch.setattr(app.state, "replay_repository", object())
+    assert (await readiness_check())["status"] == "ready"
+    monkeypatch.setattr(app.state, "replay_repository", None)
+    monkeypatch.setattr(settings, "app_runtime_profile", "live")
+    assert (await readiness_check())["status"] == "ready"

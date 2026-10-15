@@ -1,0 +1,51 @@
+﻿需求编号,需求名称,需求内容,优先级,本轮工程证据,验收边界
+UR-S1-001,实时查看路口状态,用户可选择路口和视频来源查看当前运行情况。,高,platform/tests/test_core_api_routes.py; console2/src/LiveModules.test.jsx; 实际监测页；真实回放恢复、整视频封存对账与缺地图验证；方向首100帧仍WARN,断流现场演练、权威路网及正式精度/签署待确认
+UR-S1-002,车辆数量统计,按统计时间给出车辆数量和变化趋势。,高,test/test_calc_statistics_capability.py; platform/tests/test_kafka_consumer_stats.py; XQH基线；真实回放恢复、整视频封存对账与缺地图验证；方向首100帧仍WARN,断流现场演练、权威路网及正式精度/签署待确认
+UR-S1-003,车速查看,给出车辆平均速度和低速车辆情况。,高,test/test_speed_estimation_coordinate_contract.py; 重构118 passed、无YOLO37/0/0；真实回放恢复、整视频封存对账与缺地图验证；方向首100帧仍WARN,断流现场演练、权威路网及正式精度/签署待确认
+UR-S1-004,转向流量查看,区分直行、左转、右转和掉头流量。,高,test/test_mission_trajectory_archive.py; console2/src/MonitoringDecisionPanels.test.jsx; XQH方向统计WARN；真实回放恢复、整视频封存对账与缺地图验证；方向首100帧仍WARN,断流现场演练、权威路网及正式精度/签署待确认
+UR-S1-005,排队与拥堵判断,展示排队长度、排队车辆和拥堵等级。,高,test/test_auto_lane_inference_quality.py; test/test_mission_trajectory_archive.py；真实回放恢复、整视频封存对账与缺地图验证；方向首100帧仍WARN,断流现场演练、权威路网及正式精度/签署待确认
+UR-S1-006,车辆轨迹回放,按车辆和方向查看轨迹及通行过程。,中,platform/tests/test_replay_api.py; console2/src/components/ReplayStage.test.jsx; replay-restored.jpg；真实回放恢复、整视频封存对账与缺地图验证；方向首100帧仍WARN,断流现场演练、权威路网及正式精度/签署待确认
+UR-S1-007,道路和车道匹配,在资料可用时展示道路、车道和进口方向。,中,test/test_road_map_matching_node.py; test/test_runtime_map_projection.py；真实回放恢复、整视频封存对账与缺地图验证；方向首100帧仍WARN,断流现场演练、权威路网及正式精度/签署待确认
+UR-S1-008,结果可信提示,数据质量不足时明确提示，不用错误数据冒充正常结果。,高,test/test_calc_statistics_capability.py; platform/tests/test_kafka_consumer_stats.py; 监测页质量提示；真实回放恢复、整视频封存对账与缺地图验证；方向首100帧仍WARN,断流现场演练、权威路网及正式精度/签署待确认
+UR-S1-009,历史查询,按路口、任务和时间范围查询历史结果。,中,platform/tests/test_trajectory_analysis.py; platform/tests/test_spatial_trajectory_query.py; replay-missions恢复200；真实回放恢复、整视频封存对账与缺地图验证；方向首100帧仍WARN,断流现场演练、权威路网及正式精度/签署待确认
+UR-S1-010,地图与视频联动,选中路口或车辆时可在地图和画面之间联动查看。,中,console2/src/components/CityMap.test.jsx; console2/src/components/MonitoringBevMap.test.jsx；真实回放恢复、整视频封存对账与缺地图验证；方向首100帧仍WARN,断流现场演练、权威路网及正式精度/签署待确认
+UR-S2-001,换道行为识别,识别车辆从一条行驶轨迹向相邻位置持续偏移并恢复稳定的过程。,高,test/test_lane_change_node.py::test_detects_one_trajectory_only_lane_change_without_lane_geometry；真实10条未复核冲突候选与证据、TCC/换道自动化,换道真实页面正例与事件人工业务认定待确认；精度not_evaluated
+UR-S2-002,换道方向展示,显示车辆向左或向右换道。,高,test/test_lane_change_node.py；真实10条未复核冲突候选与证据、TCC/换道自动化,换道真实页面正例与事件人工业务认定待确认；精度not_evaluated
+UR-S2-003,普通转向排除,普通转弯不作为换道行为。,高,test/test_lane_change_node.py::test_does_not_call_a_normal_turn_a_lane_change；真实10条未复核冲突候选与证据、TCC/换道自动化,换道真实页面正例与事件人工业务认定待确认；精度not_evaluated
+UR-S2-004,冲突风险识别,识别机动车与非机动车可能接近或发生冲突的过程。,高,test/test_tcc_diagnostics.py；真实10条未复核冲突候选与证据、TCC/换道自动化,换道真实页面正例与事件人工业务认定待确认；精度not_evaluated
+UR-S2-005,冲突时间展示,按双方接近速度预计可能发生冲突的时间，帮助用户判断风险紧迫程度。,高,test/test_tcc_diagnostics.py; platform/tests/test_core_api_routes.py; 实际事件台账；真实10条未复核冲突候选与证据、TCC/换道自动化,换道真实页面正例与事件人工业务认定待确认；精度not_evaluated
+UR-S2-006,先后通过时间差,展示双方先后经过冲突位置的时间差。,中,test/test_tcc_diagnostics.py; platform/tests/test_core_api_routes.py; 实际事件台账；真实10条未复核冲突候选与证据、TCC/换道自动化,换道真实页面正例与事件人工业务认定待确认；精度not_evaluated
+UR-S2-007,风险分级,按风险程度给出提示等级。,高,test/test_tcc_diagnostics.py; platform/tests/test_kafka_consumer_stats.py；真实10条未复核冲突候选与证据、TCC/换道自动化,换道真实页面正例与事件人工业务认定待确认；精度not_evaluated
+UR-S2-008,事件画面复核,同屏展示原始画面和检测画面。,高,test/test_tcc_evidence_publisher.py; platform/tests/test_event_center_aggregate_evidence.py; 监测页证据入口；真实10条未复核冲突候选与证据、TCC/换道自动化,换道真实页面正例与事件人工业务认定待确认；精度not_evaluated
+UR-S2-009,事件确认和驳回,用户可填写原因后复核事件。,高,platform/tests/test_event_review_alias.py; console2/src/RouterInfrastructure.test.jsx; 历史已驳回事件可见；真实10条未复核冲突候选与证据、TCC/换道自动化,换道真实页面正例与事件人工业务认定待确认；精度not_evaluated
+UR-S2-010,重复事件控制,同一过程和同一等级不重复提醒，风险升级时重新提醒。,中,platform/tests/test_kafka_consumer_stats.py; test/test_tcc_diagnostics.py；真实10条未复核冲突候选与证据、TCC/换道自动化,换道真实页面正例与事件人工业务认定待确认；精度not_evaluated
+UR-S3-001,创建测绘任务,用户可登记任务并关联现场位置。,高,platform/tests/test_event_survey_api.py; platform/tests/test_event_survey_service.py; 实际测绘任务列表；真实600帧/6关键帧REST量算、退回修订与PDF；S3真库回归,技术流程模拟通过；量算真值、法定结论及人员签署未完成
+UR-S3-002,现场条件确认,采集前确认人员、设备、位置和存储条件。,高,console2/src/RouterApp.test.jsx; 测绘相关自动化仅供索引；真实600帧/6关键帧REST量算、退回修订与PDF；S3真库回归,技术流程模拟通过；量算真值、法定结论及人员签署未完成
+UR-S3-003,导入现场资料,使用已登记视频或上传资料。,高,platform/tests/test_survey_service_contracts.py；真实600帧/6关键帧REST量算、退回修订与PDF；S3真库回归,技术流程模拟通过；量算真值、法定结论及人员签署未完成
+UR-S3-004,选择关键画面,从现场资料中选择需要量算的画面。,高,platform/tests/test_survey_geometry.py; platform/tests/test_survey_service_contracts.py；真实600帧/6关键帧REST量算、退回修订与PDF；S3真库回归,技术流程模拟通过；量算真值、法定结论及人员签署未完成
+UR-S3-005,距离和长度量算,用户选点后给出米制结果。,高,platform/tests/test_survey_annotation_images.py; console2/src/lib/surveyGeometry.test.js；真实600帧/6关键帧REST量算、退回修订与PDF；S3真库回归,技术流程模拟通过；量算真值、法定结论及人员签署未完成
+UR-S3-006,面积和周长量算,用户绘制区域后给出面积和周长。,高,platform/tests/test_survey_geometry.py::test_polygon_measurement_returns_area_and_perimeter；真实600帧/6关键帧REST量算、退回修订与PDF；S3真库回归,技术流程模拟通过；量算真值、法定结论及人员签署未完成
+UR-S3-007,现场对象标注,标注车辆、散落物、痕迹和其他对象。,中,platform/tests/test_survey_service_contracts.py::test_scene_annotation_full_crud_preserves_revision_and_audit；真实600帧/6关键帧REST量算、退回修订与PDF；S3真库回归,技术流程模拟通过；量算真值、法定结论及人员签署未完成
+UR-S3-008,结果复核,复核人员可通过或退回补充。,高,console2/src/RouterApp.test.jsx; 实际测绘任务状态列表；真实600帧/6关键帧REST量算、退回修订与PDF；S3真库回归,技术流程模拟通过；量算真值、法定结论及人员签署未完成
+UR-S3-009,报告生成,生成带量算结果的报告和材料清单。,高,platform/tests/test_survey_annotation_images.py::test_pdf_contains_the_annotated_image；真实600帧/6关键帧REST量算、退回修订与PDF；S3真库回归,技术流程模拟通过；量算真值、法定结论及人员签署未完成
+UR-S3-010,保留修改过程,修改量算和标注时保留前后版本。,高,platform/tests/test_survey_service_contracts.py::test_scene_annotation_full_crud_preserves_revision_and_audit；真实600帧/6关键帧REST量算、退回修订与PDF；S3真库回归,技术流程模拟通过；量算真值、法定结论及人员签署未完成
+UR-S4-001,配置关注区域,用户可维护需要监测的道路区域。,高,platform/tests/test_enforcement_api.py::test_candidate_zone_admin_revision_and_publish_boundary；真库候选幂等、确认/驳回/版本冲突；持续低速与GCJ02尾点门禁,实际视频规则适用性与权威依据未批准；不等于违法认定
+UR-S4-002,配置判断条件,用户可维护候选判断条件和适用范围。,高,platform/tests/test_enforcement_api.py::test_candidate_rule_update_cannot_declare_approval_or_violation；真库候选幂等、确认/驳回/版本冲突；持续低速与GCJ02尾点门禁,实际视频规则适用性与权威依据未批准；不等于违法认定
+UR-S4-003,区分车辆类型,显示货车、非货车或无法确认。,高,test/test_enforcement_detection_node.py; test/test_yolo_track_provenance.py；真库候选幂等、确认/驳回/版本冲突；持续低速与GCJ02尾点门禁,实际视频规则适用性与权威依据未批准；不等于违法认定
+UR-S4-004,货车关注线索,车辆进入相关区域且类型明确时形成候选线索。,高,test/test_enforcement_detection_node.py::test_emits_truck_restriction_candidate_from_frozen_enu_rule；真库候选幂等、确认/驳回/版本冲突；持续低速与GCJ02尾点门禁,实际视频规则适用性与权威依据未批准；不等于违法认定
+UR-S4-005,速度关注线索,车辆速度超过已配置条件时形成候选线索。,高,test/test_enforcement_detection_node.py::test_speed_candidate_requires_observed_speed_above_frozen_threshold；真库候选幂等、确认/驳回/版本冲突；持续低速与GCJ02尾点门禁,实际视频规则适用性与权威依据未批准；不等于违法认定
+UR-S4-006,违停和滞留线索,车辆在关注区域持续低速或停留时形成候选线索。,高,相关测试未证明真实违停/滞留正例，规则持续停留与未知观测回归通过；真库候选幂等、确认/驳回/版本冲突；持续低速与GCJ02尾点门禁,实际视频规则适用性与权威依据未批准；不等于违法认定
+UR-S4-007,线索列表,按类型、时间、路口和复核状态查询。,高,platform/tests/test_enforcement_api.py; 实际/enforcement空列表与筛选；真库候选幂等、确认/驳回/版本冲突；持续低速与GCJ02尾点门禁,实际视频规则适用性与权威依据未批准；不等于违法认定
+UR-S4-008,线索详情,展示事实、位置、车辆和画面。,高,test/test_enforcement_evidence_publisher.py; 实际列表为空；真库候选幂等、确认/驳回/版本冲突；持续低速与GCJ02尾点门禁,实际视频规则适用性与权威依据未批准；不等于违法认定
+UR-S4-009,人工复核,用户确认或驳回线索并填写原因。,高,platform/tests/test_enforcement_api.py::test_radar_cannot_be_faked_and_review_is_technical_only; 本轮确认/驳回真库通过；真库候选幂等、确认/驳回/版本冲突；持续低速与GCJ02尾点门禁,实际视频规则适用性与权威依据未批准；不等于违法认定
+UR-S4-010,明确结果边界,页面持续提示线索不代表违法认定或处罚结果。,高,platform/tests/test_enforcement_api.py; 候选与正式结论边界；真库候选幂等、确认/驳回/版本冲突；持续低速与GCJ02尾点门禁,实际视频规则适用性与权威依据未批准；不等于违法认定
+UR-S9-001,维护无人机信息,新增、编辑、启用和停用无人机。,高,platform/tests/test_drone_store.py; 实际无人机列表7项；独立真库并发、防重、EOF/失败持久化与失败重试新记录,真库执行器受控FakePipeline；外部RTSP/MQTT/飞控与运营签署未完成
+UR-S9-002,维护视频来源,配置实时视频或本地视频。,高,platform/tests/test_mission_scheduling.py; 实际来源16项；独立真库并发、防重、EOF/失败持久化与失败重试新记录,真库执行器受控FakePipeline；外部RTSP/MQTT/飞控与运营签署未完成
+UR-S9-003,维护位置信息来源,配置与视频配套的遥测来源。,高,platform/tests/test_mission_scheduling.py; test/test_telemetry_time_quality.py通过；独立真库并发、防重、EOF/失败持久化与失败重试新记录,真库执行器受控FakePipeline；外部RTSP/MQTT/飞控与运营签署未完成
+UR-S9-004,来源校验,保存前检查视频与遥测是否可用。,高,platform/tests/test_mission_scheduling.py::test_local_source_validation_enforces_allowlist_and_pair_types；独立真库并发、防重、EOF/失败持久化与失败重试新记录,真库执行器受控FakePipeline；外部RTSP/MQTT/飞控与运营签署未完成
+UR-S9-005,创建单次任务,按指定起止时间执行一次。,高,platform/tests/test_mission_scheduling.py::test_once_schedule_preserves_exact_utc_window；独立真库并发、防重、EOF/失败持久化与失败重试新记录,真库执行器受控FakePipeline；外部RTSP/MQTT/飞控与运营签署未完成
+UR-S9-006,创建周期任务,按星期和有效日期重复执行。,高,platform/tests/test_mission_scheduling.py::test_weekly_schedule_supports_cross_midnight_and_exceptions；独立真库并发、防重、EOF/失败持久化与失败重试新记录,真库执行器受控FakePipeline；外部RTSP/MQTT/飞控与运营签署未完成
+UR-S9-007,避免重复执行,同一无人机同一时间不重复创建任务。,高,platform/tests/test_mission_postgres_integration.py::test_persistent_plan_concurrency_stop_and_restart_recovery（本轮独立真库通过）；独立真库并发、防重、EOF/失败持久化与失败重试新记录,真库执行器受控FakePipeline；外部RTSP/MQTT/飞控与运营签署未完成
+UR-S9-008,查看任务状态,查看等待、执行、完成、失败和停止状态。,高,platform/tests/test_missions_api.py; platform/tests/test_pipeline_manager.py; 实际Mission122项；独立真库并发、防重、EOF/失败持久化与失败重试新记录,真库执行器受控FakePipeline；外部RTSP/MQTT/飞控与运营签署未完成
+UR-S9-009,停止与重试,用户可以停止任务并重新执行失败任务。,高,platform/tests/test_missions_api.py; platform/tests/test_pipeline_executor.py; 本轮真库EOF/失败重试通过；独立真库并发、防重、EOF/失败持久化与失败重试新记录,真库执行器受控FakePipeline；外部RTSP/MQTT/飞控与运营签署未完成
+UR-S9-010,异常原因提示,失败时显示可理解的失败原因。,高,platform/tests/test_missions_api.py::test_orchestrator_errors_preserve_status_and_code; console2/src/LiveModules.test.jsx；独立真库并发、防重、EOF/失败持久化与失败重试新记录,真库执行器受控FakePipeline；外部RTSP/MQTT/飞控与运营签署未完成

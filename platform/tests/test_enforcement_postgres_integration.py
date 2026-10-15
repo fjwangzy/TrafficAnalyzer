@@ -95,6 +95,13 @@ async def test_candidate_config_clue_evidence_review_and_idempotency():
             ), None)
         assert stale.value.status_code == 409
 
+        rejected = await service.review_clue(clue["id"], ClueReview(
+            review_status="reviewed_rejected", expected_revision=2,
+            reason="自动化功能验收：模拟驳回，不代表业务结论",
+        ), 1)
+        assert rejected["review_status"] == "reviewed_rejected"
+        assert rejected["review_revision"] == 3
+
         with pytest.raises(EnforcementError) as publish:
             await service.publish_candidate("zone", zone["id"])
         assert publish.value.status_code == 503

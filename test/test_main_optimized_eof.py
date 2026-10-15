@@ -4,6 +4,8 @@ import main_optimized
 import numpy as np
 import signal
 import pytest
+import subprocess
+import sys
 
 
 class RecordingQueue:
@@ -12,6 +14,28 @@ class RecordingQueue:
 
     def put(self, item):
         self.items.append(item)
+
+
+def test_shared_frame_survives_reader_tracker_close_until_show_unlinks():
+    result = subprocess.run([sys.executable, "-c", """
+from multiprocessing import shared_memory
+from main_optimized import _close_shared_memory_consumer
+for _ in range(3):
+    reader = shared_memory.SharedMemory(create=True, size=16)
+    name = reader.name
+    reader.buf[0] = 123
+    tracker = shared_memory.SharedMemory(name=name)
+    show = shared_memory.SharedMemory(name=name)
+    _close_shared_memory_consumer(reader)
+    assert tracker.buf[0] == 123
+    _close_shared_memory_consumer(tracker)
+    assert show.buf[0] == 123
+    show.close()
+    show.unlink()
+"""], capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stderr
+    assert "KeyError" not in result.stderr
+    assert "leaked shared_memory" not in result.stderr
 
 
 def test_reader_detection_process_forwards_eof_without_accessing_frame(monkeypatch):

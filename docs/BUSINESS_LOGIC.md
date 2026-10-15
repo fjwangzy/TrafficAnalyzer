@@ -787,3 +787,10 @@ Console2 普通模式使用服务器典型时段读模型与固定演示样例�
 - 回放不插值。窗口开始可 sample-and-hold 最近实采点，明确 tracking/trajectory quality gap 的进入和离开都断线；road/geo 降级本身不能切断仍可信的像素轨迹。
 - `/monitoring` 是实时轨迹投放，不能请求 V2 Mission API；`/gis` 是估计复盘业务视图，只分析当前 sealed Mission。“全部 Mission”只汇总，不播放。
 - 没有批准真值时，IDF1、HOTA、正式 ID switch、位置 RMSE、速度 MAE 与 ReID 准确率统一为 `not_evaluated`。
+
+## 2026-10-04 禁停候选连续观测门禁
+
+- `no_parking` 的停留时间只从连续低于规则速度门槛的观测开始计算。快速穿越区域的时间不累计到停车时长；速度未知、非有限值、失去当帧观测或当前位置时重置计时。
+- 源时间反转或间隔超过跟踪配置的 max_frame_gap_sec 时重置连续停留，不能把遥测/视频空洞当作连续停车。离开区域、轨迹不再活跃及 EOF 清理对应状态，保持一次连续过程只发一次候选。
+- GCJ-02 区域只使用当前尾点；当前尾点为空时不得回用历史有效点。匹配事实明确携带实际 ENU/GCJ02 坐标系。空值、unknown和数字车型标签都保留 unknown，不冒充已确认 non_truck。
+- 这些结果保持 unverified 技术候选，规则阈值与正式执法结论仍受业务审批约束。

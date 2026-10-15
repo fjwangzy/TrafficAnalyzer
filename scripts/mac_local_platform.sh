@@ -5,7 +5,7 @@ set -euo pipefail
 PROJECT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MPS_PYTHON="${MPS_VENV_DIR:-$PROJECT_ROOT/.venv-mps}/bin/python"
 PLATFORM_INSTANCE="${PLATFORM_INSTANCE:-live}"
-APP_RUNTIME_PROFILE="${APP_RUNTIME_PROFILE:-live}"
+APP_RUNTIME_PROFILE="${APP_RUNTIME_PROFILE:-replay_v2}"
 PLATFORM_PORT="${PLATFORM_PORT:-8000}"
 DEFAULT_SURVEY_STORAGE_DIR="$PROJECT_ROOT/.runtime/survey"
 if [[ ! "$PLATFORM_INSTANCE" =~ ^[A-Za-z0-9_-]+$ ]]; then
@@ -44,8 +44,8 @@ platform_is_ready() {
   local readiness
   readiness="$(curl -fsS "http://127.0.0.1:${PLATFORM_PORT}/ready" 2>/dev/null)" || return 1
   "$MPS_PYTHON" -c \
-    "import json, sys; raise SystemExit(json.loads(sys.argv[1]).get('status') != 'ready')" \
-    "$readiness"
+    "import json, sys; data=json.loads(sys.argv[1]); raise SystemExit(data.get('status') != 'ready' or data.get('runtime_profile') != sys.argv[2])" \
+    "$readiness" "$APP_RUNTIME_PROFILE"
 }
 
 port_is_busy() {
@@ -79,6 +79,10 @@ start_platform() {
   chmod 700 "$LOCAL_SURVEY_STORAGE_DIR"
   if platform_is_running; then
     assert_single_platform
+    if ! platform_is_ready; then
+      echo "Running Platform is degraded or uses a different runtime profile; run $0 restart." >&2
+      return 1
+    fi
     return
   fi
   if port_is_busy; then

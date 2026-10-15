@@ -622,3 +622,11 @@ V2 与 canonical 共享 connection database=`road9`，但只写 `uav_replay_v2_*
 本机实迁移验证：canonical revision 保持 `20260728_0020`；迁移前后
 `uav_message_inbox=292244`、`uav_track_events=19493`、`uav_track_points=902896`、
 `uav_telemetry_metrics=102406`、`uav_traffic_metrics=36245`、`uav_conflict_events=103`，canonical schema MD5 均为 `db2efdf31521eb04f08ab109820bc2c7`。这些数字是 2026-08-04 本机隔离证据，不是生产容量承诺。
+
+## 2026-10-04 空白 road9 初始化验证
+
+初始 canonical 迁移仍沿用当前模型 metadata 基线，但必须排除 `uav_replay_v2_*`。Replay V2 只能由其独立 Alembic 轨道创建。canonical 0016–0020 在完整当前 metadata 基线已存在时跳过重复 DDL；旧版本前向路径保留。V2 0003/0004 在当前 metadata 已提供相应唯一约束或冲突字段时不重复创建。
+
+独立根 Compose 项目 `traffic_accept_20261004`、数据库名 road9、端口15432和独立卷从空库执行两套迁移：canonical head `20260728_0020`，V2 head `20260809_rv2_0004`；canonical 初始化后无 V2 表，V2 初始化后共6个 hypertable（5 canonical + 1 Replay V2）。该结果验证本机空库初始化，不推进已有业务库 revision，也不关闭生产门禁。
+
+长期迁移维护仍需把历史 metadata 基线冻结为不可漂移的 DDL；本轮不将模型漂移问题表述为已彻底消除。

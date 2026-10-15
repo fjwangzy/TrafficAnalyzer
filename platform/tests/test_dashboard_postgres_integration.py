@@ -29,7 +29,7 @@ async def test_dashboard_reads_verified_coordinates_and_never_invents_kpis():
             source="integration_fixture",
             checksum="c" * 64,
             coordinate_reference={"display": "GCJ02", "status": "verified"},
-            payload={"intersection": {"name": "I5 集成路口", "center_lat": 36.7, "center_lon": 117.0}},
+            payload={"intersection": {"name": "I5 集成路口", "center_gcj02": [117.0, 36.7]}},
             quality_status="verified",
         ))
         await session.commit()
@@ -38,8 +38,8 @@ async def test_dashboard_reads_verified_coordinates_and_never_invents_kpis():
         intersections = await read_model.intersections()
         row = next(item for item in intersections["items"] if item["inter_id"] == inter_id)
         assert row["map_eligible"] is True
-        assert row["lat"] == 36.7
-        assert row["lon"] == 117.0
+        assert row["center_gcj02"] == {"longitude": 117.0, "latitude": 36.7}
+        assert row["coordinate_system"] == "GCJ02"
         assert row["risk"] == "unknown"
         filtered = await read_model.intersections(
             quality="unverified", bbox=(116.9, 36.6, 117.1, 36.8), query=marker, limit=1

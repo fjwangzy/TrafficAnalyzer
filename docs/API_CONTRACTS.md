@@ -1708,3 +1708,11 @@ Console2 将 `cursor_sec` 作为窗口结束游标，将 `cursor_sec - window_se
 “东进口 → 西出口”格式且 `movement_source=trajectory_quadrant_inferred`；无法确定进口时才返回
 `turn:{turn_behavior}` 与“直行（进口未知）”。`movement_key` 过滤必须使用同一有效流向，不能只与
 数据库中的可空原始字段比较。
+
+## 2026-10-04 就绪与地图范围筛选补充
+
+`GET /ready` 新增 `runtime_profile`，`services` 新增 `trajectory_replay`（healthy / not_configured）。当 `runtime_profile=replay_v2` 时，回放仓库缺失使 `status=degraded`。原有 database、Kafka、TimescaleDB、pipeline_manager 与 pipelines_active 字段保留。HTTP 状态不替代响应中的就绪状态。
+
+Dashboard 路口响应继续以 `center_gcj02={longitude, latitude}` 为坐标权威；bbox 按同一字段比较，不能读取已移除的顶层 lon/lat，也不添加旧坐标适配字段。
+
+Replay V2验收按 running→sealed 两条生命周期信封更新一条Mission事实对账；记录Kafka消息数和expected_facts分别解释，不要求两条消息生成两行Mission。Stats允许当前实时BEV有界尾迹（本机默认200条、每条30点），禁止顶层完整journey/无界历史轨迹。EOF剩余持久消息不得报告成功，周期样本关闭超时的drop_reason为 `shutdown_drain_timeout`。

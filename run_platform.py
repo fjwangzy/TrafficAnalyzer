@@ -17,6 +17,8 @@ def configure_environment() -> None:
     """Apply local-development defaults without overriding deployment values."""
     os.environ.setdefault("DEBUG", "true")
     os.environ.setdefault("SERVICE_PORT", "8000")
+    if os.environ.get("DEPLOYMENT_MODE", "local") == "local":
+        os.environ.setdefault("APP_RUNTIME_PROFILE", "replay_v2")
     existing_pythonpath = os.environ.get("PYTHONPATH", "")
     python_paths = [str(PROJECT_ROOT)]
     if existing_pythonpath:

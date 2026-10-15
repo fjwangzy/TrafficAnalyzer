@@ -5,8 +5,8 @@ Revises: 20260805_rv2_0003
 """
 
 import sqlalchemy as sa
-from alembic import op
 
+from alembic import op
 
 revision = "20260809_rv2_0004"
 down_revision = "20260805_rv2_0003"
@@ -15,22 +15,16 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.add_column(
-        "uav_replay_v2_conflict_events",
+    table = "uav_replay_v2_conflict_events"
+    existing = {column["name"] for column in sa.inspect(op.get_bind()).get_columns(table)}
+    for column in (
         sa.Column("motor_track_id", sa.String(length=100), nullable=True),
-    )
-    op.add_column(
-        "uav_replay_v2_conflict_events",
         sa.Column("non_motor_track_id", sa.String(length=100), nullable=True),
-    )
-    op.add_column(
-        "uav_replay_v2_conflict_events",
         sa.Column("distance_m", sa.Float(), nullable=True),
-    )
-    op.add_column(
-        "uav_replay_v2_conflict_events",
         sa.Column("conflict_scene", sa.String(length=100), nullable=True),
-    )
+    ):
+        if column.name not in existing:
+            op.add_column(table, column)
 
 
 def downgrade() -> None:

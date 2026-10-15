@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
 """管道集成测试（无YOLO）：使用合成检测数据验证遥测→标定→运动补偿→统计全链路。
 
-用法（Docker内运行）：
-  docker run --rm -v $(pwd):/app -w /app traffic_analyzer python3 test/test_pipeline_no_yolo.py
+用法（本机原生Python）：
+  .venv-mps/bin/python test/test_pipeline_no_yolo.py
+检测输入是合成数据；图像关联、世界投影和质量降级采用当前生产节点。
 """
 
 import os
 import sys
-import json
 import time
-import math
 import logging
 from pathlib import Path
 
@@ -106,7 +105,6 @@ def main():
     print("Phase 2: VideoReader + 遥测注入")
     print("="*60)
 
-    import cv2
     from nodes.VideoReader import VideoReader
     from elements.VideoEndBreakElement import VideoEndBreakElement
 
@@ -264,7 +262,6 @@ def main():
     print("Phase 5: 完整管道（合成检测 + 全节点链路，200帧）")
     print("="*60)
 
-    from elements.FrameElement import FrameElement
     from nodes.HomographyCalibrationNode import HomographyCalibrationNode
     from nodes.MotionCompensationNode import MotionCompensationNode
     from nodes.TrackerInfoUpdateNode import TrackerInfoUpdateNode
@@ -274,8 +271,13 @@ def main():
     from nodes.TrajectoryNode import TrajectoryNode
     from nodes.ConflictDetectionNode import ConflictDetectionNode
     from nodes.CalcStatisticsNode import CalcStatisticsNode
+    from nodes.ImageMotionEstimationNode import ImageMotionEstimationNode
+    from nodes.GroundTrajectoryTrackerNode import GroundTrajectoryTrackerNode
+    from nodes.FlightGeoReferenceNode import FlightGeoReferenceNode
+    from nodes.PostTrackingWorldProjectionNode import PostTrackingWorldProjectionNode
 
     full_config = {
+        "tracking_profile": "hover_cruise_v1",
         "general": {
             "colors_of_roads": {1: [102,204,255], 2: [0,0,170], 3: [17,70,10], 4: [120,56,126], 5: [30,105,215]},
             "buffer_analytics": 0.5,
@@ -346,6 +348,10 @@ def main():
     trajectory_node = TrajectoryNode(full_config)
     conflict_node = ConflictDetectionNode(full_config)
     calc_node = CalcStatisticsNode(full_config)
+    image_node = ImageMotionEstimationNode(full_config)
+    association_node = GroundTrajectoryTrackerNode(full_config)
+    geo_node = FlightGeoReferenceNode(full_config)
+    projection_node = PostTrackingWorldProjectionNode(full_config)
 
     results.check("所有节点实例化", True)
 
@@ -359,6 +365,8 @@ def main():
         "detections": 0,
         "tracks_max": 0,
         "speed_nonzero": 0,
+        "speed_unavailable": 0,
+        "geo_eligible": 0,
         "direction_stats": 0,
         "completed_tracks": 0,
         "info_output": 0,
@@ -380,12 +388,15 @@ def main():
         fe.detected_xyxy = fe.tracked_xyxy
         fe.detected_conf = fe.tracked_conf
         fe.detected_cls = fe.tracked_cls
+        fe.detected_cls_ids = [v["cls_id"] for v in vehicles]
         stats["detections"] += len(vehicles)
 
         if fe.telemetry:
             stats["telemetry"] += 1
 
         # 全链路处理
+        fe = image_node.process(fe)
+        fe = association_node.process(fe)
         fe = h_node2.process(fe)
         if fe.homography_matrix is not None:
             stats["h_matrix"] += 1
@@ -394,6 +405,9 @@ def main():
         if fe.drone_displacement_m is not None:
             stats["motion_comp"] += 1
 
+        fe = geo_node.process(fe)
+        fe = projection_node.process(fe)
+        stats["geo_eligible"] += int(fe.geo_analytics_eligible)
         fe = tracker_node.process(fe)
         if fe.buffer_tracks:
             stats["tracks_max"] = max(stats["tracks_max"], len(fe.buffer_tracks))
@@ -402,9 +416,11 @@ def main():
         # 检查速度值
         if fe.buffer_tracks:
             for tid, track in fe.buffer_tracks.items():
-                if hasattr(track, 'speed_kmh') and track.speed_kmh > 0:
+                if track.speed_kmh is not None and track.speed_kmh > 0:
                     stats["speed_nonzero"] += 1
                     break
+            if all(track.speed_kmh is None for track in fe.buffer_tracks.values()):
+                stats["speed_unavailable"] += 1
 
         fe = direction_node.process(fe)
         if fe.direction_stats:
@@ -460,14 +476,19 @@ def main():
                   f"{stats['motion_comp']}/{frame_count3}")
     results.check("轨迹跟踪工作", stats["tracks_max"] > 0,
                   f"max {stats['tracks_max']} active tracks")
-    results.check("速度估计工作", stats["speed_nonzero"] > 0,
-                  f"{stats['speed_nonzero']} frames with speed > 0")
+    if stats["geo_eligible"]:
+        results.check("有效世界事实支持米制速度", stats["speed_nonzero"] > 0,
+                      f"{stats['speed_nonzero']} frames with speed > 0")
+    else:
+        results.check("地理质量不足时速度明确不可用",
+                      stats["speed_unavailable"] > 0 and stats["speed_nonzero"] == 0,
+                      f"{stats['speed_unavailable']} frames with nullable speed")
     results.check("统计输出工作", stats["info_output"] > 0,
                   f"{stats['info_output']} frames with info")
 
     # 检查最后一帧的详细输出
     if last_fe:
-        print(f"\n  最终帧详细状态:")
+        print("\n  最终帧详细状态:")
         print(f"    timestamp: {last_fe.timestamp:.3f}s")
         print(f"    telemetry: {'Yes' if last_fe.telemetry else 'No'}")
         print(f"    calibration_mode: {last_fe.calibration_mode}")

@@ -1,10 +1,29 @@
+import importlib.util
 from pathlib import Path
 
 from alembic.config import Config
 from alembic.script import ScriptDirectory
+from sqlalchemy import create_engine, inspect
 
-from app.models import replay_v2  # noqa: F401
 from app.core.database import Base
+from app.models import replay_v2  # noqa: F401
+
+
+def test_canonical_baseline_keeps_replay_tables_on_their_own_migration_track(monkeypatch):
+    migration = Path(__file__).resolve().parents[1] / "alembic/versions/20260714_0001_road9_survey_baseline.py"
+    spec = importlib.util.spec_from_file_location("canonical_baseline", migration)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    engine = create_engine("sqlite://")
+    try:
+        with engine.begin() as connection:
+            monkeypatch.setattr(module.op, "get_bind", lambda: connection)
+            module.upgrade()
+            tables = set(inspect(connection).get_table_names())
+            assert {"uav_users", "uav_missions", "uav_survey_tasks"} <= tables
+            assert not any(name.startswith("uav_replay_v2_") for name in tables)
+    finally:
+        engine.dispose()
 
 
 def test_replay_v2_uses_an_independent_migration_track_and_fact_tables():

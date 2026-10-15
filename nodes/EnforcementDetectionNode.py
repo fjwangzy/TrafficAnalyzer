@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 
 from shapely.geometry import Point, shape
@@ -32,13 +33,17 @@ class EnforcementDetectionNode:
         self._rules = [dict(rule) for rule in cfg.get("rules", []) if rule.get("id")]
         self._entered_at: dict[tuple[int, str], float] = {}
         self._emitted: set[tuple[int, str, float]] = set()
+        self._max_observation_gap = float(config.get("tracking_node", {}).get("max_frame_gap_sec", 0.5))
+        self._last_timestamp: float | None = None
 
     @staticmethod
     def _vehicle_class(track) -> str:
         name = str(getattr(track, "yolo_class_name", "") or "").strip().lower()
+        if not name or name.isdecimal() or name in {"unknown", "none", "nan"}:
+            return "unknown"
         if name == "truck":
             return "truck"
-        return "non_truck" if name else "unknown"
+        return "non_truck"
 
     def _fact(self, rule: dict, zone: dict, track, track_id: int, vehicle_class: str, timestamp: float, facts: dict) -> dict:
         result = {
@@ -91,19 +96,31 @@ class EnforcementDetectionNode:
     @staticmethod
     def _position_for_zone(track, zone: dict):
         if zone.get("coordinate_system", "ENU") == "GCJ02":
-            points = [point for point in (getattr(track, "trajectory_gcj02", None) or []) if point is not None]
+            points = getattr(track, "trajectory_gcj02", None) or []
             return points[-1] if points else None
         return getattr(track, "current_position_enu_m", None)
 
     @profile_time
     def process(self, frame_element: FrameElement) -> FrameElement:
         if isinstance(frame_element, VideoEndBreakElement):
+            self._entered_at.clear()
+            self._emitted.clear()
             return frame_element
         frame_element.enforcement_clues = []
         if not self.enabled:
             return frame_element
         timestamp = float(frame_element.timestamp)
+        if self._last_timestamp is not None and (
+            timestamp <= self._last_timestamp or timestamp - self._last_timestamp > self._max_observation_gap
+        ):
+            self._entered_at.clear()
+            self._emitted.clear()
+        self._last_timestamp = timestamp
+        valid_keys = set()
         for track_id, track in mature_tracks_of(frame_element).items():
+            observed_at = getattr(track, "current_observation_timestamp_sec", None)
+            if observed_at is not None and abs(float(observed_at) - timestamp) > 1e-6:
+                continue
             vehicle_class = self._vehicle_class(track)
             for rule in self._rules:
                 zone_entry = self._zones.get(str(rule.get("zone_id") or ""))
@@ -116,12 +133,18 @@ class EnforcementDetectionNode:
                 point = Point(float(position[0]), float(position[1]))
                 key = (int(track_id), str(rule["id"]))
                 if not polygon.covers(point):
-                    self._entered_at.pop(key, None)
                     continue
+                if rule.get("clue_type") == "no_parking":
+                    speed = getattr(track, "avg_speed_kmh", None)
+                    limit = float((rule.get("definition") or {}).get("max_speed_kmh", 3.0))
+                    if speed is None or not math.isfinite(float(speed)) or not 0 <= float(speed) <= limit:
+                        continue
+                valid_keys.add(key)
                 entered_at = self._entered_at.setdefault(key, timestamp)
                 facts = self._matches(rule, track, vehicle_class, entered_at, timestamp)
                 if facts is None:
                     continue
+                facts["coordinate_system"] = zone.get("coordinate_system", "ENU")
                 event_key = (int(track_id), str(rule["id"]), entered_at)
                 if event_key in self._emitted:
                     continue
@@ -129,4 +152,9 @@ class EnforcementDetectionNode:
                 frame_element.enforcement_clues.append(
                     self._fact(rule, zone, track, int(track_id), vehicle_class, timestamp, facts)
                 )
+        self._entered_at = {key: started for key, started in self._entered_at.items() if key in valid_keys}
+        self._emitted = {
+            event for event in self._emitted
+            if event[:2] in self._entered_at and event[2] == self._entered_at[event[:2]]
+        }
         return frame_element

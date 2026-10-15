@@ -1,9 +1,12 @@
 import time
+import threading
 
 import pytest
 
 import nodes.ReliableKafkaPublisher as reliable_module
 from nodes.ReliableKafkaPublisher import ReliableKafkaPublisher, kafka_compression_type
+from nodes.KafkaProducerNode import KafkaProducerNode
+from elements.VideoEndBreakElement import VideoEndBreakElement
 
 
 class _Future:
@@ -29,6 +32,58 @@ class _Producer:
 
     def flush(self, timeout=None):
         return None
+
+
+def test_durable_eof_burst_drains_every_accepted_message_before_shutdown(tmp_path):
+    release = threading.Event()
+
+    class Future:
+        def get(self, timeout):
+            assert release.wait(timeout)
+
+    class Producer(_Producer):
+        def send(self, topic, value):
+            self.sent.append((topic, value))
+            return Future()
+
+    producer = Producer()
+    publisher = ReliableKafkaPublisher(producer, tmp_path, delivery_timeout_sec=10)
+    try:
+        for index in range(300):
+            publisher.publish("uav_track_complete_1", {"message_id": f"burst-{index}"}, durable=True)
+        release.set()
+        result = publisher.close(timeout_sec=5)
+        assert result["durable_pending"] == 0
+        assert result["coverage_ratio"] == 1
+        assert {payload["message_id"] for _, payload in producer.sent} == {f"burst-{index}" for index in range(300)}
+        assert not list(tmp_path.glob("*.json"))
+    finally:
+        release.set()
+        publisher.close(timeout_sec=1)
+
+
+def test_pipeline_eof_reports_failure_while_durable_messages_are_pending():
+    class Publisher:
+        def close(self, timeout_sec):
+            assert timeout_sec == 120
+            return {"durable_pending": 3}
+
+    node = object.__new__(KafkaProducerNode)
+    node.publisher = Publisher()
+    with pytest.raises(RuntimeError, match="3 durable messages"):
+        node.process(VideoEndBreakElement("fixture.mp4", 1))
+
+
+def test_shutdown_timeout_preserves_durable_fact_and_reports_transient_drop_reason(tmp_path):
+    publisher = ReliableKafkaPublisher(_Producer(fail=True), tmp_path, retry_interval_sec=0.01)
+    publisher.publish("uav_track_complete_1", {"message_id": "durable"}, durable=True)
+    publisher.publish("uav_statistics_1", {"message_id": "periodic-1"})
+    publisher.publish("uav_telemetry_1", {"message_id": "periodic-2"})
+    result = publisher.close(timeout_sec=0.02)
+    assert result["durable_pending"] == 1
+    assert result["dropped_samples"] == 2
+    assert result["drop_reason"] == "shutdown_drain_timeout"
+    assert result["expected_samples"] == result["actual_samples"] + result["dropped_samples"] + result["durable_pending"]
 
 
 def _wait_until(predicate, timeout=2.0):

@@ -4,8 +4,9 @@ Revision ID: 20260805_rv2_0003
 Revises: 20260804_rv2_0002
 """
 
-from alembic import op
+import sqlalchemy as sa
 
+from alembic import op
 
 revision = "20260805_rv2_0003"
 down_revision = "20260804_rv2_0002"
@@ -33,8 +34,11 @@ CONSTRAINTS = (
 
 
 def upgrade() -> None:
+    inspector = sa.inspect(op.get_bind())
     for name, table, columns in CONSTRAINTS:
-        op.create_unique_constraint(name, table, list(columns))
+        existing = {item["name"] for item in inspector.get_unique_constraints(table)}
+        if name not in existing:
+            op.create_unique_constraint(name, table, list(columns))
 
 
 def downgrade() -> None:

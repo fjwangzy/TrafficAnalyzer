@@ -166,6 +166,7 @@ video_saver_node:
   clip_after_sec: 5.0             # 新增：录制冲突后几秒
 
 kafka_producer_node: #// 摄像头 id
+  shutdown_drain_timeout_sec: 120  # EOF 集中归档有界排空；剩余持久消息使管道失败，spool 保留可重放
   bootstrap_servers: ${oc.env:KAFKA_BOOTSTRAP,kafka:29092} #127.0.0.1:9092 #kafka:29092
   topic_name: ${oc.env:TOPIC_NAME}
   how_often_sec: 1 # 每隔多少秒发送一次结果

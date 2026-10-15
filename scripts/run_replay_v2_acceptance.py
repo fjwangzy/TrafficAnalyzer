@@ -16,12 +16,6 @@ import time
 import uuid
 from urllib.parse import urlencode
 
-BOOTSTRAP_V2_PYTHON_DEPS = Path(
-    os.environ.get("REPLAY_V2_PYTHON_DEPS", "/private/tmp/traffic-analyzer-replay-v2-python")
-)
-if BOOTSTRAP_V2_PYTHON_DEPS.is_dir():
-    sys.path.insert(0, str(BOOTSTRAP_V2_PYTHON_DEPS))
-
 from kafka import KafkaConsumer, TopicPartition
 from kafka.admin import ConfigResource, ConfigResourceType, KafkaAdminClient, NewTopic
 from kafka.errors import TopicAlreadyExistsError
@@ -56,7 +50,6 @@ DEFAULT_SOURCES = (
     "SRC-MP4NEW-CH-0625-AM",
     "SRC-MP4729-JS-0729-3MS",
 )
-V2_PYTHON_DEPS = BOOTSTRAP_V2_PYTHON_DEPS
 
 
 def build_v2_run_identity(source_profile_id: str, *, nonce: str | None = None) -> dict:
@@ -80,7 +73,7 @@ def parse_args() -> argparse.Namespace:
     timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", action="append", help="repeat to select SourceProfiles")
-    parser.add_argument("--base-url", default="http://127.0.0.1:8200")
+    parser.add_argument("--base-url", default="http://127.0.0.1:8000")
     parser.add_argument("--username", default=os.environ.get("PLATFORM_USERNAME", "admin"))
     parser.add_argument("--password", default=os.environ.get("PLATFORM_PASSWORD", "admin123"))
     parser.add_argument("--kafka-bootstrap", default="127.0.0.1:9092")
@@ -276,11 +269,13 @@ async def wait_for_reconciliation(
     *,
     require_road_grains: bool = False,
 ) -> dict:
+    # Running and sealed are two Kafka messages that update one Mission fact.
+    expected_facts = {**expected, "missions": int(expected.get("missions", 0) > 0)}
     deadline = time.monotonic() + 90.0
     actual = await replay_v2_counts(mission_id)
     while time.monotonic() < deadline:
         if (
-            all(actual.get(key) == value for key, value in expected.items())
+            all(actual.get(key) == value for key, value in expected_facts.items())
             and actual.get("mission_status") == "sealed"
             and aggregate_gate(actual, require_road_grains=require_road_grains)["passed"]
         ):
@@ -289,12 +284,12 @@ async def wait_for_reconciliation(
         actual = await replay_v2_counts(mission_id)
     mismatches = {
         key: {"kafka": value, "road9": actual.get(key)}
-        for key, value in expected.items()
+        for key, value in expected_facts.items()
         if actual.get(key) != value
     }
     if actual.get("mission_status") != "sealed":
         mismatches["mission_status"] = {"expected": "sealed", "actual": actual.get("mission_status")}
-    return {"kafka": expected, "road9": actual, "mismatches": mismatches, "matched": not mismatches}
+    return {"kafka": expected, "expected_facts": expected_facts, "road9": actual, "mismatches": mismatches, "matched": not mismatches}
 
 
 async def storage_snapshot() -> dict:
@@ -445,6 +440,35 @@ def validate_archived_tracks(tracks: list[dict]) -> dict:
     }
 
 
+def realtime_stats_are_bounded(messages: list[dict]) -> bool:
+    """Permit current BEV tails without admitting unbounded archived journeys."""
+    coordinate_fields = (
+        "trajectory_px", "trajectory_bbox_center_px", "trajectory_enu_m",
+        "trajectory_gcj02", "trajectory_timestamps_sec", "trajectory_frame_nums",
+    )
+    for message in messages:
+        data = message.get("data") or {}
+        if any(key in data for key in ("journeys", "trajectory_px", "trajectory_gcj02")):
+            return False
+        for key in ("active_trajectories", "candidate_trajectories"):
+            tracks = data.get(key) or []
+            if not isinstance(tracks, list) or len(tracks) > 200:
+                return False
+            for track in tracks:
+                if not isinstance(track, dict):
+                    return False
+                if any(
+                    track.get(field) is not None and (not isinstance(track[field], list) or len(track[field]) > 30)
+                    for field in coordinate_fields
+                ):
+                    return False
+    return True
+
+
+def mission_lifecycle_is_sealed(messages: list[dict]) -> bool:
+    return [(message.get("data") or {}).get("status") for message in messages] == ["running", "sealed"]
+
+
 def run_source(
     client: PlatformClient,
     source: dict,
@@ -483,13 +507,8 @@ def run_source(
         raise RuntimeError(f"Kafka topic assignment timed out for {source['profile_id']}")
     consumer.seek_to_end(*consumer.assignment())
 
-    main_assets = Path("/Users/yaoyao/ai/TrafficAnalyzer")
+    main_assets = ROOT
     env = os.environ.copy()
-    env["PYTHONPATH"] = os.pathsep.join(
-        [str(V2_PYTHON_DEPS), value]
-        if (value := env.get("PYTHONPATH"))
-        else [str(V2_PYTHON_DEPS)]
-    )
     env.update(
         {
             "VIDEO_SRC": str((ROOT / source["video"]).resolve()),
@@ -508,7 +527,7 @@ def run_source(
             "KAFKA_SPOOL_DIR": str(output_dir / "kafka-spool"),
             "SURVEY_STORAGE_DIR": os.environ.get(
                 "REPLAY_V2_SURVEY_STORAGE_DIR",
-                "/private/tmp/traffic-analyzer-replay-v2-survey",
+                str(ROOT / ".runtime/survey"),
             ),
             "REPLAY_V2_APPEARANCE_MODEL_PATH": str(main_assets / "weights/yolo11s-visdrone.pt"),
             "REPLAY_V2_APPEARANCE_BATCH_SIZE": "128",
@@ -593,13 +612,7 @@ def run_source(
         if buckets["missions"]
         else None
     )
-    stats_have_no_tails = all(
-        not any(
-            key in (item.get("data") or {})
-            for key in ("active_trajectories", "candidate_trajectories", "trajectory_px", "trajectory_gcj02")
-        )
-        for item in buckets["stats"]
-    )
+    stats_are_bounded = realtime_stats_are_bounded(buckets["stats"])
     canonical_after = topic_end_offsets(kafka_bootstrap, canonical_topics)
     canonical_topic_writes = {
         topic: {"before": canonical_before.get(topic), "after": offsets}
@@ -619,7 +632,8 @@ def run_source(
         "created_topics": created_topics,
         "message_counts": expected,
         "mission_status": mission_status,
-        "stats_have_no_trajectory_tails": stats_have_no_tails,
+        "stats_have_bounded_realtime_trajectories": stats_are_bounded,
+        "mission_lifecycle_valid": mission_lifecycle_is_sealed(buckets["missions"]),
         "canonical_topic_writes": canonical_topic_writes,
         "track_validation": track_validation,
         "reconciliation": reconciliation,
@@ -631,9 +645,9 @@ def run_source(
         and error is None
         and expected["stats"] > 0
         and expected["tracks"] > 0
-        and expected["missions"] == 1
+        and result["mission_lifecycle_valid"]
         and mission_status == "sealed"
-        and stats_have_no_tails
+        and stats_are_bounded
         and not canonical_topic_writes
         and track_validation["alignment_failures"] == 0
         and reconciliation["matched"]

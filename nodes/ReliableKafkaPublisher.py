@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import threading
+from collections import deque
 import time
 import uuid
 from pathlib import Path
@@ -52,6 +53,10 @@ class ReliableKafkaPublisher:
         self._spool_dir = Path(spool_path)
         self._spool_dir.mkdir(parents=True, exist_ok=True)
         self._spool_lock = threading.Lock()
+        self._pending = deque(sorted(
+            self._spool_dir.glob("*.json"),
+            key=lambda path: (path.stat().st_mtime_ns, path.name),
+        ))
         self._transient: Queue[tuple[str, dict]] = Queue(maxsize=queue_size)
         self._delivery_timeout_sec = delivery_timeout_sec
         self._retry_interval_sec = retry_interval_sec
@@ -95,6 +100,7 @@ class ReliableKafkaPublisher:
                             handle.flush()
                             os.fsync(handle.fileno())
                         os.replace(temporary, target)
+                        self._pending.append(target)
             except OSError:
                 temporary.unlink(missing_ok=True)
                 logger.exception("durable Kafka spool write failed")
@@ -136,8 +142,14 @@ class ReliableKafkaPublisher:
         self._stop.set()
         self._wake.set()
         self._thread.join(timeout=max(deadline - time.monotonic(), 0.1))
+        while True:
+            try:
+                self._transient.get_nowait()
+            except Empty:
+                break
+            self._record_drop("shutdown_drain_timeout")
         try:
-            self._producer.flush(timeout=max(timeout_sec, 0.1))
+            self._producer.flush(timeout=max(deadline - time.monotonic(), 0.1))
         except Exception:
             logger.warning("Kafka producer flush failed during close", exc_info=True)
         return self.snapshot()
@@ -170,6 +182,7 @@ class ReliableKafkaPublisher:
             self._send(record["topic"], record["payload"])
             with self._spool_lock:
                 path.unlink(missing_ok=True)
+                self._pending.popleft()
             self._record_actual()
         except Exception as exc:
             logger.warning("durable Kafka delivery deferred: %s", exc)
@@ -179,7 +192,7 @@ class ReliableKafkaPublisher:
 
     def _pending_files(self) -> list[Path]:
         with self._spool_lock:
-            return sorted(self._spool_dir.glob("*.json"), key=lambda path: (path.stat().st_mtime_ns, path.name))
+            return list(self._pending)
 
     def _send(self, topic: str, payload: dict) -> None:
         future = self._producer.send(topic, value=payload)

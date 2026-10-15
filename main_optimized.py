@@ -26,7 +26,7 @@ import os
 os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")  # MPS设备NMS等操作回退CPU
 
 from time import sleep, time
-from multiprocessing import Process, Queue, shared_memory, resource_tracker
+from multiprocessing import Process, Queue, shared_memory
 from queue import Empty
 import signal
 import numpy as np
@@ -155,17 +155,12 @@ def _close_shared_memory_consumer(shm: shared_memory.SharedMemory) -> None:
     """Close a POSIX shared-memory handle without claiming unlink ownership.
 
     The reader creates each segment, the tracker reads it, and the show worker is
-    the single owner that unlinks it after rendering.  Python registers every
-    opened handle with the local process resource tracker; unless the two
-    non-owning processes unregister their handles, an early reader EOF can unlink
-    queued frames before the slower Kafka/show stages consume them.
+    the single owner that unlinks it after rendering. Multiprocessing children
+    share their parent's resource tracker, whose registry is a set rather than
+    a handle reference count. Only unlink may unregister the segment; doing so
+    on every reader/tracker close races the show worker and causes KeyError.
     """
     shm.close()
-    if os.name != "nt":
-        try:
-            resource_tracker.unregister(shm._name, "shared_memory")
-        except (KeyError, ValueError):
-            pass
 
 
 def proc_frame_reader_and_detection(

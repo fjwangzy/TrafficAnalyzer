@@ -1,15 +1,14 @@
 import sys
 
 import pytest
-
 import scripts.run_replay_v2_acceptance as acceptance
 from scripts.run_replay_v2_acceptance import (
-    aggregate_gate,
     _message_size_summary,
+    aggregate_gate,
     build_v2_run_identity,
+    ensure_topics,
     parse_args,
     topic_end_offsets,
-    ensure_topics,
 )
 
 
@@ -29,8 +28,36 @@ def test_v2_acceptance_defaults_to_external_private_tmp_artifacts(monkeypatch):
     args = parse_args()
 
     assert str(args.output_dir).startswith("/private/tmp/traffic-analyzer-replay-v2-")
-    assert args.base_url == "http://127.0.0.1:8200"
+    assert args.base_url == "http://127.0.0.1:8000"
     assert args.frame_stride == 10
+
+
+def test_acceptance_permits_bounded_bev_tails_and_rejects_complete_journeys():
+    valid = [{"data": {"active_trajectories": [{"trajectory_px": [[1, 2]] * 30}]}}]
+    assert acceptance.realtime_stats_are_bounded(valid)
+    assert not acceptance.realtime_stats_are_bounded([{"data": {"active_trajectories": [{}] * 201}}])
+    assert not acceptance.realtime_stats_are_bounded([{"data": {"active_trajectories": [{"trajectory_px": [[1, 2]] * 31}]}}])
+    assert not acceptance.realtime_stats_are_bounded([{"data": {"journeys": []}}])
+
+
+def test_acceptance_requires_running_then_sealed_without_duplicate_or_incomplete_terminal_messages():
+    assert acceptance.mission_lifecycle_is_sealed([{"data": {"status": "running"}}, {"data": {"status": "sealed"}}])
+    assert not acceptance.mission_lifecycle_is_sealed([{"data": {"status": "running"}}, {"data": {"status": "incomplete"}}])
+    assert not acceptance.mission_lifecycle_is_sealed([{"data": {"status": "sealed"}}])
+
+
+@pytest.mark.asyncio
+async def test_reconciliation_maps_lifecycle_messages_to_one_mission_fact(monkeypatch):
+    expected = {"stats": 1, "tracks": 1, "conflicts": 0, "telemetry": 1, "missions": 2}
+
+    async def counts(_mission_id):
+        return {**expected, "missions": 1, "mission_status": "sealed", "intersection_5min": 1, "typical_5min_mm": 1}
+
+    monkeypatch.setattr(acceptance, "replay_v2_counts", counts)
+    result = await acceptance.wait_for_reconciliation("M", expected)
+    assert result["matched"]
+    assert result["kafka"]["missions"] == 2
+    assert result["expected_facts"]["missions"] == 1
 
 
 def test_v2_acceptance_records_serialized_message_size_distribution():

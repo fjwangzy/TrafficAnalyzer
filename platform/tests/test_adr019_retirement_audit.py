@@ -86,7 +86,7 @@ def test_mac_local_platform_supports_a_named_replay_v2_instance_without_replacin
     assert 'PLATFORM_INSTANCE="${PLATFORM_INSTANCE:-live}"' in script
     assert 'traffic-analyzer-local-platform-${PLATFORM_INSTANCE}-${UID}' in script
     assert 'com.traffic-analyzer.local-platform-${PLATFORM_INSTANCE}-${UID}' in script
-    assert 'APP_RUNTIME_PROFILE="${APP_RUNTIME_PROFILE:-live}"' in script
+    assert 'APP_RUNTIME_PROFILE="${APP_RUNTIME_PROFILE:-replay_v2}"' in script
 
 
 def test_mac_local_platform_uses_one_default_port_and_no_shadow_dependency_tree():

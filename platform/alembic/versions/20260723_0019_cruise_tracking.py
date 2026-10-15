@@ -15,6 +15,10 @@ depends_on = None
 
 
 def upgrade() -> None:
+    # 0001 creates current metadata on a blank database, including the complete
+    # post-0020 schema. Keep historical upgrades for databases that predate it.
+    if "uav_source_geo_registrations" in sa.inspect(op.get_bind()).get_table_names():
+        return
     op.add_column(
         "uav_flight_plans",
         sa.Column("tracking_profile", sa.String(32), nullable=True),

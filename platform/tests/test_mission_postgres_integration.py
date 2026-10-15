@@ -223,6 +223,14 @@ async def test_scheduler_persists_pipeline_eof_and_error_terminal_states():
     assert failed_result["pipeline"]["error_message"] == "decoder exited"
     await orchestrator.change_plan_state(failed_plan["id"], failed_plan["revision"], "retire")
 
+    retry = await orchestrator.retry_mission(failed_mission["id"], "自动化功能验收：验证新执行记录")
+    assert retry["id"] != failed_mission["id"]
+    assert retry["parent_mission_id"] == failed_mission["id"]
+    assert retry["retry_index"] == 1
+    assert retry["status"] == "running"
+    assert (await orchestrator.get_mission(failed_mission["id"]))["status"] == "failed"
+    await orchestrator.stop_mission(retry["id"], "自动化功能验收结束")
+
     _, missing_mission = await start_plan("I2 pipeline runtime missing")
     pipeline.running.pop(missing_mission["pipeline_id"])
     await orchestrator.run_once(now + timedelta(seconds=3))

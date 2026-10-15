@@ -1030,3 +1030,14 @@ intersection/link/lane/turn 四类真实 5 分钟聚合和独立典型矩阵；�
 `/gis` 时间轴使用可独立拖动的窗口开始/结束双游标；未通过 URL 指定游标时初始化为 `T+0 ～ T+10s`（短 Mission 取实际总长），避免双游标重合在原点导致开始游标没有可移动区间。拖动只更新本地预览，释放或键盘提交后才更新查询游标并发起一次 REST 请求，禁止把连续 pointer move 转换为并发请求。自动播放保持当前窗口宽度向前移动。顶部“轨迹统计”只投影已提交窗口的 replay 响应（已加载轨迹、可回放轨迹、空间点覆盖、流向种类和窗口冲突），不触发第二套指标重算；右侧流向排名、时间轴全局事件标记和 Mission 行为总数继续保持封存 Mission 口径。PostgreSQL ReplayRepository 只读取完整 Mission 的轨迹摘要、行为、冲突及每条轨迹的首尾分析点，再按当前窗口下推 TrackPoint 范围、确定性锚点和分页上限；Python 组装期间不占用数据库连接，不得为每个游标全量加载 Mission 点集。
 V2 `uav_stats` 继续携带有界的 active/candidate 轨迹尾部，仅用于当前 Pipeline 的 WebSocket/BEV；`ReplayV2MetricStoreAdapter` 不持久化这些尾部，历史点仍只允许通过 Mission spool → sealed journey 路径落库。
 同一适配器实现 `/monitoring` 使用的 `query_traffic` 与 `query_conflicts` 读契约：查询只读取 `uav_replay_v2_*` 样本、冲突和 Mission 谱系，不回退 canonical 事实表。`uav_replay_mission` 是持久化控制事实，没有实时地图投影，consumer 落库后直接确认 dispatch。
+
+## 2026-10-04 本机完整运行档与共享帧验收修订
+
+- 原生 `scripts/mac_local_platform.sh` 和根 `run_platform.py` 的本机默认档统一为 `replay_v2`；显式运行档和生产 Compose 保持由部署配置选择。启动脚本检查 `/ready.runtime_profile`，已有实例运行档不一致时要求 restart，不能以仅端口健康冒充完整功能。
+- `/ready` 单独报告 `trajectory_replay`。V2 档缺少 ReplayRepository 时整体状态为 degraded；显式 live 档报告 not_configured，不宣称回放已启用。
+- 多进程共享帧由 reader 创建、tracker 只读、show 完成渲染后唯一 unlink。reader/tracker 只 close；同一 multiprocessing 进程树共享资源跟踪器，不能逐句柄 unregister 同一个共享内存名称。
+- 根级重构回归脚本复用维护中的 pytest 契约；无 YOLO 脚本保留真实视频/JSON 遥测与合成检测，补齐 ImageMotion → GroundTrajectoryTracker → FlightGeoReference → PostTrackingWorldProjection，明确测试地理质量不足时速度不可用。
+
+### EOF持久发布排空（2026-10-04）
+
+每Pipeline独占其Kafka spool目录。发送器启动只扫描恢复一次，以有序内存队列追踪原子落盘文件，避免EOF集中journey逐条重扫/stat全部文件。自然EOF按 `kafka_producer_node.shutdown_drain_timeout_sec`（默认120秒）排空；仍有durable_pending时进程失败，文件保留可恢复。周期队列超时记 `shutdown_drain_timeout`，不能把残留周期样本当作已发送。短片真实复验与大spool恢复证据见功能验收报告。

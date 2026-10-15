@@ -5,8 +5,8 @@ Revises: 20260721_0017
 """
 
 import sqlalchemy as sa
-from alembic import op
 
+from alembic import op
 
 revision = "20260722_0018"
 down_revision = "20260721_0017"
@@ -15,6 +15,10 @@ depends_on = None
 
 
 def upgrade() -> None:
+    # 0001 creates current metadata on a blank database, including the complete
+    # post-0020 schema. Keep historical upgrades for databases that predate it.
+    if "uav_source_geo_registrations" in sa.inspect(op.get_bind()).get_table_names():
+        return
     op.create_table(
         "uav_intersection_projects",
         sa.Column("id", sa.String(40), primary_key=True),

@@ -36,10 +36,10 @@ from app.services.enforcement_service import EnforcementService
 from app.services.event_center import EventCenter
 from app.services.lane_annotation_store import LaneAnnotationStore
 from app.services.metric_store import PostgresMetricStoreAdapter
-from app.services.replay_repository import PostgresReplayRepository
-from app.services.replay_v2_metric_store import ReplayV2MetricStoreAdapter
 from app.services.mission_orchestrator import MissionOrchestrator, PipelineManagerAdapter
 from app.services.pipeline_manager import PipelineManager
+from app.services.replay_repository import PostgresReplayRepository
+from app.services.replay_v2_metric_store import ReplayV2MetricStoreAdapter
 from app.services.road_context import (
     Road9RoadContextAdapter,
     RoadContext,
@@ -266,6 +266,9 @@ async def readiness_check():
         "kafka": "unknown",
         "timescaledb": "unknown",
         "pipeline_manager": "healthy",
+        "trajectory_replay": (
+            "healthy" if getattr(app.state, "replay_repository", None) else "not_configured"
+        ),
     }
 
     # Check Kafka
@@ -296,9 +299,12 @@ async def readiness_check():
         services[name] == "healthy"
         for name in ("database", "kafka", "timescaledb", "pipeline_manager")
     )
+    if settings.app_runtime_profile == "replay_v2":
+        all_ready = all_ready and services["trajectory_replay"] == "healthy"
 
     return {
         "status": "ready" if all_ready else "degraded",
+        "runtime_profile": settings.app_runtime_profile,
         "services": services,
         "pipelines_active": pipelines_active,
     }

@@ -14,7 +14,6 @@ from app.services.metric_store import (
     InMemoryMetricStoreAdapter,
     MessageEnvelope,
     MetricContractError,
-    MessageTransportConflict,
     PostgresMetricStoreAdapter,
     _period_start,
 )
@@ -658,7 +657,7 @@ class MetricStoreContractTest(unittest.IsolatedAsyncioTestCase):
             "MessageIdentityConflict",
         )
 
-    async def test_transport_offset_reuse_is_quarantined_without_pinning_consumer(self):
+    async def test_transport_offset_reuse_does_not_block_new_message_identity(self):
         ws = _RecordingWS()
         store = InMemoryMetricStoreAdapter()
         service = KafkaConsumerService(
@@ -674,12 +673,9 @@ class MetricStoreContractTest(unittest.IsolatedAsyncioTestCase):
         await service._process_message(first, "uav_statistics_1", 0, 10)
         await service._process_message(reused_offset, "uav_statistics_1", 0, 10)
 
-        self.assertEqual(len(ws.messages), 1)
-        self.assertEqual(len(store.dead_letters), 1)
-        self.assertEqual(
-            store.dead_letters[("uav_statistics_1", 0, 10)]["reason_code"],
-            "MessageTransportConflict",
-        )
+        self.assertEqual(len(ws.messages), 2)
+        self.assertEqual(len(store.dead_letters), 0)
+        self.assertEqual(ws.messages[-1][1]["data"]["cars"], 9)
 
 
 if __name__ == "__main__":

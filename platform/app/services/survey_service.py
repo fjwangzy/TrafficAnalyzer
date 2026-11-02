@@ -406,7 +406,7 @@ class SurveyService:
             video_fps = float(source_manifest.get("video_fps") or 0)
             evidence_frame_number = round(float(timestamp_sec) * video_fps) if video_fps > 0 else 0
         platform_dir = Path(__file__).resolve().parents[2]
-        telemetry_asset = telemetry_source.location.removeprefix("test_videos/")
+        telemetry_asset = telemetry_source.location.removeprefix("/app/test_videos/").removeprefix("test_videos/")
         telemetry_path = resolve_allowlisted_asset(
             telemetry_asset,
             [*settings.survey_asset_roots, settings.survey_storage_dir],
@@ -723,8 +723,8 @@ class SurveyService:
                 raise ValueError("survey server import requires a local source profile")
             if not video_source.enabled or not telemetry_source.enabled:
                 raise ValueError("source profile is disabled")
-            video_asset = video_source.location.removeprefix("test_videos/")
-            telemetry_asset = telemetry_source.location.removeprefix("test_videos/")
+            video_asset = video_source.location.removeprefix("/app/test_videos/").removeprefix("test_videos/")
+            telemetry_asset = telemetry_source.location.removeprefix("/app/test_videos/").removeprefix("test_videos/")
             telemetry_type = telemetry_source.source_type
             telemetry_config = telemetry_source.config or {}
             if telemetry_source.source_type == "file":

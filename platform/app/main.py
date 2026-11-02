@@ -2,7 +2,11 @@
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from utils_local.runtime_logging import configure_runtime_logging
+
+configure_runtime_logging(persist=True)
+
+from fastapi import Depends, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
@@ -24,7 +28,7 @@ from app.api.v1.drones import router as drones_router
 from app.api.v1.drones import telemetry_router
 from app.api.v1.pipelines import router as pipelines_router
 from app.core.config import settings
-from app.core.database import async_session_maker, close_db, init_db, init_replay_v2_db
+from app.core.database import async_session_maker, close_db, init_db, init_replay_v2_db, validate_database
 from app.kafka.consumer import KafkaConsumerService
 from app.kafka.ws_manager import WSManager
 from app.middleware.auth import AuthMiddleware
@@ -46,24 +50,27 @@ from app.services.road_context import (
 )
 from app.services.survey_worker import SurveyWorker
 
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan manager."""
+    logger.info("Platform startup runtime_profile=%s device=%s", settings.app_runtime_profile, settings.pipeline_device)
     replay_profile = settings.app_runtime_profile == "replay_v2"
     # ── Initialize database ──
     db_available = False
     try:
-        db_available = (
-            await init_replay_v2_db() if replay_profile else await init_db()
-        )
+        if settings.db_auto_migrate:
+            db_available = await init_replay_v2_db() if replay_profile else await init_db()
+        else:
+            db_available = await validate_database()
         if not db_available:
             raise RuntimeError("database initialization failed")
         logger.info(f"Database initialized: {settings.db_host}:{settings.db_port}")
     except Exception as e:
+        if settings.deployment_mode == "production":
+            raise RuntimeError("Production database is not ready; run deploy init-db") from e
         logger.warning(f"Database unavailable (auth features disabled): {e}")
 
     # ── Initialize components ──
@@ -129,10 +136,11 @@ async def lifespan(app: FastAPI):
             ws_manager=ws_manager,
             alert_engine=alert_engine,
             lane_annotation_store=(
-                lane_annotation_store if settings.lane_annotation_auto_tasks_enabled else None
+                lane_annotation_store if settings.lane_annotation_auto_tasks_enabled and settings.road_features_enabled else None
             ),
             metric_store=metric_store,
             dispatch_realtime=True,
+            security_options=settings.kafka_security_options,
         )
         await kafka_service.start()
         if kafka_service._consumer is not None:
@@ -230,7 +238,12 @@ app.include_router(alerts.router, prefix="/api/v1")
 app.include_router(system.router, prefix="/api/v1")
 app.include_router(trajectories.router, prefix="/api/v1")
 app.include_router(video.router, prefix="/api/v1")
-app.include_router(calibration.router, prefix="/api/v1")
+def require_road_features():
+    if not settings.road_features_enabled:
+        raise HTTPException(status_code=503, detail={"code": "ROAD_FEATURES_DISABLED", "message": "路网标注、匹配与导入已关闭"})
+
+
+app.include_router(calibration.router, prefix="/api/v1", dependencies=[Depends(require_road_features)])
 app.include_router(drones_router, prefix="/api/v1")
 app.include_router(telemetry_router, prefix="/api/v1")
 app.include_router(pipelines_router, prefix="/api/v1")
@@ -295,9 +308,12 @@ async def readiness_check():
     services["pipeline_manager"] = "healthy" if pm else "not_configured"
     pipelines_active = pm.get_active_count() if pm else 0
 
+    required_services = ["database", "kafka", "pipeline_manager"]
+    if settings.db_timescale_required:
+        required_services.append("timescaledb")
     all_ready = all(
         services[name] == "healthy"
-        for name in ("database", "kafka", "timescaledb", "pipeline_manager")
+        for name in required_services
     )
     if settings.app_runtime_profile == "replay_v2":
         all_ready = all_ready and services["trajectory_replay"] == "healthy"

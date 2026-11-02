@@ -55,6 +55,32 @@ def canonical(msg_type: str, message_id: str, data: dict, **headers) -> dict:
 
 
 @pytest.mark.asyncio
+async def test_canonical_offset_reuse_keeps_message_identity_and_both_facts():
+    marker = uuid.uuid4().hex[:10]
+    store = PostgresMetricStoreAdapter(async_session_maker)
+    topic = f"uav_statistics_offset_{marker}"
+    ids = [f"offset-first-{marker}", f"offset-second-{marker}"]
+    first = canonical("uav_stats", ids[0], {"cars": 2})
+    second = canonical("uav_stats", ids[1], {"cars": 9})
+    try:
+        assert not (await store.persist(MessageEnvelope(first, topic, 0, 0))).duplicate
+        assert not (await store.persist(MessageEnvelope(second, topic, 0, 0))).duplicate
+        assert (await store.persist(MessageEnvelope(second, topic, 0, 1))).duplicate
+        with pytest.raises(MessageIdentityConflict):
+            await store.persist(MessageEnvelope({**second, "data": {"cars": 99}}, topic, 0, 2))
+        async with async_session_maker() as session:
+            rows = (await session.scalars(select(MessageInbox).where(MessageInbox.topic == topic))).all()
+            assert len(rows) == 2
+            assert {row.offset for row in rows} == {0}
+            assert await session.scalar(select(func.count()).select_from(TrafficMetric).where(TrafficMetric.source_message_id.in_(ids))) == 2
+    finally:
+        async with async_session_maker() as session:
+            await session.execute(delete(TrafficMetric).where(TrafficMetric.source_message_id.in_(ids)))
+            await session.execute(delete(MessageInbox).where(MessageInbox.topic == topic))
+            await session.commit()
+
+
+@pytest.mark.asyncio
 async def test_transactional_inbox_facts_queries_and_identity_conflict():
     marker = uuid.uuid4().hex[:10]
     store = PostgresMetricStoreAdapter(async_session_maker)

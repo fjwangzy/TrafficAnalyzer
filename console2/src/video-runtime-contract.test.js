@@ -1,8 +1,20 @@
 import { readFileSync } from 'node:fs'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { detectorVideoStreamSrc } from './lib/videoStream'
 
 describe('detector video runtime contract', () => {
+  afterEach(() => vi.unstubAllEnvs())
+
+  it('routes production MJPEG through the authenticated same-origin endpoint', () => {
+    vi.stubEnv('PROD', true)
+    const src = detectorVideoStreamSrc({ camera_id: 17, video_stream_url: 'http://127.0.0.1:8117/video' }, 3)
+    const url = new URL(src, window.location.origin)
+    expect(url.origin).toBe(window.location.origin)
+    expect(url.pathname).toBe('/api/v1/video/camera/17')
+    expect(url.searchParams.get('retry')).toBe('3')
+    expect(detectorVideoStreamSrc({ camera_id: -1, video_stream_url: 'http://127.0.0.1:8117/video' })).toBe('')
+  })
+
   it('keeps detector MJPEG off the Vite proxy data path', () => {
     const viteConfig = readFileSync('vite.config.mjs', 'utf8')
     expect(viteConfig).not.toMatch(/['"]\/camera['"]\s*:/)

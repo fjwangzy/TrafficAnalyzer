@@ -180,6 +180,7 @@ class KafkaConsumerStatsTest(unittest.IsolatedAsyncioTestCase):
         self.assertIs(created, fake_consumer)
         self.assertTrue(fake_consumer.started)
         kwargs = constructor.call_args.kwargs
+        self.assertEqual(kwargs["auto_offset_reset"], "latest")
         self.assertEqual(kwargs["max_poll_records"], 1)
         self.assertGreaterEqual(kwargs["max_poll_interval_ms"], 1_800_000)
 

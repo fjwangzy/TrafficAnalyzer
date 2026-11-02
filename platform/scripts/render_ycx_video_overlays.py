@@ -12,7 +12,6 @@ import asyncio
 import json
 import sys
 from pathlib import Path
-from types import SimpleNamespace
 
 import cv2
 import numpy as np
@@ -22,7 +21,6 @@ PLATFORM = ROOT / "platform"
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(PLATFORM))
 
-from audit_ycx_readonly_schema import _credential_values  # noqa: E402
 from app.services.ycx_road_import import YcxRoadImporter  # noqa: E402
 from bootstrap_mp4new_sources import LOCAL_REPLAY_CATALOG  # noqa: E402
 from services.SrtTelemetryParser import SrtTelemetryParser  # noqa: E402
@@ -123,12 +121,8 @@ def _project_geometry(geometry: dict | None, inverse_h: np.ndarray) -> list[np.n
 
 
 async def render(credentials_file: Path, output_dir: Path, timestamp_sec: float) -> dict:
-    values = _credential_values(credentials_file)
-    importer = YcxRoadImporter(SimpleNamespace(
-        ycx_db_host=values["host"], ycx_db_port=int(values["port"]),
-        ycx_db_user=values["user"], ycx_db_password=values["pwd"],
-        ycx_db_name=values["db"], ycx_db_schema=values["schame"],
-    ))
+    from app.core.config import settings
+    importer = YcxRoadImporter(settings)
     output_dir.mkdir(parents=True, exist_ok=True)
     summary = []
     for item in LOCAL_REPLAY_CATALOG:
@@ -185,7 +179,7 @@ async def render(credentials_file: Path, output_dir: Path, timestamp_sec: float)
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--credentials-file", type=Path, required=True)
+    parser.add_argument("--credentials-file", type=Path, help="Deprecated; Doris is configured in platform/.env")
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--timestamp-sec", type=float, default=0.0)
     args = parser.parse_args()

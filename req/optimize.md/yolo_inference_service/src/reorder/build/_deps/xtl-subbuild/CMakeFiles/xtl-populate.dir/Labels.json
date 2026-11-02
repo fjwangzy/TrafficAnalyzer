@@ -1,0 +1,46 @@
+{
+	"sources" : 
+	[
+		{
+			"file" : "/root/project/model_deployment/device_run_new/service_new_new_new/yolo_inference_service/src/reorder/build/_deps/xtl-subbuild/CMakeFiles/xtl-populate"
+		},
+		{
+			"file" : "/root/project/model_deployment/device_run_new/service_new_new_new/yolo_inference_service/src/reorder/build/_deps/xtl-subbuild/CMakeFiles/xtl-populate.rule"
+		},
+		{
+			"file" : "/root/project/model_deployment/device_run_new/service_new_new_new/yolo_inference_service/src/reorder/build/_deps/xtl-subbuild/CMakeFiles/xtl-populate-complete.rule"
+		},
+		{
+			"file" : "/root/project/model_deployment/device_run_new/service_new_new_new/yolo_inference_service/src/reorder/build/_deps/xtl-subbuild/xtl-populate-prefix/src/xtl-populate-stamp/xtl-populate-build.rule"
+		},
+		{
+			"file" : "/root/project/model_deployment/device_run_new/service_new_new_new/yolo_inference_service/src/reorder/build/_deps/xtl-subbuild/xtl-populate-prefix/src/xtl-populate-stamp/xtl-populate-configure.rule"
+		},
+		{
+			"file" : "/root/project/model_deployment/device_run_new/service_new_new_new/yolo_inference_service/src/reorder/build/_deps/xtl-subbuild/xtl-populate-prefix/src/xtl-populate-stamp/xtl-populate-download.rule"
+		},
+		{
+			"file" : "/root/project/model_deployment/device_run_new/service_new_new_new/yolo_inference_service/src/reorder/build/_deps/xtl-subbuild/xtl-populate-prefix/src/xtl-populate-stamp/xtl-populate-install.rule"
+		},
+		{
+			"file" : "/root/project/model_deployment/device_run_new/service_new_new_new/yolo_inference_service/src/reorder/build/_deps/xtl-subbuild/xtl-populate-prefix/src/xtl-populate-stamp/xtl-populate-mkdir.rule"
+		},
+		{
+			"file" : "/root/project/model_deployment/device_run_new/service_new_new_new/yolo_inference_service/src/reorder/build/_deps/xtl-subbuild/xtl-populate-prefix/src/xtl-populate-stamp/xtl-populate-patch.rule"
+		},
+		{
+			"file" : "/root/project/model_deployment/device_run_new/service_new_new_new/yolo_inference_service/src/reorder/build/_deps/xtl-subbuild/xtl-populate-prefix/src/xtl-populate-stamp/xtl-populate-test.rule"
+		},
+		{
+			"file" : "/root/project/model_deployment/device_run_new/service_new_new_new/yolo_inference_service/src/reorder/build/_deps/xtl-subbuild/xtl-populate-prefix/src/xtl-populate-stamp/xtl-populate-update.rule"
+		}
+	],
+	"target" : 
+	{
+		"labels" : 
+		[
+			"xtl-populate"
+		],
+		"name" : "xtl-populate"
+	}
+}

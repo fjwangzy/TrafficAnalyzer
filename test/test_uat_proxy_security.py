@@ -21,7 +21,7 @@ def test_console_proxy_enforces_uat_upload_security_and_cache_contract():
 
 
 def test_root_proxy_never_serves_media_without_platform_authorization():
-    config = _read("services/nginx/nginx.conf")
+    config = _read("console2/nginx.conf")
 
     assert "client_max_body_size 8g;" in config
     assert "alias /hls/;" not in config

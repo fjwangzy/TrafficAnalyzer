@@ -1,5 +1,46 @@
 # API_CONTRACTS.md — TrafficAnalyzer API 契约
 
+## 2026-10-19 Console任务启动等待
+
+Console创建Mission及retry会同步等待检测器就绪，客户端专用timeout改180秒，覆盖当前生产120秒就绪门禁及启动准备；普通API仍10秒。REST路径/响应/服务端就绪判断不变，不自动重试创建，不因浏览器超时假定服务端任务已取消。
+
+## 2026-10-19 登记视频录制位置
+
+`GET /sources`及按无人机列出来源可返回可空`recording_position`，字段为`position_gcj02:{longitude,latitude}`、
+`coordinate_system:GCJ02`、`source_time_sec`、`recorded_at`。它来自配对本地遥测且遵循视频同步offset，
+仅供“素材位置”显示，不表示实时飞行、已验证路口中心或地理/路网计算质量。缺失GPS或文件异常返回null。
+首页无路口快照/路网关闭时仍使用该位置显示登记视频，点击保留source_profile_id与intersection_id。
+
+## 2026-10-19 测绘登记来源的生产路径
+
+测绘source_profile_id导入及事件测绘支持登记位置`/app/test_videos/...`或`test_videos/...`，
+内部统一相对asset_key后继续原有素材根白名单检查；不开放请求中的任意绝对路径。
+`GET /sources`对启用本地invalid/unknown来源按现有素材重检并刷新派生校验状态，
+响应字段不变，已知遥测缺口保持degraded，enabled及现场路径/配置不改。
+
+## 2026-10-19 用户授权的最新数据优先降级
+
+正式及Replay V2消息身份均由稳定消息ID和内容哈希决定，运输offset只用于审计，Topic重建复用offset不拒收新身份。
+无有效消费断点时auto_offset_reset=latest；正常消费仍先入库再广播/提交。
+处理或提交异常跳受影响分区当前log-end并提交，不再seek失败offset；无记录上下文的解码/消费异常对当前分配分区同样处理。
+broker不可达时有界重试并退避重连，重连后首轮消费先切最新位置。异常与恢复offset写日志，跳过的历史区间不自动补回。
+契约及身份冲突仍拒绝/隔离，不允许未经校验直接广播。该规则按用户授权优先功能恢复，不代表无损消费或完整事实对账。
+
+## 2026-10-19 Replay V2消息身份
+
+Replay V2以稳定message_id和payload哈希去重：同ID同内容不重复写事实，同ID异内容仍拒绝。
+Kafka topic/partition/offset保留为运输审计信息，不视作跨Topic重建生命周期的唯一消息身份。
+消息信封、REST与WebSocket字段不变；本机恢复证据见`MONITORING_INGESTION_RECOVERY_20261019.md`。
+
+## 2026-10-18 慢帧FPS口径修正
+
+uav_stats/v1的fps保持数值字段，改为monotonic墙钟窗口中的帧间隔数/总耗时，保留跨两秒窗口的一段间隔，小数保留三位；首帧无间隔时为0。处理间隔大于两秒仍计算低FPS，不再因窗口清空而恒为0。inference_ms仍为单处理帧predict耗时，pipeline_processing_ms含读取后排队/检测/分析至统计生成的墙钟时间；这些值均不是浏览器MJPEG接收帧率。Topic、消息类型与通道不变。
+
+## 2026-10-18 生产实时画面
+
+生产Console使用同源`GET /api/v1/video/camera/{camera_id}?retry=N`，由HttpOnly媒体会话鉴权后代理当前运行检测器；不把localhost检测器端口当浏览器地址。Mac开发直连契约保留。
+实时FPS/推理/平均速度来自真实uav_stats；路网关闭不隐藏通用统计。只读diagnose_live工具检查当前任务身份、Kafka样本/offset及DB写入，不提交消费offset或更改业务数据。
+
 > 2026-07-16 本机运行时已切到 canonical 契约。带有旧 Topic、旧 `msg_type` 或旧观测链路的后续章节仅是历史快照，不再存在运行时兼容；REST 路径保持不变。
 
 ## 0. canonical 消息与持久化契约（本机已实施）
@@ -92,7 +133,7 @@ Topic 的单复数按上表固定。`msg_type` 必须与 Topic 映射一致；�
 
 消费者必须先校验 `msg_type + schema_version`，再通过长期 canonical 表 `uav_message_inbox` 的唯一键 `(source_system, message_id)` 做全局幂等；事实写入与 inbox 置为 `processed` 必须在同一数据库事务提交。未知 major 版本进入 `uav_message_dead_letters`，不得按旧结构猜测解析。
 
-`uav_message_inbox` 保存 `payload_hash/status/topic/partition/offset/first_seen_at/processed_at/fact_refs`，并以 `dispatch_status/dispatch_attempts/last_dispatch_error/last_dispatch_attempt_at/dispatched_at` 记录事实提交后的副作用恢复状态。相同 ID、相同 hash 的重放不重复写事实；仅 `dispatched` 可跳过 WS/告警，`pending` 必须继续派发。相同 ID、不同 hash 视为消息身份冲突，必须隔离并告警，不能覆盖原事实。`(topic, partition, offset)` 也是不可复用的传输身份：若它已绑定另一 `message_id`，消费者必须以 `MessageTransportConflict` 隔离该记录并推进 offset，不能让唯一键异常钉住分区、饿死其他来源 Topic。hypertable 唯一键只是第二层防重，不能替代 inbox 的跨时间全局唯一性。
+`uav_message_inbox` 保存 `payload_hash/status/topic/partition/offset/first_seen_at/processed_at/fact_refs`，并以 `dispatch_status/dispatch_attempts/last_dispatch_error/last_dispatch_attempt_at/dispatched_at` 记录事实提交后的副作用恢复状态。相同 ID、相同 hash 的重放不重复写事实；仅 `dispatched` 可跳过 WS/告警，`pending` 必须继续派发。相同 ID、不同 hash 视为消息身份冲突，必须隔离并告警，不能覆盖原事实。`(topic, partition, offset)` 只作为运输审计位置，Topic重建后可复用；不同消息ID不得因旧offset而拒收。hypertable 唯一键只是第二层防重，不能替代 inbox 的跨时间全局唯一性。
 
 ### 0.4 各消息 `data` 边界
 
@@ -148,7 +189,7 @@ WebSocket 推送沿用 `{channel, type, data, ts}` 外壳，但 `type` 和 UAV �
 | `uav_ai_event` | `uav_ai_events`、`uav_event_outbox`、`uav_event_delivery_attempts`、`uav_evidence_packages`、`uav_evidence_items` | 普通表 |
 | `uav_ai_event_feedback` | `uav_event_feedback`；同步更新 `uav_ai_events` 审核摘要 | 普通表 |
 
-入站 Kafka 的 schema/身份冲突等永久错误进入普通表 `uav_message_dead_letters`，耐久提交后才推进 offset；EventDelivery/outbox 超过重试上限的外发失败进入 `uav_dead_letters`。两者都不是另一个对外业务 Topic；是否增加运维专用 Topic需另行评审。
+入站 Kafka 的 schema/身份冲突等永久错误进入普通表 `uav_message_dead_letters`，正常路径耐久提交后推进 offset；隔离存储异常时按最新数据降级规则记录并跳至最新。EventDelivery/outbox 超过重试上限的外发失败进入 `uav_dead_letters`。两者都不是另一个对外业务 Topic；是否增加运维专用 Topic需另行评审。
 
 所有 Kafka 类型还共同写入 `uav_message_inbox` 作为全局幂等与消费审计；该表不是迁移期临时表，目标系统长期保留。
 
@@ -183,11 +224,11 @@ WebSocket 推送沿用 `{channel, type, data, ts}` 外壳，但 `type` 和 UAV �
 
 #### Consumer 事务与 offset 约束（P0）
 
-- 目标 Kafka consumer 必须关闭 `enable_auto_commit`；禁止在数据库事务完成前提交 offset。
+- Kafka consumer 必须关闭 `enable_auto_commit`；正常路径在数据库事务完成后提交 offset，异常路径按用户授权跳最新并记录恢复位置。
 - 标准顺序为：拉取消息 → 校验 envelope/hash → 开启 `road9` 事务 → 写/锁定 `uav_message_inbox` → 写 canonical 事实 → 更新 inbox `processed/fact_refs` → 提交数据库事务 → 手动提交 Kafka offset。
-- 数据库失败必须回滚且不提交 offset，使消息可重放。若数据库已提交但 offset 尚未提交即崩溃，重放由 inbox 返回相同事实引用后再提交 offset，不能重复写事实。
-- schema/身份冲突等不可重试消息只有在 `uav_message_dead_letters` 隔离记录耐久提交后才能提交 offset，禁止“记录日志后跳过”。该表与对外投递失败使用的 `uav_dead_letters` 分离。
-- 因此目标语义是 Kafka at-least-once + inbox/事实幂等，形成业务上的 exactly-once effect；不得宣称 Kafka 与 PostgreSQL 存在未实现的分布式事务。
+- 数据库失败必须回滚，随后跳受影响分区最新位置并提交；正常崩溃重放仍由 inbox 返回既有事实引用，不重复写事实。
+- schema/身份冲突仍拒绝并写 `uav_message_dead_letters`；隔离成功后推进当前消息，隔离存储也失败时记录异常并切最新，不能原位阻塞。该表与对外投递失败使用的 `uav_dead_letters` 分离。
+- 正常成功路径以 inbox/事实幂等防止重复；异常降级允许跳过积压，因此不保证全链路at-least-once或完整事实覆盖，也不宣称Kafka与PostgreSQL具有分布式事务。
 
 #### 遗留统计双写迁移约束（P0）
 
@@ -234,13 +275,26 @@ WebSocket 推送沿用 `{channel, type, data, ts}` 外壳，但 `type` 和 UAV �
 
 `bbox` 非 4 个数、经纬度越界或最小值不小于最大值返回 `422 invalid_bbox`。`limit` 为 1～1000，默认 200；`offset` 不小于 0。road9 查询超时或 SQLAlchemy 依赖异常返回 `503 dashboard_dependency_unavailable`，前端可保留最后成功快照并重试，不得回退 Mock。此内部查询契约解决实现者选择项，但正式项目范围、权限过滤、点位聚合/zoom、缓存、SLA 和错误预算仍由 S8-TBD-002/006/007/009 书面冻结。
 
-`situation` 连接 PostgreSQL database=`ycx`，只读联结 `road9.dim_data_version/dim_inter_info/dim_link_info` 与 `xianchang.dws_inter_evaluation_5min_mm/dws_inter_link_status_5min_mm`。查询只使用启用道路版本，过滤删除态、无效坐标、空或无法转换的几何；LineString 和 MultiLineString 统一返回 `paths_gcj02`。路口范围取指标表全部有效 `inter_id`，路段范围取全部有效 `inter_id + link_id`，所选时槽无指标时仍返回范围对象并将状态置为 `missing`。`summary` 同时提供路口 `good/near_saturated/oversaturated/missing` 与路段 `smooth_segments/slow_segments/congested_segments/missing_segments` 汇总，首页前三个 KPI 直接读取该响应。
+`situation` 统一只读 Doris `ycx_xc`，同库联结 `dim_inter_info/dim_link_info` 与
+`dws_tfc_inter_index_m_5mi/dws_tfc_link_index_m_5mi`。道路版本由 `dim_data_version.is_enabled=1`
+或显式 `YCX_ROAD_VERSION` 取得；选择匹配版本的两表共同最新月份，过滤 `is_deleted`，
+无当槽指标仍保留该月范围并置 `missing`。接口不访问瀚高/PostGIS。
 
-本机原生 Platform 从权限为 `600`、Git 忽略的 `platform/.env` 读取 `YCX_*` 只读连接配置；
-`mac_local_platform.sh` 不注入空值覆盖该文件。配置缺失或连接失败时接口返回
-`503 dashboard_dependency_unavailable`，Console2 必须保留明确空态，不能用 mock 补齐。
+`source` 增加 `stat_month/intersection_table/segment_table/intersection_metric=delay_index` 和
+`intersection_aggregation=max_direction_monthly_mean`。路口新增 `delay_index/avg_speed_kmh`，
+前者为方向月均值最大值，后者为方向均值；`saturation_max/saturation_avg/level_of_service` 保留 null。
+路段以 `delay_index_avg/stop_time_sec_avg/avg_nostop_speed_avg` 映射既有字段，
+`queue_len_est_m` 为 null，`inter_id` 取当前版本 Link 的 `t_inter_id`。
+路口/路段状态均为 `smooth(<1.5)/slow(1.5..2.0)/congested(>2.0)/missing`；
+路口 `summary` 使用 `smooth/slow/congested/missing`，路段继续使用对应 `*_segments`。
+`paths_gcj02`、不透明源 ID、候选车道质量及无人机事实契约保持。
 
-缓存键为 `road_version + day_of_week + step_index`，TTL 300 秒，LRU 上限 64。命中返回 `cache.status=hit`；外部连接失败且同一星期/时槽存在最近成功值时返回 `cache.status=stale/stale=true`；无缓存返回 `503 dashboard_dependency_unavailable`。该接口只用于首页态势展示，不允许写服务器、不写本地库，也不改变 Mission、检测、无人机统计或事件事实。
+本机从 Git 忽略、权限 `600` 的 `platform/.env` 读取 `DORIS_MYSQL_*` 和 `DORIS_DATABASE`，
+启动脚本不以空环境变量覆盖。SQL 仅执行 SELECT 并绑定业务参数，不向公网或本地复制指标。
+连接失败无缓存时返回受控 `503 DORIS_*`；没有共同指标月份返回 `DORIS_METRICS_EMPTY`。
+缓存键含 `road_version + stat_month + day_of_week + step_index`，TTL 300 秒、LRU 上限64；
+只有相同星期/时槽有成功缓存时可返回 `cache.stale=true`，不会改连瀚高或用 mock 补齐。
+全城 JSON 较大，Console2 对该接口单独使用60秒超时，其他接口10秒不变。
 
 主任首屏默认只订阅 `uav_alerts` 和 `uav_system`；选中路口后订阅 `uav_intersection:{intersection_id}`，需要无人机实时详情时再订阅 `uav_telemetry:{drone_id}`。禁止同时订阅城市全部路口明细频道。若未来新增全局路口状态增量，channel 和 `type` 必须以 `uav_` 开头并经过容量、恢复和幂等评审。
 
@@ -843,7 +897,7 @@ Content-Type: application/json
 
 ### 基础 URL
 - 本地开发：`http://localhost:8000`
-- Docker Compose：Platform API `http://localhost:8000`；Console `http://localhost:8080`（Console 内部通过 `/api/` 代理到 `platform:8000`）
+- Docker Compose：Platform API `http://localhost:8000`；Console `http://localhost:8009`（Console 内置代理通过 `/api/` 访问 `platform:8000`，内网Platform不直接发布宿主机端口）
 
 ### 健康检查端点（无需认证）
 
@@ -1570,7 +1624,7 @@ canonical 完成事实，不能先过滤旧版本记录再去重，否则分类�
 | 方法 | 路径 | 约束 |
 | --- | --- | --- |
 | POST | `/calibration/channelized-maps/bootstrap/{inter_id}` | 管理员操作；本地存在则不访问 YCX，本地不存在才只读导入该路口 |
-| POST | `/calibration/road-context/import-ycx` | YCX 只读事务；WKT 通过 PostGIS `ST_GeomFromText(...,4326)` 读取；ID 按不透明 geomhash 字符串处理 |
+| POST | `/calibration/road-context/import-ycx` | Doris SELECT；已有 Shapely 解码 WKT；ID 按不透明 geomhash 字符串处理；不存在返回404 DORIS_INTERSECTION_NOT_FOUND |
 | POST | `/calibration/channelized-maps` | 管理员从外部完整几何创建新的 `draft`；不得用于浏览器自行复制已发布版本 |
 | POST | `/calibration/channelized-maps/{map_version_id}/derive-draft` | 服务端从非 retired 版本派生新 `draft`，复制 Lane/Link/Feature 与绑定并在 topology/quality 写入 `derived_from_map_version_id`；源版本保持不可变，复核状态归零 |
 | POST | `/calibration/lane-keyframe-extractions` | 管理员为当前路口选择已启用、`valid`、本地 SourceProfile；请求必须逐项确认五项测绘预检。服务端在同一事务内创建 `source=lane_calibration` 测绘任务、完成预检并将原视频/遥测不可变引用入抽帧队列；支持 `Idempotency-Key` |
@@ -1716,3 +1770,25 @@ Console2 将 `cursor_sec` 作为窗口结束游标，将 `cursor_sec - window_se
 Dashboard 路口响应继续以 `center_gcj02={longitude, latitude}` 为坐标权威；bbox 按同一字段比较，不能读取已移除的顶层 lon/lat，也不添加旧坐标适配字段。
 
 Replay V2验收按 running→sealed 两条生命周期信封更新一条Mission事实对账；记录Kafka消息数和expected_facts分别解释，不要求两条消息生成两行Mission。Stats允许当前实时BEV有界尾迹（本机默认200条、每条30点），禁止顶层完整journey/无界历史轨迹。EOF剩余持久消息不得报告成功，周期样本关闭超时的drop_reason为 `shutdown_drain_timeout`。
+
+## 2026-10-15 内网发布传输配置
+
+当前完整 Replay V2 数据契约保持不变。所有检测与证据发布者及平台消费者统一使用
+`KAFKA_SECURITY_PROTOCOL`、`KAFKA_SASL_MECHANISM`、`KAFKA_SASL_USERNAME`、
+`KAFKA_SASL_PASSWORD`；生产为 SASL_PLAINTEXT/PLAIN，不回退过渡 9092。
+新增仅生产显式启用的 `INTRANET_HTTP_ENABLED`，用于 IP+HTTP 场景关闭 Cookie Secure；
+不绕过 JWT、媒体权限、HttpOnly/SameSite 或显式 CORS 校验。生产唯一外部入口为 8009。
+Topic/消费者组权限、现有 V2 候选执法消息的消费边界见部署手册。
+
+## 2026-10-17 生产暂关闭路网与可选依赖
+
+ROAD_FEATURES_ENABLED=false时全部/api/v1/calibration/*接口以503、detail.code=ROAD_FEATURES_DISABLED拒绝；
+不启动自动标注任务，不改变已保存标定/路网记录。/dashboard/situation返回同码；典型态势图层暂停。
+其他视频、检测、统计、告警和轨迹回放契约不变。Doris或YCX恢复使用后失败返回受控503错误码/处理建议，
+不回传原始异常、SQL或密码；同槽历史缓存规则保留，不生成替代指标。
+DB_TIMESCALE_REQUIRED=false且扩展未启用时/ready的status可为ready、services.timescaledb为degraded；
+数据库/Kafka/管道/回放必需检查仍决定ready。该字段不证明业务ACL或容量验收。
+
+2026-10-17生产连接更新：瀚高UAV应用目标改为ycx_prod.drone、账号sysdba；
+预检/初始化/权限与版本查询按Settings核对实际目标，不写死旧xinchan.ycx_drone。
+REST/Kafka/WebSocket及Doris只读契约不变，本机road9默认不变。

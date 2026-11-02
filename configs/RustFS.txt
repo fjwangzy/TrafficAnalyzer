@@ -1,0 +1,8 @@
+RustFS
+http://37.12.14.166:9000
+drone-data
+drone-data@2026
+桶名：drone-data
+Xjml2Mn0gbnH4FFjeadL
+qzDIKAYYGQUaAG4FaDBDx73GY0aV5RyRLpCrI9lE
+

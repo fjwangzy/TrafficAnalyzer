@@ -1,0 +1,2 @@
+/usr/bin/ar qc libdrn_c_client.a CMakeFiles/drn_c_client.dir/control_client.cpp.o CMakeFiles/drn_c_client.dir/update_subscriber.cpp.o CMakeFiles/drn_c_client.dir/data_plane_client.cpp.o
+/usr/bin/ranlib libdrn_c_client.a

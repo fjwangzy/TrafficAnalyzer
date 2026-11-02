@@ -1,0 +1,18 @@
+[Unit]
+Description=DRN YOLO Inference Service (service_ultimate)
+After=network.target device-run-rtsp-receive.service
+Wants=device-run-rtsp-receive.service
+
+[Service]
+Type=notify
+NotifyAccess=main
+Restart=on-failure
+RestartSec=3
+TimeoutStartSec=60
+TimeoutStopSec=30
+LimitNOFILE=65536
+WorkingDirectory=@PROJECT_ROOT@
+ExecStart=@PROJECT_ROOT@/device_run_new/service_ultimate/yolo_inference_service/build/src/yolo_inference_service --config @PROJECT_ROOT@/device_run_new/service_ultimate/config_files/services_config.yaml
+
+[Install]
+WantedBy=multi-user.target

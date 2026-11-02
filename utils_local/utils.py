@@ -5,6 +5,7 @@ import numpy as np
 from shapely.geometry import Point, Polygon
 
 logger_profile = logging.getLogger("profile")
+logger = logging.getLogger(__name__)
 
 
 def check_and_set_env_var(var_name, value_new):
@@ -15,9 +16,9 @@ def check_and_set_env_var(var_name, value_new):
     value = os.getenv(var_name)
     if value is None:
         os.environ[var_name] = str(value_new)
-        print(f"值 {value_new} 已保存到环境变量 {var_name} 中。")
+        logger.info("ENV_DEFAULT variable=%s", var_name)
     else:
-        print(f"环境变量 {var_name} 已设置: {value}")
+        logger.info("ENV_CONFIGURED variable=%s", var_name)
 
 
 def profile_time(func):

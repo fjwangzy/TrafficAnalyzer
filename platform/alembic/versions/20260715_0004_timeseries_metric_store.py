@@ -260,24 +260,15 @@ def _upgrade_inbox() -> None:
 
 
 def _enable_timescale_if_available() -> None:
+    from app.core.config import settings
+    from app.core.timeseries import configure_timescale
     bind = op.get_bind()
-    available = bind.execute(
-        sa.text("SELECT EXISTS (SELECT 1 FROM pg_available_extensions WHERE name='timescaledb')")
-    ).scalar()
-    if not available:
-        return
-    op.execute("CREATE EXTENSION IF NOT EXISTS timescaledb")
-    for table, column in (
-        ("uav_traffic_metrics", "observed_at"),
-        ("uav_system_metrics", "observed_at"),
-        ("uav_telemetry_metrics", "observed_at"),
-        ("uav_track_points", "observed_at"),
-        ("uav_conflict_events", "occurred_at"),
-    ):
-        op.execute(
-            f"SELECT create_hypertable('{table}', by_range('{column}'), "
-            "if_not_exists => TRUE, migrate_data => TRUE)"
-        )
+    if settings.deployment_mode != "production":
+        available = bind.scalar(sa.text("SELECT EXISTS (SELECT 1 FROM pg_available_extensions WHERE name='timescaledb')"))
+        if available:
+            op.execute("CREATE EXTENSION IF NOT EXISTS timescaledb")
+    # Production extensions belong to the DBA; absence keeps ordinary tables.
+    configure_timescale(bind)
 
 
 def upgrade() -> None:

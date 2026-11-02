@@ -8,6 +8,8 @@ from typing import Any
 
 def load_runtime_map_bundle(config: dict | None = None) -> dict | None:
     """Load and validate the canonical runtime map from env or node config."""
+    if os.environ.get("ROAD_FEATURES_ENABLED", "true").lower() == "false":
+        return None
     cfg = (config or {}).get("road_map_matching", {})
     raw: Any = os.environ.get("RUNTIME_MAP_BUNDLE_JSON") or cfg.get(
         "runtime_map_bundle"

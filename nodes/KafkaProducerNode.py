@@ -19,6 +19,7 @@ from json import dumps
 
 import cv2
 from kafka import KafkaProducer
+from utils_local.kafka_security import kafka_security_options
 
 from elements.FrameElement import FrameElement
 from elements.VideoEndBreakElement import VideoEndBreakElement
@@ -69,6 +70,7 @@ class KafkaProducerNode:
         self.last_send_time = None
         self.kafka_producer = KafkaProducer(
             bootstrap_servers=bootstrap_servers,
+            **kafka_security_options(),
             value_serializer=lambda x: dumps(x).encode("utf-8"),
             # 增加重试和超时配置以提高可靠性
             retries=3,
@@ -325,14 +327,16 @@ class KafkaProducerNode:
 
     def _compute_fps(self) -> float:
         """基于wall-clock滑动窗口计算实时FPS。"""
-        now = time.time()
+        now = time.monotonic()
         self._fps_timestamps.append(now)
         cutoff = now - self._fps_window_sec
-        self._fps_timestamps = [t for t in self._fps_timestamps if t > cutoff]
+        # Keep one interval across the cutoff, including when a frame takes >2s.
+        while len(self._fps_timestamps) > 2 and self._fps_timestamps[1] <= cutoff:
+            self._fps_timestamps.pop(0)
         if len(self._fps_timestamps) >= 2:
             dt = self._fps_timestamps[-1] - self._fps_timestamps[0]
             if dt > 0:
-                return round(len(self._fps_timestamps) / dt, 1)
+                return round((len(self._fps_timestamps) - 1) / dt, 3)
         return 0.0
 
     @staticmethod

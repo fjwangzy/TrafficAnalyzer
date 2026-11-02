@@ -19,38 +19,15 @@ TABLE = "uav_replay_v2_traffic_metric_samples"
 
 
 def upgrade() -> None:
+    from app.core.config import settings
+    from app.core.timeseries import configure_timescale
     bind = op.get_bind()
-    available = bind.execute(
-        sa.text("SELECT EXISTS (SELECT 1 FROM pg_available_extensions WHERE name='timescaledb')")
-    ).scalar()
-    if not available:
-        return
-
-    op.execute("CREATE EXTENSION IF NOT EXISTS timescaledb")
-    # Timescale requires every uniqueness constraint to include the partition
-    # column.  The V2 inbox remains the global message idempotency boundary.
-    op.execute(
-        f"ALTER TABLE {TABLE} DROP CONSTRAINT IF EXISTS {TABLE}_pkey"
-    )
-    op.execute(
-        f"ALTER TABLE {TABLE} ADD CONSTRAINT {TABLE}_pkey PRIMARY KEY (id, sampled_at)"
-    )
-    op.execute(
-        f"SELECT create_hypertable('{TABLE}', by_range('sampled_at'), "
-        "if_not_exists => TRUE, migrate_data => TRUE)"
-    )
-    op.execute(
-        f"ALTER TABLE {TABLE} SET ("
-        "timescaledb.compress, "
-        "timescaledb.compress_segmentby = 'mission_id,inter_id,source_profile_id', "
-        "timescaledb.compress_orderby = 'sampled_at DESC')"
-    )
-    op.execute(
-        f"SELECT add_compression_policy('{TABLE}', INTERVAL '7 days', if_not_exists => TRUE)"
-    )
-    op.execute(
-        f"SELECT add_retention_policy('{TABLE}', INTERVAL '90 days', if_not_exists => TRUE)"
-    )
+    if settings.deployment_mode != "production":
+        available = bind.scalar(sa.text("SELECT EXISTS (SELECT 1 FROM pg_available_extensions WHERE name='timescaledb')"))
+        if available:
+            op.execute("CREATE EXTENSION IF NOT EXISTS timescaledb")
+    # Also used by explicit init-db after the DBA enables the extension later.
+    configure_timescale(bind, replay_v2=True)
 
 
 def downgrade() -> None:

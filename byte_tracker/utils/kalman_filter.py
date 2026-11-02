@@ -1,6 +1,7 @@
 # vim: expandtab:ts=4:sw=4
 import numpy as np
 import scipy.linalg
+from utils_local.runtime_logging import stage
 
 
 """
@@ -213,11 +214,12 @@ class KalmanFilter(object):
         """
         projected_mean, projected_cov = self.project(mean, covariance)
 
-        chol_factor, lower = scipy.linalg.cho_factor(
-            projected_cov, lower=True, check_finite=False)
-        kalman_gain = scipy.linalg.cho_solve(
-            (chol_factor, lower), np.dot(covariance, self._update_mat.T).T,
-            check_finite=False).T
+        with stage("bytetrack.kalman_update", dims=projected_cov.shape[0]):
+            chol_factor, lower = scipy.linalg.cho_factor(
+                projected_cov, lower=True, check_finite=False)
+            kalman_gain = scipy.linalg.cho_solve(
+                (chol_factor, lower), np.dot(covariance, self._update_mat.T).T,
+                check_finite=False).T
         innovation = measurement - projected_mean
 
         new_mean = mean + np.dot(innovation, kalman_gain.T)
@@ -260,11 +262,17 @@ class KalmanFilter(object):
         if metric == 'gaussian':
             return np.sum(d * d, axis=1)
         elif metric == 'maha':
-            cholesky_factor = np.linalg.cholesky(covariance)
-            z = scipy.linalg.solve_triangular(
-                cholesky_factor, d.T, lower=True, check_finite=False,
-                overwrite_b=True)
-            squared_maha = np.sum(z * z, axis=0)
-            return squared_maha
+            with stage("bytetrack.mahalanobis_solve", dims=covariance.shape[0], measurements=len(measurements)):
+                cholesky_factor = np.linalg.cholesky(covariance)
+                if only_position:
+                    # Two-row forward substitution avoids threaded BLAS for each shadow track.
+                    x = d[:, 0] / cholesky_factor[0, 0]
+                    y = (d[:, 1] - cholesky_factor[1, 0] * x) / cholesky_factor[1, 1]
+                    return x * x + y * y
+                z = scipy.linalg.solve_triangular(
+                    cholesky_factor, d.T, lower=True, check_finite=False,
+                    overwrite_b=True)
+                squared_maha = np.sum(z * z, axis=0)
+                return squared_maha
         else:
             raise ValueError('invalid distance metric')

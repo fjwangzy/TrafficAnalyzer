@@ -1,0 +1,11 @@
+{
+  "platform": "linux/arm64",
+  "reference": "timescale/timescaledb@sha256:909e2c7577c074517c8936b6d8799294b33f25fb5bad978a2199250665f1ce1a",
+  "upstream_image_id": "sha256:b385e3392ebef4bcbebc1317b9febe89dfd5b096e00cf3b609c555644ffd54ac",
+  "postgresql": "17.10",
+  "postgis": "3.6.4",
+  "postgis_source": "https://github.com/postgis/postgis/archive/3.6.4.tar.gz",
+  "postgis_sha256": "4f80e1a4d227f088ae818f79180debd5894c075615823e0f556f73479cf1f200",
+  "recipe_reference": "https://github.com/postgis/docker-postgis/blob/master/17-3.6/alpine/Dockerfile",
+  "timescaledb": "2.28.2"
+}

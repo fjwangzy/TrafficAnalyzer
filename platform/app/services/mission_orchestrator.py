@@ -5,11 +5,13 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 import os
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
+from functools import lru_cache
 from typing import Protocol
 from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -42,6 +44,7 @@ from app.schemas.mission import (
 from app.services.pipeline_manager import detector_video_stream_url
 from app.services.road_context import RoadContext
 from app.services.runtime_capabilities import capability_report_from_runtime_quality
+from utils_local.coordinates import normalize_telemetry_position
 
 logger = logging.getLogger(__name__)
 
@@ -180,6 +183,27 @@ def _masked_location(location: str) -> str:
     return Path(location).name or "***"
 
 
+@lru_cache(maxsize=128)
+def _recording_position(path: str, source_type: str, offset: float, fingerprint: tuple[int, int]) -> dict | None:
+    # shortcut: read-only materials use size/mtime caching; add content hashes for mutable stores.
+    from services.SrtTelemetryParser import SrtTelemetryParser
+    from services.TelemetryFileReader import TelemetryFileReader
+
+    reader = SrtTelemetryParser(path) if source_type == "srt" else TelemetryFileReader(path)
+    for record in reader.records:
+        timestamp = float(record.get("timestamp") or 0)
+        lon, lat = float(record.get("longitude") or 0), float(record.get("latitude") or 0)
+        if not math.isfinite(timestamp) or timestamp < offset or not (-180 <= lon <= 180 and -90 <= lat <= 90) or (lon == 0 and lat == 0):
+            continue
+        return {
+            "position_gcj02": normalize_telemetry_position(record)["position_gcj02"],
+            "coordinate_system": "GCJ02",
+            "source_time_sec": timestamp,
+            "recorded_at": record.get("recorded_at"),
+        }
+    return None
+
+
 class SourceValidator:
     def __init__(self, roots: list[str] | None = None):
         project_root = Path(
@@ -237,6 +261,8 @@ class SourceValidator:
                     self.validate_dji_json(path)
                 else:
                     raise MissionError("local telemetry must use srt or file", code="source_type_mismatch")
+                if (telemetry.config or {}).get("known_degradation"):
+                    return "degraded", telemetry.config["known_degradation"]
                 return "valid", None
             if urlsplit(video.location).scheme.lower() != "rtsp":
                 raise MissionError("realtime video must use rtsp", code="video_scheme_invalid")
@@ -245,6 +271,22 @@ class SourceValidator:
             return "degraded", "realtime_reachability_unverified"
         except MissionError as exc:
             return "invalid", exc.code
+
+    def recording_position(self, telemetry: TelemetrySourceRecord) -> dict | None:
+        if telemetry.mode != "local" or telemetry.source_type not in {"srt", "file"}:
+            return None
+        try:
+            path = self.resolve_local(telemetry.location, ".srt" if telemetry.source_type == "srt" else (".json", ".txt"))
+            offset = float((telemetry.config or {}).get("time_offset_sec") or 0)
+            if not math.isfinite(offset):
+                return None
+            stat = path.stat()
+            return _recording_position(str(path), telemetry.source_type, offset, (stat.st_mtime_ns, stat.st_size))
+        except (MissionError, OSError, ValueError, TypeError):
+            return None
+        except Exception:
+            logger.exception("Recording position unavailable for source %s", getattr(telemetry, "profile_id", "unknown"))
+            return None
 
 
 class MissionOrchestrator:
@@ -330,6 +372,7 @@ class MissionOrchestrator:
                 stmt = stmt.where(VideoSourceRecord.drone_id == drone_id)
             videos = (await session.execute(stmt)).scalars().all()
             result = []
+            refreshed = False
             for video in videos:
                 telemetry = (
                     await session.execute(
@@ -337,7 +380,29 @@ class MissionOrchestrator:
                     )
                 ).scalar_one_or_none()
                 if telemetry:
-                    result.append(self._source_dict(video, telemetry))
+                    if (
+                        video.enabled and telemetry.enabled
+                        and video.mode == telemetry.mode == "local"
+                        and {video.validation_status, telemetry.validation_status} & {"invalid", "unknown"}
+                    ):
+                        status, code = await asyncio.to_thread(self._validator.validate, video, telemetry)
+                        previous = (
+                            video.validation_status, telemetry.validation_status,
+                            video.validation_error_code, telemetry.validation_error_code,
+                        )
+                        if previous != (status, status, code, code):
+                            video.validation_status = telemetry.validation_status = status
+                            video.validation_error_code = telemetry.validation_error_code = code
+                            video.validated_at = telemetry.validated_at = _now()
+                            refreshed = True
+                    payload = self._source_dict(video, telemetry)
+                    payload["recording_position"] = (
+                        await asyncio.to_thread(self._validator.recording_position, telemetry)
+                        if video.enabled and telemetry.enabled and payload["validation_status"] in {"valid", "degraded"} else None
+                    )
+                    result.append(payload)
+            if refreshed:
+                await session.commit()
             return result
 
     async def list_plans(self) -> list[dict]:

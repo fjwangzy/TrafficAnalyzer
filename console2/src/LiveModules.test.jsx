@@ -83,7 +83,7 @@ vi.mock('./components/CityMap', () => ({
 vi.mock('./components/MonitoringBevMap', () => ({
   MonitoringBevMap: ({ compact, emptyMessage, label, trajectories = [], pixelTrajectories = [] }) => {
     const displayed = trajectories.length ? trajectories : pixelTrajectories.filter((item) => Array.isArray(item?.trajectory_px) && item.trajectory_px.length >= 2)
-    return <div role='img' aria-label={label} data-compact={compact ? 'true' : 'false'} data-trajectory-count={displayed.length} data-track-ids={displayed.map((item) => item.track_id).join(',')}>{trajectories.length ? '高德 GCJ-02 轨迹地图' : displayed.length ? `像素坐标实时轨迹 世界坐标不可用 · ${displayed.length} 条` : '高德 GCJ-02 轨迹地图'}{!displayed.length && emptyMessage ? <span>{emptyMessage}</span> : null}</div>
+    return <div role='img' aria-label={label} data-compact={compact ? 'true' : 'false'} data-trajectory-count={displayed.length} data-track-ids={displayed.map((item) => item.track_id).join(',')}>{trajectories.length ? '高德 GCJ-02 轨迹地图' : displayed.length ? `像素坐标实时轨迹 ${displayed.length} 条` : '高德 GCJ-02 轨迹地图'}{!displayed.length && emptyMessage ? <span>{emptyMessage}</span> : null}</div>
   },
 }))
 
@@ -211,7 +211,7 @@ describe('Console2 live module migration', () => {
     })).toBe('/events?event_type=conflict&intersection_id=011wwe0z19700001&source_profile_id=SRC-INTER-XQH-0403-PM&mission_id=MSN-AE785FD3C417&event_id=d1bfae25da343b0d5e32c61ffe85a09f5892180d')
   })
 
-  it('drives monitoring from REST and realtime data and preserves detector/BEV switching', async () => {
+  it.each([29.7, 0.008])('drives monitoring at %s FPS and preserves detector/BEV switching', async (fps) => {
     open('/monitoring')
 
     await waitFor(
@@ -231,7 +231,7 @@ describe('Console2 live module migration', () => {
         congestion_index: 6.3,
         cars: 842,
         avg_speed_kmh: 27.4,
-        fps: 29.7,
+        fps,
         inference_ms: 33,
         inference_context: { effective_imgsz: 960, device: 'mps', precision: 'fp16' },
         road_analytics_eligible: true,
@@ -244,6 +244,7 @@ describe('Console2 live module migration', () => {
     expect(screen.getByLabelText('飞行姿态数据')).toHaveTextContent('112.4')
     expect(screen.getByLabelText('飞行姿态数据')).toHaveTextContent('37.8')
     expect(screen.getByText('842')).toBeInTheDocument()
+    expect(document.querySelector('.main-feed-status')).toHaveTextContent(`${fps} FPS`)
     expect(screen.getByText('YOLO 单处理帧 33ms · 960')).toBeInTheDocument()
     expect(screen.getByText('186')).toBeInTheDocument()
     const trajectoryCard = screen.getByText('实时轨迹数量').closest('.congestion-card')
@@ -253,6 +254,7 @@ describe('Console2 live module migration', () => {
     fireEvent.click(screen.getByRole('button', { name: /切为主视图/ }))
     expect(window.location.search).toContain('view=bev')
     expect(await screen.findByRole('img', { name: 'BEV 地图轨迹主视图' })).toBeInTheDocument()
+    expect(document.querySelector('.camera-head')).toHaveTextContent(`${fps} FPS`)
     expect(screen.queryByAltText('BEV 鸟瞰轨迹投放图')).not.toBeInTheDocument()
 
     expect(screen.getByText('转向流量')).toBeInTheDocument()
@@ -366,7 +368,7 @@ describe('Console2 live module migration', () => {
     expect(screen.getByText(/Lane ID、Link ID 与匹配质量不可用/)).toBeInTheDocument()
     expect(screen.getByText(/世界坐标、速度、方向、统计和 TCC 使用各自独立门禁/)).toBeInTheDocument()
     expect(screen.queryByText('仅候选，不进入统计/TCC')).not.toBeInTheDocument()
-    expect(screen.getByRole('img', { name: '像素坐标实时轨迹投放图' })).toHaveTextContent('世界坐标不可用 · 1 条')
+    expect(screen.getByRole('img', { name: '像素坐标实时轨迹投放图' })).toHaveTextContent('像素坐标实时轨迹 1 条')
     expect(screen.getByText('实时轨迹数量').closest('.congestion-card')).toHaveTextContent('1')
   })
 
@@ -454,7 +456,7 @@ describe('Console2 live module migration', () => {
 
     const map = screen.getByRole('img', { name: '像素坐标实时轨迹投放图' })
     expect(map).toHaveAttribute('data-trajectory-count', '1')
-    expect(map).toHaveTextContent('世界坐标不可用 · 1 条')
+    expect(map).toHaveTextContent('像素坐标实时轨迹 1 条')
     expect(screen.getByText('实时轨迹数量').closest('.congestion-card')).toHaveTextContent('0')
   })
 
@@ -614,7 +616,8 @@ describe('Console2 live module migration', () => {
     open('/monitoring?intersection_id=INT-1&source_profile_id=SRC-1')
 
     expect(await screen.findByText('TCC 已启用：无合格预测候选')).toBeInTheDocument()
-    expect(screen.getByText('实时链路已断开，当前展示历史/REST 数据')).toBeInTheDocument()
+    fireEvent.click(screen.getByText('工程诊断'))
+    expect(screen.getByText('WebSocket')).toHaveTextContent('WebSocket disconnected')
   })
 
   it('aligns the monitoring selector with registered UAV video sources and their intersections', async () => {
@@ -789,7 +792,7 @@ describe('Console2 live module migration', () => {
     expect(rightPanel).toHaveAttribute('data-state', 'collapsed')
   })
 
-  it('switches between directional strategy and recent events without claiming mock execution', async () => {
+  it('shows recent events directly without source-health or scenario strategy panels', async () => {
     open('/monitoring?intersection_id=INT-1&source_profile_id=SRC-1')
     await screen.findByAltText('检测器输出视频流', {}, { timeout: 10_000 })
 
@@ -799,23 +802,12 @@ describe('Console2 live module migration', () => {
     expect(within(screen.getByLabelText('实时态势面板')).getByRole('article', { name: '按方向实时流量' })).toBe(flowPanel)
     expect(within(screen.getByLabelText('BEV 与实时事件面板')).queryByRole('article', { name: '按方向实时流量' })).not.toBeInTheDocument()
 
-    fireEvent.click(screen.getByRole('tab', { name: '场景策略' }))
-    const scenarioGroup = screen.getByRole('group', { name: '重点业务场景' })
-    expect(within(scenarioGroup).getAllByRole('button')).toHaveLength(6)
-    expect(screen.getByRole('tabpanel', { name: '场景策略' })).not.toHaveTextContent('Mock 控制链路')
-    expect(screen.getByRole('tabpanel', { name: '场景策略' })).not.toHaveTextContent('基于 Mock 数据')
-    expect(screen.getByRole('tabpanel', { name: '场景策略' })).not.toHaveTextContent('一次仅研判 1 项')
-    expect(screen.getByRole('tabpanel', { name: '场景策略' })).not.toHaveTextContent('开发测试')
-    expect(screen.getByRole('tabpanel', { name: '场景策略' })).toHaveTextContent('不形成在线建议')
-    expect(screen.getByRole('tabpanel', { name: '场景策略' })).toHaveTextContent('仅生成建议')
-    expect(screen.getByRole('tabpanel', { name: '场景策略' })).toHaveTextContent('交警 / 信控平台确认')
-
-    fireEvent.click(within(scenarioGroup).getByRole('button', { name: '行人感应' }))
-    expect(screen.getByRole('tabpanel', { name: '场景策略' })).toHaveTextContent('等待人数 12 人，已超过演示阈值 8 人')
-    expect(screen.getByRole('tabpanel', { name: '场景策略' })).toHaveTextContent('已进入人行横道的行人清空时间不得因机动车排队提前结束')
-
-    fireEvent.click(screen.getByRole('tab', { name: /近期事件/ }))
-    expect(screen.getByRole('tabpanel', { name: '近期事件' })).toHaveTextContent('历史路径交点事件')
+    expect(screen.queryByRole('article', { name: '实时来源健康状态' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('tab', { name: '场景策略' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('group', { name: '重点业务场景' })).not.toBeInTheDocument()
+    expect(screen.queryByText(/策略门禁/)).not.toBeInTheDocument()
+    expect(screen.getByRole('region', { name: '近期事件' })).toHaveTextContent('历史路径交点事件')
+    expect(screen.getByRole('button', { name: '全部事件' })).toBeEnabled()
   })
 
   it('keeps world-coordinate tracks off the detector video and renders them only on the BEV map', async () => {

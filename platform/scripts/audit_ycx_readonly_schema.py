@@ -212,17 +212,12 @@ def main() -> None:
     parser.add_argument("--summary-only", action="store_true")
     parser.add_argument("--exercise-importer", action="store_true")
     args = parser.parse_args()
-    values = _credential_values(args.credentials_file)
     if args.exercise_importer:
         if not args.inter_id:
             parser.error("--exercise-importer requires --inter-id")
         from app.services.ycx_road_import import YcxRoadImporter
 
-        settings = SimpleNamespace(
-            ycx_db_host=values["host"], ycx_db_port=int(values["port"]),
-            ycx_db_user=values["user"], ycx_db_password=values["pwd"],
-            ycx_db_name=values["db"], ycx_db_schema=values["schame"],
-        )
+        from app.core.config import settings
         imported = asyncio.run(YcxRoadImporter(settings).import_intersection(args.inter_id))
         result = {
             "transaction_contract": "readonly",
@@ -234,6 +229,7 @@ def main() -> None:
             "checksum": imported.checksum,
         }
     else:
+        values = _credential_values(args.credentials_file)
         result = asyncio.run(
             _audit(
                 values,

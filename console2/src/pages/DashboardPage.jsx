@@ -11,6 +11,7 @@ import { platformApi } from '../lib/api'
 import { buildDashboardDigitalTwin, selectDigitalTwinMap } from '../lib/dashboardDigitalTwin'
 import { intersectionChannels, telemetryChannels } from '../lib/realtime'
 import { demoSituation } from '../config/demoData'
+import { isMineMap } from '../lib/amap'
 
 const DAY_LABELS = ['周一', '周二', '周三', '周四', '周五', '周六', '周日']
 const SOURCE_PRIORITY = { running: 0, ready: 1, degraded: 2, invalid: 3, disabled: 4 }
@@ -71,7 +72,7 @@ export function buildDashboardIntersectionPoints({ situationIntersections = [], 
       id: item.inter_id,
       ...position,
       saturation_max: saturation,
-      status: situationStatusFromSaturation(saturation),
+      status: item.delay_index != null ? segmentStatusFromDelayIndex(item.delay_index) : situationStatusFromSaturation(saturation),
       is_project: false,
       has_server_situation: true,
     })
@@ -119,16 +120,15 @@ export function buildDashboardSourcePoints({ sources = [], drones = [], intersec
     const drone = droneById.get(source.drone_id)
     const intersectionId = pipeline?.intersection_id || drone?.default_inter_id || drone?.current_intersection_id
     const intersection = intersectionById.get(intersectionId)
-    const position = projectPosition(intersection)
+    const position = projectPosition(intersection) || telemetryPosition(source.recording_position)
     const sourceStatus = dashboardSourceStatus(source, pipeline)
-    // A verified project intersection remains a truthful UAV source location
-    // even when the selected server typical-situation matrix has no matching
-    // row.  Only missing coordinates or unusable sources exclude a marker.
-    if (!intersectionId || !intersection || !position || sourceStatus === 'disabled' || sourceStatus === 'invalid') return
+    // Recorded source coordinates keep markers visible when road layers are off.
+    if (!intersectionId || !position || sourceStatus === 'disabled' || sourceStatus === 'invalid') return
     const mapped = {
       source_profile_id: source.profile_id,
       intersection_id: intersectionId,
       drone_id: source.drone_id,
+      ...position,
       name: source.display_name || source.video?.location_hint || source.profile_id,
       drone_name: drone?.name || source.drone_id,
       source_status: sourceStatus,
@@ -141,14 +141,12 @@ export function buildDashboardSourcePoints({ sources = [], drones = [], intersec
 
   return [...grouped.entries()].map(([intersectionId, mappedSources]) => {
     const intersection = intersectionById.get(intersectionId)
-    const position = projectPosition(intersection)
     const sorted = mappedSources.sort((left, right) => SOURCE_PRIORITY[left.source_status] - SOURCE_PRIORITY[right.source_status])
     const primary = sorted[0]
     return {
       id: intersectionId,
       ...primary,
-      intersection_name: intersection.name || intersectionId,
-      ...position,
+      intersection_name: intersection?.name || intersectionId,
       source_count: sorted.length,
       sources: sorted,
     }
@@ -188,24 +186,26 @@ export function buildLiveDronePoints({ dashboardDrones = [], drones = [], source
     const storedTelemetry = drone.last_telemetry || null
     const freshStoredTelemetry = drone.telemetry_status === 'fresh' ? storedTelemetry : null
     const telemetry = liveTelemetry || trajectoryTelemetry || storedTelemetry || dashboardDrone
-    const livePosition = telemetryPosition(liveTelemetry)
+    const observedPosition = telemetryPosition(liveTelemetry)
       || telemetryPosition(trajectoryTelemetry)
       || telemetryPosition(dashboardDrone)
       || telemetryPosition(freshStoredTelemetry)
       || (isReplayMonitoring ? telemetryPosition(storedTelemetry) : null)
+    const livePosition = isReplay && !isMonitoring ? null : observedPosition
     const lastPosition = telemetryPosition(storedTelemetry)
     const assignedPosition = projectPosition(intersection)
-    const position = livePosition || lastPosition || assignedPosition
+    const recordingPosition = telemetryPosition(source?.recording_position)
+    const position = livePosition || lastPosition || assignedPosition || recordingPosition
     if (!position) return []
 
     const runtimeStatus = String(drone.status || dashboardDrone.status || '').toLowerCase()
-    const isFlying = runtimeStatus === 'flying' || runtimeStatus === 'hovering'
+    const isFlying = (!isReplay || isMonitoring) && (runtimeStatus === 'flying' || runtimeStatus === 'hovering')
     const isOnline = dashboardDrone.status === 'online' || (!['offline', 'disabled'].includes(runtimeStatus) && Boolean(runtimeStatus))
     const telemetryQuality = liveTelemetry?.quality_status || liveTelemetry?.telemetry_quality || dashboardDrone.telemetry_quality || drone.telemetry_status
     const isCorridorInspection = String(intersectionId || '').includes('CORRIDOR') || String(drone.name || '').includes('巡航')
     const sceneLabel = isCorridorInspection ? '道路巡检' : '路口监测'
     const statusLabel = !livePosition
-      ? isMonitoring ? lastPosition ? '监控中 · 最后位置' : '监控中 · 任务区域' : lastPosition ? '最后位置' : '任务区域'
+      ? isMonitoring ? lastPosition ? '监控中 · 最后位置' : '监控中 · 任务区域' : lastPosition ? '最后位置' : assignedPosition ? '任务区域' : '素材位置'
       : isMonitoring
       ? runtimeStatus === 'hovering' ? '悬停监控' : isReplayMonitoring ? '回放巡航' : '实时监控'
       : isFlying ? runtimeStatus === 'hovering' ? '悬停中' : '飞行中'
@@ -222,7 +222,7 @@ export function buildLiveDronePoints({ dashboardDrones = [], drones = [], source
       runtime_flying: isFlying || isReplayMonitoring,
       is_replay: isReplay,
       is_online: isOnline,
-      position_basis: livePosition ? isReplayMonitoring && trajectoryTelemetry ? 'replay_gcj02_trajectory' : isReplayMonitoring ? 'replay_gcj02_telemetry' : 'live_gcj02_telemetry' : lastPosition ? 'last_gcj02_telemetry' : 'assigned_intersection',
+      position_basis: livePosition ? isReplayMonitoring && trajectoryTelemetry ? 'replay_gcj02_trajectory' : isReplayMonitoring ? 'replay_gcj02_telemetry' : 'live_gcj02_telemetry' : lastPosition ? 'last_gcj02_telemetry' : assignedPosition ? 'assigned_intersection' : 'source_telemetry',
       trail_gcj02: trailGcj02,
       intersection_id: intersectionId || null,
       intersection_name: intersection?.name || intersectionId || '未绑定路口',
@@ -241,8 +241,8 @@ export function buildLiveDronePoints({ dashboardDrones = [], drones = [], source
       gimbal_yaw_deg: firstFinite(telemetry?.gimbal_yaw, telemetry?.gb_yaw, telemetry?.attitude_head),
       focal_length_mm: firstFinite(telemetry?.focal_len, telemetry?.focal_length_mm, 4.5),
       camera_zoom_factor: firstFinite(telemetry?.zoom_factor, telemetry?.dzoom_ratio ? 1 / telemetry.dzoom_ratio : null, 1),
-      telemetry_fresh: Boolean(liveTelemetry || trajectoryTelemetry || drone.telemetry_status === 'fresh'),
-      telemetry_note: telemetryQuality ? `${isReplay ? '回放' : '实时'}遥测 · ${telemetryQuality}` : isReplay ? '回放遥测' : '实时遥测',
+      telemetry_fresh: (!isReplay || isMonitoring) && Boolean(liveTelemetry || trajectoryTelemetry || drone.telemetry_status === 'fresh'),
+      telemetry_note: !livePosition && !lastPosition && !assignedPosition ? '素材录制位置 · 非实时' : telemetryQuality ? `${isReplay ? '回放' : '实时'}遥测 · ${telemetryQuality}` : isReplay ? '回放遥测' : '实时遥测',
     }]
   })
 }
@@ -471,8 +471,8 @@ export function DashboardPage() {
     : historicalStats ? 'REST 最近样本' : selectedDrone?.is_monitoring ? '等待实时数据' : '无实时任务'
 
   const rankedIntersections = useMemo(() => [...intersections]
-    .filter((item) => item.saturation_max != null)
-    .sort((left, right) => right.saturation_max - left.saturation_max), [intersections])
+    .filter((item) => (item.delay_index ?? item.saturation_max) != null)
+    .sort((left, right) => (right.delay_index ?? right.saturation_max) - (left.delay_index ?? left.saturation_max)), [intersections])
 
   useEffect(() => {
     if (!selectedIntersectionId && rankedIntersections[0]) setSelectedIntersectionId(rankedIntersections[0].id)
@@ -507,15 +507,20 @@ export function DashboardPage() {
     setSelectedSegmentId(item.id)
   }, [])
   const selectDrone = useCallback((item) => {
+    if (item?.source_profile_id && item?.intersection_id) {
+      openSourceMonitoring(item)
+      return
+    }
     const droneId = item?.drone_id || item?.id
     if (!droneId) return
     setSelectedDroneId(droneId)
     setMapDisplayMode('traffic')
     if (item.intersection_id) setSelectedIntersectionId(item.intersection_id)
     setSelectedSegmentId(null)
-  }, [])
+  }, [openSourceMonitoring])
 
   const serverSummary = situation?.summary || {}
+  const delayIndexMode = situation?.source?.intersection_metric === 'delay_index'
   const situationError = situationQuery.error
   const otherLoadError = intersectionsQuery.error || sourcesQuery.error || sourceDronesQuery.error || dashboardDronesQuery.error || pipelinesQuery.error
   const slotLabel = `${DAY_LABELS[dayOfWeek - 1]} ${timeValue(stepIndex)}`
@@ -551,11 +556,11 @@ export function DashboardPage() {
         fitToData
         displayMode={mapDisplayMode}
         viewportInsets={viewportInsets}
-        coordinateLabel={trafficMode ? '高德实时路况 · UAV 实时遥测' : `路口 ${intersections.length} · 路段 ${segments.length} · 无人机覆盖 ${sourcePoints.length}`}
+        coordinateLabel={trafficMode ? `${isMineMap() ? '四维图新底图' : '高德实时路况'} · UAV 实时遥测` : `路口 ${intersections.length} · 路段 ${segments.length} · 无人机覆盖 ${sourcePoints.length}`}
       />
 
       <header className='dashboard-command-bar'>
-        <div className='dashboard-command-title'><span><Drone size={19} weight='fill' /></span><div><strong>无人机交通态势工作台</strong><small>{trafficMode ? '高德实时路况与无人机遥测' : `${slotLabel} · road9 典型态势`}</small></div></div>
+        <div className='dashboard-command-title'><span><Drone size={19} weight='fill' /></span><div><strong>无人机交通态势工作台</strong><small>{trafficMode ? `${isMineMap() ? '四维图新底图' : '高德实时路况'}与无人机遥测` : `${slotLabel} · Doris 典型态势`}</small></div></div>
         <section className='demo-story-strip dashboard-story-strip' aria-label='演示故事线'>
           {demoSituation.story.map((step, index) => <button key={step.id} onClick={() => navigate(storyRoutes[index])}><span>{step.id}</span><div><strong>{step.label}</strong><small>{step.caption}</small></div>{index < demoSituation.story.length - 1 && <ArrowRight size={12} />}</button>)}
         </section>
@@ -569,11 +574,11 @@ export function DashboardPage() {
           </div>
           <div className={`situation-map-toolbar dashboard-map-toolbar ${trafficMode ? 'traffic-mode' : ''}`} aria-label='地图展示与典型时段选择'>
             <div className='map-display-mode' role='group' aria-label='地图展示模式'>
-              <button type='button' className={!trafficMode ? 'active' : ''} aria-pressed={!trafficMode} onClick={() => setMapDisplayMode('situation')}>road9 典型态势</button>
-              <button type='button' className={trafficMode ? 'active' : ''} aria-pressed={trafficMode} onClick={() => setMapDisplayMode('traffic')}>高德实时路况</button>
+              <button type='button' className={!trafficMode ? 'active' : ''} aria-pressed={!trafficMode} onClick={() => setMapDisplayMode('situation')}>Doris 典型态势</button>
+              <button type='button' className={trafficMode ? 'active' : ''} aria-pressed={trafficMode} onClick={() => setMapDisplayMode('traffic')}>{isMineMap() ? '四维图新底图' : '高德实时路况'}</button>
             </div>
             {trafficMode
-              ? <span className='traffic-refresh-note'>约 3 分钟刷新</span>
+              ? <span className='traffic-refresh-note'>{isMineMap() ? '无人机实时遥测' : '约 3 分钟刷新'}</span>
               : <><label>星期<select aria-label='星期' value={dayOfWeek} onChange={(event) => setDayOfWeek(Number(event.target.value))}>{DAY_LABELS.map((label, index) => <option key={label} value={index + 1}>{label}</option>)}</select></label><label>时间<select aria-label='时间' value={stepIndex} onChange={(event) => setStepIndex(Number(event.target.value))}>{TIME_SLOTS.map((slot) => <option key={slot.stepIndex} value={slot.stepIndex}>{slot.label}</option>)}</select></label></>}
           </div>
         </div>
@@ -592,9 +597,9 @@ export function DashboardPage() {
         />
         : <aside className='dashboard-context-panel dashboard-summary-panel' aria-label='首页治理摘要'>
           <div className='dashboard-side'>
-            <Panel title='重点路口态势' subtitle='服务器典型时段 · 饱和度排序' action={<button className='text-button' onClick={() => navigate('/gis')}>历史分析</button>}>
+            <Panel title='重点路口态势' subtitle={`服务器典型时段 · ${delayIndexMode ? '延误指数' : '饱和度'}排序`} action={<button className='text-button' onClick={() => navigate('/gis')}>历史分析</button>}>
               {focusIntersections.length
-                ? <div className='demo-intersection-list'>{focusIntersections.map((item, index) => { const segment = [...segments.filter((row) => row.inter_id === item.id)].sort((left, right) => (right.delay_index ?? -1) - (left.delay_index ?? -1))[0]; const source = sourcePoints.find((row) => row.intersection_id === item.id); return <button key={item.id} onClick={() => selectIntersection(item)}><span className={`rank rank-${index + 1}`}>{index + 1}</span><div><strong>{item.name}</strong><span>{segment ? `${segment.direction || ''}${segment.name}延误指数 ${formatMetric(segment.delay_index)}` : '暂无路段指标'}</span><small>{source ? `${source.source_count} 路无人机源` : '无无人机覆盖'} · 排队 {formatMetric(segment?.queue_len_est_m, 0)}m</small></div><b className={item.status}>{formatMetric(item.saturation_max)}</b></button> })}</div>
+                ? <div className='demo-intersection-list'>{focusIntersections.map((item, index) => { const segment = [...segments.filter((row) => row.inter_id === item.id)].sort((left, right) => (right.delay_index ?? -1) - (left.delay_index ?? -1))[0]; const source = sourcePoints.find((row) => row.intersection_id === item.id); return <button key={item.id} onClick={() => selectIntersection(item)}><span className={`rank rank-${index + 1}`}>{index + 1}</span><div><strong>{item.name}</strong><span>{segment ? `${segment.direction || ''}${segment.name}延误指数 ${formatMetric(segment.delay_index)}` : '暂无路段指标'}</span><small>{source ? `${source.source_count} 路无人机源` : '无无人机覆盖'} · 排队 {formatMetric(segment?.queue_len_est_m, 0)}m</small></div><b className={item.status}>{formatMetric(item.delay_index ?? item.saturation_max)}</b></button> })}</div>
                 : <div className='situation-empty'>{situationError ? '服务器态势读取失败；未使用 mock 补齐。' : '当前典型时槽暂无态势数据。'}</div>}
             </Panel>
             <Panel title='重点事件' subtitle='固定演示样例 · 机非冲突与事故测绘' action={<button className='text-button' onClick={() => navigate('/events')}>事件中心</button>}>
@@ -608,13 +613,13 @@ export function DashboardPage() {
         </aside>}
 
       {trafficMode
-        ? <div className='map-legend traffic-legend' aria-label='高德实时路况图例'><span><i className='traffic-free' />通畅</span><span><i className='traffic-slow' />缓行</span><span><i className='traffic-congested' />拥堵</span><span><i className='traffic-severe' />严重拥堵</span><span><i className='traffic-unknown' />未知</span><em /><span><i className='uav-monitoring' />无人机监控</span><span><i className='uav-flying' />飞行中</span><span><i className='uav-history' />最后遥测</span><span><i className='uav-connected' />配置任务区域</span></div>
-        : <div className='map-legend situation-legend'><span><i className='situation-good' />良好</span><span><i className='situation-slow' />接近饱和 / 缓行</span><span><i className='situation-bad' />过饱和 / 拥堵</span><span><i className='situation-missing' />暂无态势</span><span><Drone size={15} weight='fill' />无人机视频源</span></div>}
+        ? <div className='map-legend traffic-legend' aria-label={isMineMap() ? '四维图新地图图例' : '高德实时路况图例'}>{!isMineMap() && <><span><i className='traffic-free' />通畅</span><span><i className='traffic-slow' />缓行</span><span><i className='traffic-congested' />拥堵</span><span><i className='traffic-severe' />严重拥堵</span><span><i className='traffic-unknown' />未知</span><em /></>}<span><i className='uav-monitoring' />无人机监控</span><span><i className='uav-flying' />飞行中</span><span><i className='uav-history' />最后遥测</span><span><i className='uav-connected' />配置任务区域</span></div>
+        : <div className='map-legend situation-legend'><span><i className='situation-good' />{delayIndexMode ? '畅通' : '良好'}</span><span><i className='situation-slow' />{delayIndexMode ? '缓行' : '接近饱和 / 缓行'}</span><span><i className='situation-bad' />{delayIndexMode ? '拥堵' : '过饱和 / 拥堵'}</span><span><i className='situation-missing' />暂无态势</span><span><Drone size={15} weight='fill' />无人机视频源</span></div>}
 
       <div className='dashboard-bottom-strip'>
-        <div><Pulse size={16} weight='fill' /><span>态势口径</span><strong>{slotLabel} · 5 分钟典型矩阵{!situation ? ' · 未加载' : ''}</strong></div>
+        <div><Pulse size={16} weight='fill' /><span>态势口径</span><strong>{slotLabel} · {situation?.source?.stat_month ? `${situation.source.stat_month} 月度` : ''}5 分钟典型矩阵{!situation ? ' · 未加载' : ''}</strong></div>
         <div><Database size={16} /><span>服务器只读数据</span><strong>{situationError ? '暂不可用，地图不回退 mock' : situation?.cache?.stale ? '连接失败，展示同槽最近缓存' : `road ${situation?.source?.road_version || '—'} · ${situation?.cache?.status || '加载中'}`}</strong></div>
-        <div><Funnel size={16} /><span>指标口径</span><strong>饱和度：良好 &lt; 0.85 · 接近饱和 0.85–0.95 · 过饱和 &gt; 0.95{otherLoadError ? ' · 视频源信息部分不可用' : ''}</strong></div>
+        <div><Funnel size={16} /><span>指标口径</span><strong>{delayIndexMode ? '延误指数：畅通 < 1.5 · 缓行 1.5–2.0 · 拥堵 > 2.0' : '饱和度：良好 < 0.85 · 接近饱和 0.85–0.95 · 过饱和 > 0.95'}{otherLoadError ? ' · 视频源信息部分不可用' : ''}</strong></div>
       </div>
     </div>
   </AppShell>

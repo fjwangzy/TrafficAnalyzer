@@ -12,6 +12,7 @@ from sqlalchemy import (
     Float,
     ForeignKey,
     Integer,
+    Index,
     String,
     Text,
     UniqueConstraint,
@@ -574,7 +575,7 @@ class MessageInbox(Base):
     dispatched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     __table_args__ = (
-        UniqueConstraint("topic", "partition", "offset", name="uq_uav_inbox_topic_partition_offset"),
+        Index("ix_uav_inbox_topic_partition_offset", "topic", "partition", "offset"),
         UniqueConstraint("source_system", "message_id", name="uq_uav_inbox_source_message"),
     )
 

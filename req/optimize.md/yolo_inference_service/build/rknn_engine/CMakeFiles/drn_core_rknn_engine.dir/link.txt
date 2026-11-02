@@ -1,0 +1,2 @@
+/usr/bin/ar qc libdrn_core_rknn_engine.a CMakeFiles/drn_core_rknn_engine.dir/src/engine.cpp.o CMakeFiles/drn_core_rknn_engine.dir/src/mock_backend.cpp.o CMakeFiles/drn_core_rknn_engine.dir/src/rknn_backend.cpp.o
+/usr/bin/ranlib libdrn_core_rknn_engine.a

@@ -5,7 +5,7 @@ const mapMocks = vi.hoisted(() => ({
   add: vi.fn(), destroy: vi.fn(), remove: vi.fn(), setCenter: vi.fn(), setFitView: vi.fn(), sdk: null,
 }))
 
-vi.mock('../lib/amap', () => ({ loadAmap: vi.fn(async () => mapMocks.sdk) }))
+vi.mock('../lib/amap', () => ({ loadAmap: vi.fn(async () => mapMocks.sdk), mapProviderLabel: () => '高德地图' }))
 
 import { ReplayStage, splitReplaySegments } from './ReplayStage'
 

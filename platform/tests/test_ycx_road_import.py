@@ -1,5 +1,4 @@
-import json
-from contextlib import asynccontextmanager
+"""Read-only Doris roads preserve canonical geometry and opaque source IDs."""
 from types import SimpleNamespace
 
 import pytest
@@ -7,80 +6,57 @@ import pytest
 from app.services import ycx_road_import
 
 
-class _ReadonlyConnection:
-    def __init__(self):
-        self.queries = []
-        self.closed = False
-        self.readonly = None
-
-    @asynccontextmanager
-    async def transaction(self, *, readonly=False):
-        self.readonly = readonly
-        yield
-
-    async def fetchval(self, sql, *args):
-        self.queries.append(sql)
-        return "20260501"
-
-    async def fetchrow(self, sql, *args):
-        self.queries.append(sql)
-        return {
-            "inter_id": args[0], "inter_name": "测试路口",
-            "center_geojson": json.dumps({"type": "Point", "coordinates": [117.0, 36.0]}),
-            "boundary_geojson": None,
-        }
-
-    async def fetch(self, sql, *args):
-        self.queries.append(sql)
-        if "FROM dim_link_info" in sql:
-            return [{
-                "link_id": "011-link", "road_name": "测试路", "f_inter_id": "from",
-                "t_inter_id": args[0], "f_angle": 0, "t_angle": 180,
-                "lane_num": 1, "c_lane_num": 1, "lane_info": "C",
-                "road_level": "2", "formway": 1, "max_speed": 40,
-                "turn_move": "straight",
-                "geom_geojson": json.dumps({"type": "LineString", "coordinates": [[116.999, 36.0], [117.0, 36.0]]}),
-            }]
-        return [{
-            "lane_id": "011-lane", "link_id": "011-link", "lane_no": 1,
-            "lane_func_code": "C", "width": 3.5, "length": 30,
-            "inter_id": args[0], "turn_move": "straight",
-            "geom_geojson": json.dumps({"type": "LineString", "coordinates": [[116.999, 36.0], [117.0, 36.0]]}),
-        }]
-
-    async def close(self):
-        self.closed = True
+@pytest.mark.asyncio
+@pytest.mark.parametrize('has_links', [True, False])
+async def test_import_uses_only_doris_binds_ids_and_handles_empty_link_scope(monkeypatch, has_links):
+    calls = []
+    async def query(settings, sql, *args):
+        calls.append((sql,args))
+        assert sql.startswith('SELECT ') and '$' not in sql and 'ANY(' not in sql
+        if 'dim_inter_info' in sql:
+            return [{'inter_id': args[0], 'inter_name':'测试路口','geom_center':'POINT(117 36)', 'geom_boundary':None}]
+        if 'dim_link_info' in sql:
+            return [{'link_id':'opaque-link','road_name':'路','f_inter_id':'from','t_inter_id':args[1],
+                'f_angle':0,'t_angle':180,'lane_num':1,'c_lane_num':1,'lane_info':'C','road_level':'2',
+                'formway':'1','max_speed':40,'turn_move':'straight','geom':'LINESTRING(116.999 36,117 36)'}] if has_links else []
+        if 'dim_lane_info' in sql:
+            assert ('link_id IN (%s)' in sql) is has_links
+            assert args == ('confirmed', "literal' id", *(['opaque-link'] if has_links else []))
+            return [{'lane_id':'opaque-lane','link_id':'opaque-link','lane_no':1,'lane_func_code':'C',
+                'width':3.5,'length':30,'inter_id':args[1],'turn_move':'straight','geom':'LINESTRING(116.999 36,117 36)'}]
+        raise AssertionError(sql)
+    monkeypatch.setattr(ycx_road_import,'query',query)
+    imported = await ycx_road_import.YcxRoadImporter(SimpleNamespace(doris_database='ycx_xc',ycx_road_version='confirmed')).import_intersection("literal' id")
+    assert len(calls) == 3
+    assert all("literal' id" not in sql for sql,_ in calls)
+    assert imported.anchor_gcj02 == [117,36]
+    assert imported.payload['source_id_semantics'] == 'opaque_geomhash'
+    assert imported.payload['lanes'][0]['lane_id'] == 'opaque-lane'
+    assert imported.geometry_enu_m['lane_candidates']['opaque-lane']['coordinates'][-1] == [0.0,0.0]
+    assert imported.payload['lane_geometry_authority'] == 'candidate_only'
 
 
 @pytest.mark.asyncio
-async def test_ycx_import_is_readonly_postgis_and_keeps_geomhash_ids_opaque(monkeypatch):
-    connection = _ReadonlyConnection()
-    connect_args = {}
+async def test_nearby_binds_center_radius_and_preserves_version(monkeypatch):
+    async def query(settings,sql,*args):
+        assert 'ST_Distance_Sphere' in sql and 'LIMIT 20' in sql
+        assert args == ('confirmed',117.0,36.0,250.0,117.0,36.0)
+        return [{'inter_id':'opaque','inter_name':None,'longitude':117,'latitude':36}]
+    monkeypatch.setattr(ycx_road_import,'query',query)
+    result = await ycx_road_import.YcxRoadImporter(SimpleNamespace(doris_database='ycx_xc',ycx_road_version='confirmed')).nearby_intersections([117,36])
+    assert result[0]['inter_id'] == 'opaque' and result[0]['road_data_version'] == 'confirmed'
 
-    async def connect(**kwargs):
-        connect_args.update(kwargs)
-        return connection
 
-    monkeypatch.setattr(ycx_road_import.asyncpg, "connect", connect)
-    settings = SimpleNamespace(
-        ycx_db_host="readonly.example", ycx_db_port=5432,
-        ycx_db_user="reader", ycx_db_password="secret",
-        ycx_db_name="ycx", ycx_db_schema="road9",
-    )
-    imported = await ycx_road_import.YcxRoadImporter(settings).import_intersection(
-        "011wwe0z19700001"
-    )
-
-    assert connection.readonly is True
-    assert connection.closed is True
-    assert connect_args["server_settings"]["search_path"] == "road9,public"
-    assert any("ST_GeomFromText" in query for query in connection.queries)
-    assert not any(
-        token in query.upper()
-        for query in connection.queries
-        for token in (" INSERT ", " UPDATE ", " DELETE ", " TRUNCATE ")
-    )
-    assert imported.payload["source_id_semantics"] == "opaque_geomhash"
-    assert imported.payload["links"][0]["link_id"] == "011-link"
-    assert imported.payload["lanes"][0]["lane_id"] == "011-lane"
-    assert imported.payload["lanes"][0]["geometry_source"] == "link_offset_derived"
+@pytest.mark.asyncio
+async def test_import_api_reports_missing_doris_id_as_404_without_writes(monkeypatch):
+    from unittest.mock import AsyncMock
+    from fastapi import HTTPException
+    from app.api.v1 import calibration
+    monkeypatch.setattr(calibration, '_require_admin', lambda request: None)
+    monkeypatch.setattr(calibration, '_lock_intersection', AsyncMock())
+    monkeypatch.setattr(calibration, 'YcxRoadImporter', lambda settings: SimpleNamespace(
+        import_intersection=AsyncMock(side_effect=LookupError('missing'))))
+    with pytest.raises(HTTPException) as error:
+        await calibration.import_ycx_road_context(calibration.YcxRoadImportPayload(inter_id='missing'), object(), object())
+    assert error.value.status_code == 404
+    assert error.value.detail['code'] == 'DORIS_INTERSECTION_NOT_FOUND'

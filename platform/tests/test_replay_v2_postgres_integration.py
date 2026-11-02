@@ -23,7 +23,7 @@ from app.models.replay_v2 import (
     ReplayV2TrafficMetricSample,
     ReplayV2TurnMetric5Min,
 )
-from app.services.metric_store import MessageEnvelope
+from app.services.metric_store import MessageEnvelope, MessageIdentityConflict
 from app.services.replay_repository import PostgresReplayRepository
 from app.services.replay_v2_metric_store import ReplayV2MetricStoreAdapter
 
@@ -32,6 +32,35 @@ pytestmark = pytest.mark.skipif(
     os.environ.get("RUN_PG_INTEGRATION") != "1",
     reason="requires explicit local road9 PostgreSQL/TimescaleDB integration",
 )
+
+
+@pytest.mark.asyncio
+async def test_recreated_topic_offsets_preserve_new_messages_and_message_id_idempotency():
+    assert await init_replay_v2_db()
+    marker = uuid.uuid4().hex[:10]
+    source_id = f"SRC-OFFSET-{marker}"
+    topic = f"uav_replay_v2_statistics_{source_id}"
+    message_ids = [f"offset-old-{marker}", f"offset-new-{marker}"]
+    store = ReplayV2MetricStoreAdapter(async_session_maker)
+    first = _envelope("uav_stats", message_ids[0], {"source_profile_id": source_id, "cars": 2}, marker)
+    second = _envelope("uav_stats", message_ids[1], {"source_profile_id": source_id, "cars": 9}, marker)
+    try:
+        assert not (await store.persist(MessageEnvelope(first, topic, 0, 0))).duplicate
+        assert not (await store.persist(MessageEnvelope(second, topic, 0, 0))).duplicate
+        assert (await store.persist(MessageEnvelope(second, topic, 0, 1))).duplicate
+        with pytest.raises(MessageIdentityConflict):
+            await store.persist(MessageEnvelope({**second, "data": {**second["data"], "cars": 99}}, topic, 0, 2))
+        async with async_session_maker() as session:
+            inbox = (await session.scalars(select(ReplayV2MessageInbox).where(ReplayV2MessageInbox.topic == topic))).all()
+            assert len(inbox) == 2
+            assert {row.offset for row in inbox} == {0}
+            samples = (await session.scalars(select(ReplayV2TrafficMetricSample).where(ReplayV2TrafficMetricSample.source_profile_id == source_id))).all()
+            assert sorted(row.vehicle_count for row in samples) == [2, 9]
+    finally:
+        async with async_session_maker() as session:
+            await session.execute(delete(ReplayV2MessageInbox).where(ReplayV2MessageInbox.topic == topic))
+            await session.execute(delete(ReplayV2TrafficMetricSample).where(ReplayV2TrafficMetricSample.source_profile_id == source_id))
+            await session.commit()
 
 
 async def _canonical_snapshot() -> tuple:

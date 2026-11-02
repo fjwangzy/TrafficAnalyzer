@@ -1,5 +1,41 @@
 # 端到端测试报告：inter_xqh 视频 + SRT 遥测
 
+## 2026-10-19 .4绘制优化验证边界
+
+用户应用.3后报告0.9FPS；.4只优化候选标签局部混合和headless无用缩放。31项绘制/EOF回归与原ARM镜像随机背景/边缘/重叠逐像素对照通过；实际包200候选4K为旧1333.519ms/新23.401ms。未重跑本视频或真实NPU，新现场日志及整体吞吐待验，不新增精度或全片结论；见DEPLOYMENT_INTRANET_VALIDATION.md。
+
+## 2026-10-19 累计.3验证边界
+
+本轮修复任务启动等待、配置后就绪logger及二维影子求解；Python92项/1subtest、Console284项/构建、原ARM64镜像真实入口监听及173×177数值/ID对照通过。没有重跑XQH全片或真实NPU，不新增正式精度或现场吞吐结论；详见DEPLOYMENT_INTRANET_VALIDATION.md。
+
+## 2026-10-19 启动就绪握手修复边界
+
+本轮复现并修复Hydra禁用VideoServer logger导致的网页启动超时；原ARM64镜像完成真实监听/握手/初始化JPEG传输正反例，聚焦58项及1 subtest通过。没有重跑本视频、NPU推理或精度/吞吐验证，既有视频基线不变；详见DEPLOYMENT_INTRANET_VALIDATION.md。
+
+## 2026-10-19 全量发布验证边界
+
+本次构建ARM64离线镜像及宿主源码全量包，不含模型/视频；验证发布工具、Platform/Console回归、隔离ycx_prod.drone首次与重复初始化及两套新head。没有重跑XQH全片、正式精度或真实NPU推理，既有视频基线不变。打包与后续源码更新步骤见`RELEASE_PACKAGING_GUIDE.md`。
+
+## 2026-10-18 本机系统回归
+
+旧100帧MPS基线为55 PASS/0 FAIL/1 WARN（检测/遥测/H均100/100、运动补偿90/100）；未达到历史56/0/0。该脚本未接当前地理参考/后投影资格链，方向统计为空不能仅归因轨迹短，也不替代完整当前链方向验收。
+
+另用既有前20秒派生MP4及原SRT，根Compose独立road9.public/Kafka、原生Platform/MPS、main_optimized.py自然EOF：191完成轨迹、6761/6761点、统计50/遥测60、running/sealed两消息归并一条Mission；303/303排空、落库差异0、实际回放无截断。未写canonical业务Topic/事实表，冲突0不构成正例验收，世界点可空不构成精度验收。根/前端首轮超时、现有服务失应及恢复、Kafka健康探针和ADR证据门禁均保留，不能据隔离闭环宣布系统整体通过。并发环境下约236.944秒验收耗时不作受控吞吐基准。未复跑全992秒及mp4728；完整报告见`docs/test_report_regression_20261018.md`，证据见`output/regression/20261018/isolated/`。
+
+## 2026-10-18 日志与宿主源码发布验证边界
+
+本轮规范logging、阶段等待诊断及宿主源码挂载，执行器/EOF/几何/Ascend/日志/部署等聚焦组合94项及1 subtest通过；另有最终日志/升级路径定向验证、真实旧ARM64镜像只读资源与源码导入检查。未重新运行本视频全片或真实NPU推理，不新增MPS/NPU吞吐或精度结论。正式源码包、日志位置和升级边界见DEPLOYMENT_INTRANET.md及其验证报告。
+
+## 2026-10-18 生产问题复现边界
+
+本轮XQH原生MPS用于视频代理与关闭路网的通用统计短时验证，采到FPS7.1/均速20.9；主动停止，未跑全片EOF或生成精度真值。mp4728未重跑。生产NPU/内网及指标断点仍待现场证据，详见DEPLOYMENT_INTRANET_VALIDATION.md。
+
+## 2026-10-17 intranet.3临时数据库验证边界
+
+本轮新增同机ARM64 PG17.10/PostGIS3.6.4/TimescaleDB2.28.2，实测迁移、时序/空间写读、重启和同版本备份恢复；未重跑本视频或修改检测/跟踪实现。
+平台400项、发布/管道89项及镜像真数据库5场景通过不替代视频/生产NPU验收。最近XQH仍55 PASS/0 FAIL/1 WARN（前100帧方向为空），旧mp4728证据保持。
+详情见DEPLOYMENT_INTRANET_VALIDATION.md；正式精度与HG恢复兼容性均未新增结论。
+
 > **当前范围说明（2026-07-30）**：当前工作树的 xqh 前 100 帧算法/管道防回退证据为 `55 PASS / 0 FAIL / 1 WARN`；最新完整 992 秒 adaptive 原生 MPS 回放在 road9 排空后功能验收通过。ADR-019 strict 的 9 项代码/拓扑检查通过，但 `local_runtime_evidence` 仍为外部门禁。项目不建设人工轨迹标注工作包，因此当前口径是 `local_engineering_acceptance_passed / production_accuracy_not_claimed`。
 
 按类别、尺寸、飞行阶段和轨迹寿命的可复现拆解见
@@ -881,3 +917,24 @@ build 成功；xqh 基线 `56 PASS / 0 FAIL / 0 WARN`。`git diff --check` 无�
 - 当前代码使用前20秒派生片段另跑完整三进程/Kafka/真库：自然EOF、191 journey、生命周期running→sealed、发送231/231/剩余0，DWS实际/典型聚合与对账通过，无resource_tracker KeyError；该短片验证不代替全片再次推理。
 - 同片段通过REST测绘实际处理600帧、6/6关键帧可量算，完成退回与revision2修订、面积/周长及PDF下载；质量保持unverified，交付422门禁保留。真实页面历史回放已恢复并推进T+10至27秒。
 - 首100帧基线仍55 PASS/0 FAIL/1 WARN，方向统计为空；ADR-019既有证据与生产门禁、正式精度not_evaluated继续保留，不将工程回归数量当作50项用户需求全部正式签署。
+
+## 2026-10-15 内网部署适配回归补充
+
+本次新增生产连接、离线交付和 Ascend 后端，未改动图像关联/世界投影业务判定。
+本机 `scripts/mac_local_platform.sh status` 仍为 Replay V2 ready；未清理现有开发数据；Docker按用户授权扩容后，数据库/Kafka已恢复健康。
+XQH 短段基线本次实测为 **55 PASS / 0 FAIL / 1 WARN**，警告为前100帧 direction_stats 为空，
+不将历史 `56/0/0` 标为本次结果；mp4728 全长未重跑，不追加新的精度或全源验收结论。
+Platform/Console/独立 PostgreSQL 与 SASL 验证及生产阻断详见部署验证报告。
+
+### 2026-10-17 部署开关回归记录
+
+仅生产路网关闭开关新增：图像跟踪与世界投影继续，Lane/Link匹配、车道模型/分析/推断暂停；默认本地不变。
+EOF单元回归覆盖开关两态；本机inter_xqh真实素材按原生MPS启动的PYTORCH_ENABLE_MPS_FALLBACK=1运行，
+55 PASS/0 FAIL/1 WARN（前100帧direction_stats为空），不宣称56/0/0；未重新执行mp4728完整视频。
+详见docs/DEPLOYMENT_INTRANET_VALIDATION.md与dist/VALIDATION-DEGRADED-2026.10.17.json；没有真值精度或生产性能声明。
+
+### 2026-10-17 Doris外部读库接入验证
+
+本次只切换外部路网/路况读取，未修改检测、跟踪、TCC或MPS设备逻辑，未重跑真实视频。
+Doris公网与API实测、后端399通过/3跳过/10子测试、部署47通过、前端266及构建见
+`DORIS_INTEGRATION_VALIDATION_20261017.md`。不将旧视频基线或精度结论当作本次新实跑结果。

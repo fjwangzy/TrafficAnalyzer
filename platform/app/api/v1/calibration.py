@@ -41,6 +41,7 @@ from app.services.channelized_editor_geometry import overlap_must_be_disjoint, r
 from app.services.survey_geometry import align_homography_to_map_enu
 from app.services.survey_service import SurveyService
 from app.services.ycx_road_import import YcxRoadImporter
+from app.core.deployment_diagnostics import DiagnosticError
 
 logger = logging.getLogger(__name__)
 
@@ -1302,9 +1303,14 @@ async def import_ycx_road_context(
 ):
     _require_admin(request)
     await _lock_intersection(db, payload.inter_id)
-    imported = await YcxRoadImporter(settings).import_intersection(
-        payload.inter_id, payload.road_data_version
-    )
+    try:
+        imported = await YcxRoadImporter(settings).import_intersection(
+            payload.inter_id, payload.road_data_version
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail={"code": "DORIS_INTERSECTION_NOT_FOUND", "message": "Doris路网中不存在该路口或版本"}) from exc
+    except DiagnosticError as exc:
+        raise HTTPException(status_code=503, detail={"code": exc.code, "message": exc.title, "action": exc.action}) from exc
     snapshot = (
         await db.execute(
             select(RoadContextSnapshot).where(

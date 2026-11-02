@@ -108,7 +108,7 @@ def audit(scope: str = "production") -> dict:
     ws_manager = _text("platform/app/kafka/ws_manager.py")
     platform_project = _text("platform/pyproject.toml")
     realtime = _text("console2/src/lib/realtime.js")
-    nginx = _text("services/nginx/nginx.conf")
+    nginx = _text("console2/nginx.conf")
     purge = _text("scripts/purge_adr019_legacy_storage.py")
     mac_local_platform = _text("scripts/mac_local_platform.sh")
 
@@ -124,7 +124,7 @@ def audit(scope: str = "production") -> dict:
                 ))
             ) else "blocker",
             "evidence": "docker-compose.yaml",
-            "detail": "生产根 Compose 仅保留 road9/TimescaleDB、KRaft、Platform、Console2、Nginx 与可选服务。",
+            "detail": "生产根 Compose 仅保留 road9/TimescaleDB、KRaft、Platform、Console2内置统一代理与可选服务。",
         },
         {
             "code": "stable_clean_road9_volume",
@@ -186,7 +186,7 @@ def audit(scope: str = "production") -> dict:
         {
             "code": "nginx_uses_compose_dns",
             "status": "pass" if "http://platform:8000" in nginx and "traffic_platform" not in nginx else "blocker",
-            "evidence": "services/nginx/nginx.conf",
+            "evidence": "console2/nginx.conf",
             "detail": "Nginx 使用 Compose service DNS。",
         },
         {

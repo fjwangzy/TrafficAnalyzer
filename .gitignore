@@ -11,6 +11,10 @@ myenv
 web.py
 **env**
 !platform/alembic_replay_v2/env.py
+!platform/alembic/env.py
+!deploy/intranet/production.env.example
+!deploy/highgo-reference/tools/highgo-portable/highgo.env.example
+!deploy/highgo-reference/tools/highgo-portable/k8s-highgo-env.example.yaml
 test.ipynb
 .env
 secrets.txt
@@ -35,3 +39,14 @@ test_videos/mp4**
 .runtime/
 **/test**/*.png
 **/test**/*.jpg
+
+# Private production parameters and generated release artifacts.
+configs/yao.txt
+configs/*.env
+deploy/intranet/*.env
+deploy/intranet/highgo-driver/
+deploy/intranet/*.digest
+dist/
+**/*.zip
+output/**
+deploy/highgo**

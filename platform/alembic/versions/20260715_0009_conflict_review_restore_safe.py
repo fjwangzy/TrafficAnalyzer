@@ -5,6 +5,7 @@ Revises: 20260715_0008
 """
 
 from alembic import op
+from app.core.config import settings
 
 
 revision = "20260715_0009"
@@ -13,8 +14,13 @@ branch_labels = None
 depends_on = None
 
 
+def _execute(statement):
+    # Existing public deployments and isolated production schemas use the same revision.
+    op.execute(statement.replace("public.", f'"{settings.db_schema}".'))
+
+
 def upgrade() -> None:
-    op.execute("""
+    _execute("""
         DO $$
         DECLARE item record;
         BEGIN
@@ -31,7 +37,7 @@ def upgrade() -> None:
           END LOOP;
         END $$
     """)
-    op.execute("""
+    _execute("""
         CREATE OR REPLACE FUNCTION public.uav_validate_conflict_review_event()
         RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN
@@ -46,14 +52,14 @@ def upgrade() -> None:
           RETURN NEW;
         END $$
     """)
-    op.execute("DROP TRIGGER IF EXISTS uav_conflict_review_event_guard ON public.uav_conflict_reviews")
-    op.execute("""
+    _execute("DROP TRIGGER IF EXISTS uav_conflict_review_event_guard ON public.uav_conflict_reviews")
+    _execute("""
         CREATE TRIGGER uav_conflict_review_event_guard
         BEFORE INSERT OR UPDATE OF event_id,event_occurred_at
         ON public.uav_conflict_reviews
         FOR EACH ROW EXECUTE FUNCTION public.uav_validate_conflict_review_event()
     """)
-    op.execute("""
+    _execute("""
         CREATE OR REPLACE FUNCTION public.uav_cascade_conflict_review_delete()
         RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN
@@ -62,8 +68,8 @@ def upgrade() -> None:
           RETURN OLD;
         END $$
     """)
-    op.execute("DROP TRIGGER IF EXISTS uav_conflict_review_delete_cascade ON public.uav_conflict_events")
-    op.execute("""
+    _execute("DROP TRIGGER IF EXISTS uav_conflict_review_delete_cascade ON public.uav_conflict_events")
+    _execute("""
         CREATE TRIGGER uav_conflict_review_delete_cascade
         BEFORE DELETE ON public.uav_conflict_events
         FOR EACH ROW EXECUTE FUNCTION public.uav_cascade_conflict_review_delete()
@@ -71,11 +77,11 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.execute("DROP TRIGGER IF EXISTS uav_conflict_review_delete_cascade ON public.uav_conflict_events")
-    op.execute("DROP FUNCTION IF EXISTS public.uav_cascade_conflict_review_delete()")
-    op.execute("DROP TRIGGER IF EXISTS uav_conflict_review_event_guard ON public.uav_conflict_reviews")
-    op.execute("DROP FUNCTION IF EXISTS public.uav_validate_conflict_review_event()")
-    op.execute("""
+    _execute("DROP TRIGGER IF EXISTS uav_conflict_review_delete_cascade ON public.uav_conflict_events")
+    _execute("DROP FUNCTION IF EXISTS public.uav_cascade_conflict_review_delete()")
+    _execute("DROP TRIGGER IF EXISTS uav_conflict_review_event_guard ON public.uav_conflict_reviews")
+    _execute("DROP FUNCTION IF EXISTS public.uav_validate_conflict_review_event()")
+    _execute("""
         ALTER TABLE public.uav_conflict_reviews
           ADD CONSTRAINT fk_uav_conflict_reviews_event
           FOREIGN KEY (event_id,event_occurred_at)

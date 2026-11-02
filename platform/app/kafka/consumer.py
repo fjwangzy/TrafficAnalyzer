@@ -7,6 +7,7 @@ import time
 from typing import Any
 
 from aiokafka import AIOKafkaConsumer, TopicPartition
+from utils_local.kafka_security import kafka_security_options
 from aiokafka.structs import OffsetAndMetadata
 
 from app.kafka.ws_manager import WSManager
@@ -29,6 +30,7 @@ class KafkaConsumerService:
         lane_annotation_store: Any = None,
         metric_store: MetricStorePort | None = None,
         dispatch_realtime: bool = True,
+        security_options: dict | None = None,
     ):
         self._bootstrap = bootstrap_servers
         self._group_id = group_id
@@ -38,9 +40,11 @@ class KafkaConsumerService:
         self._lane_annotation_store = lane_annotation_store
         self._metric_store = metric_store
         self._dispatch_realtime = dispatch_realtime
+        self._security_options = security_options
         self._consumer: AIOKafkaConsumer | None = None
         self._task: asyncio.Task | None = None
         self._running = False
+        self._resume_after_reconnect = False
 
         # Latest state cache: {intersection_id: latest_stats}
         self._latest_stats: dict[str, dict] = {}
@@ -73,8 +77,9 @@ class KafkaConsumerService:
         """Create and start an AIOKafkaConsumer. Returns None if broker unavailable."""
         consumer = AIOKafkaConsumer(
             bootstrap_servers=self._bootstrap,
+            **(self._security_options if self._security_options is not None else kafka_security_options()),
             group_id=self._group_id,
-            auto_offset_reset="earliest",
+            auto_offset_reset="latest",
             enable_auto_commit=False,
             value_deserializer=lambda v: json.loads(v.decode("utf-8")),
             request_timeout_ms=10000,
@@ -151,14 +156,33 @@ class KafkaConsumerService:
             consumer = await self._create_consumer()
             if consumer is not None:
                 self._consumer = consumer
+                self._resume_after_reconnect = True
                 logger.info("Kafka consumer reconnected successfully")
                 self._task = asyncio.create_task(self._consume_loop())
                 return
 
             backoff = min(backoff * 2, max_backoff)
 
+    async def _resume_latest(self, partitions):
+        """Skip an abnormal backlog while retaining its transport positions in logs."""
+        partitions = tuple(partitions)
+        if not partitions:
+            raise RuntimeError("Kafka has no assigned partitions for latest recovery")
+        offsets = await self._consumer.end_offsets(partitions)
+        for partition, offset in offsets.items():
+            self._consumer.seek(partition, offset)
+            logger.warning(
+                "KAFKA_DEGRADED topic=%s partition=%s resume_offset=%s; historical backlog skipped",
+                partition.topic, partition.partition, offset,
+            )
+        await self._consumer.commit({
+            partition: OffsetAndMetadata(offset, "latest_after_error")
+            for partition, offset in offsets.items()
+        })
+        self._resume_after_reconnect = False
+
     async def _consume_loop(self):
-        """Main consumption loop with bounded retry."""
+        """Prefer current data after errors instead of pinning a failed offset."""
         consecutive_errors = 0
         max_consecutive_errors = 10
 
@@ -172,24 +196,34 @@ class KafkaConsumerService:
                 async for msg in self._consumer:
                     if not self._running:
                         break
+                    if self._resume_after_reconnect:
+                        await self._resume_latest(self._consumer.assignment())
+                        continue
                     try:
                         await self._process_message(msg.value, msg.topic, msg.partition, msg.offset)
                         await self._consumer.commit({
                             TopicPartition(msg.topic, msg.partition): OffsetAndMetadata(msg.offset + 1, "")
                         })
                         consecutive_errors = 0
-                    except Exception as e:
-                        logger.error(f"Error processing Kafka message: {e}")
-                        # Do not advance past a failed record: a later successful
-                        # commit would otherwise skip this offset permanently.
-                        self._consumer.seek(TopicPartition(msg.topic, msg.partition), msg.offset)
-                        await asyncio.sleep(1)
-                        break
+                    except Exception:
+                        logger.exception(
+                            "Kafka record failed topic=%s partition=%s offset=%s; resuming latest",
+                            msg.topic, msg.partition, msg.offset,
+                        )
+                        await self._resume_latest([TopicPartition(msg.topic, msg.partition)])
+                        consecutive_errors = 0
             except asyncio.CancelledError:
                 break
             except Exception as e:
                 consecutive_errors += 1
                 logger.error(f"Kafka consumer error ({consecutive_errors}/{max_consecutive_errors}): {e}")
+                try:
+                    await self._resume_latest(self._consumer.assignment())
+                except Exception:
+                    logger.exception("Kafka latest recovery unavailable; retrying broker connection")
+                else:
+                    consecutive_errors = 0
+                    continue
                 if consecutive_errors >= max_consecutive_errors:
                     logger.warning(f"Kafka consumer: {max_consecutive_errors} consecutive errors — switching to reconnect mode")
                     # 关闭旧 consumer

@@ -1,5 +1,69 @@
 # ARCHITECTURE.md — TrafficAnalyzer 系统架构
 
+## 2026-10-20 用户授权的宿主 Platform 对照排查
+
+新增独立原生排查包：Platform和其main_optimized.py子进程使用原ARM64镜像同版Python3.11/CANN9私有运行库直接在宿主运行，Console及数据库仍在Docker；Kafka/Doris沿用现场连接。宿主通过现有bridge IP访问数据库，Console代理至宿主bridge网关8000，不开放DB端口。入口保留DB/schema/head、认证/模型门禁及日志，切换失败尝试恢复原应用；显式init-db与普通启动分开。用户宿主UOS Server20/Python3.12.12不作系统Python升级或替换。短期排查例外不改变Mac原生MPS或原正式Compose；详见HOST_PLATFORM_RUNBOOK_20261020.md，现场NPU/兼容性/性能待验收。
+
+## 2026-10-19 .4候选标签局部渲染
+
+ShowNode沿用TCC徽标的ROI混合方式，仅复制/混合候选标签背景，避免每个候选重复处理整张4K帧；ROI包含原矩形右下端点，框、字、尾迹、透明度、顺序及原地输出不变。imshow=False时不再缩放未使用的本地窗口图，frame_result仍保留原分辨率供保存/证据/MJPEG。三worker、数值库线程、模型及抽帧配置不变；ARM像素等价、性能与累计.4包验证见DEPLOYMENT_INTRANET_VALIDATION.md，现场0.9FPS的新主瓶颈仍待新日志。
+
+## 2026-10-19 .3就绪日志与小矩阵边界
+
+VideoServer在Hydra配置后创建pipeline.video生命周期logger，只在真实监听socket已绑定并启动线程后报告MJPEG_READY；覆盖Platform沿用旧disabled启动参数的情形。Platform/子进程分别记录startup_contract/ready_contract=20261019.3，不改就绪门禁。二维影子门控保留Cholesky并以两行前代替代逐轨迹trtrs，避免小矩阵线程调度；数学距离、影子计数、正式关联与四维/正式Kalman更新保持。详情见DEPLOYMENT_INTRANET_VALIDATION.md。
+
+## 2026-10-19 Hydra禁用视频就绪logger修复
+
+Platform及Replay V2验收入口使用`hydra/job_logging=stdout`，随后由现有`configure_runtime_logging`统一格式和脱敏。Hydra的`disabled`模式会禁用导入时已创建的节点logger；仅重设root级别不能恢复，Linux fork还会继承该状态，导致VideoServer监听后无法发送MJPEG_READY。`none`模式也不会恢复先前被hydra_logging禁用的logger。保留真实就绪标记与超时门禁，不以进程存活或阶段完成代替就绪。详见DEPLOYMENT_INTRANET_VALIDATION.md。
+
+## 2026-10-19 跟踪计算分段CPU诊断
+
+ByteTrack沿用StageMonitor报告预测、距离矩阵、影子Mahalanobis及当前行/小矩阵求解、正式Kalman更新和分配后端；不改变正式关联/影子门禁。采样日志增加进程CPU时间、线程/亲和/配额与cgroup-v2限流累计计数；缺失诊断数据不得中断业务。watchdog在快速嵌套子阶段中仍可报告已慢的父阶段，退出状态区分completed/failed/interrupted。用户同基线更新选择直接复制宿主源码与校验清单，依赖/迁移变化仍走新的完整运行时发布。详见DEPLOYMENT_INTRANET.md。
+
+## 2026-10-19 检测器就绪信号与共享内存所有权
+
+Platform在完整脱敏后的stdout输入内识别MJPEG_READY，再保留4000字符诊断尾部；避免日志突发导致有效标记被尾部截断，真实就绪/120秒超时边界不变。POSIX父进程在创建三worker前启动resource_tracker，fork子进程共享清理注册表；reader/tracker只关闭句柄、show最后unlink，异常退出保留原清理机制。详见DEPLOYMENT_INTRANET.md。
+
+## 2026-10-19 全量发布从首次启动挂宿主源码
+
+全量封包将经校验的app-package置于`application/`，根Compose与内网/数据库/源码覆盖共同渲染为单文件；Platform与init-db均只读挂载`application/app`，Console静态资源同版。原有离线导入、资源校验、预检及显式init-db顺序保留，依赖与迁移基线记录在新ARM64镜像和APP_RELEASE中。后续prepare/apply复用原部署根，首次源码回退返回全量包基线；指南见RELEASE_PACKAGING_GUIDE.md。
+
+## 2026-10-19 首页登记视频定位独立于路网
+
+首页静态视频图标从登记来源的真实遥测取得录制位置，作为实时/最后遥测及路口坐标之外的显示定位依据。
+生产ROAD_FEATURES_ENABLED=false和空RoadContext快照均不应隐藏具备真实录制位置的视频；停止检测只改变状态。
+该位置在线程中由已有SRT/JSON读取器解析并缓存，不参与管道投影/地图匹配，也不自动恢复生产路网读取。
+详见`WORKBENCH_SOURCE_MARKERS_20261019.md`。
+
+## 2026-10-19 消费异常最新数据降级
+
+正式与回放统一取消历史运输offset门禁。公共KafkaConsumerService在记录处理/提交异常时切受影响分区最新位置，
+无记录上下文的解码/消费异常处理当前分配分区；broker不可达使用既有有界退避重连，重连后切最新。
+正常记录继续事务入库后广播，异常位置与恢复offset保留日志，跳过积压不自动补回；完整性声明必须反映降级缺口。
+此为用户明确选择的可用性优先规则，schema身份、鉴权及地理/道路质量门禁不放宽。
+
+## 2026-10-19 本地回放消费恢复
+
+MJPEG和Kafka指标是独立输出。回放Topic重建后的offset复用曾被inbox运输唯一约束阻塞，导致有视频无指标。
+Replay V2改用message_id+内容哈希维护幂等，运输位置改普通索引，保留历史与原始offset；无需清库或跳消息。
+独立迁移`20261019_rv2_0005`及真实页面验证见`MONITORING_INGESTION_RECOVERY_20261019.md`。
+
+## 2026-10-18 内网应用源码与日志边界（ADR-041）
+
+内网源码版复用固定ARM64运行时镜像，宿主`app/releases/<版本>/app`完整只读挂到`/app`；Platform与init-db共享同版源码，模型/视频与数据分别沿用独立挂载。Console静态资源和模板只读，启动生成内容使用容器内可写目录。源码切换只重建Platform/Console，不自动迁移数据库；依赖和迁移基线变化阻止源码升级。
+Python标准logging负责时间/级别/PID/Pipeline/logger、凭据过滤及轮转。Platform作为检测器每个Pipeline文件的唯一轮转所有者，持续排空子进程stdout/stderr并保留docker输出；三个worker不竞争写同一轮转文件。低频阶段BEGIN/WAIT/END覆盖初始化、Ascend执行/NMS、分析、队列与显示输出。宿主日志根为DATA_ROOT/logs，容器TRAFFIC_LOG_DIR=/var/log/traffic-analyzer。部署过程及Nginx日志单独落盘。详见DEPLOYMENT_INTRANET.md。
+
+## 2026-10-18 生产媒体与地图边界
+
+生产Console通过同源鉴权`/api/v1/video/camera/{camera_id}`访问Platform，再由Platform代理容器内检测器端口；Mac开发保留注册的直连MJPEG。
+MineMap CSS不得覆盖项目画布绝对定位；SDK/样式/服务/瓦片服务可显式分域配置，CSP和请求边界仅允许这些origin，无默认公网fallback。
+
+## 2026-10-17 生产临时数据库（ADR-039）
+
+intranet.3复用根Compose及两层内网覆盖，在同机运行ARM64 PostgreSQL17.10/PostGIS3.6.4/TimescaleDB2.28.2。
+无人机写入ycx_prod.drone；Doris统一只读外部路网/路况。数据库无宿主端口，DATA_ROOT/postgres持久化；先数据库健康，再预检/init-db/应用。
+主.env使用临时PG，.env.hg和docker-compose.hg.yaml保留HG目标；后续切换须备份与数据迁移对账。原生Mac road9/MPS边界不变。
+
 > 2026-07-16 本机开发环境已按 ADR-019 完成纯净切换。本文中的旧链路段落仅是历史设计记录；
 > 当前实现以根 `docker-compose.yaml`、Alembic `20260728_0020` 和 canonical `uav_*` 契约为准。
 
@@ -347,8 +411,8 @@ Mac 开发机不得用 x86_64/Rosetta Python 承担 YOLO 推理。仓库通过
 `mps.is_built()` 与 `mps.is_available()`，然后以用户级 `launchd` 运行 `run_platform.py`，注入
 原生 `.venv-mps`、`PIPELINE_DEVICE=mps`、默认 `PIPELINE_IMGSZ=960`、
 `PYTORCH_ENABLE_MPS_FALLBACK=1`、持久证据目录 `.runtime/survey` 以及本机 road9/Kafka 地址。
-外部 YCX 只读连接由 Git 忽略且权限为 `600` 的 `platform/.env` 持久化，并在 uvicorn 从
-`platform/` 工作目录加载 `Settings` 时读取；启动脚本不得注入空 `YCX_*` 覆盖该文件。
+外部 Doris 路网/路况只读连接由 Git 忽略且权限为 `600` 的 `platform/.env` 持久化，并在 uvicorn 从
+`platform/` 工作目录加载 `Settings` 时读取；启动脚本不得注入空 `DORIS_*` 覆盖该文件。
 本机证据目录不得回退到 `/tmp`；`uav_evidence_items.storage_key` 与内容寻址对象必须成对保留，
 切换运行拓扑时先以非破坏方式导入既有证据卷，不能只复用 road9 元数据。Platform 创建的检测器是同一
 macOS 环境中的进程组，因此 REST、Mission、MJPEG 与进程生命周期都保持本地回环，不需要
@@ -626,11 +690,11 @@ Console2 /（典型时段地图）
 - S8 口径未批准时 KPI 值为 null，同时返回事实分子/分母和阻断原因；主任首屏不展示无值或未验证的 KPI 卡片，也不把缺失解释为 0。阻断详情只保留在 API 和口径治理材料中。
 - 当前唯一活动底图是高德 JS API 2.0，Dashboard 路口、无人机、路网和轨迹坐标全部使用经服务端一次转换的 GCJ-02。正式车道层只接受 `lane_verified`；`link_verified` 最多作为明确标记的道路级降级骨架，不得显示为车道。可追溯的 GCJ-02 测试点位可进入本机验收地图；缺坐标或其他未验证记录进入隔离计数/配置待办。
 - 正式首页顶部范围、窗口和 `as_of` 来自聚合响应，不再使用 AppState 中的试点原型常量。I5-B 内部查询已支持风险/监测/质量、GCJ-02 bbox、搜索和 offset/limit，并将 road9 超时统一为 503；Console2 保留上一成功快照和有限重试，高德加载失败时降级为列表/KPI。项目范围/权限、点位聚合/zoom、全局增量/断线 REST 缺口回补和容量仍属后续或外部门禁。
-- `situation` 是首页专用的外部读模型例外，不参与 Pipeline、Mission、Kafka、无人机统计或本地 `road9` 写链路，也不复制服务器数据。服务端按启用 `road_version + day_of_week + step_index` 缓存 5 分钟、最多 64 个时槽；首次依赖失败返回结构化 503，有同槽成功缓存时才允许返回 `stale=true`。地图用全量态势路口/路段范围与本地项目路口做并集，无当槽指标的对象保持灰色。
+- `situation` 是首页专用的外部读模型例外，不参与 Pipeline、Mission、Kafka、无人机统计或本地 `road9` 写链路，也不复制服务器数据。服务端按启用 `road_version + stat_month + day_of_week + step_index` 缓存 5 分钟、最多 64 个时槽；首次依赖失败返回结构化 503，有同槽成功缓存时才允许返回 `stale=true`。地图用全量态势路口/路段范围与本地项目路口做并集，无当槽指标的对象保持灰色。
 
 ### I6 本机纯净目标栈与恢复边界
 
-- 根 `docker-compose.yaml` 是唯一完整拓扑，包含 `road9`/TimescaleDB、Apache Kafka KRaft、Platform、Console2、Nginx，以及可选 Kafka UI/GPU 检测器；隔离验证使用环境变量覆盖 project、端口和卷名。
+- 根 `docker-compose.yaml` 是唯一完整拓扑，包含 `road9`/TimescaleDB、Apache Kafka KRaft、Platform、Console2内置统一代理，以及可选 Kafka UI/GPU 检测器；隔离验证使用环境变量覆盖 project、端口和卷名。
 - Platform 镜像复制 `alembic.ini` 与全部 forward migration，`/ready` 同时确认 database、Kafka、TimescaleDB 和 PipelineManager；`/health` 仅表示进程存活。
 - 新 `road9` 最初由 `20260715_0010` 从空库创建并确认 5 张 hypertable，随后以前向迁移到
   `20260728_0020`；`0013` 增加 Kafka inbox 可恢复派发，`0014/0015` 增加轨迹研判维度与索引，
@@ -784,7 +848,7 @@ Console2 /enforcement/**
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                           前端（console2）                       │
-│                    React SPA + Nginx (:8080)                     │
+│                    React SPA + 内置代理 (:8009)                     │
 └────────────────────────────┬────────────────────────────────────┘
                              │ /api/*  /ws/*
                              ▼
@@ -865,7 +929,7 @@ Console2 /enforcement/**
 
 Platform 的历史 API 直接查询 PostgreSQL/TimescaleDB；仓库不保留旧查询客户端、依赖或运行时配置。
 
-I3 的 `MetricStore` 是 Kafka 与存储之间的深模块边界：消费者只提交 canonical 信封，模块内部完成 schema/业务时间校验、payload hash、`uav_message_inbox` 判重、事实展开和同事务提交。旧信封直接拒绝并进入 dead letter。数据库成功后才手动提交 Kafka offset；瞬态失败 seek 回原 offset，成功重放由 inbox 返回既有事实引用且不重复广播。可变冲突复核单独进入 `uav_conflict_reviews`，不修改 `uav_conflict_events` 追加事实。
+I3 的 `MetricStore` 是 Kafka 与存储之间的深模块边界：消费者只提交 canonical 信封，模块内部完成 schema/业务时间校验、payload hash、`uav_message_inbox` 判重、事实展开和同事务提交。旧信封直接拒绝并进入 dead letter。正常数据库成功后手动提交Kafka offset；2026-10-19起处理/提交异常记录位置并切最新，避免原位阻塞，成功重放仍由inbox返回既有事实引用且不重复广播。可变冲突复核单独进入 `uav_conflict_reviews`，不修改 `uav_conflict_events` 追加事实。
 
 冲突视觉证据跨越两个进程边界：`KafkaProducerNode` 只冻结当前 storage profile 的 TCC 信封并随 `FrameElement` 传给显示进程，`ShowNode` 在真实原帧上产生实际 `frame_result`，随后 `TccEvidencePublisherNode → utils_local.event_evidence` 才写盘并发布 Kafka。两个发布节点必须共享同一 live/V2 Topic 选择器，Replay V2 冲突只能进入 `uav_replay_v2_conflicts_{source_key}`。证据模块不允许重绘框、标签、轨迹或冲突标记；它仅保存 `ShowNode` 就地绘制前的原帧副本和绘制后的原尺寸 `frame_result`。`VideoSaverNode` 依旧保留原有 `conflict_*.jpg` 输出，managed `conflict_detector_frame` 是同一输出的内容寻址副本。两项 JPEG 按 SHA-256 写入 `SURVEY_STORAGE_DIR`，事件只携带相对 `storage_key`、哈希、大小和尺寸，不携带 Base64 或本机绝对路径。`MetricStore` 只校验并登记一个 `EvidencePackage` 与两项 `EvidenceItem`，不复制文件；Console2 通过鉴权证据接口读取。
 
@@ -1041,3 +1105,39 @@ V2 `uav_stats` 继续携带有界的 active/candidate 轨迹尾部，仅用于�
 ### EOF持久发布排空（2026-10-04）
 
 每Pipeline独占其Kafka spool目录。发送器启动只扫描恢复一次，以有序内存队列追踪原子落盘文件，避免EOF集中journey逐条重扫/stat全部文件。自然EOF按 `kafka_producer_node.shutdown_drain_timeout_sec`（默认120秒）排空；仍有durable_pending时进程失败，文件保留可恢复。周期队列超时记 `shutdown_drain_timeout`，不能把残留周期样本当作已发送。短片真实复验与大spool恢复证据见功能验收报告。
+
+## 2026-10-15 内网生产部署适配
+
+生产采用根 Compose 加 `deploy/intranet/compose.yaml` 薄覆盖，使用外部瀚高
+`xinchan.ycx_drone`（TimescaleDB、SM3）及外部认证 Kafka；本地继续原生 macOS/MPS
+和 `road9.public`。应用常规启动只校验迁移，显式部署命令初始化两套 schema。
+检测保留三进程，生产通过 DetectionNode 的 pyACL 后端运行 310P3/CANN 9.0.0 三档 OM；
+权重、视频、遥测独立挂载，轨迹归档、spool 和证据分别持久化。
+生产前端通过运行配置选择MineMap 2.1.0，内网SDK/样式/瓦片由现场地图服务提供，Key现场填写。
+共享覆盖物边界承接点位、轨迹、路网、正射影像及视角；GCJ-02直接绘制，不改变地理投影或匹配门禁。
+本地高德配置及原生启动方式保持。内网提供方加载失败显式报错，不回退公网地图。
+完整应用镜像与三档OM已构建并单独交付；现有x86_64国密库已匹配生产架构。
+实际地图服务、SM3及310P3实机仍需现场验收。详见 [部署手册](DEPLOYMENT_INTRANET.md)。
+
+### 2026-10-16 内网部署简化
+
+历史intranet.1采用Linux amd64/310P3/CANN9.0.0（生产架构后更正为aarch64，见后续补充）。根Compose移除独立Nginx服务，由Console已有代理提供8009入口；薄覆盖连接外部瀚高/Kafka。交付Compose由两者生成，包含一次性init-db及Platform/Console两个常驻服务。私有包根.env集中现场配置，首次./docker-compose up -d导入离线镜像、独立模型包并预检后启动；常驻Platform只校验数据库版本。应用xinchan.ycx_drone，外部YCX同库road11只读（典型态势仍xianchang）。本地road9/原生MPS与Console开发启动不变。
+
+## 2026-10-16 生产CPU最终更正为aarch64
+
+用户以生产机Architecture=aarch64更正此前amd64结论；内网构建、ELF检查、镜像/主机启动检查和回滚检查统一为ARM64。计划版本2026.10.16-intranet.3，旧amd64归档保留历史但不能直接部署。CANN9.0.0/310P ARM64官方digest已重新核实；参考项目19个国密动态库仍是x86_64，禁止混装，补齐aarch64国密libpq及依赖并完成实际加载前，不发布完整ARM64包。16个源/7台无人机及29个视频遥测保留，模型兼容单独核验；macOS原生MPS和本地.env不变。
+
+ARM64驱动补充：用户提供`deploy/highgo-reference/libpq.so.5`，已核实ELF183/aarch64及SM3符号；OpenSSL1.1兼容依赖取自Ubuntu官方ARM64包并核对SHA，原始来源/逐库SHA记于`deploy/highgo-reference/ARM64_SOURCE.json`。正式ARM64版本改为2026.10.16-intranet.4；intranet.3保留源码准备快照，不作为完整包。
+
+2026-10-16生产aarch64补充：ARM64 intranet.4沿用厂商国密libpq与纯Python psycopg3；DB_DRIVER=psycopg采用专用异步SQLAlchemy方言，以SHOW server_version_num识别PG内核，覆盖预检、常驻平台及两套Alembic迁移。既有镜像通过版本化只读文件挂载交付小补丁，现场.env/资产与数据库不覆盖；本地macOS asyncpg/MPS不变。
+
+2026-10-17部署诊断：platform/app/core/deployment_diagnostics.py提供不泄漏异常原文的结构化分类与集中报告；生产预检分项检查模型、资源、数据库、YCX和Kafka。SQL只读检查使用savepoint隔离，独立服务失败不互相遮蔽；显式init-db通过raise_on_error保留迁移异常链，原本地bool返回契约不变。
+
+2026-10-17生产例外（ADR-037）：瀚高xinchan.ycx_drone在Timescale缺失时允许普通PG时序表，显式初始化可在DBA启用后转换超表。
+外部典型指标从Doris MySQL协议读取；与HG road11分离。本次关闭路网标注/导入API、自动标注任务、运行时地图包匹配与车道推断，
+前端隐藏相应菜单；保持图像跟踪、独立遥测投影和普通统计/回放路径。本地开发默认不变。
+
+2026-10-17 ADR-038：外部路网和典型路况统一 Doris 同库只读联结；运行时不再使用瀚高 road11/xianchang，
+上述更早部署记录为历史拓扑。`doris_connection.py` 复用 PyMySQL 有界 SELECT、启用版本读取和 Shapely WKT解码；
+`YcxRoadImporter` 保持既有 API/候选几何契约，`DashboardSituationReadModel` 按共同月份/道路版本聚合指标。
+本机 road9/UAV事实、生产瀚高应用数据读写和原生MPS不变，生产关闭路网开关仍有效。

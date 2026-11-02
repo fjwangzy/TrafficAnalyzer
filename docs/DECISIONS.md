@@ -1051,3 +1051,110 @@ xqh 全量 1696 帧可以用于定位稳定悬停与离场阶段的工程差异�
 ### 后果
 
 实时页面只要图像跟踪器接受目标就立即显示并计入通用活动目标统计；不会再出现候选冷静期虚线。响应更直接，也明确接受短暂误检在实时画面短时出现的产品取舍。正式检测/跟踪精度仍需批准真值评估，不能由即时投放数量证明。
+
+## ADR-033：内网 AMD64/310P3 生产发布（2026-10-15）
+
+状态：实施与本地验证；生产实机/SM3 门禁待完成。
+
+项目方确认生产为外部瀚高 `xinchan.ycx_drone` + TimescaleDB/SM3、认证 Kafka、
+Linux AMD64 + Ascend310P3 + CANN 9.0.0，并明确允许 IP+HTTP。使用根 Compose
+加薄覆盖，不另建完整拓扑。HTTP 例外必须显式配置，不全局关闭媒体鉴权或 CORS。
+本机 `road9.public`、原生 macOS/MPS 启动及现有业务契约保持。
+
+生产数据库走 psycopg 3/厂商 AMD64 libpq，启动只校验，部署单独迁移；当前归档的
+x86_64/cp311 参考库已匹配 AMD64/Python 3.11，纯 Python psycopg3 加载验证通过。检测仅增加 pyACL 推理后端，保留三进程
+与统一检测几何边界；模型、视频独立传输，应用镜像离线导入。
+缺少厂商 AMD64 库/镜像/模型时正式打包必须失败，源码准备包必须标为不可直接离线运行。
+初始范围不含地图切换；后续地图接入按 ADR-034 扩展。RustFS 新接入和历史迁移仍不纳入此次工作。
+
+## ADR-034：生产内网 MineMap 与本地高德隔离配置（2026-10-15）
+
+用户追加要求接入内网地图，确认 Key 由现场填写。生产薄覆盖固定 `MAP_PROVIDER=minemap`，
+使用附件中的 `http://37.8.188.98:21009`、SDK 2.1.0、方案17000；Key必填且不随包提供。
+本地开发默认高德及原有环境文件保持。共享SDK边界适配点位、实时轨迹、路网面、
+正射影像叠加、视角与资源释放，已有GCJ-02数据直接输入，不新增坐标转换。
+
+MineMap不回退公网SDK；地图资源请求仅允许配置的地图origin及应用同源影像。
+方案未确认提供卫星影像或实时路况，因此生产界面只标识四维图新底图与无人机遥测。
+真实2.1.0 SDK的本机测试夹具验证不替代现场Key授权、实际样式/瓦片、浏览器CORS和空间对齐验收。
+
+## ADR-036：内网单入口与私有一键离线交付（2026-10-16）
+
+用户要求简化并直接部署，撤销此前独立Nginx及连接配置分开发送的方式。复用Console内置代理，8009单入口；源码仍以根Compose加薄覆盖为唯一拓扑，封包生成可独立读取.env的单Compose。首次./docker-compose up -d补足系统Compose无法导入离线tar的步骤，验证镜像ID、模型与设备/连接；Compose以service_completed_successfully等待init-db迁移，再启动Platform与Console。普通服务重启只校验版本。
+
+用户授权将实际DB/Kafka/YCX/地图配置及新生成的JWT/管理员密码写入私有部署包根.env，600权限并标明私有；镜像、Git和源码包继续排除秘密。内部校验排除可编辑.env，外层SHA覆盖原始完整归档。YCX确认与应用同一瀚高database=xinchan，路网schema=road11；不写外部表。模型/视频保持外置，macOS本地模式不变。生产SM3、310P3数值/性能、内网地图和ACL仍需现场验收。
+
+## 2026-10-16 生产CPU最终更正为aarch64
+
+用户以生产机Architecture=aarch64更正此前amd64结论；内网构建、ELF检查、镜像/主机启动检查和回滚检查统一为ARM64。计划版本2026.10.16-intranet.3，旧amd64归档保留历史但不能直接部署。CANN9.0.0/310P ARM64官方digest已重新核实；参考项目19个国密动态库仍是x86_64，禁止混装，补齐aarch64国密libpq及依赖并完成实际加载前，不发布完整ARM64包。16个源/7台无人机及29个视频遥测保留，模型兼容单独核验；macOS原生MPS和本地.env不变。
+
+ARM64驱动补充：用户提供`deploy/highgo-reference/libpq.so.5`，已核实ELF183/aarch64及SM3符号；OpenSSL1.1兼容依赖取自Ubuntu官方ARM64包并核对SHA，原始来源/逐库SHA记于`deploy/highgo-reference/ARM64_SOURCE.json`。正式ARM64版本改为2026.10.16-intranet.4；intranet.3保留源码准备快照，不作为完整包。
+
+## ADR-037：现场可选外部依赖、普通PG表与路网暂停（2026-10-17）
+
+用户确认两张外部典型指标表实际在Doris，并授权暂缺TimescaleDB、PostGIS和路网版本表不阻塞部署；
+随后要求先关闭路网标注、匹配及导入和一级菜单。本次生产采用DB_TIMESCALE_REQUIRED=false，
+ROAD_FEATURES_ENABLED=false及YCX_METRICS_BACKEND=doris，本机默认与ADR-019/020保持。
+
+Doris经参考项目已有MySQL协议（9030/PyMySQL）只读查询，与瀚高路网在应用侧按ID关联，不跨库SQL JOIN；
+连接参数写私有.env，缺表/错误认证为非阻塞警告。外部指标不是UAV历史数据迁移/旧链路复活。
+路网关闭时API返回ROAD_FEATURES_DISABLED，UI隐藏平台治理一级与标定入口、阻断标定/项目深链，
+运行时不加载路网、不执行车道检测/分析/推断，自动标注任务关闭；独立图像跟踪与遥测世界投影继续。
+路网未来开启时缺版本元数据只能显式指定已确认版本；缺空间函数暂停导入/地图层，不伪造数据。
+
+普通表保留同一uav_*表、inbox幂等和版本表；启动健康报告timescaledb=degraded而不阻塞ready。
+缺点为无超表分块、压缩和自动保留，需要容量监控。DBA在xinchan启用兼容扩展后，由显式init-db
+以事务幂等转换六表并恢复V2的7天压缩/90天保留，保留既有数据；常规平台启动不执行转换。
+已安装扩展但转换失败时保留异常和回滚，不假装迁移成功。DB/迁移、Kafka与昇腾必需检查保持。
+
+## ADR-038：外部路网与路况统一只读 Doris（2026-10-17）
+
+用户提供公网连接并授权写入本地环境、进行本机验证，随后确认实际表名带 `index`。
+外部路网三维表和版本表、路口/路段指标均使用 `DORIS_MYSQL_* + DORIS_DATABASE`；
+瀚高 `xinchan.ycx_drone` 只承载无人机应用事实，不再作为 road11/xianchang 读源。
+Mac 本地 `road9.public` 与原生 MPS 保持，生产架构仍 ARM64；ADR-037 生产路网暂停开关不变。
+
+版本读取 `dim_data_version.is_enabled=1`，不猜测未启用版本；WKT 用已有 Shapely 解码，
+Doris 附近查询使用 `ST_Distance_Sphere`，无需 PostGIS。
+两张指标表是 `dws_tfc_inter_index_m_5mi` / `dws_tfc_link_index_m_5mi`，取匹配道路版本的
+共同最新 `stat_month`，避免跨月混合。路口每个方向的月均延误指数取最大值展示；
+路段使用 `delay_index_avg`。饱和度/服务水平/排队长度不存在于该来源时保留 null。
+坐标仍为既有 GCJ-02，候选 Lane 不自动升级为 lane_verified。
+
+该决策取代本文件之前“瀚高路网 + Doris指标”的读库拓扑；历史交付物保持封存，不自动重发。
+本机验证、缺失历史路口和全量地图加载限制见 `DORIS_INTEGRATION_VALIDATION_20261017.md`。
+
+2026-10-17生产连接补充：用户将瀚高应用目标更正为sysdba / ycx_prod.drone，替代旧xinchan.ycx_drone。
+生产预检/初始化按受控配置核对实际库/schema，拒绝road9及公共/系统schema；不回退或迁移旧目标。
+Doris统一只读与Mac原生road9/MPS约束不变，完整发布为2026.10.17-intranet.2。
+
+## ADR-039：HG扩展故障期间使用同机临时PostgreSQL（2026-10-17）
+
+**状态**：用户已授权，ARM64镜像及本机隔离验证完成，生产执行待现场。
+
+**背景**：生产HG的PostGIS/TimescaleDB暂不能修复，用户要求先在同机Docker走通项目部署，后续再切回HG。
+
+**决策**：复用根Compose加内网覆盖，并用compose.postgres.yaml启用road9服务。构建固定Timescale ARM64基础镜像加校验SHA的PostGIS3.6.4核心源码，提供PG17.10/TS2.28.2。无人机库/schema仍ycx_prod.drone；外部路网/路况继续只读Doris，路网开关保持关闭。
+数据库不暴露宿主端口，以DATA_ROOT/postgres持久化，首次创建扩展/schema，健康后再预检与应用迁移；Mac原生开发态不变。
+
+**切换边界**：主.env使用临时库，HG完整连接单独保留.env.hg和docker-compose.hg.yaml；不双写、不自动搬迁HG历史数据。
+提供备份工具和切换手册。PG17/Timescale整库dump不保证可恢复到HG，未来须停写备份、核验目标扩展/版本、制定迁移并对账后切换，保留临时目录用于回退。
+
+**验证与限制**：首次/重复迁移、六正式超表、真实业务集成、空间/时序写读、重启、同版本备份完整恢复通过；源码/镜像无生产秘密。
+生产内网/NPU实机、单机容量与RPO/RTO尚未验收。V2样本7天压缩/90天保留仍生效；核心空间功能已测，未添加未用的raster/GDAL/SFCGAL。
+
+## ADR-040：生产画面同源代理与MineMap显式服务配置（2026-10-18）
+
+**状态**：本机真实复现及修复验证，现场执行待验收。
+生产浏览器无法路由容器localhost，原MineMap CSP也会拦截直连检测流；Console改用已有鉴权媒体代理，继续以当前camera_id映射运行检测器，开发直连不变。
+MineMap CSS后加载将画布position改为relative导致高度0；项目用更高优先级选择器保留absolute/inset/100%尺寸。SDK/样式/服务/瓦片域可显式配置，对应CSP origin与请求允许集合；未配置仍保持内网默认，不做公网fallback。
+只读诊断工具区分Kafka是否有FPS、DB是否落样本及offset复用。没有生产日志时不修改消费幂等性、不跳过错误、不将缺失指标填零。后续数据修复须独立确认原因和影响范围。
+
+2026-10-18补充：用户要求MineMap统一深色。仅重配provider矢量底图颜色，保留其道路等级/宽度与标签布局，不对整张canvas做滤镜，不改业务overlay/marker颜色；默认应用于所有MineMap视图，AMap既有深色默认保持。
+
+## ADR-041：宿主应用源码发布与标准logging持久化（2026-10-18）
+
+用户要求能查看容器启动与检测器日志，并把app资源独立挂宿主，使后续兼容升级只交付源码包。
+内网源码版复用固定ARM64镜像中的Python/原生依赖与CANN环境；完整应用代码及Console构建资源采用版本化宿主只读挂载，配置生成内容另放容器可写目录。Platform及init-db必须使用同一版源码。模型、视频、私有env及业务数据保留原独立路径。
+升级先校验SHA/镜像ID/依赖及两套迁移基线和实际数据库版本，再在维护窗口停止两应用、执行预检并重建；失败恢复上一版应用配置。不执行数据库DDL，依赖/迁移/模型运行时变化必须走独立发布，不能以源码回退冒充数据库回退。
+Python统一标准logging，保留控制台、宿主限额轮转日志、级别/PID/Pipeline/logger及异常栈；Platform单点采集检测器三个worker输出，避免多进程同时轮转。阶段日志应在工作完成前就能看到BEGIN/WAIT，覆盖设备执行、CPU后处理、分析归档与队列反压。没有现场证据时不据日志功能交付宣称NPU吞吐已恢复。

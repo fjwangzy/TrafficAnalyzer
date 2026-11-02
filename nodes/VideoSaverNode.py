@@ -28,7 +28,7 @@ class VideoSaverNode:
         if isinstance(frame_element, VideoEndBreakElement):
             if self._cv2_writer is not None:
                 self._cv2_writer.release()
-                print(f"主视频已保存到文件夹 {self.out_folder}")
+                logger.info("VIDEO_SAVED output_dir=%s", self.out_folder)
             return
         
         assert isinstance(

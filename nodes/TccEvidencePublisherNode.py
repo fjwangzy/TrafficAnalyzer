@@ -8,6 +8,7 @@ import re
 from json import dumps
 
 from kafka import KafkaProducer
+from utils_local.kafka_security import kafka_security_options
 
 from elements.VideoEndBreakElement import VideoEndBreakElement
 from nodes.KafkaProducerNode import KafkaProducerNode
@@ -43,6 +44,7 @@ class TccEvidencePublisherNode:
 
         producer = KafkaProducer(
             bootstrap_servers=kafka_config["bootstrap_servers"],
+            **kafka_security_options(),
             value_serializer=lambda value: dumps(value).encode("utf-8"),
             retries=3,
             request_timeout_ms=5000,

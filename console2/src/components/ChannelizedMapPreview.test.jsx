@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const amapMocks = vi.hoisted(() => ({ maps: [], polygons: [], polylines: [], imageLayers: [] }))
 
 vi.mock('../lib/amap', () => ({
+  mapProviderLabel: () => '高德地图',
   loadAmap: vi.fn(async () => {
     class Map {
       constructor(_target, options) { this.options = options; amapMocks.maps.push(this) }

@@ -29,7 +29,7 @@ describe('release bundle configuration', () => {
     const entrypoint = readFileSync(resolve(process.cwd(), 'docker-entrypoint.d/40-amap-runtime-config.sh'), 'utf8')
 
     expect(runtimeTemplate).toContain("amapSecurityJsCode: '${AMAP_SECURITY_JS_CODE}'")
-    expect(entrypoint).toContain("envsubst '${AMAP_JS_API_KEY} ${AMAP_SECURITY_JS_CODE}'")
+    expect(entrypoint).toContain('${MAP_PROVIDER} ${MINEMAP_DOMAIN} ${MINEMAP_KEY} ${MINEMAP_SOLUTION}')
   })
 
   it('allows production startup without the optional AMap security code', () => {
@@ -87,4 +87,12 @@ describe('AMap browser-direct security configuration', () => {
       plugins: ['AMap.Scale', 'AMap.MoveAnimation'],
     })
   })
+})
+
+it('does not contact the public map SDK when the intranet map is disabled', async () => {
+  resetAmapLoaderForTest()
+  AMapLoader.load.mockClear()
+  window.__RUNTIME_CONFIG__ = { mapDisabled: true, amapKey: 'unused' }
+  await expect(loadAmap()).rejects.toThrow('内网底图暂未接入')
+  expect(AMapLoader.load).not.toHaveBeenCalled()
 })

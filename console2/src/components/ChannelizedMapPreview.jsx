@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { WarningCircle } from '@phosphor-icons/react'
-import { loadAmap } from '../lib/amap'
+import { loadAmap, mapProviderLabel } from '../lib/amap'
 
 function geometries(group) {
   if (!group || typeof group !== 'object') return []
@@ -24,6 +24,8 @@ export function ChannelizedMapPreview({ mapVersion }) {
         mapStyle: 'amap://styles/darkblue',
         viewMode: '2D',
       })
+      mapRef.current = map
+      map.on?.('error', () => { if (!disposed) setError(`${mapProviderLabel()}服务不可用`) })
       const geometry = mapVersion.geometry_gcj02 || {}
       const overlays = []
       const imageLayers = []
@@ -60,7 +62,7 @@ export function ChannelizedMapPreview({ mapVersion }) {
         map.setFitView(overlays, false, [40, 40, 40, 40], 19)
       }
       mapRef.current = map
-    }).catch((reason) => { if (!disposed) setError(reason?.message || '高德地图加载失败') })
+    }).catch((reason) => { if (!disposed) setError(reason?.message || `${mapProviderLabel()}加载失败`) })
     return () => {
       disposed = true
       mapRef.current?.destroy()
@@ -73,6 +75,6 @@ export function ChannelizedMapPreview({ mapVersion }) {
   return <div className='channelized-map-preview'>
     <div ref={targetRef} className='amap-canvas' />
     <div className='map-demo-label'>GCJ-02 · {mapVersion.status}</div>
-    <div className='map-attribution'>高德地图 · YCX 候选仅供拟合参考</div>
+    <div className='map-attribution'>{mapProviderLabel()} · YCX 候选仅供拟合参考</div>
   </div>
 }

@@ -1,0 +1,1 @@
+/usr/bin/c++ CMakeFiles/yolo_trace_track_smoke.dir/smoke_main.cpp.o -o yolo_trace_track_smoke  libyolo_trace_track.a reorder/libyolo_reorder.a postprocess/libyolo_postprocess.a inference/libyolo_inference.a preprocess/libyolo_preprocess.a c_client/libdrn_c_client.a /usr/lib/aarch64-linux-gnu/libzmq.so -lrga /usr/lib/aarch64-linux-gnu/libsqlite3.so -lyaml-cpp -lpthread 

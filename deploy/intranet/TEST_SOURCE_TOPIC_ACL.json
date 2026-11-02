@@ -1,0 +1,765 @@
+{
+  "topics": [
+    {
+      "topic": "uav_replay_v2_statistics_SRC-E2BA6A8F6D0F",
+      "operations": [
+        "Write",
+        "Describe",
+        "Read"
+      ]
+    },
+    {
+      "topic": "uav_replay_v2_track_complete_SRC-E2BA6A8F6D0F",
+      "operations": [
+        "Write",
+        "Describe",
+        "Read"
+      ]
+    },
+    {
+      "topic": "uav_replay_v2_conflicts_SRC-E2BA6A8F6D0F",
+      "operations": [
+        "Write",
+        "Describe",
+        "Read"
+      ]
+    },
+    {
+      "topic": "uav_replay_v2_telemetry_SRC-E2BA6A8F6D0F",
+      "operations": [
+        "Write",
+        "Describe",
+        "Read"
+      ]
+    },
+    {
+      "topic": "uav_replay_v2_mission_SRC-E2BA6A8F6D0F",
+      "operations": [
+        "Write",
+        "Describe",
+        "Read"
+      ]
+    },
+    {
+      "topic": "uav_replay_v2_enforcement_clues_SRC-E2BA6A8F6D0F",
+      "operations": [
+        "Write",
+        "Describe"
+      ]
+    },
+    {
+      "topic": "uav_replay_v2_statistics_SRC-INTER-XQH-0403-PM",
+      "operations": [
+        "Write",
+        "Describe",
+        "Read"
+      ]
+    },
+    {
+      "topic": "uav_replay_v2_track_complete_SRC-INTER-XQH-0403-PM",
+      "operations": [
+        "Write",
+        "Describe",
+        "Read"
+      ]
+    },
+    {
+      "topic": "uav_replay_v2_conflicts_SRC-INTER-XQH-0403-PM",
+      "operations": [
+        "Write",
+        "Describe",
+        "Read"
+      ]
+    },
+    {
+      "topic": "uav_replay_v2_telemetry_SRC-INTER-XQH-0403-PM",
+      "operations": [
+        "Write",
+        "Describe",
+        "Read"
+      ]
+    },
+    {
+      "topic": "uav_replay_v2_mission_SRC-INTER-XQH-0403-PM",
+      "operations": [
+        "Write",
+        "Describe",
+        "Read"
+      ]
+    },
+    {
+      "topic": "uav_replay_v2_enforcement_clues_SRC-INTER-XQH-0403-PM",
+      "operations": [
+        "Write",
+        "Describe"
+      ]
+    },
+    {
+      "topic": "uav_replay_v2_statistics_SRC-MP4728-JS-0728-3MS",
+      "operations": [
+        "Write",
+        "Describe",
+        "Read"
+      ]
+    },
+    {
+      "topic": "uav_replay_v2_track_complete_SRC-MP4728-JS-0728-3MS",
+      "operations": [
+        "Write",
+        "Describe",
+        "Read"
+      ]
+    },
+    {
+      "topic": "uav_replay_v2_conflicts_SRC-MP4728-JS-0728-3MS",
+      "operations": [
+        "Write",
+        "Describe",
+        "Read"
+      ]
+    },
+    {
+      "topic": "uav_replay_v2_telemetry_SRC-MP4728-JS-0728-3MS",
+      "operations": [
+        "Write",
+        "Describe",
+        "Read"
+      ]
+    },
+    {
+      "topic": "uav_replay_v2_mission_SRC-MP4728-JS-0728-3MS",
+      "operations": [
+        "Write",
+        "Describe",
+        "Read"
+      ]
+    },
+    {
+      "topic": "uav_replay_v2_enforcement_clues_SRC-MP4728-JS-0728-3MS",
+      "operations": [
+        "Write",
+        "Describe"
+      ]
+    },
+    {
+      "topic": "uav_replay_v2_statistics_SRC-MP4728-JS-0728-5MS",
+      "operations": [
+        "Write",
+        "Describe",
+        "Read"
+      ]
+    },
+    {
+      "topic": "uav_replay_v2_track_complete_SRC-MP4728-JS-0728-5MS",
+      "operations": [
+        "Write",
+        "Describe",
+        "Read"
+      ]
+    },
+    {
+      "topic": "uav_replay_v2_conflicts_SRC-MP4728-JS-0728-5MS",
+      "operations": [
+        "Write",
+        "Describe",
+        "Read"
+      ]
+    },
+    {
+      "topic": "uav_replay_v2_telemetry_SRC-MP4728-JS-0728-5MS",
+      "operations": [
+        "Write",
+        "Describe",
+        "Read"
+      ]
+    },
+    {
+      "topic": "uav_replay_v2_mission_SRC-MP4728-JS-0728-5MS",
+      "operations": [
+        "Write",
+        "Describe",
+        "Read"
+      ]
+    },
+    {
+      "topic": "uav_replay_v2_enforcement_clues_SRC-MP4728-JS-0728-5MS",
+      "operations": [
+        "Write",
+        "Describe"
+      ]
+    },
+    {
+      "topic": "uav_replay_v2_statistics_SRC-MP4728-JS-0728-7MS",
+      "operations": [
+        "Write",
+        "Describe",
+        "Read"
+      ]
+    },
+    {
+      "topic": "uav_replay_v2_track_complete_SRC-MP4728-JS-0728-7MS",
+      "operations": [
+        "Write",
+        "Describe",
+        "Read"
+      ]
+    },
+    {
+      "topic": "uav_replay_v2_conflicts_SRC-MP4728-JS-0728-7MS",
+      "operations": [
+        "Write",
+        "Describe",
+        "Read"
+      ]
+    },
+    {
+      "topic": "uav_replay_v2_telemetry_SRC-MP4728-JS-0728-7MS",
+      "operations": [
+        "Write",
+        "Describe",
+        "Read"
+      ]
+    },
+    {
+      "topic": "uav_replay_v2_mission_SRC-MP4728-JS-0728-7MS",
+      "operations": [
+        "Write",
+        "Describe",
+        "Read"
+      ]
+    },
+    {
+      "topic": "uav_replay_v2_enforcement_clues_SRC-MP4728-JS-0728-7MS",
+      "operations": [
+        "Write",
+        "Describe"
+      ]
+    },
+    {
+      "topic": "uav_replay_v2_statistics_SRC-MP4729-JS-0729-3MS",
+      "operations": [
+        "Write",
+        "Describe",
+        "Read"
+      ]
+    },
+    {
+      "topic": "uav_replay_v2_track_complete_SRC-MP4729-JS-0729-3MS",
+      "operations": [
+        "Write",
+        "Describe",
+        "Read"
+      ]
+    },
+    {
+      "topic": "uav_replay_v2_conflicts_SRC-MP4729-JS-0729-3MS",
+      "operations": [
+        "Write",
+        "Describe",
+        "Read"
+      ]
+    },
+    {
+      "topic": "uav_replay_v2_telemetry_SRC-MP4729-JS-0729-3MS",
+      "operations": [
+        "Write",
+        "Describe",
+        "Read"
+      ]
+    },
+    {
+      "topic": "uav_replay_v2_mission_SRC-MP4729-JS-0729-3MS",
+      "operations": [
+        "Write",
+        "Describe",
+        "Read"
+      ]
+    },
+    {
+      "topic": "uav_replay_v2_enforcement_clues_SRC-MP4729-JS-0729-3MS",
+      "operations": [
+        "Write",
+        "Describe"
+      ]
+    },
+    {
+      "topic": "uav_replay_v2_statistics_SRC-MP4820-JS-0813-EW",
+      "operations": [
+        "Write",
+        "Describe",
+        "Read"
+      ]
+    },
+    {
+      "topic": "uav_replay_v2_track_complete_SRC-MP4820-JS-0813-EW",
+      "operations": [
+        "Write",
+        "Describe",
+        "Read"
+      ]
+    },
+    {
+      "topic": "uav_replay_v2_conflicts_SRC-MP4820-JS-0813-EW",
+      "operations": [
+        "Write",
+        "Describe",
+        "Read"
+      ]
+    },
+    {
+      "topic": "uav_replay_v2_telemetry_SRC-MP4820-JS-0813-EW",
+      "operations": [
+        "Write",
+        "Describe",
+        "Read"
+      ]
+    },
+    {
+      "topic": "uav_replay_v2_mission_SRC-MP4820-JS-0813-EW",
+      "operations": [
+        "Write",
+        "Describe",
+        "Read"
+      ]
+    },
+    {
+      "topic": "uav_replay_v2_enforcement_clues_SRC-MP4820-JS-0813-EW",
+      "operations": [
+        "Write",
+        "Describe"
+      ]
+    },
+    {
+      "topic": "uav_replay_v2_statistics_SRC-MP4820-JS-0813-WE",
+      "operations": [
+        "Write",
+        "Describe",
+        "Read"
+      ]
+    },
+    {
+      "topic": "uav_replay_v2_track_complete_SRC-MP4820-JS-0813-WE",
+      "operations": [
+        "Write",
+        "Describe",
+        "Read"
+      ]
+    },
+    {
+      "topic": "uav_replay_v2_conflicts_SRC-MP4820-JS-0813-WE",
+      "operations": [
+        "Write",
+        "Describe",
+        "Read"
+      ]
+    },
+    {
+      "topic": "uav_replay_v2_telemetry_SRC-MP4820-JS-0813-WE",
+      "operations": [
+        "Write",
+        "Describe",
+        "Read"
+      ]
+    },
+    {
+      "topic": "uav_replay_v2_mission_SRC-MP4820-JS-0813-WE",
+      "operations": [
+        "Write",
+        "Describe",
+        "Read"
+      ]
+    },
+    {
+      "topic": "uav_replay_v2_enforcement_clues_SRC-MP4820-JS-0813-WE",
+      "operations": [
+        "Write",
+        "Describe"
+      ]
+    },
+    {
+      "topic": "uav_replay_v2_statistics_SRC-MP4NEW-CH-0625-AM",
+      "operations": [
+        "Write",
+        "Describe",
+        "Read"
+      ]
+    },
+    {
+      "topic": "uav_replay_v2_track_complete_SRC-MP4NEW-CH-0625-AM",
+      "operations": [
+        "Write",
+        "Describe",
+        "Read"
+      ]
+    },
+    {
+      "topic": "uav_replay_v2_conflicts_SRC-MP4NEW-CH-0625-AM",
+      "operations": [
+        "Write",
+        "Describe",
+        "Read"
+      ]
+    },
+    {
+      "topic": "uav_replay_v2_telemetry_SRC-MP4NEW-CH-0625-AM",
+      "operations": [
+        "Write",
+        "Describe",
+        "Read"
+      ]
+    },
+    {
+      "topic": "uav_replay_v2_mission_SRC-MP4NEW-CH-0625-AM",
+      "operations": [
+        "Write",
+        "Describe",
+        "Read"
+      ]
+    },
+    {
+      "topic": "uav_replay_v2_enforcement_clues_SRC-MP4NEW-CH-0625-AM",
+      "operations": [
+        "Write",
+        "Describe"
+      ]
+    },
+    {
+      "topic": "uav_replay_v2_statistics_SRC-MP4NEW-HY-0624-PM",
+      "operations": [
+        "Write",
+        "Describe",
+        "Read"
+      ]
+    },
+    {
+      "topic": "uav_replay_v2_track_complete_SRC-MP4NEW-HY-0624-PM",
+      "operations": [
+        "Write",
+        "Describe",
+        "Read"
+      ]
+    },
+    {
+      "topic": "uav_replay_v2_conflicts_SRC-MP4NEW-HY-0624-PM",
+      "operations": [
+        "Write",
+        "Describe",
+        "Read"
+      ]
+    },
+    {
+      "topic": "uav_replay_v2_telemetry_SRC-MP4NEW-HY-0624-PM",
+      "operations": [
+        "Write",
+        "Describe",
+        "Read"
+      ]
+    },
+    {
+      "topic": "uav_replay_v2_mission_SRC-MP4NEW-HY-0624-PM",
+      "operations": [
+        "Write",
+        "Describe",
+        "Read"
+      ]
+    },
+    {
+      "topic": "uav_replay_v2_enforcement_clues_SRC-MP4NEW-HY-0624-PM",
+      "operations": [
+        "Write",
+        "Describe"
+      ]
+    },
+    {
+      "topic": "uav_replay_v2_statistics_SRC-MP4NEW-HY-0625-AM",
+      "operations": [
+        "Write",
+        "Describe",
+        "Read"
+      ]
+    },
+    {
+      "topic": "uav_replay_v2_track_complete_SRC-MP4NEW-HY-0625-AM",
+      "operations": [
+        "Write",
+        "Describe",
+        "Read"
+      ]
+    },
+    {
+      "topic": "uav_replay_v2_conflicts_SRC-MP4NEW-HY-0625-AM",
+      "operations": [
+        "Write",
+        "Describe",
+        "Read"
+      ]
+    },
+    {
+      "topic": "uav_replay_v2_telemetry_SRC-MP4NEW-HY-0625-AM",
+      "operations": [
+        "Write",
+        "Describe",
+        "Read"
+      ]
+    },
+    {
+      "topic": "uav_replay_v2_mission_SRC-MP4NEW-HY-0625-AM",
+      "operations": [
+        "Write",
+        "Describe",
+        "Read"
+      ]
+    },
+    {
+      "topic": "uav_replay_v2_enforcement_clues_SRC-MP4NEW-HY-0625-AM",
+      "operations": [
+        "Write",
+        "Describe"
+      ]
+    },
+    {
+      "topic": "uav_replay_v2_statistics_SRC-MP4NEW-LS-0624-PM",
+      "operations": [
+        "Write",
+        "Describe",
+        "Read"
+      ]
+    },
+    {
+      "topic": "uav_replay_v2_track_complete_SRC-MP4NEW-LS-0624-PM",
+      "operations": [
+        "Write",
+        "Describe",
+        "Read"
+      ]
+    },
+    {
+      "topic": "uav_replay_v2_conflicts_SRC-MP4NEW-LS-0624-PM",
+      "operations": [
+        "Write",
+        "Describe",
+        "Read"
+      ]
+    },
+    {
+      "topic": "uav_replay_v2_telemetry_SRC-MP4NEW-LS-0624-PM",
+      "operations": [
+        "Write",
+        "Describe",
+        "Read"
+      ]
+    },
+    {
+      "topic": "uav_replay_v2_mission_SRC-MP4NEW-LS-0624-PM",
+      "operations": [
+        "Write",
+        "Describe",
+        "Read"
+      ]
+    },
+    {
+      "topic": "uav_replay_v2_enforcement_clues_SRC-MP4NEW-LS-0624-PM",
+      "operations": [
+        "Write",
+        "Describe"
+      ]
+    },
+    {
+      "topic": "uav_replay_v2_statistics_SRC-MP4NEW-LS-0625-AM",
+      "operations": [
+        "Write",
+        "Describe",
+        "Read"
+      ]
+    },
+    {
+      "topic": "uav_replay_v2_track_complete_SRC-MP4NEW-LS-0625-AM",
+      "operations": [
+        "Write",
+        "Describe",
+        "Read"
+      ]
+    },
+    {
+      "topic": "uav_replay_v2_conflicts_SRC-MP4NEW-LS-0625-AM",
+      "operations": [
+        "Write",
+        "Describe",
+        "Read"
+      ]
+    },
+    {
+      "topic": "uav_replay_v2_telemetry_SRC-MP4NEW-LS-0625-AM",
+      "operations": [
+        "Write",
+        "Describe",
+        "Read"
+      ]
+    },
+    {
+      "topic": "uav_replay_v2_mission_SRC-MP4NEW-LS-0625-AM",
+      "operations": [
+        "Write",
+        "Describe",
+        "Read"
+      ]
+    },
+    {
+      "topic": "uav_replay_v2_enforcement_clues_SRC-MP4NEW-LS-0625-AM",
+      "operations": [
+        "Write",
+        "Describe"
+      ]
+    },
+    {
+      "topic": "uav_replay_v2_statistics_SRC-MP4NEW2-CH-0715-PM",
+      "operations": [
+        "Write",
+        "Describe",
+        "Read"
+      ]
+    },
+    {
+      "topic": "uav_replay_v2_track_complete_SRC-MP4NEW2-CH-0715-PM",
+      "operations": [
+        "Write",
+        "Describe",
+        "Read"
+      ]
+    },
+    {
+      "topic": "uav_replay_v2_conflicts_SRC-MP4NEW2-CH-0715-PM",
+      "operations": [
+        "Write",
+        "Describe",
+        "Read"
+      ]
+    },
+    {
+      "topic": "uav_replay_v2_telemetry_SRC-MP4NEW2-CH-0715-PM",
+      "operations": [
+        "Write",
+        "Describe",
+        "Read"
+      ]
+    },
+    {
+      "topic": "uav_replay_v2_mission_SRC-MP4NEW2-CH-0715-PM",
+      "operations": [
+        "Write",
+        "Describe",
+        "Read"
+      ]
+    },
+    {
+      "topic": "uav_replay_v2_enforcement_clues_SRC-MP4NEW2-CH-0715-PM",
+      "operations": [
+        "Write",
+        "Describe"
+      ]
+    },
+    {
+      "topic": "uav_replay_v2_statistics_SRC-MP4NEW2-HY-0715-PM",
+      "operations": [
+        "Write",
+        "Describe",
+        "Read"
+      ]
+    },
+    {
+      "topic": "uav_replay_v2_track_complete_SRC-MP4NEW2-HY-0715-PM",
+      "operations": [
+        "Write",
+        "Describe",
+        "Read"
+      ]
+    },
+    {
+      "topic": "uav_replay_v2_conflicts_SRC-MP4NEW2-HY-0715-PM",
+      "operations": [
+        "Write",
+        "Describe",
+        "Read"
+      ]
+    },
+    {
+      "topic": "uav_replay_v2_telemetry_SRC-MP4NEW2-HY-0715-PM",
+      "operations": [
+        "Write",
+        "Describe",
+        "Read"
+      ]
+    },
+    {
+      "topic": "uav_replay_v2_mission_SRC-MP4NEW2-HY-0715-PM",
+      "operations": [
+        "Write",
+        "Describe",
+        "Read"
+      ]
+    },
+    {
+      "topic": "uav_replay_v2_enforcement_clues_SRC-MP4NEW2-HY-0715-PM",
+      "operations": [
+        "Write",
+        "Describe"
+      ]
+    },
+    {
+      "topic": "uav_replay_v2_statistics_SRC-MP4NEW2-LS-0715-PM",
+      "operations": [
+        "Write",
+        "Describe",
+        "Read"
+      ]
+    },
+    {
+      "topic": "uav_replay_v2_track_complete_SRC-MP4NEW2-LS-0715-PM",
+      "operations": [
+        "Write",
+        "Describe",
+        "Read"
+      ]
+    },
+    {
+      "topic": "uav_replay_v2_conflicts_SRC-MP4NEW2-LS-0715-PM",
+      "operations": [
+        "Write",
+        "Describe",
+        "Read"
+      ]
+    },
+    {
+      "topic": "uav_replay_v2_telemetry_SRC-MP4NEW2-LS-0715-PM",
+      "operations": [
+        "Write",
+        "Describe",
+        "Read"
+      ]
+    },
+    {
+      "topic": "uav_replay_v2_mission_SRC-MP4NEW2-LS-0715-PM",
+      "operations": [
+        "Write",
+        "Describe",
+        "Read"
+      ]
+    },
+    {
+      "topic": "uav_replay_v2_enforcement_clues_SRC-MP4NEW2-LS-0715-PM",
+      "operations": [
+        "Write",
+        "Describe"
+      ]
+    }
+  ],
+  "groups": [
+    {
+      "group": "uav-platform-replay-v2",
+      "operations": [
+        "Read",
+        "Describe"
+      ]
+    }
+  ]
+}

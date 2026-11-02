@@ -84,12 +84,13 @@ services:
       DB_PASSWORD: ${ROAD9_PASSWORD:?ROAD9_PASSWORD is required for production}
       DB_NAME: road9
       DB_BOOTSTRAP_DATABASE: postgres
-      YCX_DB_HOST: ${YCX_DB_HOST:?YCX_DB_HOST is required for read-only road import}
-      YCX_DB_PORT: ${YCX_DB_PORT:-5432}
-      YCX_DB_USER: ${YCX_DB_USER:?YCX_DB_USER is required for read-only road import}
-      YCX_DB_PASSWORD: ${YCX_DB_PASSWORD:?YCX_DB_PASSWORD is required for read-only road import}
-      YCX_DB_NAME: ${YCX_DB_NAME:-ycx}
-      YCX_DB_SCHEMA: ${YCX_DB_SCHEMA:-road9}
+      YCX_METRICS_BACKEND: doris
+      YCX_ROAD_VERSION: ${YCX_ROAD_VERSION:-}
+      DORIS_MYSQL_HOST: ${DORIS_MYSQL_HOST:-}
+      DORIS_MYSQL_PORT: ${DORIS_MYSQL_PORT:-9030}
+      DORIS_MYSQL_USER: ${DORIS_MYSQL_USER:-}
+      DORIS_MYSQL_PASSWORD: ${DORIS_MYSQL_PASSWORD:-}
+      DORIS_DATABASE: ${DORIS_DATABASE:-ycx_xc}
       KAFKA_BOOTSTRAP: kafka:29092
       KAFKA_SPOOL_DIR: /pipeline-spool
       KAFKA_CONSUMER_GROUP: uav-platform
@@ -142,23 +143,15 @@ services:
       AMAP_JS_API_KEY: ${AMAP_JS_API_KEY:?AMAP_JS_API_KEY is required}
       AMAP_SECURITY_JS_CODE: ${AMAP_SECURITY_JS_CODE:-}
     ports:
-      - "${CONSOLE_PORT:-8080}:8080"
+      - "${CONSOLE_PORT:-8009}:8080"
     depends_on:
       platform:
         condition: service_healthy
-    networks: [uav_target]
-
-  nginx:
-    image: ${NGINX_IMAGE:-nginx:1.27-alpine}
-    restart: unless-stopped
-    ports:
-      - "${NGINX_PORT:-8009}:8009"
-    volumes:
-      - ./services/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
-      - hls_data:/hls:ro
-    depends_on:
-      platform:
-        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/ready"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
     networks: [uav_target]
 
   nvidia-mps:

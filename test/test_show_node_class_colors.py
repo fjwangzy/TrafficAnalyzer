@@ -76,6 +76,46 @@ class ShowNodeClassColorsTest(unittest.TestCase):
         self.assertTrue(np.array_equal(frame[20, 10], np.array([0, 191, 255])))
         self.assertGreater(np.count_nonzero(frame), 100)
 
+    def test_candidate_labels_do_not_blend_a_whole_4k_frame_per_target(self):
+        frame = np.zeros((2160, 3840, 3), dtype=np.uint8)
+
+        with mock.patch.object(cv2, "addWeighted", wraps=cv2.addWeighted) as blend:
+            for track_id in range(20):
+                ShowNode._draw_candidate_box(frame, [100, 200, 140, 240], track_id, "car")
+
+        blended_values = sum(call.args[0].size for call in blend.call_args_list)
+        self.assertLess(blended_values, frame.size)
+
+    def test_headless_render_does_not_resize_an_unused_window(self):
+        node = self._make_node()
+        frame = np.zeros((240, 320, 3), dtype=np.uint8)
+        frame_element = FrameElement(
+            source="headless-preview", frame=frame, timestamp=1.0, frame_num=1,
+            roads_info={}, buffer_tracks={},
+        )
+
+        with mock.patch.object(cv2, "resize", wraps=cv2.resize) as resize:
+            rendered = node.process(frame_element)
+
+        resize.assert_not_called()
+        self.assertIs(rendered.frame_result, frame)
+
+    def test_window_resize_preserves_full_resolution_output(self):
+        node = self._make_node()
+        node.imshow = True
+        node.scale = 0.5
+        frame = np.zeros((240, 320, 3), dtype=np.uint8)
+        frame_element = FrameElement(
+            source="window-preview", frame=frame, timestamp=1.0, frame_num=1,
+            roads_info={}, buffer_tracks={},
+        )
+
+        with mock.patch.object(cv2, "imshow") as show, mock.patch.object(cv2, "waitKey"):
+            rendered = node.process(frame_element)
+
+        self.assertEqual(show.call_args.args[1].shape, (120, 160, 3))
+        self.assertIs(rendered.frame_result, frame)
+
     def test_warning_tcc_prediction_uses_participant_trace_colors_and_dashes(self):
         node = self._make_node()
         motor = TrackElement(id=82, timestamp_first=0.0)

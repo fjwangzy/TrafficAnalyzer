@@ -11,7 +11,7 @@ from pathlib import Path
 import asyncpg
 from alembic.config import Config
 from alembic.script import ScriptDirectory
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
 
@@ -23,6 +23,7 @@ logger = logging.getLogger(__name__)
 
 engine = create_async_engine(
     settings.database_url,
+    connect_args=settings.database_connect_args,
     echo=settings.debug,
     pool_pre_ping=True,
     pool_size=10,
@@ -81,7 +82,7 @@ def _run_alembic_upgrade() -> None:
     platform_dir = Path(__file__).resolve().parents[2]
     config = Config(str(platform_dir / "alembic.ini"))
     config.set_main_option("script_location", str(platform_dir / "alembic"))
-    config.set_main_option("sqlalchemy.url", settings.database_url)
+    config.set_main_option("sqlalchemy.url", settings.database_url.replace("%", "%%"))
     command.upgrade(config, "head")
 
 
@@ -99,7 +100,7 @@ def _replay_v2_alembic_config() -> Config:
     platform_dir = Path(__file__).resolve().parents[2]
     config = Config(str(platform_dir / "alembic_replay_v2.ini"))
     config.set_main_option("script_location", str(platform_dir / "alembic_replay_v2"))
-    config.set_main_option("sqlalchemy.url", settings.database_url)
+    config.set_main_option("sqlalchemy.url", settings.database_url.replace("%", "%%"))
     return config
 
 
@@ -114,36 +115,64 @@ def _run_replay_v2_alembic_upgrade() -> None:
     command.upgrade(_replay_v2_alembic_config(), "head")
 
 
-async def database_revision() -> str | None:
-    """Return the installed UAV migration revision without invoking Alembic."""
-    conn = await asyncpg.connect(**_connection_kwargs(settings.db_name))
-    try:
-        exists = await conn.fetchval("SELECT to_regclass('public.uav_alembic_version')")
+async def _installed_revision(table: str) -> str | None:
+    async with engine.connect() as connection:
+        exists = await connection.scalar(
+            text("SELECT to_regclass(:table)"),
+            {"table": f"{settings.db_schema}.{table}"},
+        )
         if not exists:
             return None
-        return await conn.fetchval("SELECT version_num FROM uav_alembic_version LIMIT 1")
-    finally:
-        await conn.close()
+        return await connection.scalar(text(
+            f'SELECT version_num FROM "{settings.db_schema}"."{table}" LIMIT 1'
+        ))
+
+
+async def database_revision() -> str | None:
+    return await _installed_revision("uav_alembic_version")
 
 
 async def replay_v2_database_revision() -> str | None:
-    conn = await asyncpg.connect(**_connection_kwargs(settings.db_name))
-    try:
-        exists = await conn.fetchval(
-            "SELECT to_regclass('public.uav_replay_v2_alembic_version')"
-        )
-        if not exists:
-            return None
-        return await conn.fetchval(
-            "SELECT version_num FROM uav_replay_v2_alembic_version LIMIT 1"
-        )
-    finally:
-        await conn.close()
+    return await _installed_revision("uav_replay_v2_alembic_version")
 
 
-async def init_replay_v2_db() -> bool:
+async def validate_database() -> bool:
+    """Production startup checks only; deployment runs migrations explicitly."""
+    if await database_revision() != await asyncio.to_thread(_alembic_head):
+        raise RuntimeError("Database migrations are not current; run deploy init-db")
+    if settings.app_runtime_profile == "replay_v2":
+        if await replay_v2_database_revision() != await asyncio.to_thread(_replay_v2_alembic_head):
+            raise RuntimeError("Replay V2 migrations are not current; run deploy init-db")
+    async with engine.connect() as connection:
+        actual = (await connection.execute(text("SELECT current_database(), current_schema()"))).one()
+        if tuple(actual) != (settings.db_name, settings.db_schema):
+            raise RuntimeError("Database/schema is missing, unexpected or not accessible")
+        enabled = await connection.scalar(text(
+            "SELECT EXISTS (SELECT 1 FROM pg_extension WHERE extname='timescaledb')"
+        ))
+        if not enabled:
+            if settings.db_timescale_required:
+                raise RuntimeError("DBA must enable TimescaleDB before deployment")
+            logger.warning("TimescaleDB unavailable: ordinary PostgreSQL tables; no compression/retention policies")
+            return True
+        hypertables = set((await connection.execute(text(
+            "SELECT hypertable_name FROM timescaledb_information.hypertables "
+            "WHERE hypertable_schema=current_schema()"
+        ))).scalars())
+        required = {"uav_traffic_metrics", "uav_system_metrics", "uav_telemetry_metrics",
+                    "uav_track_points", "uav_conflict_events"}
+        if settings.app_runtime_profile == "replay_v2":
+            required.add("uav_replay_v2_traffic_metric_samples")
+        if not required.issubset(hypertables):
+            raise RuntimeError("Expected TimescaleDB hypertables are missing from the application schema")
+    return True
+
+
+async def init_replay_v2_db(*, raise_on_error: bool = False) -> bool:
     """Migrate only replay-v2 tables after asserting canonical road9 is current."""
     try:
+        if not settings.db_auto_migrate:
+            return await validate_database()
         installed_canonical = await database_revision()
         canonical_head = await asyncio.to_thread(_alembic_head)
         if installed_canonical != canonical_head:
@@ -158,14 +187,19 @@ async def init_replay_v2_db() -> bool:
             logger.info("Replay-v2 schema already at Alembic head %s", replay_head)
         return True
     except Exception as exc:
+        if raise_on_error:
+            raise
         logger.warning("Replay-v2 database initialization failed: %s", exc)
         return False
 
 
-async def init_db() -> bool:
+async def init_db(*, raise_on_error: bool = False) -> bool:
     """Ensure road9 exists, migrate the schema, and seed the local admin."""
     try:
-        await ensure_target_database()
+        if not settings.db_auto_migrate:
+            return await validate_database()
+        if settings.deployment_mode == "local":
+            await ensure_target_database()
         installed_revision = await database_revision()
         migration_head = await asyncio.to_thread(_alembic_head)
         if installed_revision != migration_head:
@@ -191,6 +225,8 @@ async def init_db() -> bool:
                 await session.commit()
         return True
     except Exception as exc:
+        if raise_on_error:
+            raise
         logger.warning("Database initialization failed: %s", exc)
         return False
 

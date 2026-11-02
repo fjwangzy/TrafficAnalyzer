@@ -291,15 +291,10 @@ class ShowNode:
         label_left = max(0, min(x1, max(width - 1, 0)))
         label_right = min(label_left + text_width + padding * 2, max(width - 1, 0))
         label_bottom = min(label_top + label_height, max(height - 1, 0))
-        overlay = frame.copy()
-        cv2.rectangle(
-            overlay,
-            (label_left, label_top),
-            (label_right, label_bottom),
-            (18, 18, 18),
-            -1,
-        )
-        cv2.addWeighted(overlay, 0.82, frame, 0.18, 0, frame)
+        roi = frame[label_top:label_bottom + 1, label_left:label_right + 1]
+        overlay = roi.copy()
+        overlay[:] = (18, 18, 18)
+        cv2.addWeighted(overlay, 0.82, roi, 0.18, 0, roi)
         cv2.rectangle(
             frame,
             (label_left, label_top),
@@ -667,9 +662,9 @@ class ShowNode:
             frame_result = self._draw_stats_panel(frame_result, frame_element)
 
         frame_element.frame_result = frame_result
-        frame_show = cv2.resize(frame_result, (-1, -1), fx=self.scale, fy=self.scale)
 
         if self.imshow:
+            frame_show = cv2.resize(frame_result, (-1, -1), fx=self.scale, fy=self.scale)
             cv2.imshow(frame_element.source, frame_show)
             cv2.waitKey(1)
 

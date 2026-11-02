@@ -1,0 +1,36 @@
+http://37.12.14.86:8009/
+
+##登录账号
+admin
+XkEHQW7t8tqfud-bUoozLWD0p3i43m5a
+
+
+## 服务器
+secadmin
+
+81FThf#$n@^19P
+
+37.12.14.84
+
+60022
+
+
+## 目录:
+/data2/drone/traffic
+/data2/drone/application
+
+/data2/drone
+(base) [secadmin@ai02 drone]$ ls
+application  install  kafka-cli  traffic  traffic-analyzer-assets  traffic-analyzer-data
+
+scp  -P 60022 -r ./traffic-analyzer-assets  secadmin@37.12.14.84:/data2/drone
+scp  -P 60022 -r ./traffic-analyzer-data  secadmin@37.12.14.84:/data2/drone
+scp  -P 60022 -r ./traffic-analyzer3  secadmin@37.12.14.85:/data2/drone
+
+scp  -P 60022 -r traffic-analyzer-2026.10.17-intranet.3-linux-arm64.tar.gz  secadmin@37.12.14.84:/data2/drone
+
+scp  -P 60022 -r ./traffic-analyzer-assets  secadmin@37.12.14.85:/data2/drone
+scp  -P 60022 -r traffic-analyzer-2026.10.17-intranet.3-linux-arm64.tar.gz  secadmin@37.12.14.85:/data2/drone
+
+
+python ./kafka_topic_cli.py  --bootstrap-servers 37.12.14.66:9093,37.12.14.67:9093,37.12.14.68:9093,37.12.14.69:9093  --request-timeout-ms 10000  list

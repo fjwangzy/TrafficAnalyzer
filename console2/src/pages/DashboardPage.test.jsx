@@ -13,6 +13,31 @@ import {
 } from './DashboardPage'
 
 describe('dashboard UAV video source map', () => {
+  it('keeps registered video markers before, during and after detection when production road data is disabled', () => {
+    const input = {
+      sources: [{ profile_id: 'SRC-1', drone_id: 'UAV-1', mode: 'local', enabled: true, validation_status: 'valid',
+        recording_position: { position_gcj02: { longitude: 117, latitude: 36.7 }, coordinate_system: 'GCJ02' } }],
+      drones: [{ id: 'UAV-1', name: '回放摄像头', default_inter_id: 'INT-1', status: 'offline' }],
+      intersections: [],
+    }
+    const before = buildLiveDronePoints(input)
+    expect(before).toHaveLength(1)
+    expect(before[0]).toMatchObject({ source_profile_id: 'SRC-1', intersection_id: 'INT-1', lon: 117, lat: 36.7,
+      position_basis: 'source_telemetry', status_label: '素材位置', is_flying: false, is_monitoring: false, telemetry_fresh: false })
+    const during = buildLiveDronePoints({ ...input,
+      pipelines: [{ drone_id: 'UAV-1', source_profile_id: 'SRC-1', intersection_id: 'INT-1', status: 'running' }],
+      telemetryByDrone: { 'UAV-1': { position_gcj02: { longitude: 117.01, latitude: 36.71 } } },
+    })
+    expect(during[0]).toMatchObject({ is_monitoring: true, lon: 117.01, lat: 36.71 })
+    const after = buildLiveDronePoints({ ...input,
+      drones: [{ ...input.drones[0], status: 'flying' }],
+      telemetryByDrone: { 'UAV-1': { position_gcj02: { longitude: 117.01, latitude: 36.71 } } },
+    })
+    expect(after).toHaveLength(1)
+    expect(after[0]).toMatchObject({ position_basis: 'source_telemetry', status_label: '素材位置', is_flying: false, runtime_flying: false, telemetry_fresh: false })
+    expect(buildDashboardSourcePoints(input)[0]).toMatchObject({ source_profile_id: 'SRC-1', intersection_id: 'INT-1', lon: 117, lat: 36.7 })
+  })
+
   it('aggregates video sources per mapped intersection and prioritizes the running source', () => {
     const points = buildDashboardSourcePoints({
       sources: [
@@ -184,6 +209,15 @@ describe('dashboard UAV video source map', () => {
     expect(points).toHaveLength(2)
     expect(points.find((item) => item.id === 'INT-1')).toMatchObject({ is_project: true, status: 'near_saturated', has_server_situation: true })
     expect(points.find((item) => item.id === 'INT-2')).toMatchObject({ is_project: true, status: 'missing', saturation_max: null, has_server_situation: false })
+  })
+
+  it('colors Doris intersections by delay index without treating it as saturation', () => {
+    const points = buildDashboardIntersectionPoints({ situationIntersections: [
+      { inter_id: 'DORIS-1', lon: 117, lat: 36.7, delay_index: 1.6, saturation_max: null },
+      { inter_id: 'DORIS-2', lon: 117.1, lat: 36.8, delay_index: 2.2, saturation_max: null },
+    ] })
+    expect(points[0]).toMatchObject({ status: 'slow', saturation_max: null, delay_index: 1.6 })
+    expect(points[1]).toMatchObject({ status: 'congested', saturation_max: null, delay_index: 2.2 })
   })
 
   it('applies the approved metric color boundaries', () => {

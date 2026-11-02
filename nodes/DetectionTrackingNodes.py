@@ -3,6 +3,7 @@ import torch
 import numpy as np
 import time
 import hashlib
+import logging
 from pathlib import Path
 
 from utils_local.utils import profile_time
@@ -14,6 +15,8 @@ from utils_local.detection_geometry import (
     extract_valid_detections,
 )
 from utils_local.adaptive_imgsz import AdaptiveImageSizePolicy
+
+logger = logging.getLogger(__name__)
 
 
 def build_yolo_model_id(weight_path: str | Path) -> str:
@@ -44,7 +47,7 @@ class DetectionTrackingNodes:
         else:
             device = torch.device(device_cfg)
         self.device = device
-        print(f'检测将在 {device} 上进行')
+        logger.info("DETECTOR_DEVICE device=%s tracking_profile=hover_only_legacy", device.type)
 
         weight_path = config_yolo["weight_pth"]
         self.model = YOLO(weight_path, task='detect')

@@ -1,0 +1,14 @@
+# Target labels
+ xtl-populate
+# Source files and their labels
+/root/project/model_deployment/device_run_new/service_new_new_new/yolo_inference_service/src/trace_track/build/_deps/xtl-subbuild/CMakeFiles/xtl-populate
+/root/project/model_deployment/device_run_new/service_new_new_new/yolo_inference_service/src/trace_track/build/_deps/xtl-subbuild/CMakeFiles/xtl-populate.rule
+/root/project/model_deployment/device_run_new/service_new_new_new/yolo_inference_service/src/trace_track/build/_deps/xtl-subbuild/CMakeFiles/xtl-populate-complete.rule
+/root/project/model_deployment/device_run_new/service_new_new_new/yolo_inference_service/src/trace_track/build/_deps/xtl-subbuild/xtl-populate-prefix/src/xtl-populate-stamp/xtl-populate-build.rule
+/root/project/model_deployment/device_run_new/service_new_new_new/yolo_inference_service/src/trace_track/build/_deps/xtl-subbuild/xtl-populate-prefix/src/xtl-populate-stamp/xtl-populate-configure.rule
+/root/project/model_deployment/device_run_new/service_new_new_new/yolo_inference_service/src/trace_track/build/_deps/xtl-subbuild/xtl-populate-prefix/src/xtl-populate-stamp/xtl-populate-download.rule
+/root/project/model_deployment/device_run_new/service_new_new_new/yolo_inference_service/src/trace_track/build/_deps/xtl-subbuild/xtl-populate-prefix/src/xtl-populate-stamp/xtl-populate-install.rule
+/root/project/model_deployment/device_run_new/service_new_new_new/yolo_inference_service/src/trace_track/build/_deps/xtl-subbuild/xtl-populate-prefix/src/xtl-populate-stamp/xtl-populate-mkdir.rule
+/root/project/model_deployment/device_run_new/service_new_new_new/yolo_inference_service/src/trace_track/build/_deps/xtl-subbuild/xtl-populate-prefix/src/xtl-populate-stamp/xtl-populate-patch.rule
+/root/project/model_deployment/device_run_new/service_new_new_new/yolo_inference_service/src/trace_track/build/_deps/xtl-subbuild/xtl-populate-prefix/src/xtl-populate-stamp/xtl-populate-test.rule
+/root/project/model_deployment/device_run_new/service_new_new_new/yolo_inference_service/src/trace_track/build/_deps/xtl-subbuild/xtl-populate-prefix/src/xtl-populate-stamp/xtl-populate-update.rule

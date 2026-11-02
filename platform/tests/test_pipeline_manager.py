@@ -118,9 +118,10 @@ class PipelineManagerTest(unittest.IsolatedAsyncioTestCase):
             captured["cmd"],
             (
                 "/opt/pipeline/bin/python",
+                "-u",
                 "main_optimized.py",
                 "pipeline.send_info_kafka=True",
-                "hydra/job_logging=disabled",
+                "hydra/job_logging=stdout",
                 "detection_node.adaptive_imgsz.enabled=true",
                 "telemetry.enabled=True",
                 "telemetry.source=srt",

@@ -1,5 +1,6 @@
 from flask import Flask, render_template, Response
 from threading import Thread, Lock
+import logging
 import time
 import numpy as np
 import cv2
@@ -28,7 +29,7 @@ class VideoServer(object):
         self.app.add_url_rule('/', 'index', EndpointAction(self._index))
         self.app.add_url_rule('/video', 'video', self._update_page)
 
-        self.host_ip = config_server["host_ip"]
+        self.host_ip = _os.environ.get("VIDEO_BIND_HOST", config_server["host_ip"])
         # 支持 VIDEO_PORT 环境变量覆盖（多管道并行时避免端口冲突）
         self.port = int(_os.environ.get("VIDEO_PORT", config_server["port"]))
         self.index_page = config_server["index_page"]
@@ -116,7 +117,8 @@ class VideoServer(object):
         self.app_thread.start()
         # Platform waits for this marker before publishing the pipeline as running.
         # make_server has already bound the socket, so browser requests are safe now.
-        print(f"MJPEG_READY port={self.port}", flush=True)
+        # Create after Hydra setup so disabled import-time loggers cannot swallow readiness.
+        logging.getLogger("pipeline.video").info("MJPEG_READY port=%s ready_contract=20261019.3", self.port)
 
     def stop_server(self):
         if hasattr(self, '_httpd'):

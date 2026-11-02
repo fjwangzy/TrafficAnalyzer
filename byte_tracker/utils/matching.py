@@ -11,6 +11,7 @@ from scipy.spatial.distance import cdist
 from cython_bbox import bbox_overlaps as bbox_ious
 from byte_tracker.utils import kalman_filter
 import time
+from utils_local.runtime_logging import stage
 
 def merge_matches(m1, m2, shape):
     O,P,Q = shape
@@ -44,16 +45,18 @@ def linear_assignment(cost_matrix, thresh):
     if cost_matrix.size == 0:
         return np.empty((0, 2), dtype=int), tuple(range(cost_matrix.shape[0])), tuple(range(cost_matrix.shape[1]))
     matches, unmatched_a, unmatched_b = [], [], []
-    if lap is not None:
-        cost, x, y = lap.lapjv(cost_matrix, extend_cost=True, cost_limit=thresh)
-    else:
-        row_ind, col_ind = linear_sum_assignment(cost_matrix)
-        x = np.full(cost_matrix.shape[0], -1, dtype=np.int32)
-        y = np.full(cost_matrix.shape[1], -1, dtype=np.int32)
-        for row, col in zip(row_ind, col_ind):
-            if cost_matrix[row, col] <= thresh:
-                x[row] = col
-                y[col] = row
+    with stage("bytetrack.assignment", rows=cost_matrix.shape[0], columns=cost_matrix.shape[1],
+               solver="lapjv" if lap is not None else "scipy", threshold=thresh):
+        if lap is not None:
+            cost, x, y = lap.lapjv(cost_matrix, extend_cost=True, cost_limit=thresh)
+        else:
+            row_ind, col_ind = linear_sum_assignment(cost_matrix)
+            x = np.full(cost_matrix.shape[0], -1, dtype=np.int32)
+            y = np.full(cost_matrix.shape[1], -1, dtype=np.int32)
+            for row, col in zip(row_ind, col_ind):
+                if cost_matrix[row, col] <= thresh:
+                    x[row] = col
+                    y[col] = row
     for ix, mx in enumerate(x):
         if mx >= 0:
             matches.append([ix, mx])
@@ -145,14 +148,16 @@ def embedding_distance(tracks, detections, metric='cosine'):
 def gate_cost_matrix(kf, cost_matrix, tracks, detections, only_position=False):
     if cost_matrix.size == 0:
         return cost_matrix
-    gating_dim = 2 if only_position else 4
-    gating_threshold = kalman_filter.chi2inv95[gating_dim]
-    measurements = np.asarray([det.to_xyah() for det in detections])
-    for row, track in enumerate(tracks):
-        gating_distance = kf.gating_distance(
-            track.mean, track.covariance, measurements, only_position)
-        cost_matrix[row, gating_distance > gating_threshold] = np.inf
-    return cost_matrix
+    with stage("bytetrack.shadow_gate", tracks=len(tracks), detections=len(detections), pairs=cost_matrix.size, only_position=only_position):
+        gating_dim = 2 if only_position else 4
+        gating_threshold = kalman_filter.chi2inv95[gating_dim]
+        measurements = np.asarray([det.to_xyah() for det in detections])
+        for row, track in enumerate(tracks):
+            with stage("bytetrack.shadow_row", row=row + 1, tracks=len(tracks), detections=len(detections)):
+                gating_distance = kf.gating_distance(
+                    track.mean, track.covariance, measurements, only_position)
+            cost_matrix[row, gating_distance > gating_threshold] = np.inf
+        return cost_matrix
 
 
 def fuse_motion(kf, cost_matrix, tracks, detections, only_position=False, lambda_=0.98):

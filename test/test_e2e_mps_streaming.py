@@ -111,15 +111,15 @@ check("Camera 3 uses inter_xqh video",
 # ═══════════════════════════════════════════════════════════════════
 print("\n═══ Phase 2: Nginx Configuration ═══")
 
-with open("services/nginx/nginx.conf") as f:
+with open("console2/nginx.conf") as f:
     nginx_conf = f.read()
 
 check("Nginx has HLS location", "/hls/" in nginx_conf)
 check("Nginx has API proxy", "/api/" in nginx_conf)
 check("Nginx has WebSocket proxy", "/ws/" in nginx_conf)
 check("Nginx has camera proxy", "/camera_" in nginx_conf)
-check("Nginx has HLS volume mounted",
-      "hls_data" in str(services.get("nginx", {}).get("volumes", [])))
+check("Console forwards HLS authorization to Platform",
+      "proxy_pass http://platform:8000" in nginx_conf and "alias /hls/" not in nginx_conf)
 
 # ═══════════════════════════════════════════════════════════════════
 # Phase 3: Platform Video API

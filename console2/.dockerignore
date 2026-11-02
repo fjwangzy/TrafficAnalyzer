@@ -4,3 +4,11 @@ dist
 coverage
 .git
 *.log
+
+# Private local build parameters must not enter production images.
+.env*
+**/*.env
+
+.npm-cache
+.playwright*
+.DS_Store

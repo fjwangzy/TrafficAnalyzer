@@ -74,15 +74,6 @@ class MessageIdentityConflict(MetricContractError):  # noqa: N818 - public contr
     """A stable message ID was replayed with different content."""
 
 
-class MessageTransportConflict(MetricContractError):  # noqa: N818 - public contract
-    """A Kafka topic/partition/offset was reused for a different message.
-
-    Transport positions are immutable.  Reusing one would otherwise make the
-    inbox's transport unique constraint repeatedly fail and pin the consumer
-    before later, independent source topics can be processed.
-    """
-
-
 @dataclass(frozen=True)
 class MessageEnvelope:
     payload: dict[str, Any]
@@ -309,15 +300,6 @@ class PostgresMetricStoreAdapter:
                         tuple(inbox.fact_references or ()),
                         inbox.dispatch_status,
                     )
-                transport_inbox = await self._find_inbox_by_transport(
-                    session, envelope.topic, envelope.partition, envelope.offset
-                )
-                if transport_inbox:
-                    raise MessageTransportConflict(
-                        "Kafka transport position "
-                        f"{envelope.topic}/{envelope.partition}/{envelope.offset} is already bound "
-                        f"to message_id {transport_inbox.message_id}"
-                    )
             raise
 
     async def _persist_once(
@@ -340,16 +322,6 @@ class PostgresMetricStoreAdapter:
                         normalized,
                         tuple(inbox.fact_references or ()),
                         inbox.dispatch_status,
-                    )
-
-                transport_inbox = await self._find_inbox_by_transport(
-                    session, envelope.topic, envelope.partition, envelope.offset, for_update=True
-                )
-                if transport_inbox:
-                    raise MessageTransportConflict(
-                        "Kafka transport position "
-                        f"{envelope.topic}/{envelope.partition}/{envelope.offset} is already bound "
-                        f"to message_id {transport_inbox.message_id}"
                     )
 
                 inbox = MessageInbox(
@@ -427,23 +399,6 @@ class PostgresMetricStoreAdapter:
         statement = select(MessageInbox).where(
             MessageInbox.source_system == source_system,
             MessageInbox.message_id == message_id,
-        )
-        if for_update:
-            statement = statement.with_for_update()
-        return (await session.execute(statement)).scalar_one_or_none()
-
-    @staticmethod
-    async def _find_inbox_by_transport(
-        session: AsyncSession,
-        topic: str,
-        partition: int,
-        offset: int,
-        for_update: bool = False,
-    ) -> MessageInbox | None:
-        statement = select(MessageInbox).where(
-            MessageInbox.topic == topic,
-            MessageInbox.partition == partition,
-            MessageInbox.offset == offset,
         )
         if for_update:
             statement = statement.with_for_update()
@@ -1080,7 +1035,7 @@ class PostgresMetricStoreAdapter:
             if extension:
                 rows = await session.execute(text(
                     "SELECT hypertable_name FROM timescaledb_information.hypertables "
-                    "WHERE hypertable_schema='public' AND hypertable_name LIKE 'uav_%'"
+                    "WHERE hypertable_schema=current_schema() AND hypertable_name LIKE 'uav_%'"
                 ))
                 hypertables = sorted(row[0] for row in rows)
             return {"timescaledb": extension, "hypertables": hypertables}
@@ -1547,7 +1502,6 @@ class InMemoryMetricStoreAdapter:
     def __init__(self):
         self.messages: dict[tuple[str, str], PersistResult] = {}
         self.payload_hashes: dict[tuple[str, str], str] = {}
-        self.transport_messages: dict[tuple[str, int, int], tuple[str, str]] = {}
         self.dead_letters: dict[tuple[str, int, int], dict[str, Any]] = {}
         self.dispatched: set[tuple[str, str]] = set()
         self.dispatch_attempts: dict[tuple[str, str], int] = {}
@@ -1574,18 +1528,9 @@ class InMemoryMetricStoreAdapter:
                 existing.fact_references,
                 "dispatched" if key in self.dispatched else "pending",
             )
-        transport_key = (envelope.topic, envelope.partition, envelope.offset)
-        bound_message = self.transport_messages.get(transport_key)
-        if bound_message:
-            raise MessageTransportConflict(
-                "Kafka transport position "
-                f"{envelope.topic}/{envelope.partition}/{envelope.offset} is already bound "
-                f"to message_id {bound_message[1]}"
-            )
         result = PersistResult(False, message_id, msg_type, normalized, (f"memory:{message_id}",), "pending")
         self.messages[key] = result
         self.payload_hashes[key] = payload_hash
-        self.transport_messages[transport_key] = key
         return result
 
     async def mark_dispatched(self, source_system: str, message_id: str) -> None:

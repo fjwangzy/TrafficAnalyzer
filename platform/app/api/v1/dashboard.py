@@ -5,6 +5,7 @@ from typing import Literal
 import asyncpg
 from fastapi import APIRouter, HTTPException, Query, Request
 from sqlalchemy.exc import SQLAlchemyError
+from app.core.deployment_diagnostics import DiagnosticError
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 
@@ -34,6 +35,8 @@ def _parse_bbox(value: str | None) -> tuple[float, float, float, float] | None:
 async def _invoke(awaitable):
     try:
         return await awaitable
+    except DiagnosticError as exc:
+        raise HTTPException(status_code=503, detail={"code": exc.code, "message": exc.title, "action": exc.action}) from exc
     except (TimeoutError, OSError, SQLAlchemyError, asyncpg.PostgresError) as exc:
         raise HTTPException(
             status_code=503,

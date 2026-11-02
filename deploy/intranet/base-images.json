@@ -1,0 +1,7 @@
+{
+  "verified_at": "2026-10-16",
+  "platform": "linux/arm64",
+  "cann_base": "swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.0.0-310p-ubuntu22.04-py3.11@sha256:6743a03cfa034bfddff06b3e74616f5ed6a367d30506045ca95e004f96b5c785",
+  "node_base": "node:22-alpine@sha256:85cdd100016a2e09927c0776bb7ebebcfefce5cd0af49893ada91cbc4d78ee22",
+  "nginx_base": "nginx:1.27-alpine@sha256:63ffc0d1f14e4082b832c6a42e606e9a0384a526f16ddd720af7c1f018f2f7c4"
+}

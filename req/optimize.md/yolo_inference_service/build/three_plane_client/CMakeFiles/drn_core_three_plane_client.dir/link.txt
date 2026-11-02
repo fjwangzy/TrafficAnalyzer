@@ -1,0 +1,2 @@
+/usr/bin/ar qc libdrn_core_three_plane_client.a CMakeFiles/drn_core_three_plane_client.dir/control_client.cpp.o CMakeFiles/drn_core_three_plane_client.dir/update_subscriber.cpp.o CMakeFiles/drn_core_three_plane_client.dir/data_plane_client.cpp.o
+/usr/bin/ranlib libdrn_core_three_plane_client.a

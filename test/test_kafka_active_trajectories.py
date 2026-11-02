@@ -1,7 +1,7 @@
 import numpy as np
 import unittest
 import json
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from elements.FrameElement import FrameElement
 from elements.TrackElement import TrackElement
@@ -9,6 +9,13 @@ from nodes.KafkaProducerNode import KafkaProducerNode
 
 
 class KafkaActiveTrajectoriesTest(unittest.TestCase):
+    def test_fps_counts_intervals_and_preserves_slow_frame_measurement(self):
+        producer = self._producer_without_kafka()
+        with patch('nodes.KafkaProducerNode.time.monotonic', side_effect=[0, .5, 1, 4, 124]):
+            self.assertEqual([producer._compute_fps() for _ in range(5)],
+                             [0.0, 2.0, 2.0, .333, .008])
+        self.assertEqual(len(producer._fps_timestamps), 2)
+
     def _producer_without_kafka(self):
         producer = object.__new__(KafkaProducerNode)
         producer.topic_name = "uav_statistics_7"

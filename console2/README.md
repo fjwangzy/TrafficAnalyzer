@@ -4,6 +4,8 @@
 
 ## 当前数据边界
 
+- 实时监测左侧不显示来源健康卡片；右侧 BEV 下直接展示近期事件与证据复核，不再提供场景策略板块。
+
 - 真实模块：`/login`、`/monitoring`、`/admin/calibration`、`/admin/system`。
 - 真实数据来源：Platform `/api/v1`、`/ws/realtime`，以及 Pipeline/Mission 登记的检测器 `video_stream_url` MJPEG 直连。
 - 其余工作台、轨迹研判、AI 事件、事故测绘、执法线索、飞行任务和集成交付页面暂时保留契约化模拟数据。
@@ -42,13 +44,18 @@
 先启动 Platform，再启动前端：
 
 ```bash
-cd platform
-python scripts/run_local.py
+scripts/mac_local_platform.sh up
 
-cd ../console2
-npm install
+cd console2
 npm run dev
 ```
+
+本地使用原生 macOS arm64 Platform/MPS（8000）和 Vite（5173）；`console2/.env` 的
+`VITE_MAP_PROVIDER=amap` 选择高德，浏览器 Key 使用已有 `AMAP_JS_API_KEY`。
+本地 `public/runtime-config.js` 不应覆盖为生产地图配置。内网生产通过根 Compose 加
+`deploy/intranet/compose.yaml` 固定 `MAP_PROVIDER=minemap`，使用四维图新 MineMap；
+生产入口生成自己的 runtime-config，不随本地 `.env` 切换。
+高德默认深色；浏览器使用栅格渲染时仅基础瓦片应用深色调色，路况与业务覆盖物保持原色。
 
 Vite 只代理 `/api` 和 `/ws` 到 `http://localhost:8000`。监控屏和无人机屏直接使用 Platform 返回的 `video_stream_url`，本机默认为检测器 `http://127.0.0.1:{video_port}/video`；UAT/生产需配置浏览器可达的 HTTPS 地址模板。
 

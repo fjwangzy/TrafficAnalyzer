@@ -1,5 +1,35 @@
 # PROJECT_STRUCTURE.md — TrafficAnalyzer 当前项目结构
 
+## 2026-10-20 宿主Platform排查包
+
+`scripts/build_host_platform.py`从固定ARM64镜像导出私有Python/CANN/动态库并校验依赖迁移基线；`deploy/host-platform/`保存原生加载器、FFmpeg入口和安装/检查/切换/回退控制器。`test/test_host_platform.py`覆盖路径映射、密码字面量、数据库IP变化拒绝及失败恢复顺序；现场操作见`docs/HOST_PLATFORM_RUNBOOK_20261020.md`。包不含模型/视频/生产凭据，安装后私有state记录现场连接与原Compose快照。
+
+## 2026-10-19 Kafka离线诊断工具
+
+`deploy/intranet/diagnose_kafka.py`为宿主机直接执行的独立单文件工具，通过现有部署入口在
+Platform服务网络执行自身的只读探针；`KAFKA_DIAGNOSIS.md`包含一次采集、Java CLI对照及分支处理。
+不改变应用启动路径、认证参数、业务消费组或offset；回归见`test/test_kafka_diagnostics.py`。
+
+## 2026-10-19 全量打包与源码更新指南
+
+`docs/RELEASE_PACKAGING_GUIDE.md`记录本地全量构建/封包、解压部署和源码prepare/apply/rollback。`package --app-source`内嵌经校验的app-package，发布根`application/app`从首次启动只读挂到`/app`；`source-compose.yaml`继续作为唯一源码挂载定义。全量包包含离线镜像及私有env，模型/视频只带清单；后续源码包不含镜像/私有env。
+
+## 2026-10-18 宿主源码版与日志
+
+- `utils_local/runtime_logging.py`：标准logging格式、轮转、脱敏及低频阶段等待诊断。
+- `deploy/intranet/source-compose.yaml`、`upgrade_source.py`、`source_check.py`、`run_logged.py`：源码只读挂载、校验/切换/恢复、只读版本检查和容器日志采集。
+- `deploy/intranet/console-runtime/entrypoint.sh`：Console只读资源的运行时配置生成、Nginx日志与轮转。
+- `scripts/build_intranet_release.py app-package`：复用固定镜像生成可运行源码升级包，与原source准备包区分；原私有env、模型、视频和数据不进入包。
+
+`deploy/intranet/console-image/start.sh`与`console-image-2026.10.18.3.yaml`用于独立Console镜像更新；只操作Console，不修改现有发布文件、不创建备份。旧console-fix为历史静态补充方式，当前交付改为镜像。
+
+## 2026-10-17 内网临时数据库交付
+
+`deploy/intranet/database/`保存ARM64数据库Dockerfile、扩展/schema初始化和来源SHA；
+`compose.postgres.yaml`为根Compose+内网覆盖的最后一层，生成四服务发布拓扑。
+`backup-db.sh`提供私有备份，`HIGHGO_CUTOVER.md`说明后续HG迁移；完整包另含.env.hg与docker-compose.hg.yaml。
+`dist/traffic-analyzer-2026.10.17-intranet.3-linux-arm64.tar.gz`包含四个离线镜像和全部检查脚本，模型/视频归档独立复用。
+
 > 当前状态：2026-08-05。本文描述 canonical 运行代码及 ADR-031 隔离的 Replay V2 shadow；已退役资产仅在“历史与保留边界”中列出。
 
 ## 1. 顶层结构
@@ -160,10 +190,10 @@ console2/
 | `road9` | 5432 | PostgreSQL + TimescaleDB，稳定卷 `traffic_road9_data` |
 | `kafka` | 9092 | Apache Kafka KRaft |
 | `platform` | 8000 | FastAPI 单体 |
-| `console2` | 8080 | React SPA |
-| `nginx` | 8009 | API/WS/MJPEG/HLS 统一入口 |
+| `console2` | 8009 | React SPA及API/WS/媒体代理 |
+| `init-db`（内网覆盖） | 无 | 一次性迁移，成功后Platform启动 |
 | `kafka-ui` | profile `ops` | 可选运维 UI |
-| detector | 本地子进程 | Mac 开发使用原生 arm64/MPS；生产容器使用 Linux CPU/CUDA |
+| detector | 本地子进程 | Mac 开发使用原生 arm64/MPS；内网生产容器使用Linux amd64/310P3（其余发布档按显式配置） |
 | `nvidia-mps` | profile `gpu-only` | 可选 NVIDIA CUDA Multi-Process Service；不是 Apple Metal/MPS |
 
 不得新增第二套完整 Compose、旧 PostgreSQL、旧/实验 TimescaleDB、InfluxDB/Telegraf/Grafana 运行服务或旧 Topic fallback。
@@ -228,3 +258,25 @@ console2/
 - `platform/tests/test_channelized_editor_geometry.py`：姿态/逆变换、类型化模型、Feature 类型和错误矩阵拒绝回归。
 - `platform/tests/test_channelized_map_editor_api.py`：拟合接口的姿态重算、几何拒绝、Feature 持久化、发布不可变及服务端派生来源链回归。
 - `docs/ROAD_ANNOTATION_UPGRADE_ACCEPTANCE_20260803.md`：两期计划的逐项验收矩阵、崇华路实证、自动化门禁与精度边界。
+
+## 内网发布新增入口（2026-10-15）
+
+- `deploy/intranet/`：根 Compose 薄覆盖、生产 Dockerfile、现场操作/预检/初始化、Topic ACL、无密码模板。
+- `deploy/highgo-reference/`：参考项目国密连接资料及完整 x86_64 驱动归档；构建只将其中 19 个 libpq/依赖库装入 AMD64 生产镜像。
+- `utils_local/ascend_detector.py`：pyACL YOLO11 OM 后端与资源清单校验。
+- `scripts/build_intranet_release.py`、`scripts/convert_ascend_models.py`：固定版本镜像构建/打包与独立模型转换。
+- `docs/DEPLOYMENT_INTRANET.md`、`docs/DEPLOYMENT_INTRANET_VALIDATION.md`：部署操作与本次验证边界。
+- `console2/src/lib/minemap.js`：内网SDK加载及共享覆盖物边界，支持工作台、轨迹回放和渠化/正射影像预览；`amap.js`按运行配置选择生产MineMap或本地高德。
+
+2026-10-16内网交付：`deploy/intranet/compose-bootstrap.sh`提供离线首次准备；发布根`docker-compose`入口、生成的单Compose及私有`.env`支持解压后启动。Console内置代理统一8009，独立Nginx服务已移除；生产YCX同库xinchan、schema road11，只读。
+
+2026-10-17：platform/app/core/doris_connection.py提供外部Doris SELECT；timeseries.py集中实现显式幂等超表转换；
+scripts/build_intranet_repair.py构建含私有Doris配置、离线PyMySQL和当前Console静态文件的累计现场修复，不在现场构建/下载。
+
+2026-10-17 ADR-038：`platform/app/core/doris_connection.py` 统一外部SELECT/版本/WKT；
+`platform/app/services/ycx_road_import.py`、`dashboard_situation.py` 仅读Doris路网/指标；
+`platform/tests/test_doris_live.py` 提供显式开启的公网只读对账，输出 `.runtime/doris-validation.json`。
+瀚高连接适配保留给应用写链路及历史离线审计，不作为运行时路网/路况fallback。
+
+2026.10.17-intranet.2：deploy/intranet/CHECK_TOOLS.md列出离线校验、导入、预检、初始化、状态/日志与ACL工具；
+db_readonly_checks.sql提供新生产目标ycx_prod.drone的DBA只读检查，topic_acl.py同时进入ARM64镜像。

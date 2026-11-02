@@ -1,0 +1,14 @@
+# Target labels
+ xtensor-populate
+# Source files and their labels
+/root/project/model_deployment/device_run_new/service_new_new_new/yolo_inference_service/src/reorder/build/_deps/xtensor-subbuild/CMakeFiles/xtensor-populate
+/root/project/model_deployment/device_run_new/service_new_new_new/yolo_inference_service/src/reorder/build/_deps/xtensor-subbuild/CMakeFiles/xtensor-populate.rule
+/root/project/model_deployment/device_run_new/service_new_new_new/yolo_inference_service/src/reorder/build/_deps/xtensor-subbuild/CMakeFiles/xtensor-populate-complete.rule
+/root/project/model_deployment/device_run_new/service_new_new_new/yolo_inference_service/src/reorder/build/_deps/xtensor-subbuild/xtensor-populate-prefix/src/xtensor-populate-stamp/xtensor-populate-build.rule
+/root/project/model_deployment/device_run_new/service_new_new_new/yolo_inference_service/src/reorder/build/_deps/xtensor-subbuild/xtensor-populate-prefix/src/xtensor-populate-stamp/xtensor-populate-configure.rule
+/root/project/model_deployment/device_run_new/service_new_new_new/yolo_inference_service/src/reorder/build/_deps/xtensor-subbuild/xtensor-populate-prefix/src/xtensor-populate-stamp/xtensor-populate-download.rule
+/root/project/model_deployment/device_run_new/service_new_new_new/yolo_inference_service/src/reorder/build/_deps/xtensor-subbuild/xtensor-populate-prefix/src/xtensor-populate-stamp/xtensor-populate-install.rule
+/root/project/model_deployment/device_run_new/service_new_new_new/yolo_inference_service/src/reorder/build/_deps/xtensor-subbuild/xtensor-populate-prefix/src/xtensor-populate-stamp/xtensor-populate-mkdir.rule
+/root/project/model_deployment/device_run_new/service_new_new_new/yolo_inference_service/src/reorder/build/_deps/xtensor-subbuild/xtensor-populate-prefix/src/xtensor-populate-stamp/xtensor-populate-patch.rule
+/root/project/model_deployment/device_run_new/service_new_new_new/yolo_inference_service/src/reorder/build/_deps/xtensor-subbuild/xtensor-populate-prefix/src/xtensor-populate-stamp/xtensor-populate-test.rule
+/root/project/model_deployment/device_run_new/service_new_new_new/yolo_inference_service/src/reorder/build/_deps/xtensor-subbuild/xtensor-populate-prefix/src/xtensor-populate-stamp/xtensor-populate-update.rule

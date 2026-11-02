@@ -1,0 +1,650 @@
+{
+  "schema_version": "uav.deployment-sources/v1",
+  "exported_at": "2026-10-16",
+  "drones": [
+    {
+      "id": "DEMO-UAT-DRONE-20260718",
+      "name": "客户演示验收机",
+      "model": "DJI-M30T-UAT",
+      "enabled": true,
+      "default_inter_id": "INT_camera_1",
+      "default_video_source_id": "VID-36B3A83667F4",
+      "default_telemetry_source_id": "TEL-B0A99146CCC7"
+    },
+    {
+      "id": "UAV-INTER-XQH",
+      "name": "回放无人机 · 小清河北路与水屯路",
+      "model": "MP4 replay fixture",
+      "enabled": true,
+      "default_inter_id": "011wwe0z19700001",
+      "default_video_source_id": "VID-INTER-XQH-0403-PM",
+      "default_telemetry_source_id": "TEL-INTER-XQH-0403-PM"
+    },
+    {
+      "id": "UAV-MP4728-JS",
+      "name": "回放无人机 · 经十路巡航",
+      "model": "MP4 replay fixture",
+      "enabled": true,
+      "default_inter_id": "INT_MP4728_JINGSHI_CORRIDOR",
+      "default_video_source_id": "VID-MP4729-JS-0729-3MS",
+      "default_telemetry_source_id": "TEL-MP4729-JS-0729-3MS"
+    },
+    {
+      "id": "UAV-MP4820-JS",
+      "name": "回放无人机 · 经十路东段巡航",
+      "model": "MP4 replay fixture",
+      "enabled": true,
+      "default_inter_id": "INT_MP4820_JINGSHI_EAST_CORRIDOR",
+      "default_video_source_id": "VID-MP4820-JS-0813-EW",
+      "default_telemetry_source_id": "TEL-MP4820-JS-0813-EW"
+    },
+    {
+      "id": "UAV-MP4NEW-CH",
+      "name": "回放摄像头 · 新泺大街-崇华路",
+      "model": "MP4 replay fixture",
+      "enabled": true,
+      "default_inter_id": "011wwe29k1q00001",
+      "default_video_source_id": "VID-MP4NEW-CH-0625-AM",
+      "default_telemetry_source_id": "TEL-MP4NEW-CH-0625-AM"
+    },
+    {
+      "id": "UAV-MP4NEW-HY",
+      "name": "回放摄像头 · 解放东路-海右路",
+      "model": "MP4 replay fixture",
+      "enabled": true,
+      "default_inter_id": "011wwe28dm500001",
+      "default_video_source_id": "VID-MP4NEW-HY-0625-AM",
+      "default_telemetry_source_id": "TEL-MP4NEW-HY-0625-AM"
+    },
+    {
+      "id": "UAV-MP4NEW-LS",
+      "name": "回放摄像头 · 解放东路-礼士路",
+      "model": "MP4 replay fixture",
+      "enabled": true,
+      "default_inter_id": "011wwe28dr400003",
+      "default_video_source_id": "VID-MP4NEW-LS-0625-AM",
+      "default_telemetry_source_id": "TEL-MP4NEW-LS-0625-AM"
+    }
+  ],
+  "sources": [
+    {
+      "video": {
+        "id": "VID-36B3A83667F4",
+        "mode": "local",
+        "enabled": true,
+        "drone_id": "DEMO-UAT-DRONE-20260718",
+        "location": "/app/test_videos/inter_xqh/DJI_20260403142902_0001_V小清河北路与水屯路路口.mp4",
+        "profile_id": "SRC-E2BA6A8F6D0F",
+        "source_type": "mp4"
+      },
+      "telemetry": {
+        "id": "TEL-B0A99146CCC7",
+        "mode": "local",
+        "config": {
+          "time_offset_sec": 0.0,
+          "sync_tolerance_sec": 0.5
+        },
+        "enabled": true,
+        "drone_id": "DEMO-UAT-DRONE-20260718",
+        "location": "/app/test_videos/inter_xqh/telemetry.srt",
+        "profile_id": "SRC-E2BA6A8F6D0F",
+        "source_type": "srt"
+      }
+    },
+    {
+      "video": {
+        "id": "VID-INTER-XQH-0403-PM",
+        "mode": "local",
+        "enabled": true,
+        "drone_id": "UAV-INTER-XQH",
+        "location": "/app/test_videos/inter_xqh/DJI_20260403142902_0001_V小清河北路与水屯路路口.mp4",
+        "profile_id": "SRC-INTER-XQH-0403-PM",
+        "source_type": "mp4"
+      },
+      "telemetry": {
+        "id": "TEL-INTER-XQH-0403-PM",
+        "mode": "local",
+        "config": {
+          "format": "dji_srt",
+          "acceptance_mode": "formal_world_trajectory",
+          "source_manifest": null,
+          "time_offset_sec": 0.0,
+          "known_degradation": null,
+          "telemetry_enabled": true,
+          "expected_speed_mps": null,
+          "sync_tolerance_sec": 0.033,
+          "expected_capture_started_at": null
+        },
+        "enabled": true,
+        "drone_id": "UAV-INTER-XQH",
+        "location": "/app/test_videos/inter_xqh/telemetry.srt",
+        "profile_id": "SRC-INTER-XQH-0403-PM",
+        "source_type": "srt"
+      }
+    },
+    {
+      "video": {
+        "id": "VID-MP4728-JS-0728-3MS",
+        "mode": "local",
+        "enabled": true,
+        "drone_id": "UAV-MP4728-JS",
+        "location": "/app/test_videos/mp4728/经十路交通状态拍摄3米每秒.mp4",
+        "profile_id": "SRC-MP4728-JS-0728-3MS",
+        "source_type": "mp4"
+      },
+      "telemetry": {
+        "id": "TEL-MP4728-JS-0728-3MS",
+        "mode": "local",
+        "config": {
+          "format": "dji_cloud_json",
+          "acceptance_mode": "roadless_trajectory",
+          "source_manifest": {
+            "video_fps": 29.97003,
+            "video_codec": "hevc",
+            "video_sha256": "1d61ea4b594a82425df4db481a0d0fc07039e60b5abb74ebb7a702ccb1062409",
+            "telemetry_sha256": "9fbb083238d6488ca353ffe2bd1de432aa50c71ff6d487b86ed87d207f3bd1c7",
+            "video_resolution": [
+              3840,
+              2160
+            ],
+            "video_size_bytes": 2784863729,
+            "video_frame_count": 15347,
+            "telemetry_ended_at": "2026-07-28T10:18:33.432+08:00",
+            "video_duration_sec": 512.078233,
+            "telemetry_size_bytes": 1597351,
+            "telemetry_started_at": "2026-07-28T10:05:07.222+08:00"
+          },
+          "time_offset_sec": 72.778,
+          "known_degradation": null,
+          "telemetry_enabled": true,
+          "expected_speed_mps": 3.0,
+          "sync_tolerance_sec": 2.5,
+          "expected_capture_started_at": "2026-07-28T10:06:20+08:00"
+        },
+        "enabled": true,
+        "drone_id": "UAV-MP4728-JS",
+        "location": "/app/test_videos/mp4728/srt0728/经十路3米每秒.txt",
+        "profile_id": "SRC-MP4728-JS-0728-3MS",
+        "source_type": "file"
+      }
+    },
+    {
+      "video": {
+        "id": "VID-MP4728-JS-0728-5MS",
+        "mode": "local",
+        "enabled": true,
+        "drone_id": "UAV-MP4728-JS",
+        "location": "/app/test_videos/mp4728/经十路交通状态拍摄5米每秒.mp4",
+        "profile_id": "SRC-MP4728-JS-0728-5MS",
+        "source_type": "mp4"
+      },
+      "telemetry": {
+        "id": "TEL-MP4728-JS-0728-5MS",
+        "mode": "local",
+        "config": {
+          "format": "dji_cloud_json",
+          "acceptance_mode": "roadless_trajectory",
+          "source_manifest": {
+            "video_fps": 29.97003,
+            "video_codec": "hevc",
+            "video_sha256": "87c6522d756517936f44e71004665a212288a632e9fcfcc7b14238db766411ec",
+            "telemetry_sha256": "ba81892e79e64eb8f697048df1e5792b34644fab43742a5492c33923087a3b00",
+            "video_resolution": [
+              3840,
+              2160
+            ],
+            "video_size_bytes": 2022413670,
+            "video_frame_count": 11142,
+            "telemetry_ended_at": "2026-07-28T10:01:57.422+08:00",
+            "video_duration_sec": 371.7714,
+            "telemetry_size_bytes": 1561049,
+            "telemetry_started_at": "2026-07-28T09:49:06.562+08:00"
+          },
+          "time_offset_sec": 72.438,
+          "known_degradation": null,
+          "telemetry_enabled": true,
+          "expected_speed_mps": 5.0,
+          "sync_tolerance_sec": 2.5,
+          "expected_capture_started_at": "2026-07-28T09:50:19+08:00"
+        },
+        "enabled": true,
+        "drone_id": "UAV-MP4728-JS",
+        "location": "/app/test_videos/mp4728/srt0728/经十路5米每秒.txt",
+        "profile_id": "SRC-MP4728-JS-0728-5MS",
+        "source_type": "file"
+      }
+    },
+    {
+      "video": {
+        "id": "VID-MP4728-JS-0728-7MS",
+        "mode": "local",
+        "enabled": true,
+        "drone_id": "UAV-MP4728-JS",
+        "location": "/app/test_videos/mp4728/经十路交通状态拍摄7米每秒.mp4",
+        "profile_id": "SRC-MP4728-JS-0728-7MS",
+        "source_type": "mp4"
+      },
+      "telemetry": {
+        "id": "TEL-MP4728-JS-0728-7MS",
+        "mode": "local",
+        "config": {
+          "format": "dji_cloud_json",
+          "acceptance_mode": "roadless_trajectory",
+          "source_manifest": {
+            "video_fps": 29.97003,
+            "video_codec": "hevc",
+            "video_sha256": "ce0c3ec29a0109f26d01e3985fd223700650468d233dc4cfbd7f359778e678de",
+            "telemetry_sha256": "b440df508737954c4eaecb65ff54b82c60d2104fc69d187c060eb2f33ba6b1d2",
+            "video_resolution": [
+              3840,
+              2160
+            ],
+            "video_size_bytes": 1589755777,
+            "video_frame_count": 8758,
+            "telemetry_ended_at": "2026-07-28T09:47:01.485+08:00",
+            "video_duration_sec": 292.225267,
+            "telemetry_size_bytes": 1265494,
+            "telemetry_started_at": "2026-07-28T09:35:54.627+08:00"
+          },
+          "time_offset_sec": 74.373,
+          "known_degradation": null,
+          "telemetry_enabled": true,
+          "expected_speed_mps": 7.0,
+          "sync_tolerance_sec": 2.5,
+          "expected_capture_started_at": "2026-07-28T09:37:09+08:00"
+        },
+        "enabled": true,
+        "drone_id": "UAV-MP4728-JS",
+        "location": "/app/test_videos/mp4728/srt0728/经十路7米每秒.txt",
+        "profile_id": "SRC-MP4728-JS-0728-7MS",
+        "source_type": "file"
+      }
+    },
+    {
+      "video": {
+        "id": "VID-MP4729-JS-0729-3MS",
+        "mode": "local",
+        "enabled": true,
+        "drone_id": "UAV-MP4728-JS",
+        "location": "/app/test_videos/mp4729/729经十路交通状态拍摄3米每秒.mp4",
+        "profile_id": "SRC-MP4729-JS-0729-3MS",
+        "source_type": "mp4"
+      },
+      "telemetry": {
+        "id": "TEL-MP4729-JS-0729-3MS",
+        "mode": "local",
+        "config": {
+          "format": "dji_cloud_json",
+          "acceptance_mode": "roadless_trajectory",
+          "source_manifest": {
+            "video_fps": 29.97003,
+            "video_codec": "hevc",
+            "video_sha256": "19fda82a1804ef7e0d507b47741780f0e4212371173b1647207ef2f38e37ac32",
+            "telemetry_sha256": "d045717f5217fc59f93cfc05400b3d16958ebd1d60167e265b942105d52d257b",
+            "video_resolution": [
+              3840,
+              2160
+            ],
+            "video_size_bytes": 3148888137,
+            "video_frame_count": 17354,
+            "telemetry_ended_at": "2026-07-29T09:57:32.037+08:00",
+            "video_duration_sec": 579.045133,
+            "telemetry_size_bytes": 1716920,
+            "telemetry_started_at": "2026-07-29T09:42:49.221+08:00"
+          },
+          "time_offset_sec": 73.779,
+          "known_degradation": null,
+          "telemetry_enabled": true,
+          "expected_speed_mps": 3.0,
+          "sync_tolerance_sec": 2.5,
+          "expected_capture_started_at": "2026-07-29T09:44:03+08:00"
+        },
+        "enabled": true,
+        "drone_id": "UAV-MP4728-JS",
+        "location": "/app/test_videos/mp4729/srt/经十路3米每秒.txt",
+        "profile_id": "SRC-MP4729-JS-0729-3MS",
+        "source_type": "file"
+      }
+    },
+    {
+      "video": {
+        "id": "VID-MP4820-JS-0813-EW",
+        "mode": "local",
+        "enabled": true,
+        "drone_id": "UAV-MP4820-JS",
+        "location": "/app/test_videos/mp4820/8.13晚高峰东向西.mp4",
+        "profile_id": "SRC-MP4820-JS-0813-EW",
+        "source_type": "mp4"
+      },
+      "telemetry": {
+        "id": "TEL-MP4820-JS-0813-EW",
+        "mode": "local",
+        "config": {
+          "format": "dji_cloud_json",
+          "acceptance_mode": "geo_tcc_validation",
+          "source_manifest": {
+            "video_fps": 29.97003,
+            "video_codec": "hevc",
+            "video_sha256": "f3fd1e970aedce0d0527c5c85afad74ced23e28b99451c383cb08ba679294ccc",
+            "telemetry_sha256": "db895b67b9d2c27ba31b932a07cc6c64038ffb7fa747f106077e6356df737a68",
+            "video_resolution": [
+              3840,
+              2160
+            ],
+            "video_size_bytes": 2390960806,
+            "video_frame_count": 13213,
+            "telemetry_ended_at": "2026-08-13T17:03:16.311+08:00",
+            "video_duration_sec": 440.873767,
+            "telemetry_size_bytes": 1544450,
+            "telemetry_started_at": "2026-08-13T16:50:39.875+08:00"
+          },
+          "time_offset_sec": 58.451,
+          "known_degradation": null,
+          "telemetry_enabled": true,
+          "expected_speed_mps": 5.0,
+          "sync_tolerance_sec": 2.5,
+          "expected_capture_started_at": "2026-08-13T16:51:38.326+08:00"
+        },
+        "enabled": true,
+        "drone_id": "UAV-MP4820-JS",
+        "location": "/app/test_videos/mp4820/8.13晚高峰东向西.txt",
+        "profile_id": "SRC-MP4820-JS-0813-EW",
+        "source_type": "file"
+      }
+    },
+    {
+      "video": {
+        "id": "VID-MP4820-JS-0813-WE",
+        "mode": "local",
+        "enabled": true,
+        "drone_id": "UAV-MP4820-JS",
+        "location": "/app/test_videos/mp4820/8.13晚高峰西向东.mp4",
+        "profile_id": "SRC-MP4820-JS-0813-WE",
+        "source_type": "mp4"
+      },
+      "telemetry": {
+        "id": "TEL-MP4820-JS-0813-WE",
+        "mode": "local",
+        "config": {
+          "format": "dji_cloud_json",
+          "acceptance_mode": "geo_tcc_validation",
+          "source_manifest": {
+            "video_fps": 29.97003,
+            "video_codec": "hevc",
+            "video_sha256": "03a85933c5ef8494463b0faaf54088898652e2b46c0860b2d7d3dba40d993474",
+            "telemetry_sha256": "028ea072c82e7e8c85ff4bbfcce1e53b77913a8191ead7ffb4a2c7ef03aa5877",
+            "video_resolution": [
+              3840,
+              2160
+            ],
+            "video_size_bytes": 2225960569,
+            "video_frame_count": 12267,
+            "telemetry_ended_at": "2026-08-13T17:22:54.306+08:00",
+            "video_duration_sec": 409.3089,
+            "telemetry_size_bytes": 1453284,
+            "telemetry_started_at": "2026-08-13T17:10:57.177+08:00"
+          },
+          "time_offset_sec": 216.149,
+          "known_degradation": null,
+          "telemetry_enabled": true,
+          "expected_speed_mps": 5.0,
+          "sync_tolerance_sec": 2.5,
+          "expected_capture_started_at": "2026-08-13T17:14:34.326+08:00"
+        },
+        "enabled": true,
+        "drone_id": "UAV-MP4820-JS",
+        "location": "/app/test_videos/mp4820/8.13晚高峰西向东.txt",
+        "profile_id": "SRC-MP4820-JS-0813-WE",
+        "source_type": "file"
+      }
+    },
+    {
+      "video": {
+        "id": "VID-MP4NEW-CH-0625-AM",
+        "mode": "local",
+        "enabled": true,
+        "drone_id": "UAV-MP4NEW-CH",
+        "location": "/app/test_videos/mp4new/6.25早高峰 崇华路.mp4",
+        "profile_id": "SRC-MP4NEW-CH-0625-AM",
+        "source_type": "mp4"
+      },
+      "telemetry": {
+        "id": "TEL-MP4NEW-CH-0625-AM",
+        "mode": "local",
+        "config": {
+          "format": "dji_cloud_json",
+          "acceptance_mode": "formal_world_trajectory",
+          "source_manifest": null,
+          "time_offset_sec": 247.096,
+          "known_degradation": null,
+          "telemetry_enabled": true,
+          "expected_speed_mps": null,
+          "sync_tolerance_sec": 2.5,
+          "expected_capture_started_at": null
+        },
+        "enabled": true,
+        "drone_id": "UAV-MP4NEW-CH",
+        "location": "/app/test_videos/mp4new/srt/新泺大街崇华路路口0625早高峰srt文件.txt",
+        "profile_id": "SRC-MP4NEW-CH-0625-AM",
+        "source_type": "file"
+      }
+    },
+    {
+      "video": {
+        "id": "VID-MP4NEW-HY-0624-PM",
+        "mode": "local",
+        "enabled": true,
+        "drone_id": "UAV-MP4NEW-HY",
+        "location": "/app/test_videos/mp4new/6.24晚高峰 解放东路-海右路.mp4",
+        "profile_id": "SRC-MP4NEW-HY-0624-PM",
+        "source_type": "mp4"
+      },
+      "telemetry": {
+        "id": "TEL-MP4NEW-HY-0624-PM",
+        "mode": "local",
+        "config": {
+          "format": "dji_cloud_json",
+          "acceptance_mode": "formal_world_trajectory",
+          "source_manifest": null,
+          "time_offset_sec": 233.463,
+          "known_degradation": null,
+          "telemetry_enabled": true,
+          "expected_speed_mps": null,
+          "sync_tolerance_sec": 2.5,
+          "expected_capture_started_at": null
+        },
+        "enabled": true,
+        "drone_id": "UAV-MP4NEW-HY",
+        "location": "/app/test_videos/mp4new/srt/解放东路-海右路0624晚高峰 srt文件.txt",
+        "profile_id": "SRC-MP4NEW-HY-0624-PM",
+        "source_type": "file"
+      }
+    },
+    {
+      "video": {
+        "id": "VID-MP4NEW-HY-0625-AM",
+        "mode": "local",
+        "enabled": true,
+        "drone_id": "UAV-MP4NEW-HY",
+        "location": "/app/test_videos/mp4new/6.25早高峰 解放东路-海右路.mp4",
+        "profile_id": "SRC-MP4NEW-HY-0625-AM",
+        "source_type": "mp4"
+      },
+      "telemetry": {
+        "id": "TEL-MP4NEW-HY-0625-AM",
+        "mode": "local",
+        "config": {
+          "format": "dji_cloud_json",
+          "acceptance_mode": "formal_world_trajectory",
+          "source_manifest": null,
+          "time_offset_sec": 178.129,
+          "known_degradation": null,
+          "telemetry_enabled": true,
+          "expected_speed_mps": null,
+          "sync_tolerance_sec": 2.5,
+          "expected_capture_started_at": null
+        },
+        "enabled": true,
+        "drone_id": "UAV-MP4NEW-HY",
+        "location": "/app/test_videos/mp4new/srt/解放东路-海右路0625早高峰 srt文件.txt",
+        "profile_id": "SRC-MP4NEW-HY-0625-AM",
+        "source_type": "file"
+      }
+    },
+    {
+      "video": {
+        "id": "VID-MP4NEW-LS-0624-PM",
+        "mode": "local",
+        "enabled": true,
+        "drone_id": "UAV-MP4NEW-LS",
+        "location": "/app/test_videos/mp4new/6.24晚高峰 解放东路-礼士路.mp4",
+        "profile_id": "SRC-MP4NEW-LS-0624-PM",
+        "source_type": "mp4"
+      },
+      "telemetry": {
+        "id": "TEL-MP4NEW-LS-0624-PM",
+        "mode": "local",
+        "config": {
+          "format": "dji_cloud_json",
+          "acceptance_mode": "formal_world_trajectory",
+          "source_manifest": null,
+          "time_offset_sec": 179.115,
+          "known_degradation": "telemetry_gap_34s",
+          "telemetry_enabled": true,
+          "expected_speed_mps": null,
+          "sync_tolerance_sec": 2.5,
+          "expected_capture_started_at": null
+        },
+        "enabled": true,
+        "drone_id": "UAV-MP4NEW-LS",
+        "location": "/app/test_videos/mp4new/srt/解放东路-礼士路0624晚高峰srt文件.txt",
+        "profile_id": "SRC-MP4NEW-LS-0624-PM",
+        "source_type": "file"
+      }
+    },
+    {
+      "video": {
+        "id": "VID-MP4NEW-LS-0625-AM",
+        "mode": "local",
+        "enabled": true,
+        "drone_id": "UAV-MP4NEW-LS",
+        "location": "/app/test_videos/mp4new/6.25早高峰 解放东路-礼士路路口.mp4",
+        "profile_id": "SRC-MP4NEW-LS-0625-AM",
+        "source_type": "mp4"
+      },
+      "telemetry": {
+        "id": "TEL-MP4NEW-LS-0625-AM",
+        "mode": "local",
+        "config": {
+          "format": "dji_cloud_json",
+          "acceptance_mode": "formal_world_trajectory",
+          "source_manifest": null,
+          "time_offset_sec": 132.032,
+          "known_degradation": null,
+          "telemetry_enabled": true,
+          "expected_speed_mps": null,
+          "sync_tolerance_sec": 2.5,
+          "expected_capture_started_at": null
+        },
+        "enabled": true,
+        "drone_id": "UAV-MP4NEW-LS",
+        "location": "/app/test_videos/mp4new/srt/解放东路礼士路路口0625早高峰srt文件.txt",
+        "profile_id": "SRC-MP4NEW-LS-0625-AM",
+        "source_type": "file"
+      }
+    },
+    {
+      "video": {
+        "id": "VID-MP4NEW2-CH-0715-PM",
+        "mode": "local",
+        "enabled": true,
+        "drone_id": "UAV-MP4NEW-CH",
+        "location": "/app/test_videos/mp4new2/解放东路-崇华路路口晚高峰.mp4",
+        "profile_id": "SRC-MP4NEW2-CH-0715-PM",
+        "source_type": "mp4"
+      },
+      "telemetry": {
+        "id": "TEL-MP4NEW2-CH-0715-PM",
+        "mode": "local",
+        "config": {
+          "format": "dji_cloud_json",
+          "acceptance_mode": "formal_world_trajectory",
+          "source_manifest": null,
+          "time_offset_sec": 334.868,
+          "known_degradation": null,
+          "telemetry_enabled": true,
+          "expected_speed_mps": null,
+          "sync_tolerance_sec": 2.5,
+          "expected_capture_started_at": null
+        },
+        "enabled": true,
+        "drone_id": "UAV-MP4NEW-CH",
+        "location": "/app/test_videos/mp4new2/srt/新泺大街-崇华路路口srt数据.txt",
+        "profile_id": "SRC-MP4NEW2-CH-0715-PM",
+        "source_type": "file"
+      }
+    },
+    {
+      "video": {
+        "id": "VID-MP4NEW2-HY-0715-PM",
+        "mode": "local",
+        "enabled": true,
+        "drone_id": "UAV-MP4NEW-HY",
+        "location": "/app/test_videos/mp4new2/解放东路-海右路路口晚高峰.mp4",
+        "profile_id": "SRC-MP4NEW2-HY-0715-PM",
+        "source_type": "mp4"
+      },
+      "telemetry": {
+        "id": "TEL-MP4NEW2-HY-0715-PM",
+        "mode": "local",
+        "config": {
+          "format": "dji_cloud_json",
+          "acceptance_mode": "formal_world_trajectory",
+          "source_manifest": null,
+          "time_offset_sec": 169.004,
+          "known_degradation": null,
+          "telemetry_enabled": true,
+          "expected_speed_mps": null,
+          "sync_tolerance_sec": 2.5,
+          "expected_capture_started_at": null
+        },
+        "enabled": true,
+        "drone_id": "UAV-MP4NEW-HY",
+        "location": "/app/test_videos/mp4new2/srt/解放东路-海右路  解放东路-礼士路srt.txt",
+        "profile_id": "SRC-MP4NEW2-HY-0715-PM",
+        "source_type": "file"
+      }
+    },
+    {
+      "video": {
+        "id": "VID-MP4NEW2-LS-0715-PM",
+        "mode": "local",
+        "enabled": true,
+        "drone_id": "UAV-MP4NEW-LS",
+        "location": "/app/test_videos/mp4new2/解放东路-礼士路路口晚高峰.mp4",
+        "profile_id": "SRC-MP4NEW2-LS-0715-PM",
+        "source_type": "mp4"
+      },
+      "telemetry": {
+        "id": "TEL-MP4NEW2-LS-0715-PM",
+        "mode": "local",
+        "config": {
+          "format": "dji_cloud_json",
+          "acceptance_mode": "formal_world_trajectory",
+          "source_manifest": null,
+          "time_offset_sec": 691.247,
+          "known_degradation": null,
+          "telemetry_enabled": true,
+          "expected_speed_mps": null,
+          "sync_tolerance_sec": 2.5,
+          "expected_capture_started_at": null
+        },
+        "enabled": true,
+        "drone_id": "UAV-MP4NEW-LS",
+        "location": "/app/test_videos/mp4new2/srt/解放东路-海右路  解放东路-礼士路srt.txt",
+        "profile_id": "SRC-MP4NEW2-LS-0715-PM",
+        "source_type": "file"
+      }
+    }
+  ]
+}

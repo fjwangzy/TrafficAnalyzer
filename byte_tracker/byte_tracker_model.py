@@ -1,8 +1,11 @@
 import numpy as np
+import logging
+import os
 
 from byte_tracker.utils.kalman_filter import KalmanFilter
 from byte_tracker.utils import matching
 from byte_tracker.utils.basetrack import BaseTrack, TrackState
+from utils_local.runtime_logging import stage
 
 class STrack(BaseTrack):
     shared_kalman = KalmanFilter()
@@ -269,32 +272,40 @@ class BYTETracker(object):
             "would_reject_eligible_pair_count": 0,
             "would_strand_track_count": 0,
         }
+        logging.getLogger(__name__).info(
+            "ASSOCIATION_CPU_ENV numpy=%s scipy=%s solver=%s thread_env=%s",
+            np.__version__, matching.scipy.__version__, "lapjv" if matching.lap is not None else "scipy",
+            {name: os.environ.get(name, "unset") for name in (
+                "OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS", "MKL_NUM_THREADS", "BLIS_NUM_THREADS",
+                "VECLIB_MAXIMUM_THREADS", "NUMEXPR_NUM_THREADS")},
+        )
         
     def _association_distance(self, tracks, detections):
-        dists = matching.iou_distance(tracks, detections)
-        if not len(tracks) or not len(detections):
-            return dists
-        detection_classes = np.asarray(
-            [int(detection.class_name) for detection in detections], dtype=np.int64
-        )
-        detection_groups = [detection.class_group for detection in detections]
-
-        for row, track in enumerate(tracks):
-            class_penalty = np.where(
-                np.asarray(
-                    [
-                        track.class_group is not None
-                        and group is not None
-                        and track.class_group != group
-                        for group in detection_groups
-                    ],
-                    dtype=bool,
-                ),
-                0.16,
-                np.where(detection_classes != int(track.class_name), 0.08, 0.0),
+        with stage("bytetrack.distance", frame=self.frame_id, tracks=len(tracks), detections=len(detections), pairs=len(tracks) * len(detections)):
+            dists = matching.iou_distance(tracks, detections)
+            if not len(tracks) or not len(detections):
+                return dists
+            detection_classes = np.asarray(
+                [int(detection.class_name) for detection in detections], dtype=np.int64
             )
-            dists[row] = np.minimum(1.0, dists[row] + class_penalty)
-        return dists
+            detection_groups = [detection.class_group for detection in detections]
+
+            for row, track in enumerate(tracks):
+                class_penalty = np.where(
+                    np.asarray(
+                        [
+                            track.class_group is not None
+                            and group is not None
+                            and track.class_group != group
+                            for group in detection_groups
+                        ],
+                        dtype=bool,
+                    ),
+                    0.16,
+                    np.where(detection_classes != int(track.class_name), 0.08, 0.0),
+                )
+                dists[row] = np.minimum(1.0, dists[row] + class_penalty)
+            return dists
 
     def update(self, output_results, xyxy=True, camera_warp=None, timestamp=None):
         
@@ -382,7 +393,8 @@ class BYTETracker(object):
         for track in strack_pool:
             track.apply_camera_warp(camera_warp)
         # Predict the current location with KF
-        STrack.multi_predict(strack_pool)
+        with stage("bytetrack.predict", frame=self.frame_id, tracks=len(strack_pool)):
+            STrack.multi_predict(strack_pool)
         dists = self._association_distance(strack_pool, detections)
         if not self.mot20:
             dists = matching.fuse_score(dists, detections)

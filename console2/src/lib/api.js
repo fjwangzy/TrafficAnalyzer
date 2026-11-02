@@ -75,7 +75,8 @@ export const platformApi = {
   dashboardIntersections: (params = {}) => get('/dashboard/intersections', { params }),
   dashboardIntersection: (interId) => get(`/dashboard/intersections/${encodeURIComponent(interId)}`),
   dashboardDrones: () => get('/dashboard/drones'),
-  dashboardSituation: (dayOfWeek, stepIndex) => get('/dashboard/situation', { params: { day_of_week: dayOfWeek, step_index: stepIndex } }),
+  // shortcut: full-city geometry exceeds 10 seconds; add viewport paging before a production latency SLA.
+  dashboardSituation: (dayOfWeek, stepIndex) => get('/dashboard/situation', { timeout: 60_000, params: { day_of_week: dayOfWeek, step_index: stepIndex } }),
 
   drones: () => get('/drones'),
   droneTrajectory: (droneId) => get(`/drones/${encodeURIComponent(droneId)}/trajectory`),
@@ -93,9 +94,9 @@ export const platformApi = {
   flightPlanAction: (planId, action, revision) => post(`/flight-plans/${encodeURIComponent(planId)}/${action}`, { revision }),
   flightPlanOccurrences: (planId, count = 10) => get(`/flight-plans/${encodeURIComponent(planId)}/occurrences`, { params: { count } }),
   missions: (params = {}) => get('/missions', { params }),
-  createMission: (body) => post('/missions', body),
+  createMission: (body) => post('/missions', body, { timeout: 180_000 }),
   stopMission: (missionId, reason) => post(`/missions/${encodeURIComponent(missionId)}/stop`, { reason }),
-  retryMission: (missionId, reason) => post(`/missions/${encodeURIComponent(missionId)}/retry`, { reason }),
+  retryMission: (missionId, reason) => post(`/missions/${encodeURIComponent(missionId)}/retry`, { reason }, { timeout: 180_000 }),
 
   enforcementZones: () => get('/enforcement/zones'),
   createEnforcementZone: (body) => post('/enforcement/zones', body),

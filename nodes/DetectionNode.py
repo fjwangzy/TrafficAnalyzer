@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import hashlib
+import logging
+import os
+from types import SimpleNamespace
 import time
 from pathlib import Path
 
@@ -15,6 +18,8 @@ from utils_local.detection_geometry import (
 )
 from utils_local.adaptive_imgsz import AdaptiveImageSizePolicy
 from utils_local.utils import profile_time
+
+logger = logging.getLogger(__name__)
 
 
 def build_yolo_model_id(weight_path: str | Path) -> str:
@@ -37,7 +42,10 @@ class DetectionNode:
     def __init__(self, config: dict) -> None:
         cfg = config["detection_node"]
         requested = cfg.get("device", "auto")
-        if requested == "auto":
+        self.ascend = requested == "ascend"
+        if self.ascend:
+            device = SimpleNamespace(type="ascend")
+        elif requested == "auto":
             if torch.cuda.is_available():
                 device = torch.device("cuda")
             elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
@@ -47,11 +55,23 @@ class DetectionNode:
         else:
             device = torch.device(requested)
         self.device = device
-        print(f"检测将在 {device} 上进行")
+        logger.info("DETECTOR_DEVICE device=%s", device.type)
 
         weight_path = cfg["weight_pth"]
-        self.model = YOLO(weight_path, task="detect")
-        self.safe_mps_box_clipping = configure_safe_mps_box_clipping(self.device)
+        if self.ascend:
+            from utils_local.ascend_detector import AscendDetector, sha256
+            manifest_path = os.environ.get("ASCEND_MODEL_MANIFEST", "")
+            if not manifest_path:
+                raise ValueError("ASCEND_MODEL_MANIFEST is required for Ascend")
+            source_hash = sha256(weight_path)
+            self.model = AscendDetector(manifest_path, int(os.environ.get("ASCEND_DEVICE_ID", "0")))
+            if source_hash != self.model.manifest["source_sha256"]:
+                self.model.close()
+                raise ValueError("Ascend model does not match the configured source weights")
+            self.safe_mps_box_clipping = False
+        else:
+            self.model = YOLO(weight_path, task="detect")
+            self.safe_mps_box_clipping = configure_safe_mps_box_clipping(self.device)
         self.yolo_model_id = build_yolo_model_id(weight_path)
         self.classes = self.model.names
         self.conf = cfg["confidence"]
@@ -67,6 +87,8 @@ class DetectionNode:
     @profile_time
     def process(self, frame_element: FrameElement) -> FrameElement:
         if isinstance(frame_element, VideoEndBreakElement):
+            if getattr(self, "ascend", False):
+                self.model.close()
             return frame_element
         assert isinstance(frame_element, FrameElement), (
             f"DetectionNode | 输入元素格式错误 {type(frame_element)}"
@@ -121,10 +143,14 @@ class DetectionNode:
         frame_element.yolo_model_id = self.yolo_model_id
         frame_element.inference_context = {
             "metric_scope": "yolo_predict_single_processed_frame",
-            "device": str(self.device),
+            "device": "ascend" if getattr(self, "ascend", False) else str(self.device),
             "precision": "fp16" if self.half else "fp32",
             "model": self.yolo_model_id,
             "effective_imgsz": effective_imgsz,
             "agl_tier": adaptive_diagnostics["tier"],
         }
         return frame_element
+
+    def close(self):
+        if getattr(self, "ascend", False):
+            self.model.close()

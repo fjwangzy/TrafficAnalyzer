@@ -1,0 +1,6 @@
+#!/bin/sh
+set -eu
+root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+name=${0##*/}
+unset LD_PRELOAD LD_LIBRARY_PATH
+exec "$root/runtime/usr/lib/aarch64-linux-gnu/ld-linux-aarch64.so.1" --library-path "$root/runtime/usr/lib/aarch64-linux-gnu:$root/runtime/usr/lib/aarch64-linux-gnu/pulseaudio" "$root/runtime/usr/bin/$name" "$@"

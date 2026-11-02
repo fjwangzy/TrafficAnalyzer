@@ -1,0 +1,17 @@
+# Use with the existing production docker-compose.yaml.
+services:
+  console2:
+    image: traffic-analyzer-console:2026.10.18.4-arm64
+    pull_policy: never
+    volumes: !reset []
+    environment:
+      MINEMAP_SDK_BASE_URL: ${MINEMAP_SDK_BASE_URL:-}
+      MINEMAP_SERVICE_URL: ${MINEMAP_SERVICE_URL:-}
+      MINEMAP_SERVER_DOMAIN: ${MINEMAP_SERVER_DOMAIN:-}
+      MINEMAP_STYLE_URL: ${MINEMAP_STYLE_URL:-}
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8080/index.html && wget -q -O /dev/null http://127.0.0.1:8080/runtime-config.js"]
+      interval: 5s
+      timeout: 3s
+      retries: 6
+      start_period: 5s

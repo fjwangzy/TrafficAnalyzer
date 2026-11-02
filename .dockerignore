@@ -28,3 +28,19 @@ test/
 docker-compose*.yaml
 README.md
 README-zh.md
+
+# Production connection attachments and deployment-only material.
+configs/*.txt
+configs/*.md
+.env*
+**/.env*
+**/*.env
+deploy/highgo-reference
+deploy/intranet/highgo-driver/*
+!deploy/intranet/highgo-driver/arm64/
+!deploy/intranet/highgo-driver/arm64/**
+.runtime
+.codegraph
+.claude
+.codex
+dist

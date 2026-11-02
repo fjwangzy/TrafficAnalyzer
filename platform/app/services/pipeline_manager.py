@@ -205,7 +205,15 @@ class PipelineManager:
         self._pipeline_python = pipeline_python or os.environ.get("PIPELINE_PYTHON") or "python"
         self._frame_stride = resolve_frame_stride(frame_stride)
         self._video_public_base = video_public_base or settings.pipeline_video_base
-        executor_env = {}
+        executor_env = {
+            "ROAD_FEATURES_ENABLED": str(settings.road_features_enabled).lower(),
+            "KAFKA_SECURITY_PROTOCOL": settings.kafka_security_protocol,
+            "KAFKA_SASL_MECHANISM": settings.kafka_sasl_mechanism,
+            "KAFKA_SASL_USERNAME": settings.kafka_sasl_username,
+            "KAFKA_SASL_PASSWORD": settings.kafka_sasl_password,
+        }
+        if settings.pipeline_ascend_manifest:
+            executor_env["ASCEND_MODEL_MANIFEST"] = settings.pipeline_ascend_manifest
         if settings.pipeline_device == "mps":
             executor_env["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
         if settings.app_runtime_profile == "replay_v2":
@@ -417,6 +425,8 @@ class PipelineManager:
             fallback=self._frame_stride,
         )
         video_src = self._validate_video_source(video_src)
+        if not settings.road_features_enabled:
+            runtime_map_bundle = None
         if runtime_map_bundle is not None and runtime_map_bundle.get("map_status") != "lane_verified":
             raise ValueError("runtime_map_bundle must be lane_verified when provided")
         telemetry_file_path = self._validate_support_file(

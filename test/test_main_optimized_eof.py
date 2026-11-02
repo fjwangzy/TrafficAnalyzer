@@ -16,6 +16,54 @@ class RecordingQueue:
         self.items.append(item)
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX fork shared-memory ownership")
+def test_fork_workers_share_parent_tracker_and_do_not_clean_frames_twice():
+    result = subprocess.run([sys.executable, "-c", """
+import multiprocessing as mp
+from multiprocessing import resource_tracker, shared_memory
+import time
+import main_optimized as pipeline
+
+assert resource_tracker._resource_tracker._fd is None
+context = mp.get_context('fork')
+done = context.Event()
+pipeline.Process = context.Process
+pipeline.Queue = context.Queue
+pipeline.configure_runtime_logging = lambda: None
+pipeline._run_worker = lambda function, *args: function(*args)
+
+def reader(queue, config, delay):
+    shm = shared_memory.SharedMemory(create=True, size=16)
+    shm.buf[0] = 123
+    queue.put(shm.name)
+    pipeline._close_shared_memory_consumer(shm)
+    assert done.wait(5)
+
+def tracker(source, target, config, reader_pid):
+    name = source.get(timeout=5)
+    shm = shared_memory.SharedMemory(name=name)
+    assert shm.buf[0] == 123
+    pipeline._close_shared_memory_consumer(shm)
+    target.put(name)
+    assert done.wait(5)
+
+def show(queue, config, tracker_pid):
+    shm = shared_memory.SharedMemory(name=queue.get(timeout=5))
+    assert shm.buf[0] == 123
+    shm.close()
+    shm.unlink()
+    done.set()
+
+pipeline.proc_frame_reader_and_detection = reader
+pipeline.proc_tracker_update_and_calc = tracker
+pipeline.proc_show_node = show
+pipeline.main.__wrapped__({'tracking_profile': 'fixture'})
+time.sleep(.3)
+"""], capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stderr
+    assert "resource_tracker:" not in result.stderr, result.stderr
+
+
 def test_shared_frame_survives_reader_tracker_close_until_show_unlinks():
     result = subprocess.run([sys.executable, "-c", """
 from multiprocessing import shared_memory
@@ -69,7 +117,9 @@ def test_reader_detection_process_forwards_eof_without_accessing_frame(monkeypat
     assert queue.items == [sentinel]
 
 
-def test_tracker_process_flushes_completed_tracks_before_terminal_outputs(monkeypatch):
+@pytest.mark.parametrize("road_enabled", [True, False])
+def test_tracker_process_flushes_completed_tracks_before_terminal_outputs(monkeypatch, road_enabled):
+    monkeypatch.setenv("ROAD_FEATURES_ENABLED", str(road_enabled).lower())
     sentinel = VideoEndBreakElement("fixture.mp4", 4.2)
     events = []
 
@@ -144,6 +194,11 @@ def test_tracker_process_flushes_completed_tracks_before_terminal_outputs(monkey
         "CalcStatisticsNode",
     ):
         monkeypatch.setattr(main_optimized, name, PassthroughNode)
+    if not road_enabled:
+        def forbidden(_config):
+            raise AssertionError("Road nodes must not be constructed when disabled")
+        for name in ("LaneDetectionNode", "LaneAnalysisNode", "AutoLaneInferenceNode"):
+            monkeypatch.setattr(main_optimized, name, forbidden)
     monkeypatch.setattr(main_optimized, "GroundTrajectoryTrackerNode", FakeGroundTracker)
     monkeypatch.setattr(
         main_optimized, "PostTrackingWorldProjectionNode", FakeWorldProjection

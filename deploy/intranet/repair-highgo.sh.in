@@ -1,0 +1,132 @@
+#!/bin/sh
+# Generated delivery embeds the verified repair files; host needs Docker only.
+set -eu
+umask 077
+root=$(CDPATH= cd -- "${1:-$(dirname -- "$0")}" && pwd -P)
+[ -f "$root/docker-compose.yaml" ] && [ -f "$root/.env" ] || {
+    printf '%s\n' '请将脚本放入部署目录，或将部署目录作为第一个参数。' >&2; exit 1;
+}
+report=$(mktemp "$root/highgo-repair-report.XXXXXX")
+stage=''
+cleanup() {
+    if [ -n "$stage" ]; then
+        case "$stage" in "$root"/.highgo-repair.*) rm -rf -- "$stage" ;; esac
+    fi
+}
+trap cleanup EXIT HUP INT TERM
+run() {
+    label=$1
+    shift
+    printf '%s\n' "$label"
+    printf '\n%s\n' "$label" >> "$report"
+    if "$@" >> "$report" 2>&1; then return 0; else status=$?; fi
+    printf 'COMMAND_EXIT=%s\n' "$status" >> "$report"
+    case "$status" in
+        137) printf '%s\n' '[PROCESS_SIGKILL] 进程被SIGKILL终止：核对内存/显存、内核OOM及人工终止记录，不能仅据137断定OOM。' >> "$report" ;;
+        139) printf '%s\n' '[PROCESS_SEGFAULT] 原生进程崩溃：核对驱动/CANN/动态库ABI及昇腾日志。' >> "$report" ;;
+        143) printf '%s\n' '[PROCESS_TERMINATED] 进程收到SIGTERM：核对人工操作或容器停止事件。' >> "$report" ;;
+    esac
+    awk '
+      /port is already allocated|address already in use/ {port=1}
+      /no space left on device/ {disk=1}
+      /bind source path does not exist/ {mount=1}
+      /No such image|no such image/ {image=1}
+      /exec format error/ {arch=1}
+      /error gathering device information|error while adding custom device/ {device=1}
+      END {
+        if(port) print "[HOST_PORT_CONFLICT] 入口端口被占用：核对CONSOLE_PORT及现有进程/容器。"
+        if(disk) print "[HOST_DISK_FULL] Docker或持久化磁盘已满：检查容量和保留策略，不直接删除业务数据。"
+        if(mount) print "[HOST_MOUNT_MISSING] Compose绑定源不存在：核对DATA_ROOT、ASSET_ROOT和驱动目录。"
+        if(image) print "[OFFLINE_IMAGE_MISSING] 本地缺少发布镜像：使用原离线归档导入，不联网pull。"
+        if(arch) print "[IMAGE_ARCH] 镜像/可执行文件架构不匹配：生产必须Linux ARM64。"
+        if(device) print "[ASCEND_HOST_DEVICE] 宿主机设备映射不可用：检查昇腾驱动、ASCEND_DAVINCI_DEVICE及/dev/davinci_manager等设备。"
+      }' "$report" >> "$report"
+    if command -v compose >/dev/null 2>&1; then
+        ids=$(compose ps --all --quiet 2>/dev/null || true)
+        for id in $ids; do
+            docker inspect --format 'CONTAINER {{.Name}} state={{.State.Status}} exit={{.State.ExitCode}} oom_killed={{.State.OOMKilled}}' "$id" >> "$report" 2>/dev/null || true
+        done
+        filter='import sys
+for line in sys.stdin:
+    if line.startswith("DIAGNOSTIC ["):
+        print(line.rstrip())
+    elif "MineMap" in line and any(word in line for word in ("required","Invalid","must")):
+        print("DIAGNOSTIC [MINEMAP_CONFIG] console2: 地图配置缺失或格式错误 | 处理：核对MINEMAP_DOMAIN、MINEMAP_KEY和MINEMAP_SOLUTION；不输出Key值。")
+    elif "nginx:" in line and "[emerg]" in line:
+        print("DIAGNOSTIC [GATEWAY_CONFIG] console2: Nginx入口配置或上游解析失败 | 处理：核对平台容器状态、platform服务DNS及入口配置。")'
+        for service in init-db platform console2; do
+            compose logs --no-color --no-log-prefix --tail 80 "$service" 2>/dev/null |
+                docker run --rm --pull never --network none -i --entrypoint python3 "$image" -c "$filter" >> "$report" 2>/dev/null || true
+        done
+    fi
+    printf '修复未完成，自动报告：%s\n' "$report" >&2
+    tail -n 100 "$report" >&2
+    exit 1
+}
+image=sha256:d1286fcc6a40335fbe70a75e72780b68c4de3a394fcee8cad91b560b4fa9dbb8
+run '1/5 核对已导入的ARM64镜像' docker image inspect --format '{{.Id}} {{.Architecture}}' "$image"
+stage=$(mktemp -d "$root/.highgo-repair.XXXXXX")
+decoder='import base64,hashlib,json,os,sys
+from pathlib import Path
+raw=base64.b64decode(sys.stdin.buffer.read(),validate=False)
+if hashlib.sha256(raw).hexdigest()!="__PAYLOAD_SHA256__": raise SystemExit("Repair payload checksum mismatch")
+for name,content in json.loads(raw).items():
+    if Path(name).name!=name: raise SystemExit("Unsafe repair payload path")
+    target=Path("/patch")/name
+    target.write_text(content)
+    target.chmod(0o600)
+print("Embedded repair payload verified")'
+run '2/5 校验并安装离线修复' docker run --rm --pull never --network none -i \
+    --user "$(id -u):$(id -g)" --mount "type=bind,source=$stage,target=/patch" \
+    --entrypoint python3 "$image" -c "$decoder" <<'PAYLOAD'
+__PAYLOAD_BASE64__
+PAYLOAD
+run '2/5 修复Compose兼容性并保留配置' sh "$stage/compose-apply.sh" "$root"
+run '2/5 安装数据库适配及安全预检' sh "$stage/apply.sh" "$root"
+if docker compose version >/dev/null 2>&1; then
+    compose_cli() { docker compose "$@"; }
+elif command -v docker-compose >/dev/null 2>&1 && ! [ "$(command -v docker-compose)" -ef "$root/docker-compose" ]; then
+    compose_cli() { docker-compose "$@"; }
+else
+    printf '%s\n' '未找到系统Compose V2。' >&2; exit 1
+fi
+compose() {
+    compose_cli --project-directory "$root" --env-file "$root/.env" -f "$root/docker-compose.yaml" "$@"
+}
+printf '%s\n' '3/5 先独立检查DB/YCX/Kafka（不依赖NPU设备、不执行迁移）'
+if compose run --rm --no-deps -T --entrypoint python3 init-db /app/deploy/runtime_check.py --connections-only >> "$report" 2>&1; then
+    printf '%s\n' '基础设施只读检查已完成。'
+else
+    printf '%s\n' '基础设施发现异常，继续收集其余可检查项；最终以完整预检为启动门禁。'
+fi
+verify='import sys,traceback
+try:
+    from pathlib import Path
+    from types import SimpleNamespace
+    import app.core.config as config
+    from app.core.database import engine
+    from app.core.deployment_diagnostics import Report
+    if not callable(Report): raise RuntimeError("Structured diagnostic module did not load")
+    from sqlalchemy.ext.asyncio import async_engine_from_config
+    from app.core.highgo_dialect import HighGoPsycopgDialect
+    dialect=engine.sync_engine.dialect
+    print(sys.argv[1],"LOADED_CONFIG:",config.__file__,"LOADED_DIALECT:",type(dialect).__name__,"VERSION_PARSER:",dialect._get_server_version_info.__module__,flush=True)
+    if type(dialect) is not HighGoPsycopgDialect: raise RuntimeError("Runtime did not load HighGo dialect")
+    if dialect._get_server_version_info.__module__!="app.core.highgo_dialect": raise RuntimeError("Stock version parser still active")
+    response=SimpleNamespace(exec_driver_sql=lambda _:SimpleNamespace(scalar_one=lambda:"120007"))
+    if dialect._get_server_version_info(response)!=(12,7): raise RuntimeError("Numeric version check failed")
+    migration=async_engine_from_config({"sqlalchemy.url":config.settings.database_url})
+    if type(migration.sync_engine.dialect) is not HighGoPsycopgDialect: raise RuntimeError("Migration did not load HighGo dialect")
+    if sys.argv[1]=="platform" and "def report_failure" not in Path("/app/deploy/runtime_check.py").read_text(): raise RuntimeError("Old preflight still active")
+    print(sys.argv[1],"CONFIG:",config.__file__,"DIALECT:",type(dialect).__name__,"VERIFIED",flush=True)
+except Exception as exc:
+    print("Verification failed:",type(exc).__name__,flush=True)
+    for frame in traceback.extract_tb(exc.__traceback__): print(frame.filename,frame.lineno,frame.name,flush=True)
+    sys.exit(1)'
+run '3/5 验证平台容器实际加载的代码（不连接数据库）' \
+    compose run --rm --no-deps -T --entrypoint python3 platform -c "$verify" platform
+run '4/5 验证迁移容器实际加载的代码（不执行迁移）' \
+    compose run --rm --no-deps -T --entrypoint python3 init-db -c "$verify" init-db
+run '5/5 使用已验证的部署文件执行预检及启动' \
+    sh "$root/deploy/intranet/compose-bootstrap.sh" "$root" up -d --force-recreate
+printf '修复及启动完成。报告：%s\n' "$report"

@@ -4,11 +4,10 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
 from dataclasses import dataclass
 from typing import Any
 
-import asyncpg
+from app.core.doris_connection import active_road_version, geometry_geojson, query
 from utils_local.coordinates import TRANSFORM_VERSION, gcj02_to_enu
 
 from app.core.config import Settings
@@ -54,144 +53,66 @@ def geometry_to_enu(geometry: dict | None, anchor_gcj02: list[float]) -> dict | 
 class YcxRoadImporter:
     def __init__(self, settings: Settings):
         self._settings = settings
-        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", settings.ycx_db_schema):
-            raise ValueError("YCX_DB_SCHEMA contains unsupported characters")
 
     async def nearby_intersections(
         self,
         center_gcj02: list[float],
         radius_m: float = 250.0,
     ) -> list[dict[str, Any]]:
-        """Return read-only active-version candidates around one GCJ-02 point."""
-        if not self._settings.ycx_db_host or not self._settings.ycx_db_user:
-            return []
-        connection = await asyncpg.connect(
-            host=self._settings.ycx_db_host,
-            port=self._settings.ycx_db_port,
-            user=self._settings.ycx_db_user,
-            password=self._settings.ycx_db_password,
-            database=self._settings.ycx_db_name,
-            timeout=10,
-            server_settings={"search_path": f"{self._settings.ycx_db_schema},public"},
+        """Find candidate intersections in Doris without a PostGIS dependency."""
+        version = await active_road_version(self._settings)
+        database = self._settings.doris_database
+        rows = await query(
+            self._settings,
+            f"SELECT inter_id, inter_name, ST_X(ST_GeomFromText(geom_center)) AS longitude, "
+            f"ST_Y(ST_GeomFromText(geom_center)) AS latitude FROM `{database}`.dim_inter_info "
+            "WHERE version_id=%s AND ST_Distance_Sphere("
+            "ST_X(ST_GeomFromText(geom_center)), ST_Y(ST_GeomFromText(geom_center)), %s, %s)<=%s "
+            "ORDER BY ST_Distance_Sphere(ST_X(ST_GeomFromText(geom_center)), "
+            "ST_Y(ST_GeomFromText(geom_center)), %s, %s), inter_id LIMIT 20",
+            version, float(center_gcj02[0]), float(center_gcj02[1]), float(radius_m),
+            float(center_gcj02[0]), float(center_gcj02[1]),
         )
-        try:
-            async with connection.transaction(readonly=True):
-                version = await connection.fetchval(
-                    "SELECT version_id FROM dim_data_version WHERE is_enable = 1 ORDER BY version_id DESC LIMIT 1"
-                )
-                if not version:
-                    return []
-                rows = await connection.fetch(
-                    """
-                    SELECT inter_id, inter_name,
-                           ST_X(ST_GeomFromText(geom_center, 4326)) AS longitude,
-                           ST_Y(ST_GeomFromText(geom_center, 4326)) AS latitude
-                    FROM dim_inter_info
-                    WHERE version_id=$1
-                      AND NULLIF(BTRIM(geom_center), '') IS NOT NULL
-                      AND ST_DWithin(
-                          ST_GeomFromText(geom_center, 4326)::geography,
-                          ST_SetSRID(ST_MakePoint($2, $3), 4326)::geography,
-                          $4
-                      )
-                    ORDER BY ST_GeomFromText(geom_center, 4326)::geography <->
-                             ST_SetSRID(ST_MakePoint($2, $3), 4326)::geography
-                    LIMIT 20
-                    """,
-                    version,
-                    float(center_gcj02[0]),
-                    float(center_gcj02[1]),
-                    float(radius_m),
-                )
-                return [
-                    {
-                        "inter_id": row["inter_id"],
-                        "name": row["inter_name"] or row["inter_id"],
-                        "center_gcj02": [float(row["longitude"]), float(row["latitude"])],
-                        "road_data_version": str(version),
-                        "quality_status": "candidate",
-                        "source": "ycx_readonly",
-                    }
-                    for row in rows
-                ]
-        finally:
-            await connection.close()
+        return [{
+            "inter_id": row["inter_id"], "name": row["inter_name"] or row["inter_id"],
+            "center_gcj02": [float(row["longitude"]), float(row["latitude"])],
+            "road_data_version": str(version), "quality_status": "candidate", "source": "ycx_readonly",
+        } for row in rows]
 
     async def import_intersection(
         self,
         inter_id: str,
         road_data_version: str | None = None,
     ) -> ImportedRoadContext:
-        if not self._settings.ycx_db_host or not self._settings.ycx_db_user:
-            raise RuntimeError("YCX read-only database credentials are not configured")
-        connection = await asyncpg.connect(
-            host=self._settings.ycx_db_host,
-            port=self._settings.ycx_db_port,
-            user=self._settings.ycx_db_user,
-            password=self._settings.ycx_db_password,
-            database=self._settings.ycx_db_name,
-            timeout=10,
-            server_settings={
-                "search_path": f"{self._settings.ycx_db_schema},public"
-            },
+        version = await active_road_version(self._settings, road_data_version)
+        database = self._settings.doris_database
+        intersections = await query(
+            self._settings,
+            f"SELECT inter_id, inter_name, geom_center, geom_boundary FROM `{database}`.dim_inter_info "
+            "WHERE inter_id=%s AND version_id=%s", inter_id, version,
         )
-        try:
-            async with connection.transaction(readonly=True):
-                version = road_data_version or await connection.fetchval(
-                    "SELECT version_id FROM dim_data_version WHERE is_enable = 1 ORDER BY version_id DESC LIMIT 1"
-                )
-                if not version:
-                    raise LookupError("YCX active road version not found")
-                intersection = await connection.fetchrow(
-                    """
-                    SELECT inter_id, inter_name,
-                           CASE WHEN NULLIF(BTRIM(geom_center), '') IS NULL THEN NULL
-                                ELSE ST_AsGeoJSON(ST_GeomFromText(geom_center, 4326)) END
-                                AS center_geojson,
-                           CASE WHEN NULLIF(BTRIM(geom_boundary), '') IS NULL THEN NULL
-                                ELSE ST_AsGeoJSON(ST_GeomFromText(geom_boundary, 4326)) END
-                                AS boundary_geojson
-                    FROM dim_inter_info
-                    WHERE inter_id=$1 AND version_id=$2
-                    """,
-                    inter_id,
-                    version,
-                )
-                if intersection is None:
-                    raise LookupError(f"YCX intersection not found: {inter_id}@{version}")
-                links = await connection.fetch(
-                    """
-                    SELECT link_id, road_name, f_inter_id, t_inter_id, f_angle, t_angle,
-                           lane_num, c_lane_num, lane_info, road_level, formway,
-                           max_speed, turn_move,
-                           CASE WHEN NULLIF(BTRIM(geom), '') IS NULL THEN NULL
-                                ELSE ST_AsGeoJSON(ST_GeomFromText(geom, 4326)) END
-                                AS geom_geojson
-                    FROM dim_link_info
-                    WHERE version_id=$2 AND (f_inter_id=$1 OR t_inter_id=$1)
-                    ORDER BY link_id
-                    """,
-                    inter_id,
-                    version,
-                )
-                link_ids = [row["link_id"] for row in links]
-                lanes = await connection.fetch(
-                    """
-                    SELECT lane_id, link_id, lane_no, lane_func_code, width, length,
-                           inter_id, turn_move,
-                           CASE WHEN NULLIF(BTRIM(geom), '') IS NULL THEN NULL
-                                ELSE ST_AsGeoJSON(ST_GeomFromText(geom, 4326)) END
-                                AS geom_geojson
-                    FROM dim_lane_info
-                    WHERE version_id=$2 AND (inter_id=$1 OR link_id=ANY($3::text[]))
-                    ORDER BY link_id, lane_no, lane_id
-                    """,
-                    inter_id,
-                    version,
-                    link_ids,
-                )
-        finally:
-            await connection.close()
+        if not intersections:
+            raise LookupError(f"YCX intersection not found: {inter_id}@{version}")
+        intersection = intersections[0]
+        intersection["center_geojson"] = geometry_geojson(intersection["geom_center"])
+        intersection["boundary_geojson"] = geometry_geojson(intersection["geom_boundary"])
+        links = await query(
+            self._settings,
+            f"SELECT link_id, road_name, f_inter_id, t_inter_id, f_angle, t_angle, lane_num, c_lane_num, "
+            f"lane_info, road_level, formway, max_speed, turn_move, geom FROM `{database}`.dim_link_info "
+            "WHERE version_id=%s AND (f_inter_id=%s OR t_inter_id=%s) ORDER BY link_id",
+            version, inter_id, inter_id,
+        )
+        link_ids = [row["link_id"] for row in links]
+        link_filter = " OR link_id IN (" + ",".join(["%s"] * len(link_ids)) + ")" if link_ids else ""
+        lanes = await query(
+            self._settings,
+            f"SELECT lane_id, link_id, lane_no, lane_func_code, width, length, inter_id, turn_move, geom "
+            f"FROM `{database}`.dim_lane_info WHERE version_id=%s AND (inter_id=%s{link_filter}) "
+            "ORDER BY link_id, lane_no, lane_id", version, inter_id, *link_ids,
+        )
+        for row in [*links, *lanes]:
+            row["geom_geojson"] = geometry_geojson(row["geom"])
 
         center = _geojson(intersection["center_geojson"])
         if not center or center.get("type") != "Point":

@@ -8,7 +8,7 @@ import re
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import delete, func, select, text, update
 
 from app.core.config import settings
 from app.models.replay_v2 import (
@@ -800,4 +800,8 @@ class ReplayV2MetricStoreAdapter:
         return dead_letter_id
 
     async def capabilities(self) -> dict[str, bool]:
-        return {"postgresql": True, "timescaledb": True}
+        async with self._session_maker() as session:
+            enabled = await session.scalar(text(
+                "SELECT EXISTS (SELECT 1 FROM pg_extension WHERE extname='timescaledb')"
+            ))
+        return {"postgresql": True, "timescaledb": bool(enabled)}

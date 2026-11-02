@@ -9,7 +9,7 @@ import {
 import { roles, scopeOptions, windowOptions } from '../data/mockData'
 import { useAppState } from '../state/AppState'
 import { useAuth } from '../auth/AuthContext'
-import { DEMO_GOVERNANCE_ENABLED } from '../config/features'
+import { DEMO_GOVERNANCE_ENABLED, isRoadRoute, roadFeaturesEnabled } from '../config/features'
 
 export const navigationGroups = [
   { id: 'situation', label: '全域态势', icon: GridFour, roles: ['admin', 'commander', 'enforcement', 'survey', 'analyst'], items: [
@@ -47,8 +47,8 @@ export function ConsoleFrame({ children, pageTitle, immersive = false, topContex
   const [timeOpen, setTimeOpen] = useState(false)
   const [roleOpen, setRoleOpen] = useState(false)
   const activeGroup = currentGroup(location.pathname)
-  const visibleGroups = navigationGroups.filter((group) => group.roles.includes(state.role))
-  const visibleSections = activeGroup.items
+  const visibleGroups = navigationGroups.filter((group) => group.roles.includes(state.role) && (roadFeaturesEnabled() || group.id !== 'governance'))
+  const visibleSections = activeGroup.items.filter(([path]) => roadFeaturesEnabled() || !isRoadRoute(path))
   const role = roles.find((item) => item.id === state.role)
   const updateQuery = (key, value) => {
     const params = new URLSearchParams(location.search)
@@ -116,6 +116,9 @@ export const routeAccess = {
 export function AccessBoundary({ children }) {
   const location = useLocation()
   const { consoleRole, platformRole } = useAuth()
+  if (!roadFeaturesEnabled() && isRoadRoute(location.pathname)) {
+    return <AppShell pageTitle='路网功能已关闭'><div className='access-denied'><h1>路网功能已关闭</h1><p>当前环境暂停路网标注、匹配和导入。</p><Link to='/'>返回工作台</Link></div></AppShell>
+  }
   const rule = Object.entries(routeAccess).find(([prefix]) => location.pathname.startsWith(prefix))
   if (location.pathname.startsWith('/admin') && platformRole !== 'admin') {
     return <AppShell pageTitle='无权限'><div className='access-denied'><Warning size={44} weight='duotone' /><h1>当前账号无权访问平台治理</h1><p>平台治理仅向系统管理员开放，前端角色预览不会改变真实权限。</p><Link to='/'>返回工作台</Link></div></AppShell>

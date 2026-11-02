@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { Crosshair, Drone, MapPin, Minus, Plus, TrafficSignal, WarningCircle } from '@phosphor-icons/react'
-import { loadAmap } from '../lib/amap'
+import { isMineMap, loadAmap, mapProviderLabel } from '../lib/amap'
 import { projectPixelPointToGcj02 } from '../lib/dashboardDigitalTwin'
 
 const riskColors = { critical: '#ff715b', warning: '#ffbe55', normal: '#5ad3e7' }
 const EMPTY_ITEMS = []
-const situationColors = { good: '#58d6b0', near_saturated: '#ffbe55', oversaturated: '#ff715b', missing: '#8290aa' }
+const situationColors = { smooth: '#58d6b0', slow: '#ffbe55', congested: '#ff715b', good: '#58d6b0', near_saturated: '#ffbe55', oversaturated: '#ff715b', missing: '#8290aa' }
 const segmentColors = { smooth: '#58d6b0', slow: '#ffbe55', congested: '#ff715b', missing: '#8290aa' }
 const sourceColors = { running: '#58d6b0', ready: '#5ad3e7', degraded: '#ffbe55', invalid: '#ff715b', disabled: '#8290aa' }
 const liveDroneColors = { monitoring: '#48e4d2', flying: '#68a7ff', online: '#8ec5ff', history: '#9c88d8', connected: '#667f9f', offline: '#8290aa' }
@@ -58,6 +58,7 @@ function liveDroneMarkerContent(item, onSelect, selected, hideHoverCard = false)
   const color = liveDroneColors[state]
   const heading = Number.isFinite(Number(item.heading_deg)) ? Number(item.heading_deg) : 0
   const icon = renderToStaticMarkup(<Drone size={22} weight='fill' />)
+  const actionLabel = item.source_profile_id && item.intersection_id ? '进入实时检测' : '查看飞行详情'
   const root = document.createElement('div')
   root.className = `amap-live-drone ${state}${selected ? ' selected' : ''}${hideHoverCard ? ' digital-twin-minimal' : ''}${item.position_basis === 'last_gcj02_telemetry' ? ' stale-position' : ''}${item.position_basis === 'assigned_intersection' ? ' assigned-position' : ''}`
   root.dataset.droneId = item.id
@@ -69,14 +70,14 @@ function liveDroneMarkerContent(item, onSelect, selected, hideHoverCard = false)
   root.setAttribute('role', 'button')
   root.setAttribute('tabindex', '0')
   root.setAttribute('aria-pressed', selected ? 'true' : 'false')
-  root.setAttribute('aria-label', `${item.name || item.id}，${item.status_label || '无人机状态'}，查看飞行详情`)
+  root.setAttribute('aria-label', `${item.name || item.id}，${item.status_label || '无人机状态'}，${actionLabel}`)
   root.innerHTML = `
     <span class="amap-live-drone-pulse" aria-hidden="true"></span>
     <span class="amap-live-drone-face" aria-hidden="true">${icon}</span>
     <span class="amap-live-drone-state">${escapeHtml(item.status_label)}</span>
     ${hideHoverCard ? '' : `<section class="amap-drone-hover-card compact" role="tooltip">
       <header><div><strong>${escapeHtml(item.name || item.id)}</strong><small>${escapeHtml(item.location_name || item.intersection_name || item.intersection_id || '未绑定任务区域')} · ${escapeHtml(item.scene_label || '无人机任务')}</small></div><i class="${item.is_monitoring ? 'live' : ''}">${item.is_monitoring ? 'LIVE' : 'DETAIL'}</i></header>
-      <footer><span>${escapeHtml(item.telemetry_note || '暂无实时遥测')}</span><strong>点击查看飞行详情</strong></footer>
+      <footer><span>${escapeHtml(item.telemetry_note || '暂无实时遥测')}</span><strong>点击${actionLabel}</strong></footer>
     </section>`}
   `
   const activate = (event) => {
@@ -304,7 +305,8 @@ export function CityMap({
       amapRef.current = AMap
       map.addControl(new AMap.Scale())
 
-      if (trafficMode) {
+      map.on('error', () => { if (!disposed) setLoadFailed(true) })
+      if (trafficMode && typeof AMap.TileLayer?.Traffic === 'function') {
         const trafficLayer = new AMap.TileLayer.Traffic({
           autoRefresh: true,
           interval: 180,
@@ -661,7 +663,7 @@ export function CityMap({
     }
   }, [digitalTwin, digitalTwinActive, fitToData, fitPadding, focusSelectedDrone, mapReadyToken])
 
-  if (offline || loadFailed) return <div className='map-offline'><WarningCircle size={38} weight='duotone' /><strong>高德地图服务不可用</strong><span>保留 KPI、重点关注榜和路口列表；不使用随机点位冒充真实地图。</span>{!offline && <button className='secondary-button' onClick={() => setLoadFailed(false)}>重试底图</button>}</div>
+  if (offline || loadFailed) return <div className='map-offline'><WarningCircle size={38} weight='duotone' /><strong>{mapProviderLabel()}服务不可用</strong><span>保留 KPI、重点关注榜和路口列表；不使用随机点位冒充真实地图。</span>{!offline && <button className='secondary-button' onClick={() => setLoadFailed(false)}>重试底图</button>}</div>
 
   return <div className={`city-map ${compact ? 'compact' : ''}${digitalTwinActive ? ` digital-twin-mode ${digitalTwin?.level || 'unavailable'}` : ''}`}>
     <div ref={targetRef} className='amap-canvas' />
@@ -669,6 +671,6 @@ export function CityMap({
     {showHeat && <img className='map-heat-overlay' src='/assets/bev-intersection-night.png' alt='风险热区空间分布底图' />}
     <div className={`map-demo-label${digitalTwinActive ? ` digital-twin-active ${digitalTwin?.level || 'unavailable'}` : ''}`}><MapPin size={13} weight='fill' /> {digitalTwinActive ? digitalTwin.label : coordinateLabel}</div>
     <div className='map-controls'><button onClick={() => mapRef.current?.zoomIn()} aria-label='放大'><Plus size={18} /></button><button onClick={() => mapRef.current?.zoomOut()} aria-label='缩小'><Minus size={18} /></button><button onClick={resetViewport} aria-label='复位'><Crosshair size={18} /></button></div>
-    <div className='map-attribution'>{digitalTwinActive ? digitalTwin.level === 'bev_pixel' ? `高德卫星影像 · 镜头跟随 ${Math.round(normalizedHeading(digitalTwin?.pixelGroundProjection?.headingDeg || 0))}° · 3D 倾斜 · ${digitalTwin.dataMode === 'preview' ? '前端 Mock 预览' : digitalTwin.dataMode === 'controlled_replay' ? '可控回放' : '实时检测'}` : `高德卫星影像 · 道路标注 · 3D 数字孪生 · ${digitalTwin.dataMode === 'controlled_replay' ? '可控回放' : '实时检测'}` : trafficMode ? '高德实时路况 · GCJ-02' : '高德地图 · GCJ-02'}</div>
+    <div className='map-attribution'>{digitalTwinActive ? digitalTwin.level === 'bev_pixel' ? `${isMineMap() ? '四维图新底图' : '高德卫星影像'} · 镜头跟随 ${Math.round(normalizedHeading(digitalTwin?.pixelGroundProjection?.headingDeg || 0))}° · 3D 倾斜 · ${digitalTwin.dataMode === 'preview' ? '前端 Mock 预览' : digitalTwin.dataMode === 'controlled_replay' ? '可控回放' : '实时检测'}` : `${isMineMap() ? '四维图新底图' : '高德卫星影像'} · 道路标注 · 3D 数字孪生 · ${digitalTwin.dataMode === 'controlled_replay' ? '可控回放' : '实时检测'}` : trafficMode && !isMineMap() ? '高德实时路况 · GCJ-02' : `${mapProviderLabel()} · GCJ-02`}</div>
   </div>
 }

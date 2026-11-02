@@ -8,12 +8,17 @@ start/inspect/stop contract with environment-specific device configuration.
 from __future__ import annotations
 
 import asyncio
+import codecs
 import json
+import logging
 import os
+import re
 import signal
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
+
+from utils_local.runtime_logging import RuntimeFormatter, log_level_from_text, redact_log_text, rotating_log_handler, runtime_log_dir
 
 VIDEO_READY_MARKER = "MJPEG_READY"
 
@@ -61,6 +66,8 @@ class ExecutionHandle:
     native_process: Any = field(default=None, repr=False)
     io_tasks: list[asyncio.Task] = field(default_factory=list, repr=False)
     video_ready: asyncio.Event = field(default_factory=asyncio.Event, repr=False)
+    output_logger: Any = field(default=None, repr=False)
+    exit_logged: bool = False
 
 
 class PipelineExecutor(Protocol):
@@ -100,9 +107,10 @@ class LocalPipelineExecutor:
     def _command(self, spec: PipelineLaunchSpec) -> list[str]:
         command = [
             self._pipeline_python,
+            "-u",
             "main_optimized.py",
             "pipeline.send_info_kafka=True",
-            "hydra/job_logging=disabled",
+            "hydra/job_logging=stdout",  # Re-enable pre-imported loggers, including MJPEG_READY.
         ]
         if self._device:
             command.append(f"detection_node.device={self._device}")
@@ -160,6 +168,8 @@ class LocalPipelineExecutor:
             "TRACKING_PROFILE": spec.tracking_profile,
             "VIDEO_PORT": str(spec.video_port),
             "KAFKA_BOOTSTRAP": spec.kafka_bootstrap,
+            "PYTHONUNBUFFERED": "1",
+            "PYTHONFAULTHANDLER": "1",
         }
         if spec.frame_stride is not None:
             environment["FRAME_STRIDE"] = str(spec.frame_stride)
@@ -179,18 +189,40 @@ class LocalPipelineExecutor:
         return environment
 
     async def start(self, spec: PipelineLaunchSpec) -> ExecutionHandle:
-        process = await asyncio.create_subprocess_exec(
-            *self._command(spec),
-            cwd=str(self._root),
-            env=self._environment(spec),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            start_new_session=True,
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", spec.pipeline_id):
+            raise ValueError("pipeline_id contains unsupported log path characters")
+        output_logger = logging.Logger(f"detector.{spec.pipeline_id}", logging.INFO)
+        output_logger.addHandler(rotating_log_handler(
+            runtime_log_dir(self._root) / "pipelines" / f"{spec.pipeline_id}.log",
+            pipeline_id=spec.pipeline_id,
+        ))
+        console = logging.StreamHandler()
+        console.setFormatter(RuntimeFormatter(spec.pipeline_id))
+        output_logger.addHandler(console)
+        output_logger.info(
+            "PIPELINE_LAUNCH startup_contract=20261019.3 device=%s imgsz=%s adaptive_imgsz=%s frame_stride=%s source_kind=%s tracking_profile=%s",
+            self._device or "auto", self._imgsz, self._adaptive_imgsz, spec.frame_stride,
+            "stream" if "://" in spec.video_src else "file", spec.tracking_profile,
         )
+        try:
+            process = await asyncio.create_subprocess_exec(
+                *self._command(spec),
+                cwd=str(self._root),
+                env=self._environment(spec),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                start_new_session=True,
+            )
+        except Exception:
+            output_logger.exception("PIPELINE_LAUNCH_FAILED")
+            for handler in output_logger.handlers:
+                handler.close()
+            raise
         handle = ExecutionHandle(
             execution_id=spec.pipeline_id,
             pid=process.pid,
             native_process=process,
+            output_logger=output_logger,
         )
         handle.io_tasks = [
             asyncio.create_task(self._drain_stream(process.stdout, handle, "stdout")),
@@ -200,6 +232,7 @@ class LocalPipelineExecutor:
             await self._wait_until_video_ready(handle)
             return handle
         except Exception:
+            output_logger.exception("PIPELINE_START_FAILED pid=%s", process.pid)
             await self.stop(handle)
             raise
 
@@ -233,6 +266,8 @@ class LocalPipelineExecutor:
         process = handle.native_process
         if process is not None:
             handle.returncode = process.returncode
+            if handle.returncode is not None:
+                await self._finish_output(handle)
         return handle
 
     async def stop(self, handle: ExecutionHandle) -> ExecutionHandle:
@@ -255,9 +290,34 @@ class LocalPipelineExecutor:
                 pass
         if process is not None:
             handle.returncode = process.returncode
-        for task in handle.io_tasks:
-            task.cancel()
+        await self._finish_output(handle)
         return handle
+
+    @staticmethod
+    async def _finish_output(handle: ExecutionHandle) -> None:
+        if handle.exit_logged:
+            return
+        if handle.io_tasks:
+            try:
+                await asyncio.wait_for(asyncio.gather(*handle.io_tasks), timeout=2.0)
+            except TimeoutError:
+                for task in handle.io_tasks:
+                    task.cancel()
+        handle.exit_logged = True
+        if handle.output_logger is not None:
+            def finish_log():
+                handle.output_logger.log(
+                    logging.INFO if handle.returncode == 0 else logging.ERROR,
+                    "PIPELINE_EXIT child_pid=%s returncode=%s", handle.pid, handle.returncode,
+                )
+                for handler in handle.output_logger.handlers:
+                    handler.close()
+                handle.output_logger.handlers.clear()
+            try:
+                await asyncio.wait_for(asyncio.to_thread(finish_log), timeout=2.0)
+            except TimeoutError:
+                # A stalled host log disk must not hold the pipeline lifecycle open.
+                pass
 
     @staticmethod
     async def _drain_stream(
@@ -268,17 +328,57 @@ class LocalPipelineExecutor:
         if stream is None:
             return
         tail_limit = 4000
+        decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+        pending = ""
+        dropping_oversized_line = False
+        line_level = logging.WARNING if name == "stderr" else logging.INFO
+
+        async def emit(value):
+            safe = redact_log_text(value)
+            if name == "stderr":
+                handle.stderr_tail = (handle.stderr_tail + safe)[-tail_limit:]
+            else:
+                combined = handle.stdout_tail + safe
+                if VIDEO_READY_MARKER in combined:
+                    handle.video_ready.set()
+                handle.stdout_tail = combined[-tail_limit:]
+            if handle.output_logger is not None and safe.strip():
+                def write_lines():
+                    nonlocal line_level
+                    for line in safe.splitlines():
+                        line_level = log_level_from_text(line, line_level)
+                        if not handle.output_logger.isEnabledFor(line_level):
+                            continue
+                        record = handle.output_logger.makeRecord(
+                            f"detector.{handle.execution_id}.{name}", line_level, "", 0, line, (), None,
+                        )
+                        record.process = handle.pid
+                        handle.output_logger.handle(record)
+                await asyncio.to_thread(write_lines)
+
         try:
             while True:
                 chunk = await stream.read(4096)
                 if not chunk:
                     break
-                text = chunk.decode("utf-8", errors="replace")
-                if name == "stderr":
-                    handle.stderr_tail = (handle.stderr_tail + text)[-tail_limit:]
-                else:
-                    handle.stdout_tail = (handle.stdout_tail + text)[-tail_limit:]
-                    if VIDEO_READY_MARKER in handle.stdout_tail:
-                        handle.video_ready.set()
-        except asyncio.CancelledError:
-            pass
+                decoded = decoder.decode(chunk)
+                if dropping_oversized_line:
+                    boundary = decoded.find("\n")
+                    if boundary < 0:
+                        continue
+                    dropping_oversized_line = False
+                    decoded = decoded[boundary + 1:]
+                pending += decoded
+                boundary = pending.rfind("\n")
+                if boundary >= 0:
+                    await emit(pending[:boundary + 1])
+                    pending = pending[boundary + 1:]
+                elif len(pending) > 65536:
+                    await emit("WARNING OUTPUT_LINE_TRUNCATED limit_chars=65536\n")
+                    pending = ""
+                    dropping_oversized_line = True
+            pending += decoder.decode(b"", final=True)
+            if pending:
+                await emit(pending)
+        except Exception:
+            logging.getLogger(__name__).exception("Detector output drain failed pipeline=%s stream=%s", handle.execution_id, name)

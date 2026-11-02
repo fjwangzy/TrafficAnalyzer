@@ -8,6 +8,14 @@ When implementing from a selected generated mock, treat that image as the source
 
 ## Durable design direction
 
+- 2026-10-19 已登记视频的首页图标不依赖路网开关或检测任务存活。无路口地图坐标时使用配对遥测中的录制位置并标“素材位置”；任务结束保留素材/最后位置，不将缓存回放遥测标为飞行中。没有真实坐标时不得伪造点位，点击仍携带source_profile_id与intersection_id。
+
+- 2026-10-19 实时监测移除左侧来源健康卡片及右侧场景策略入口/内容，右侧BEV下直接展示近期事件及证据复核；保留内部数据新鲜度判断、顶部来源状态与工程诊断。
+
+- 2026-10-19 本地高德同样使用深色底图；栅格模式不支持SDK mapStyle时只对基础瓦片调色，不对整张画布、路况层、轨迹或无人机标记应用滤镜。生产四维图新仍使用既有深色矢量样式。
+
+- Production intranet maps use MineMap 2.1.0 with the site-provided key; local development keeps its existing AMap default. Preserve GCJ-02 inputs and all marker/trajectory/calibration interactions. Do not label MineMap imagery as satellite or live traffic unless those layers are explicitly configured and verified; never fall back to a public provider in the intranet profile.
+
 - Console2 is the production TrafficAnalyzer frontend. `traffic-fly-console` is retired from build and deployment; do not add URL, token, or component compatibility layers for it.
 - Visual target: dark, cinematic command-center UI with an aerial road scene as the primary canvas, translucent metric panels, a right-side live-event stream, and a bottom replay timeline.
 - The login page keeps the Console 1.0 intersection-trajectory animation language (moving track points, detection-zone pulse, and live indicator) inside Console2-owned components with no legacy runtime dependency. The core fly-through remains visible when the browser reports reduced motion; only the secondary pulse and blink stop.
@@ -32,4 +40,17 @@ When implementing from a selected generated mock, treat that image as the source
 - The immersive monitoring screen opens both the real-time situation panel and the BEV/live-event panel by default. Preserve the existing edge collapse and pin controls so operators can reclaim canvas space manually.
 - The monitoring context selector is sourced from registered UAV video SourceProfiles, not the legacy in-memory Camera 1/2 intersection registry. Keep `source_profile_id` and its bound `intersection_id` together in deep links so multiple videos at one intersection cannot resolve to the wrong pipeline.
 - Workbench map drone markers represent registered UAV video SourceProfiles rather than one generic marker per intersection. Use distinct source-state colors for running, valid-but-offline, degraded, invalid, and disabled sources; clicking a marker must preserve both the source profile and intersection in the monitoring deep link.
+- Clicking a workbench UAV marker with a bound source profile and intersection goes directly to real-time detection at `/monitoring`, including offline/last-position markers; automatically select that source and intersection without opening the flight/intersection detail panel first. Only markers without a usable binding retain flight details.
 - Keep navigation as one shared two-level shell across every page: the narrow left rail is the six first-level business domains, and the top bar shows only the active domain's second-level pages. Workbench and immersive monitoring share this exact chrome; only their content canvases differ. Do not restore the former wide section sidebar or a collapsible tree unless the user explicitly reverses this preference again.
+
+- 2026-10-17生产暂关闭路网：runtime-config的roadFeaturesEnabled=false隐藏平台治理一级和标定入口，
+  阻止/admin/calibration及/admin/intersection-projects深链渲染。系统设置图标保留；视频/事件/轨迹研判/MineMap底图继续。
+  本地未配置时默认开启。后端有同名生产开关，不能只隐藏导航而继续调用标注/导入接口。
+
+- 2026-10-18生产媒体统一走同源鉴权MJPEG，Mac开发仍可直连；MineMap加载在应用CSS之后，必须保持画布absolute与满父容器尺寸，防止高度0。公网服务仅由明确的SDK/样式/服务/瓦片地址启用，默认内网2.1.0不变，不自动fallback。
+
+- 2026-10-18用户要求四维图新底图统一深色：工作台/BEV/预览均使用深蓝灰矢量底图，保留道路等级、文字对比与地理标注；只调整底图图层，不对整张画布做CSS滤镜，不改变轨迹/风险/无人机标记业务配色。
+
+- 2026-10-18 Console静态资源使用镜像专用/opt/traffic-console/html，目录755/文件644，runtime-config.js生成后644；发布测试必须覆盖旧目录拒读和umask077，并由实际页面健康检查证明可读，不能只依赖/console-health。
+
+- 2026-10-18 用户确认BEV地图异常应自动降级，不显示服务不可用、资源加载失败或重试错误面板。SDK加载/资源/地图操作失败统一使用本地深色网格与实时轨迹：有GCJ-02则保留俯视地理轨迹，否则使用真实像素轨迹，无数据时等待更新；保留候选/选中/淡化样式，不自动切公网地图或伪造业务坐标。

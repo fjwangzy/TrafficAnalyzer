@@ -1,0 +1,19 @@
+#!/bin/sh
+# Native private runtime: no Docker, chroot, system library replacement or pip download.
+set -eu
+root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+fs="$root/runtime"
+py="$fs/usr/local/python3.11.15"
+cann="$fs/usr/local/Ascend/cann-9.0.0"
+export PYTHONHOME="$py"
+export PYTHONNOUSERSITE=1 PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+export ASCEND_HOME_PATH="$cann" ASCEND_OPP_PATH="$cann/opp" ASCEND_AICPU_PATH="$cann"
+export ASCEND_TOOLKIT_HOME="$cann" ASCEND_RUNTIME_CANN_ROOT="$cann"
+export HIGHGO_LIBRARY_DIR="$fs/opt/highgo/lib"
+export PYTHONPATH="$root/bootstrap:$root/app/platform:$root/app:$cann/python/site-packages:$cann/aarch64-linux/python/site-packages"
+export PATH="$root/bin:$PATH"
+unset LD_PRELOAD LD_LIBRARY_PATH
+libs="$py/lib:$fs/opt/highgo/lib:$cann/lib64:$cann/lib64/plugin/opskernel:$cann/lib64/plugin/nnengine:$cann/opp/built-in/op_impl/ai_core/tbe/op_tiling:/usr/local/Ascend/driver/lib64:/usr/local/Ascend/driver/lib64/common:/usr/local/Ascend/driver/lib64/driver:$fs/usr/lib/aarch64-linux-gnu"
+export HOST_RUNTIME_LOADER="$fs/usr/lib/aarch64-linux-gnu/ld-linux-aarch64.so.1"
+export HOST_RUNTIME_LIBRARY_PATH="$libs"
+exec "$fs/usr/lib/aarch64-linux-gnu/ld-linux-aarch64.so.1" --argv0 "$root/bin/python3" --library-path "$libs" --preload "$fs/opt/highgo/lib/libpq.so.5" "$py/bin/python3.11" "$@"

@@ -13,6 +13,7 @@ from sqlalchemy import (
     BigInteger,
     DateTime,
     Float,
+    Index,
     Integer,
     String,
     Text,
@@ -64,7 +65,8 @@ class ReplayV2MessageInbox(Base):
     received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
     __table_args__ = (
-        UniqueConstraint("topic", "partition", "offset", name="uq_uav_replay_v2_inbox_offset"),
+        # Topic recreation reuses offsets; message_id and its hash define idempotency.
+        Index("ix_uav_replay_v2_inbox_offset", "topic", "partition", "offset"),
     )
 
 

@@ -1,0 +1,68 @@
+# Source-only overlay; keep the original deployment Compose and private .env.
+services:
+  platform:
+    image: ${APP_PLATFORM_IMAGE:?Use app-compose or upgrade_source.py}
+    command: [python3, /app/deploy/intranet/run_logged.py, platform, python3, -u, /app/run_platform.py]
+    environment:
+      TRAFFIC_LOG_DIR: /var/log/traffic-analyzer
+      PYTHONUNBUFFERED: "1"
+      PYTHONDONTWRITEBYTECODE: "1"
+    volumes: !override
+      - type: bind
+        source: ${APP_ROOT:?Use app-compose or upgrade_source.py}
+        target: /app
+        read_only: true
+        bind: {create_host_path: false}
+      - ${ASSET_ROOT}/weights:/app/weights:ro
+      - ${ASSET_ROOT}/videos:/app/test_videos:ro
+      - ${DATA_ROOT}/hls:/hls
+      - ${DATA_ROOT}/output:/pipeline-output
+      - ${DATA_ROOT}/spool:/pipeline-spool
+      - ${DATA_ROOT}/calibration:/calibration
+      - ${DATA_ROOT}/survey:/survey
+      - ${DATA_ROOT}/trajectory-archive:/trajectory-archive
+      - ${DATA_ROOT}/logs:/app/logs
+      - ${DATA_ROOT}/logs:/var/log/traffic-analyzer
+      - /usr/local/Ascend/driver:/usr/local/Ascend/driver:ro
+      - /etc/ascend_install.info:/etc/ascend_install.info:ro
+    logging: &bounded_logging
+      driver: json-file
+      options: {max-size: "20m", max-file: "6"}
+  init-db:
+    image: ${APP_PLATFORM_IMAGE:?Use app-compose or upgrade_source.py}
+    command: [python3, /app/deploy/intranet/run_logged.py, init-db, python3, -u, /app/deploy/intranet/init_db.py]
+    environment:
+      TRAFFIC_LOG_DIR: /var/log/traffic-analyzer
+      PYTHONUNBUFFERED: "1"
+      PYTHONDONTWRITEBYTECODE: "1"
+    volumes: !override
+      - type: bind
+        source: ${APP_ROOT:?Use app-compose or upgrade_source.py}
+        target: /app
+        read_only: true
+        bind: {create_host_path: false}
+      - ${ASSET_ROOT}/videos:/app/test_videos:ro
+      - ${DATA_ROOT}/logs:/var/log/traffic-analyzer
+    logging: *bounded_logging
+  console2:
+    image: ${APP_CONSOLE_IMAGE:?Use app-compose or upgrade_source.py}
+    entrypoint: [/bin/sh, /opt/traffic-console/entrypoint.sh]
+    command: [nginx, -g, "daemon off;"]
+    environment:
+      MINEMAP_SDK_BASE_URL: ${MINEMAP_SDK_BASE_URL:-}
+      MINEMAP_SERVICE_URL: ${MINEMAP_SERVICE_URL:-}
+      MINEMAP_SERVER_DOMAIN: ${MINEMAP_SERVER_DOMAIN:-}
+      MINEMAP_STYLE_URL: ${MINEMAP_STYLE_URL:-}
+    volumes: !override
+      - ${APP_ROOT}/console/html:/opt/traffic-console/html:ro
+      - ${APP_ROOT}/console/nginx.conf:/opt/traffic-console/nginx.conf:ro
+      - ${APP_ROOT}/console/configure.sh:/opt/traffic-console/configure.sh:ro
+      - ${APP_ROOT}/console/entrypoint.sh:/opt/traffic-console/entrypoint.sh:ro
+      - ${DATA_ROOT}/logs:/var/log/traffic-analyzer
+    healthcheck:
+      test: [CMD-SHELL, "wget -q -O /dev/null http://127.0.0.1:8080/index.html && wget -q -O /dev/null http://127.0.0.1:8080/runtime-config.js"]
+      interval: 5s
+      timeout: 3s
+      retries: 6
+      start_period: 5s
+    logging: *bounded_logging

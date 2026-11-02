@@ -26,13 +26,12 @@ import os
 os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")  # MPS设备NMS等操作回退CPU
 
 from time import sleep, time
-from multiprocessing import Process, Queue, shared_memory
+from multiprocessing import Process, Queue, resource_tracker, shared_memory
 from queue import Empty
 import signal
 import numpy as np
 
 import hydra
-from tqdm import tqdm
 
 from nodes.VideoReader import VideoReader
 from nodes.ShowNode import ShowNode
@@ -64,70 +63,31 @@ from nodes.GeoJsonExportNode import GeoJsonExportNode
 from nodes.RoadMapMatchingNode import RoadMapMatchingNode
 from elements.VideoEndBreakElement import VideoEndBreakElement
 from utils_local.utils import check_and_set_env_var
+from utils_local.runtime_logging import configure_runtime_logging, run_stage, stage
 
 import logging
-import logging.config
-import yaml
-
-PRINT_PROFILE_INFO = False
 
 # 队列取数据超时(秒)：下游进程在 timeout 内未收到帧时检查上游是否存活
 _QUEUE_GET_TIMEOUT = 10
 _FRAME_QUEUE_MAXSIZE = max(1, int(os.environ.get("FRAME_QUEUE_MAXSIZE", "8")))
 
 
-def _can_write_log_file(filename: str) -> bool:
-    """Return whether a FileHandler target can be opened for append."""
-    log_path = filename if os.path.isabs(filename) else os.path.join(os.getcwd(), filename)
-    log_dir = os.path.dirname(log_path) or "."
-    try:
-        os.makedirs(log_dir, exist_ok=True)
-        with open(log_path, "a", encoding="utf-8"):
-            pass
-    except OSError:
-        return False
-    return True
-
-
-def _drop_unwritable_file_handlers(cfg: dict) -> dict:
-    """Remove FileHandlers that cannot write in the current process cwd."""
-    handlers = cfg.get("handlers") or {}
-    removed = []
-    for name, handler in list(handlers.items()):
-        if handler.get("class") != "logging.FileHandler":
-            continue
-        filename = handler.get("filename")
-        if filename and _can_write_log_file(filename):
-            continue
-        handlers.pop(name, None)
-        removed.append(name)
-
-    if not removed:
-        return cfg
-
-    root = cfg.get("root") or {}
-    root["handlers"] = [h for h in root.get("handlers", []) if h not in removed]
-    for logger_cfg in (cfg.get("loggers") or {}).values():
-        logger_cfg["handlers"] = [
-            h for h in logger_cfg.get("handlers", []) if h not in removed
-        ]
-    return cfg
-
-
 def _setup_logging_in_subprocess():
-    """在子进程中初始化日志配置。
+    # Platform is the single rotating-file owner for all workers of a pipeline.
+    configure_runtime_logging()
 
-    Hydra 的 dictConfig 仅在主进程生效，multiprocessing 子进程
-    不会继承 root logger 的 handlers，需要手动重新加载。
-    """
-    config_path = os.path.join(
-        os.path.dirname(__file__), "configs", "hydra", "job_logging", "custom.yaml"
-    )
-    if os.path.exists(config_path):
-        with open(config_path) as f:
-            cfg = yaml.safe_load(f)
-        cfg = _drop_unwritable_file_handlers(cfg)
-        logging.config.dictConfig(cfg)
+
+def _run_worker(function, *args):
+    _setup_logging_in_subprocess()
+    logger = logging.getLogger("pipeline.worker")
+    logger.info("WORKER_START name=%s", function.__name__)
+    try:
+        function(*args)
+    except BaseException:
+        logger.exception("WORKER_FAILED name=%s", function.__name__)
+        raise
+    finally:
+        logger.info("WORKER_EXIT name=%s", function.__name__)
 
 
 def _is_pid_alive(pid: int) -> bool:
@@ -172,62 +132,63 @@ def proc_frame_reader_and_detection(
     队列满时阻塞等待（确保 MP4 不丢帧；RTSP 流由 reader 自适应帧率）。
     """
     _setup_logging_in_subprocess()
-    sleep_message = f"系统预热中.. sleep({time_sleep_start})"
-    for _ in tqdm(range(time_sleep_start), desc=sleep_message):
-        sleep(1)
-    video_reader = VideoReader(config["video_reader"], config.get("telemetry"))
+    logging.getLogger("pipeline.reader").info("WARMUP wait_sec=%s", time_sleep_start)
+    sleep(time_sleep_start)
+    video_reader = run_stage("init.video_reader", VideoReader, config["video_reader"], config.get("telemetry"))
     detection_node = (
-        DetectionTrackingNodes(config)
+        run_stage("init.legacy_detection", DetectionTrackingNodes, config)
         if config.get("tracking_profile", "hover_cruise_v1") == "hover_only_legacy"
-        else DetectionNode(config)
+        else run_stage("init.detection", DetectionNode, config)
     )
-    for frame_element in video_reader.process():
-        shm = None
-        ts0 = time()
-        frame_element = detection_node.process(frame_element)
-        ts1 = time()
-        ts1 = time()
+    try:
+        frames = iter(video_reader.process())
+        while True:
+            frame_element = run_stage("reader.decode", next, frames, None)
+            if frame_element is None:
+                break
+            shm = None
+            with stage("reader.detection", frame=getattr(frame_element, "frame_num", "eof")):
+                frame_element = detection_node.process(frame_element)
 
-        # EOF is a control-plane sentinel, not a frame payload. Forward it
-        # before shared-memory handling because VideoEndBreakElement deliberately
-        # does not initialize FrameElement.frame.
-        if isinstance(frame_element, VideoEndBreakElement):
-            queue_out.put(frame_element)
-            break
-        
-        # ── 新增：共享内存优化，避免 4K 帧 pickle 序列化 ──
-        if frame_element.frame is not None:
-            # 创建共享内存
-            shm = shared_memory.SharedMemory(create=True, size=frame_element.frame.nbytes)
-            # 拷贝数据
-            buffer = np.ndarray(frame_element.frame.shape, dtype=frame_element.frame.dtype, buffer=shm.buf)
-            buffer[:] = frame_element.frame[:]
-            # 记录元数据
-            frame_element.shm_name = shm.name
-            frame_element.shm_shape = frame_element.frame.shape
-            frame_element.shm_dtype = str(frame_element.frame.dtype)
-            # 清空真实的 frame 引用，防止被序列化
-            frame_element.frame = None
-            
-        queue_out.put(frame_element)  # 阻塞等待，确保不丢帧
-        if shm is not None:
-            if os.name == "nt":
-                # Windows requires one live handle until the downstream process attaches.
-                if not hasattr(proc_frame_reader_and_detection, "shm_pool"):
-                    proc_frame_reader_and_detection.shm_pool = []
-                proc_frame_reader_and_detection.shm_pool.append(shm)
-                if len(proc_frame_reader_and_detection.shm_pool) > _FRAME_QUEUE_MAXSIZE + 2:
-                    proc_frame_reader_and_detection.shm_pool.pop(0).close()
-            else:
-                # POSIX keeps the named segment alive until ShowNode unlinks it. Closing
-                # the creator handle prevents a 4K-frame leak that exhausts /dev/shm.
-                _close_shared_memory_consumer(shm)
-        if PRINT_PROFILE_INFO:
-            print(
-                f"PROC_FRAME_READER_AND_DETECTION: {(time()-ts0) * 1000:.0f} ms: "
-                + f"detection_node {(ts1-ts0) * 1000:.0f} | "
-                + f"put {(time()-ts1) * 1000:.0f}"
-            )
+            # EOF is a control-plane sentinel, not a frame payload. Forward it
+            # before shared-memory handling because VideoEndBreakElement deliberately
+            # does not initialize FrameElement.frame.
+            if isinstance(frame_element, VideoEndBreakElement):
+                run_stage("queue.detect.put", queue_out.put, frame_element)
+                break
+
+            # ── 新增：共享内存优化，避免 4K 帧 pickle 序列化 ──
+            if frame_element.frame is not None:
+                with stage("reader.shared_memory", bytes=frame_element.frame.nbytes):
+                    # 创建共享内存
+                    shm = shared_memory.SharedMemory(create=True, size=frame_element.frame.nbytes)
+                    # 拷贝数据
+                    buffer = np.ndarray(frame_element.frame.shape, dtype=frame_element.frame.dtype, buffer=shm.buf)
+                    buffer[:] = frame_element.frame[:]
+                    # 记录元数据
+                    frame_element.shm_name = shm.name
+                    frame_element.shm_shape = frame_element.frame.shape
+                    frame_element.shm_dtype = str(frame_element.frame.dtype)
+                    # 清空真实的 frame 引用，防止被序列化
+                    frame_element.frame = None
+
+            run_stage("queue.detect.put", queue_out.put, frame_element)
+            if shm is not None:
+                if os.name == "nt":
+                    # Windows requires one live handle until the downstream process attaches.
+                    if not hasattr(proc_frame_reader_and_detection, "shm_pool"):
+                        proc_frame_reader_and_detection.shm_pool = []
+                    proc_frame_reader_and_detection.shm_pool.append(shm)
+                    if len(proc_frame_reader_and_detection.shm_pool) > _FRAME_QUEUE_MAXSIZE + 2:
+                        proc_frame_reader_and_detection.shm_pool.pop(0).close()
+                else:
+                    # POSIX keeps the named segment alive until ShowNode unlinks it. Closing
+                    # the creator handle prevents a 4K-frame leak that exhausts /dev/shm.
+                    _close_shared_memory_consumer(shm)
+    finally:
+        close = getattr(detection_node, "close", None)
+        if close is not None:
+            close()
 
 
 def proc_tracker_update_and_calc(
@@ -243,31 +204,32 @@ def proc_tracker_update_and_calc(
     健康检查：通过 get(timeout) + _is_pid_alive(reader_pid) 检测读取进程崩溃。
     """
     _setup_logging_in_subprocess()
-    homography_node = HomographyCalibrationNode(config)
-    motion_compensation_node = MotionCompensationNode(config)
+    homography_node = run_stage("init.homography", HomographyCalibrationNode, config)
+    motion_compensation_node = run_stage("init.motion_compensation", MotionCompensationNode, config)
     cruise_tracking = config.get("tracking_profile", "hover_cruise_v1") == "hover_cruise_v1"
-    image_motion_node = ImageMotionEstimationNode(config) if cruise_tracking else None
-    flight_geo_reference_node = FlightGeoReferenceNode(config) if cruise_tracking else None
-    ground_trajectory_tracker_node = GroundTrajectoryTrackerNode(config) if cruise_tracking else None
+    image_motion_node = run_stage("init.image_motion", ImageMotionEstimationNode, config) if cruise_tracking else None
+    flight_geo_reference_node = run_stage("init.geo_reference", FlightGeoReferenceNode, config) if cruise_tracking else None
+    ground_trajectory_tracker_node = run_stage("init.image_tracker", GroundTrajectoryTrackerNode, config) if cruise_tracking else None
     post_tracking_world_projection_node = (
-        PostTrackingWorldProjectionNode(config) if cruise_tracking else None
+        run_stage("init.world_projection", PostTrackingWorldProjectionNode, config) if cruise_tracking else None
     )
-    tracker_info_update_node = TrackerInfoUpdateNode(config)
-    speed_node = SpeedEstimationNode(config)
-    direction_flow_node = DirectionFlowNode(config)
-    lane_detection_node = LaneDetectionNode(config)
-    lane_analysis_node = LaneAnalysisNode(config)
-    trajectory_node = TrajectoryNode(config)
-    lane_change_node = LaneChangeDetectionNode(config)
-    enforcement_node = EnforcementDetectionNode(config)
-    road_map_matching_node = RoadMapMatchingNode(config)
-    auto_lane_node = AutoLaneInferenceNode(config)
-    conflict_node = ConflictDetectionNode(config)
-    calc_statistics_node = CalcStatisticsNode(config)
-    geojson_export_node = GeoJsonExportNode(config)
+    tracker_info_update_node = run_stage("init.tracker_info", TrackerInfoUpdateNode, config)
+    speed_node = run_stage("init.speed", SpeedEstimationNode, config)
+    direction_flow_node = run_stage("init.direction", DirectionFlowNode, config)
+    road_features = os.environ.get("ROAD_FEATURES_ENABLED", "true").lower() != "false"
+    lane_detection_node = run_stage("init.lane_detection", LaneDetectionNode, config) if road_features else None
+    lane_analysis_node = run_stage("init.lane_analysis", LaneAnalysisNode, config) if road_features else None
+    trajectory_node = run_stage("init.trajectory", TrajectoryNode, config)
+    lane_change_node = run_stage("init.lane_change", LaneChangeDetectionNode, config)
+    enforcement_node = run_stage("init.enforcement", EnforcementDetectionNode, config)
+    road_map_matching_node = run_stage("init.map_matching", RoadMapMatchingNode, config)
+    auto_lane_node = run_stage("init.auto_lane", AutoLaneInferenceNode, config) if road_features else None
+    conflict_node = run_stage("init.conflict", ConflictDetectionNode, config)
+    calc_statistics_node = run_stage("init.statistics", CalcStatisticsNode, config)
+    geojson_export_node = run_stage("init.geojson", GeoJsonExportNode, config)
     send_info_kafka = config["pipeline"]["send_info_kafka"]
     if send_info_kafka:
-        kafka_producer_node = KafkaProducerNode(config)
+        kafka_producer_node = run_stage("init.kafka", KafkaProducerNode, config)
         signal.signal(
             signal.SIGTERM,
             lambda signum, _frame: _terminate_tracker_with_incomplete(
@@ -275,56 +237,58 @@ def proc_tracker_update_and_calc(
             ),
         )
     while True:
-        ts0 = time()
-        try:
-            frame_element = queue_in.get(timeout=_QUEUE_GET_TIMEOUT)
-        except Empty:
-            if not _is_pid_alive(reader_pid):
-                print("[proc_tracker] reader process died, stopping")
-                if send_info_kafka:
-                    kafka_producer_node.mark_replay_mission_incomplete(
-                        failure_reason="reader_process_died"
-                    )
-                break
-            continue
-        ts1 = time()
-        
+        with stage("queue.detect.get"):
+            try:
+                frame_element = queue_in.get(timeout=_QUEUE_GET_TIMEOUT)
+            except Empty:
+                if not _is_pid_alive(reader_pid):
+                    logging.getLogger("pipeline.tracker").error("Reader process died pid=%s", reader_pid)
+                    if send_info_kafka:
+                        kafka_producer_node.mark_replay_mission_incomplete(
+                            failure_reason="reader_process_died"
+                        )
+                    break
+                continue
+
         # ── 新增：附加共享内存 ──
         _shm_tracker = None
         if hasattr(frame_element, "shm_name") and frame_element.shm_name:
             try:
                 _shm_tracker = shared_memory.SharedMemory(name=frame_element.shm_name)
                 frame_element.frame = np.ndarray(
-                    frame_element.shm_shape, 
-                    dtype=np.dtype(frame_element.shm_dtype), 
+                    frame_element.shm_shape,
+                    dtype=np.dtype(frame_element.shm_dtype),
                     buffer=_shm_tracker.buf
                 )
-            except Exception as e:
-                print(f"[proc_tracker] Failed to attach shm: {e}")
+            except Exception:
+                logging.getLogger("pipeline.tracker").exception("Shared memory attach failed")
                 frame_element.frame = None
         if cruise_tracking:
-            frame_element = image_motion_node.process(frame_element)
+            frame_element = run_stage("tracker.image_motion", image_motion_node.process, frame_element)
             # ByteTrack is a pure image-space association stage.  It deliberately
             # runs before every H/ENU/map operation so projection error cannot
             # change identities.
-            frame_element = ground_trajectory_tracker_node.process(frame_element)
-        frame_element = homography_node.process(frame_element)
-        frame_element = motion_compensation_node.process(frame_element)
+            frame_element = run_stage("tracker.association", ground_trajectory_tracker_node.process, frame_element)
+        frame_element = run_stage("tracker.homography", homography_node.process, frame_element)
+        frame_element = run_stage("tracker.motion_compensation", motion_compensation_node.process, frame_element)
         if cruise_tracking:
-            frame_element = flight_geo_reference_node.process(frame_element)
-            frame_element = post_tracking_world_projection_node.process(frame_element)
-        frame_element = tracker_info_update_node.process(frame_element)
-        frame_element = speed_node.process(frame_element)
-        frame_element = direction_flow_node.process(frame_element)
-        frame_element = lane_detection_node.process(frame_element)
-        frame_element = trajectory_node.process(frame_element)
-        frame_element = lane_change_node.process(frame_element)
-        frame_element = road_map_matching_node.process(frame_element)
-        frame_element = enforcement_node.process(frame_element)
-        frame_element = lane_analysis_node.process(frame_element)
-        frame_element = auto_lane_node.process(frame_element)
-        frame_element = conflict_node.process(frame_element)
-        frame_element = calc_statistics_node.process(frame_element)
+            frame_element = run_stage("tracker.geo_reference", flight_geo_reference_node.process, frame_element)
+            frame_element = run_stage("tracker.world_projection", post_tracking_world_projection_node.process, frame_element)
+        frame_element = run_stage("tracker.info", tracker_info_update_node.process, frame_element)
+        frame_element = run_stage("tracker.speed", speed_node.process, frame_element)
+        frame_element = run_stage("tracker.direction", direction_flow_node.process, frame_element)
+        if lane_detection_node is not None:
+            frame_element = run_stage("tracker.lane_detection", lane_detection_node.process, frame_element)
+        frame_element = run_stage("tracker.trajectory", trajectory_node.process, frame_element)
+        frame_element = run_stage("tracker.lane_change", lane_change_node.process, frame_element)
+        frame_element = run_stage("tracker.map_matching", road_map_matching_node.process, frame_element)
+        frame_element = run_stage("tracker.enforcement", enforcement_node.process, frame_element)
+        if lane_analysis_node is not None:
+            frame_element = run_stage("tracker.lane_analysis", lane_analysis_node.process, frame_element)
+        if auto_lane_node is not None:
+            frame_element = run_stage("tracker.auto_lane", auto_lane_node.process, frame_element)
+        frame_element = run_stage("tracker.conflict", conflict_node.process, frame_element)
+        frame_element = run_stage("tracker.statistics", calc_statistics_node.process, frame_element)
         if isinstance(frame_element, VideoEndBreakElement):
             projection_flush = (
                 post_tracking_world_projection_node.last_flush_result
@@ -348,16 +312,15 @@ def proc_tracker_update_and_calc(
                     frame_element,
                     termination_reason=termination_reason,
                 )
-        frame_element = geojson_export_node.process(frame_element)
+        frame_element = run_stage("tracker.geojson", geojson_export_node.process, frame_element)
         if send_info_kafka:
-            frame_element = kafka_producer_node.process(frame_element)
-        ts2 = time()
-        
+            frame_element = run_stage("tracker.kafka_archive", kafka_producer_node.process, frame_element)
+
         # 传给进程 3 前，再次断开 frame 引用。
         if _shm_tracker is not None:
             frame_element.frame = None
 
-        queue_out.put(frame_element)  # 阻塞等待，确保不丢帧
+        run_stage("queue.track.put", queue_out.put, frame_element)
         if _shm_tracker is not None:
             if os.name == "nt":
                 if not hasattr(proc_tracker_update_and_calc, "shm_pool"):
@@ -367,13 +330,6 @@ def proc_tracker_update_and_calc(
                     proc_tracker_update_and_calc.shm_pool.pop(0).close()
             else:
                 _close_shared_memory_consumer(_shm_tracker)
-        if PRINT_PROFILE_INFO:
-            print(
-                f"PROC_TRACKER_UPDATE_AND_CALC: {(time()-ts0) * 1000:.0f} ms: "
-                + f"get {(ts1-ts0) * 1000:.0f} | "
-                + f"nodes_inference {(ts2-ts1) * 1000:.0f} | "
-                + f"put {(time()-ts2) * 1000:.0f}"
-            )
         if isinstance(frame_element, VideoEndBreakElement):
             break
 
@@ -399,27 +355,26 @@ def proc_show_node(queue_in: Queue, config: dict, tracker_pid: int):
     send_info_kafka = config["pipeline"]["send_info_kafka"]
     render_output = _requires_render_output(config)
     if render_output or send_info_kafka:
-        show_node = ShowNode(config)
+        show_node = run_stage("init.show", ShowNode, config)
     if save_video or save_conflict_clips:
-        video_saver_node = VideoSaverNode(config["video_saver_node"])
+        video_saver_node = run_stage("init.video_saver", VideoSaverNode, config["video_saver_node"])
     if send_info_kafka:
-        tcc_evidence_publisher_node = TccEvidencePublisherNode(config)
+        tcc_evidence_publisher_node = run_stage("init.tcc_evidence", TccEvidencePublisherNode, config)
         enforcement_evidence_publisher_node = (
-            EnforcementEvidencePublisherNode(config)
+            run_stage("init.enforcement_evidence", EnforcementEvidencePublisherNode, config)
             if "kafka_producer_node" in config else None
         )
     if show_in_web:
-        video_server_node = VideoServer(config)
+        video_server_node = run_stage("init.mjpeg", VideoServer, config)
     while True:
-        ts0 = time()
-        try:
-            frame_element = queue_in.get(timeout=_QUEUE_GET_TIMEOUT)
-        except Empty:
-            if not _is_pid_alive(tracker_pid):
-                print("[proc_show] tracker process died, stopping")
-                break
-            continue
-        ts1 = time()
+        with stage("queue.track.get"):
+            try:
+                frame_element = queue_in.get(timeout=_QUEUE_GET_TIMEOUT)
+            except Empty:
+                if not _is_pid_alive(tracker_pid):
+                    logging.getLogger("pipeline.show").error("Tracker process died pid=%s", tracker_pid)
+                    break
+                continue
 
         pending_tcc = bool(
             not isinstance(frame_element, VideoEndBreakElement)
@@ -431,7 +386,7 @@ def proc_show_node(queue_in: Queue, config: dict, tracker_pid: int):
         )
         needs_render = render_output or pending_tcc or pending_enforcement
         original_tcc_frame = None
-        
+
         # 只有确实需要预览/保存时才渲染 4K 标注。批量数据回放仍消费并释放
         # shared memory，但跳过成本很高的框、标签和轨迹绘制。
         _shm_show = None
@@ -445,27 +400,26 @@ def proc_show_node(queue_in: Queue, config: dict, tracker_pid: int):
                         dtype=np.dtype(frame_element.shm_dtype),
                         buffer=_shm_show.buf,
                     )
-            except Exception as e:
-                print(f"[proc_show] Failed to attach shm: {e}")
+            except Exception:
+                logging.getLogger("pipeline.show").exception("Shared memory attach failed")
                 frame_element.frame = None
         if (pending_tcc or pending_enforcement) and frame_element.frame is not None:
             # ShowNode renders in place. Preserve the exact unannotated source before
             # rendering so the evidence pair is raw input + the real detector output.
             original_tcc_frame = frame_element.frame.copy()
         if needs_render:
-            frame_element = show_node.process(frame_element)
+            frame_element = run_stage("show.render", show_node.process, frame_element)
         if save_video or save_conflict_clips:
-            video_saver_node.process(frame_element, save_video=save_video)
+            run_stage("show.video_save", video_saver_node.process, frame_element, save_video=save_video)
         if send_info_kafka:
             if pending_tcc and original_tcc_frame is not None:
                 frame_element.frame = original_tcc_frame
-            frame_element = tcc_evidence_publisher_node.process(frame_element)
+            frame_element = run_stage("show.tcc_evidence", tcc_evidence_publisher_node.process, frame_element)
             if enforcement_evidence_publisher_node is not None:
-                frame_element = enforcement_evidence_publisher_node.process(frame_element)
+                frame_element = run_stage("show.enforcement_evidence", enforcement_evidence_publisher_node.process, frame_element)
         if show_in_web:
-            video_server_node.process(frame_element)
-        ts2 = time()
-        
+            run_stage("show.mjpeg_encode", video_server_node.process, frame_element)
+
         # ── 新增：渲染结束，销毁共享内存 ──
         if _shm_show is not None:
             _shm_show.close()
@@ -474,43 +428,42 @@ def proc_show_node(queue_in: Queue, config: dict, tracker_pid: int):
             except Exception:
                 pass
             frame_element.frame = None
-        if PRINT_PROFILE_INFO:
-            print(
-                f"PROC_SHOW_NODE: {(time()-ts0) * 1000:.0f} ms: "
-                + f"get {(ts1-ts0) * 1000:.0f} | "
-                + f"show_node {(ts2-ts1) * 1000:.0f}"
-            )
         if isinstance(frame_element, VideoEndBreakElement):
             break
 
 
 @hydra.main(version_base=None, config_path="configs", config_name="app_config")
 def main(config) -> None:
+    configure_runtime_logging()
+    logging.getLogger("pipeline").info("PIPELINE_START tracking_profile=%s queue_maxsize=%s", config.get("tracking_profile"), _FRAME_QUEUE_MAXSIZE)
     time_sleep_start = 5
 
+    if os.name == "posix":
+        # Linux fork workers must inherit one tracker before creating shared frames.
+        resource_tracker.ensure_running()
     queue_detect_out = Queue(maxsize=_FRAME_QUEUE_MAXSIZE)
     queue_track_out = Queue(maxsize=_FRAME_QUEUE_MAXSIZE)
 
     # 顺序启动进程（每个下游进程需要上游 PID 做健康检查）
     reader_process = Process(
-        target=proc_frame_reader_and_detection,
-        args=(queue_detect_out, config, time_sleep_start),
+        target=_run_worker,
+        args=(proc_frame_reader_and_detection, queue_detect_out, config, time_sleep_start),
         name="proc_reader_detection",
         daemon=True,
     )
     reader_process.start()
 
     tracker_process = Process(
-        target=proc_tracker_update_and_calc,
-        args=(queue_detect_out, queue_track_out, config, reader_process.pid),
+        target=_run_worker,
+        args=(proc_tracker_update_and_calc, queue_detect_out, queue_track_out, config, reader_process.pid),
         name="proc_tracker_calc",
         daemon=True,
     )
     tracker_process.start()
 
     display_process = Process(
-        target=proc_show_node,
-        args=(queue_track_out, config, tracker_process.pid),
+        target=_run_worker,
+        args=(proc_show_node, queue_track_out, config, tracker_process.pid),
         name="proc_show",
         daemon=True,
     )
@@ -547,4 +500,4 @@ if __name__ == "__main__":
     check_and_set_env_var("CAMERA_ID", 1)
 
     main()
-    print(f"\n total time: {(time()-ts) / 60:.2} minute")
+    logging.getLogger("pipeline").info("PIPELINE_EXIT elapsed_sec=%.1f", time() - ts)

@@ -42,7 +42,7 @@ video_reader:
   runtime_map_bundle: ${oc.env:RUNTIME_MAP_BUNDLE_JSON,''} # lane_verified GCJ-02/ENU 地图包；正式运行必填
 
 detection_node:
-  weight_pth: weights/yolo11s-visdrone.pt  # 模型 .pt 或 .engine (TensorRT) 文件的路径
+  weight_pth: ${oc.env:DETECTION_WEIGHT_PATH,weights/yolo11s-visdrone.pt}  # 模型 .pt 或 .engine (TensorRT) 文件的路径
   classes_to_detect: [0,1,2,3,4,5,6,7,8,9]  # yolo11l-visdrone.pt: 0 pedestrian, 1 people, 2 bicycle, 3 car, 4 van, 5 truck, 6 tricycle, 7 awning-tricycle, 8 bus, 9 motor
   confidence: 0.05  # 检测器置信度阈值；航拍小目标非机动车需保留低分候选
   iou: 0.4  # NMS 阈值（值越大，匹配到的目标越多）

@@ -126,7 +126,8 @@ def test_unchanged_server_asset_uses_persisted_fingerprint_without_rehash(tmp_pa
 
 
 @pytest.mark.asyncio
-async def test_source_profile_capture_import_resolves_server_asset_paths(tmp_path, monkeypatch):
+@pytest.mark.parametrize("prefix", ["", "test_videos/", "/app/test_videos/", "../", "/app/test_videos/../", "/outside/"])
+async def test_source_profile_capture_import_resolves_server_asset_paths(tmp_path, monkeypatch, prefix):
     source_root = tmp_path / "sources"
     source_root.mkdir()
     video_path = source_root / "capture.mp4"
@@ -141,10 +142,10 @@ async def test_source_profile_capture_import_resolves_server_asset_paths(tmp_pat
             super().__init__()
             self.results = [
                 SimpleNamespace(
-                    location="capture.mp4", mode="local", enabled=True
+                    location=prefix + "capture.mp4", mode="local", enabled=True
                 ),
                 SimpleNamespace(
-                    location="telemetry.srt",
+                    location=prefix + "telemetry.srt",
                     mode="local",
                     enabled=True,
                     source_type="srt",
@@ -201,6 +202,12 @@ async def test_source_profile_capture_import_resolves_server_asset_paths(tmp_pat
 
     service.session.get = get
 
+    if prefix in {"../", "/app/test_videos/../", "/outside/"}:
+        with pytest.raises(ValueError):
+            await service.import_capture_batch("SVY-1", None, None, "SRC-1", actor_id=1, role="admin", request_id="invalid-source-profile")
+        assert captured == {}
+        return
+
     result = await service.import_capture_batch(
         "SVY-1",
         None,
@@ -215,6 +222,8 @@ async def test_source_profile_capture_import_resolves_server_asset_paths(tmp_pat
     assert captured["video"].path == video_path
     assert captured["telemetry"].path == telemetry_path
     assert captured["video"].storage_backend == "server_asset"
+    assert captured["video"].storage_key == "capture.mp4"
+    assert captured["telemetry"].storage_key == "telemetry.srt"
 
 
 @pytest.mark.asyncio

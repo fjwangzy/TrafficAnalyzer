@@ -1,0 +1,2 @@
+/usr/bin/ar qc libyolo_reorder.a CMakeFiles/yolo_reorder.dir/config.cpp.o CMakeFiles/yolo_reorder.dir/reorder_buffer.cpp.o CMakeFiles/yolo_reorder.dir/reorder_thread.cpp.o
+/usr/bin/ranlib libyolo_reorder.a

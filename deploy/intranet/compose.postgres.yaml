@@ -1,0 +1,29 @@
+# Temporary onsite database: use after root Compose and compose.yaml.
+services:
+  road9:
+    profiles: !reset []
+    image: ${DATABASE_IMAGE:?Set the offline PostgreSQL/PostGIS/TimescaleDB image}
+    pull_policy: never
+    ports: !reset []
+    environment:
+      POSTGRES_DB: ${DB_NAME:-ycx_prod}
+      POSTGRES_USER: ${DB_USER:-sysdba}
+      POSTGRES_PASSWORD: ${ROAD9_PASSWORD:?Set the application database password}
+      APP_DB_SCHEMA: ${DB_SCHEMA:-drone}
+      NO_TS_TUNE: "true"
+      TIMESCALEDB_TELEMETRY: "off"
+    command: ["postgres", "-c", "max_worker_processes=16", "-c", "timescaledb.max_background_workers=8"]
+    mem_limit: 2g
+    shm_size: 256m
+    volumes: !override
+      - ${DATA_ROOT:?Set DATA_ROOT}/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "PGPASSWORD=$$POSTGRES_PASSWORD psql -h 127.0.0.1 -U $$POSTGRES_USER -d $$POSTGRES_DB -Atqc \"SELECT count(*)=2 FROM pg_extension WHERE extname IN ('timescaledb','postgis')\" | grep -qx t"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+  init-db:
+    depends_on: !override
+      road9:
+        condition: service_healthy

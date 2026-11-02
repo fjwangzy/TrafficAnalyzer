@@ -87,6 +87,13 @@ describe('CityMap GCJ-02 AMap rendering', () => {
     expect(mapMocks.markers[0].options.position).toEqual([117, 36.7])
   })
 
+  it('labels the intranet provider truthfully when map loading fails', async () => {
+    window.__RUNTIME_CONFIG__ = { mapProvider: 'minemap', minemapDomain: 'http://map.internal', minemapKey: '' }
+    render(<CityMap trafficMode points={[{ id: 'INT-1', lat: 36.7, lon: 117 }]} />)
+    expect(await screen.findByText('四维图新 MineMap服务不可用')).toBeInTheDocument()
+    expect(screen.queryByText('高德实时路况 · GCJ-02')).not.toBeInTheDocument()
+  })
+
   it('uses the source status color for drone markers', async () => {
     render(<CityMap coordinateLabel='GCJ-02' sourcePoints={[{ id: 'INT-1', lat: 36.7, lon: 117, source_status: 'running', source_count: 2 }]} />)
     await waitFor(() => expect(mapMocks.markers).toHaveLength(1))

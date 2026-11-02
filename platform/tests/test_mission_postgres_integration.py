@@ -27,7 +27,7 @@ from app.services.mission_orchestrator import MissionError, MissionOrchestrator
 from app.services.road_context import RoadContext, RoadContextResult
 
 pytestmark = pytest.mark.skipif(
-    os.environ.get("RUN_PG_INTEGRATION") != "1",
+    os.environ.get("RUN_PG_INTEGRATION") != "1" or os.environ.get("DB_NAME") != "road9_i2_test",
     reason="requires an explicitly selected disposable local PostgreSQL database",
 )
 

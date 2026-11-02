@@ -15,7 +15,7 @@ from app.models import replay_v2  # noqa: F401
 
 
 config = context.config
-config.set_main_option("sqlalchemy.url", settings.database_url)
+config.set_main_option("sqlalchemy.url", settings.database_url.replace("%", "%%"))
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
@@ -30,6 +30,7 @@ def run_migrations_offline() -> None:
         dialect_opts={"paramstyle": "named"},
         version_table="uav_replay_v2_alembic_version",
         compare_type=True,
+        version_table_schema=settings.db_schema,
     )
     with context.begin_transaction():
         context.run_migrations()
@@ -41,6 +42,7 @@ def do_run_migrations(connection) -> None:
         target_metadata=target_metadata,
         version_table="uav_replay_v2_alembic_version",
         compare_type=True,
+        version_table_schema=settings.db_schema,
     )
     with context.begin_transaction():
         context.run_migrations()
@@ -51,6 +53,7 @@ async def run_async_migrations() -> None:
         config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
+        connect_args=settings.database_connect_args,
     )
     async with connectable.connect() as connection:
         await connection.run_sync(do_run_migrations)

@@ -548,7 +548,7 @@ def run_source(
     command = [
         sys.executable,
         str(ROOT / "main_optimized.py"),
-        "hydra/job_logging=disabled",
+        "hydra/job_logging=stdout",
         "pipeline.show_in_web=false",
         "pipeline.save_video=false",
         "pipeline.send_info_kafka=true",

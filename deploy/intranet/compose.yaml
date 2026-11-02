@@ -1,0 +1,129 @@
+# Overlay only: always use with the repository's root docker-compose.yaml.
+# Build/render validated with Compose 2.29.7; offline flat output supports site 2.24.7.
+services:
+  road9:
+    profiles: ["bundled-infra"]
+  kafka:
+    profiles: ["bundled-infra"]
+  platform:
+    image: ${PLATFORM_IMAGE:?Set the immutable release Platform image}
+    pull_policy: never
+    build: !reset null
+    depends_on: !override
+      init-db:
+        condition: service_completed_successfully
+    ports: !reset []
+    environment: &intranet_environment
+      APP_RUNTIME_PROFILE: replay_v2
+      INTRANET_HTTP_ENABLED: "true"
+      MEDIA_COOKIE_SECURE: "false"
+      DB_AUTO_MIGRATE: "false"
+      DB_TIMESCALE_REQUIRED: ${DB_TIMESCALE_REQUIRED:-false}
+      ROAD_FEATURES_ENABLED: ${ROAD_FEATURES_ENABLED:-false}
+      YCX_ROAD_VERSION: ${YCX_ROAD_VERSION:-}
+      YCX_METRICS_BACKEND: ${YCX_METRICS_BACKEND:-doris}
+      DORIS_MYSQL_HOST: ${DORIS_MYSQL_HOST:-}
+      DORIS_MYSQL_PORT: ${DORIS_MYSQL_PORT:-9030}
+      DORIS_MYSQL_USER: ${DORIS_MYSQL_USER:-}
+      DORIS_MYSQL_PASSWORD: ${DORIS_MYSQL_PASSWORD:-}
+      DORIS_DATABASE: ${DORIS_DATABASE:-ycx_xc}
+      DB_HOST: ${DB_HOST:-37.12.14.133}
+      DB_PORT: ${DB_PORT:-5866}
+      DB_NAME: ${DB_NAME:-ycx_prod}
+      DB_SCHEMA: ${DB_SCHEMA:-drone}
+      DB_USER: ${DB_USER:-sysdba}
+      DB_DRIVER: psycopg
+      DB_SSLMODE: ${DB_SSLMODE:-prefer}
+      # ROAD9_PASSWORD is retained solely to satisfy the root Compose contract.
+      DB_PASSWORD: ${ROAD9_PASSWORD:?Set the HighGo password in private production.env}
+      KAFKA_BOOTSTRAP: ${KAFKA_BOOTSTRAP:-37.12.14.66:9093,37.12.14.67:9093,37.12.14.68:9093,37.12.14.69:9093}
+      KAFKA_SECURITY_PROTOCOL: SASL_PLAINTEXT
+      KAFKA_SASL_MECHANISM: PLAIN
+      KAFKA_SASL_USERNAME: ${KAFKA_SASL_USERNAME:-xinchan}
+      KAFKA_SASL_PASSWORD: ${KAFKA_SASL_PASSWORD:?Set the Kafka SASL password}
+      PIPELINE_DEVICE: ascend
+      PIPELINE_ASCEND_MANIFEST: /app/weights/ascend/manifest.json
+      ASCEND_MODEL_MANIFEST: /app/weights/ascend/manifest.json
+      PIPELINE_VIDEO_READY_TIMEOUT_SEC: "120"
+      PIPELINE_MAX_ACTIVE: "1"
+      DETECTION_WEIGHT_PATH: /app/weights/yolo11s-visdrone.pt
+      ASCEND_DEVICE_ID: ${ASCEND_DEVICE_ID:-0}
+      TRAJECTORY_ARCHIVE_SPOOL_DIR: /trajectory-archive
+      REPLAY_V2_APPEARANCE_MODEL_PATH: /app/weights/yolo11s-visdrone.pt
+      REPLAY_V2_APPEARANCE_DEVICE: cpu
+      REPLAY_V2_APPEARANCE_BATCH_SIZE: "8"
+      UAV_RTSP_ALLOWED_HOSTS: ${UAV_RTSP_ALLOWED_HOSTS:-["localhost","127.0.0.1"]}
+      SURVEY_STORAGE_DIR: /survey
+      LANE_ANNOTATION_DB_PATH: /calibration/lane_annotation_db.json
+      CALIBRATION_MEDIA_ROOTS: '["/calibration","/survey","/app/test_videos"]'
+      LD_PRELOAD: /opt/highgo/lib/libpq.so.5
+      PSYCOPG_IMPL: python
+    devices:
+      - ${ASCEND_DAVINCI_DEVICE:-/dev/davinci0}:${ASCEND_DAVINCI_DEVICE:-/dev/davinci0}
+      - /dev/davinci_manager:/dev/davinci_manager
+      - /dev/devmm_svm:/dev/devmm_svm
+      - /dev/hisi_hdc:/dev/hisi_hdc
+    volumes: !override
+      - ${ASSET_ROOT:?Set absolute ASSET_ROOT}/weights:/app/weights:ro
+      - ${ASSET_ROOT}/videos:/app/test_videos:ro
+      - ${DATA_ROOT:?Set absolute DATA_ROOT}/hls:/hls
+      - ${DATA_ROOT}/output:/pipeline-output
+      - ${DATA_ROOT}/spool:/pipeline-spool
+      - ${DATA_ROOT}/calibration:/calibration
+      - ${DATA_ROOT}/survey:/survey
+      - ${DATA_ROOT}/trajectory-archive:/trajectory-archive
+      - ${DATA_ROOT}/logs:/app/logs
+      - /usr/local/Ascend/driver:/usr/local/Ascend/driver:ro
+      - /etc/ascend_install.info:/etc/ascend_install.info:ro
+  init-db:
+    extends:
+      file: docker-compose.yaml
+      service: platform
+    image: ${PLATFORM_IMAGE:?Set the immutable release Platform image}
+    pull_policy: never
+    build: !reset null
+    restart: "no"
+    command: ["python3", "/app/deploy/init_db.py"]
+    environment: *intranet_environment
+    depends_on: !reset {}
+    ports: !reset []
+    volumes: !override
+      - ${ASSET_ROOT}/videos:/app/test_videos:ro
+    healthcheck:
+      disable: true
+  console2:
+    image: ${CONSOLE_IMAGE:?Set the immutable release Console image}
+    pull_policy: never
+    build: !reset null
+    ports: !override
+      - "${CONSOLE_PORT:-8009}:8080"
+    environment:
+      ROAD_FEATURES_ENABLED: ${ROAD_FEATURES_ENABLED:-false}
+      AMAP_JS_API_KEY: ""
+      AMAP_SECURITY_JS_CODE: ""
+      MAP_DISABLED: "false"
+      MAP_PROVIDER: minemap
+      MINEMAP_DOMAIN: ${MINEMAP_DOMAIN:-http://37.8.188.98:21009}
+      MINEMAP_SOLUTION: ${MINEMAP_SOLUTION:-17000}
+      MINEMAP_SDK_BASE_URL: ${MINEMAP_SDK_BASE_URL:-}
+      MINEMAP_SERVICE_URL: ${MINEMAP_SERVICE_URL:-}
+      MINEMAP_SERVER_DOMAIN: ${MINEMAP_SERVER_DOMAIN:-}
+      MINEMAP_STYLE_URL: ${MINEMAP_STYLE_URL:-}
+      MINEMAP_KEY: ${MINEMAP_KEY:?Set the MineMap key for solution 17000}
+
+# Even unused declarations must not point at the Mac development volumes.
+volumes:
+  road9_data:
+    name: ${COMPOSE_PROJECT_NAME}_unused_road9
+  kafka_data:
+    name: ${COMPOSE_PROJECT_NAME}_unused_kafka
+  hls_data:
+    name: ${COMPOSE_PROJECT_NAME}_unused_hls
+  pipeline_output_data:
+    name: ${COMPOSE_PROJECT_NAME}_unused_output
+  pipeline_spool_data:
+    name: ${COMPOSE_PROJECT_NAME}_unused_spool
+  calibration_data:
+    name: ${COMPOSE_PROJECT_NAME}_unused_calibration
+  survey_data:
+    name: ${COMPOSE_PROJECT_NAME}_unused_survey

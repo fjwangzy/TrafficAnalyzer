@@ -22,7 +22,6 @@ import sys
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
-from types import SimpleNamespace
 
 import cv2
 import numpy as np
@@ -35,7 +34,6 @@ ROOT = PLATFORM_DIR.parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(PLATFORM_DIR))
 
-from audit_ycx_readonly_schema import _credential_values  # noqa: E402
 from app.core.database import async_session_maker, close_db, init_db  # noqa: E402
 from app.models.mission import (  # noqa: E402
     ChannelizedMapVersion,
@@ -73,15 +71,8 @@ def _source_groups() -> dict[str, dict]:
 
 
 def _credential_importer(path: Path) -> YcxRoadImporter:
-    values = _credential_values(path)
-    return YcxRoadImporter(SimpleNamespace(
-        ycx_db_host=values["host"],
-        ycx_db_port=int(values["port"]),
-        ycx_db_user=values["user"],
-        ycx_db_password=values["pwd"],
-        ycx_db_name=values["db"],
-        ycx_db_schema=values["schame"],
-    ))
+    from app.core.config import settings
+    return YcxRoadImporter(settings)
 
 
 def _linear_geometry(raw: dict | None) -> LineString | None:
@@ -534,7 +525,7 @@ async def build(credentials_file: Path, timestamp_sec: float, execute: bool) -> 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--credentials-file", type=Path, required=True)
+    parser.add_argument("--credentials-file", type=Path, help="Deprecated; Doris is configured in platform/.env")
     parser.add_argument("--timestamp-sec", type=float, default=0.0)
     parser.add_argument("--execute", action="store_true")
     args = parser.parse_args()

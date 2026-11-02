@@ -1,5 +1,25 @@
 # DATABASE_SCHEMA.md — TrafficAnalyzer 数据库结构
 
+## 2026-10-19 正式inbox同样取消offset门禁
+
+canonical head推进到`20261019_0021`：`uav_message_inbox`的topic/partition/offset唯一约束改普通索引，
+保留(source_system,message_id)唯一性和内容哈希校验；与Replay V2的`20261019_rv2_0005`一致。
+两套迁移只调整索引，历史记录及原始offset保留。本机road9.public已显式迁移；已纳入2026.10.19-intranet.1全量包，现场采用时仍须init-db，未声称生产已迁移。
+
+## 2026-10-19 Replay V2运输位置索引
+
+独立迁移head为`20261019_rv2_0005`：`uav_replay_v2_message_inbox`的topic/partition/offset仅作普通索引，
+允许Kafka Topic重建后offset重用。唯一message_id与内容哈希继续承担幂等和冲突校验；历史事实及原始offset保留，
+canonical schema不变。现场发布须显式init-db；不能用仅源码升级代替迁移。见`MONITORING_INGESTION_RECOVERY_20261019.md`。
+
+## 2026-10-17 临时生产PG（ADR-039）
+
+生产intranet.3以同机Docker PostgreSQL17.10 + PostGIS3.6.4 + TimescaleDB2.28.2暂代扩展故障的HG。
+应用库ycx_prod、schema drone、账号sysdba；DB_HOST=road9为Compose服务名，不是本机开发数据库名。
+首次空目录自动创建两扩展/schema，init-db迁移六张正式超表。V2样本沿用7天压缩/90天保留；路网关闭开关不变。
+DATA_ROOT/postgres持久化、不映射数据库端口。HG原连接仅保存在.env.hg，不自动搬迁或双写数据；切回须停写/备份/兼容性与行数核验。
+空间与时序真实写读、重复迁移、重启和同版本完整备份恢复已实测；不宣称HG恢复兼容。开发road9.public不变。
+
 > 2026-07-16 本机开发环境已用全新 `road9`/TimescaleDB 纯净初始化，不迁移任何旧库或旧消息历史。生产 TimescaleDB 参数、权威围栏/规则、法制证据和主平台合同仍须书面批准。
 
 ## 1. 已冻结的数据架构决策（目标态）
@@ -106,7 +126,7 @@ CREATE EXTENSION IF NOT EXISTS timescaledb;
 | `uav_event_delivery_attempts` | `id` | 每次投递尝试和响应摘要 |
 | `uav_event_feedback` | `id`；`(source_system, feedback_idempotency_key)` 唯一 | 主平台确认/驳回和结果反馈审计 |
 | `uav_dead_letters` | `id` | EventDelivery/outbox 对外投递超过重试上限后的人工补偿入口 |
-| `uav_message_dead_letters` | `(topic, partition, offset)` 唯一 | 入站 Kafka schema/身份冲突等永久错误的耐久隔离；成功写入后才可推进对应 offset |
+| `uav_message_dead_letters` | `(topic, partition, offset)` 唯一 | 入站 Kafka schema/身份冲突等永久错误的耐久隔离；正常隔离后推进对应offset；隔离存储失败时记录日志并切最新 |
 | `uav_evidence_packages` | `id`；`(source_system, source_event_id)` 索引 | 事件证据清单、对象存储引用、哈希和完整性元数据 |
 | `uav_evidence_items` | `id`；`package_id` 索引 | 单个图片/视频/测绘/结构化证据项；`storage_backend=managed|server_asset` 区分内容寻址对象与 allowlist 原文件引用；新冲突事件使用 `conflict_original_frame`、`conflict_detector_frame` 两项，后者是 `ShowNode.frame_result` 的原尺寸 JPEG，禁止证据侧重绘。检测图以 `derived_from_id` 指向原图并在 metadata 保存同一帧时间。检测任务先写 managed 内容地址，Platform 校验相对 `storage_key`、大小和 SHA-256 后只登记引用；历史 `conflict_trajectory_reconstruction`/`conflict_keyframe` 保留。`survey_report_annotated_image` 保存报告固化的带逐边长度 JPEG，并以 `derived_from_id` 指向 BEV、metadata 记录报告版本/帧/量算数；server asset 的 `item_metadata.source_fingerprint` 保存 size/mtime/ctime，指纹变化后必须回退到完整 SHA-256 校验 |
 
@@ -300,11 +320,11 @@ CREATE EXTENSION IF NOT EXISTS timescaledb;
 
 ### 4.3 Kafka consumer 事务与 offset 边界（目标契约）
 
-- Consumer 配置必须 `enable_auto_commit=false` 且新组从 `earliest` 开始。
+- Consumer 配置必须 `enable_auto_commit=false`，无有效断点时从 `latest` 开始。
 - 单条消息按“校验 → 数据库事务写 inbox/facts 并标记 `dispatch_status=pending` → 提交事实 → 派发 WS/告警 → 标记 `dispatched` → 手动提交 Kafka offset”执行。
-- 数据库事务失败时回滚且不提交 offset；派发失败记录尝试和错误并保持 pending，Kafka 重放时继续派发。只有 dispatched 的重复消息才能跳过副作用。
-- 不可重试入站消息必须先把 `uav_message_dead_letters` 记录耐久提交，再手动提交 offset；日志不是耐久隔离。`uav_dead_letters` 继续只处理 EventDelivery/outbox 对外投递失败，二者不得混用。
-- Kafka offset 不属于 PostgreSQL 事务，目标是 at-least-once delivery + exactly-once business effect，不能在验收材料中误称为跨系统 exactly-once transaction。
+- 数据库事务失败时回滚；处理/派发/提交失败按用户授权跳最新并记录恢复位置，不再原位重试。pending保留已有失败状态，只有dispatched的重复消息才跳过副作用。
+- 不可重试入站消息仍写`uav_message_dead_letters`；隔离存储也失败时记录异常并切最新，日志留证不能冒充耐久隔离成功。`uav_dead_letters` 继续只处理 EventDelivery/outbox 对外投递失败，二者不得混用。
+- Kafka offset不属于PostgreSQL事务；成功事实保持消息幂等，异常最新数据降级允许积压缺口，不保证全量at-least-once，也不能称为跨系统exactly-once transaction。
 
 ### 4.4 chunk 与索引候选
 
@@ -500,7 +520,7 @@ Topic 的复数/单数按上表固定，禁止消费者自行猜测；`msg_type`
 - 所有目标 Topic、`msg_type` 和 WebSocket 消息类型均匹配 `^uav_`。
 - Topic builder 显式使用 camera ID 且不含字符串替换派生；各 kind 路由单测通过。
 - 事件 spool/outbox 经断网、队列满、进程崩溃和重启测试无静默丢失；指标 drop/coverage 可观测且低覆盖窗口被正确降质。
-- Consumer 关闭 auto commit；数据库失败不提交 offset，数据库提交后崩溃重放由 inbox 幂等吸收，同 ID 不同 hash 被隔离。
+- Consumer关闭auto commit；正常崩溃重放由inbox幂等吸收，同ID不同hash被隔离；2026-10-19起数据库异常改为回滚、日志留证并切最新，取代原位重试。
 - hypertable 写入、乱序补录、幂等重放、时间桶聚合、压缩/保留策略和备份恢复通过验收。
 - 路网引用携带 `road_data_version`；无法匹配时为空并标记 `unmapped`，不伪造权威 ID。
 - Platform 历史查询不再依赖 InfluxQL；目标部署不启动 Grafana、Telegraf、InfluxDB。
@@ -630,3 +650,45 @@ V2 与 canonical 共享 connection database=`road9`，但只写 `uav_replay_v2_*
 独立根 Compose 项目 `traffic_accept_20261004`、数据库名 road9、端口15432和独立卷从空库执行两套迁移：canonical head `20260728_0020`，V2 head `20260809_rv2_0004`；canonical 初始化后无 V2 表，V2 初始化后共6个 hypertable（5 canonical + 1 Replay V2）。该结果验证本机空库初始化，不推进已有业务库 revision，也不关闭生产门禁。
 
 长期迁移维护仍需把历史 metadata 基线冻结为不可漂移的 DDL；本轮不将模型漂移问题表述为已彻底消除。
+
+## 2026-10-15 生产连接补充
+
+经项目方明确，生产目标为瀚高 database=`xinchan`、schema=`ycx_drone`，支持 TimescaleDB
+及 SM3；ADR-019 中 `road9.public` 继续约束本机开发，不再用于推导本次外部生产库名称。
+`DB_DRIVER=psycopg` 使用纯 Python psycopg 3 加载厂商 ARM64 国密 libpq（生产架构最终以aarch64为准）；本地 asyncpg 保持默认。
+基础和 V2 迁移、版本表、触发器均使用 `DB_SCHEMA`，生产初始化不建库、不安装扩展，
+DBA 必须提前准备权限和兼容的扩展版本。常规启动使用 `DB_AUTO_MIGRATE=false`。
+独立 Compose project 的 PostgreSQL/TimescaleDB 验证已确认 66 表/6 hypertable 位于
+`ycx_drone` 且 public 无 UAV 表；此验证不证明生产 SM3 或瀚高扩展兼容性。
+
+2026-10-16生产交付：xinchan.ycx_drone与本地road9分开。经用户明确要求，一次性初始化从随包test-sources.json插入当前16个视频源、对应16个遥测源及7台测试无人机；仅补缺，已有同ID记录不覆写。源路径改为/app/test_videos，未迁移历史任务/统计/告警/轨迹；外部YCX的xinchan.road11只读。
+
+2026-10-16瀚高版本适配：DB_DRIVER=psycopg经专用异步SQLAlchemy方言读取SHOW server_version_num，保留真实内核版本用于功能判定；生产预检、连接、基础及Replay V2迁移统一使用该URL。本地asyncpg不变，不修改业务表结构或版本表。比对线上指标产出分析确认其为原生psycopg2连接，没有ORM版本解析步骤。
+
+2026-10-17会话schema：psycopg专用方言在每个连接建立后以事务外SET SESSION search_path显式选择DB_SCHEMA，SQLAlchemy默认schema在此之后初始化；连接池回滚不撤销。仅设置会话，不创建schema或授予权限。预检诊断实际database/schema及ycx_drone存在和USAGE/CREATE权限，不向public回退建表。
+
+2026-10-17部署门禁补充：仅SELECT/SHOW/只读事务检查实际库、schema、扩展、应用表/序列ACL及迁移版本；每项savepoint隔离。缺库/schema/权限/扩展与未知迁移版本独立报告，待init-db的已知版本不伪报失败；预检不创建/授权或修改业务对象。显式初始化可raise_on_error保留SQLSTATE，普通本地调用仍返回bool。
+
+## 2026-10-17 生产可选Timescale模式（ADR-037）
+
+仅生产显式DB_TIMESCALE_REQUIRED=false允许扩展尚未启用时以普通PG表完成相同基础/V2迁移、
+事务inbox幂等和查询；没有Timescale分块/压缩/保留。迁移不替DBA安装生产扩展。
+DBA启用扩展后，显式init-db通过app/core/timeseries.py事务转换已有六表，幂等保留数据并设置原V2策略。
+这同时覆盖已在Alembic head的普通表数据库；不通过stamp/版本表改写模拟成功。本地默认仍要求Timescale。
+YCX road11只读和应用ycx_drone隔离；路网暂关闭，缺dim_data_version/PostGIS不阻塞。
+两张典型指标表是Doris外部SELECT源，参数DORIS_MYSQL_*/DORIS_DATABASE，不能在瀚高创建替代表。
+
+## 2026-10-17 外部 Doris 只读来源（ADR-038）
+
+当前外部读库为 Doris `ycx_xc`：`dim_data_version(version_id,is_enabled)`、
+`dim_inter_info`、`dim_link_info`、`dim_lane_info`；指标为
+`dws_tfc_inter_index_m_5mi`（stat_month/inter_id/version_id/dir4_code/day_of_week/step_index）及
+`dws_tfc_link_index_m_5mi`（stat_month/link_id/day_of_week/step_index）。
+两表有 `is_deleted`，路段表无 `version_id`，以当前版维表 Link 约束。
+Geo WKT原值使用现有 Shapely解码为GCJ-02/ENU，不要求PostGIS；不向外部创建表、写数据或回迁。
+生产瀚高只承载 UAV 应用，历史 road11/xianchang 连接不再被运行时读取；本机road9.public不变。
+连接秘密仅在被Git忽略的600权限环境文件中，文档及测试报告不记录口令。
+
+2026-10-17用户最新生产目标：瀚高database=ycx_prod、schema=drone、user=sysdba；
+旧xinchan.ycx_drone为历史目标，不自动迁移或复制旧数据。新目标由DBA预建授权；
+运行时按DB_NAME/DB_SCHEMA核对实际会话，版本表及uav_*表均在drone中。Mac本机road9.public不变。

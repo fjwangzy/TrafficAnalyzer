@@ -1,2 +1,0 @@
-/usr/bin/ar qc libyolo_inference.a CMakeFiles/yolo_inference.dir/config.cpp.o CMakeFiles/yolo_inference.dir/sample_backoff.cpp.o CMakeFiles/yolo_inference.dir/input_source.cpp.o CMakeFiles/yolo_inference.dir/infer_worker.cpp.o
-/usr/bin/ranlib libyolo_inference.a

@@ -50,3 +50,7 @@ dist/
 **/*.zip
 output/**
 deploy/highgo**
+
+# CMake build output for the yolo inference service.
+req/optimize.md/yolo_inference_service/build/
+req/optimize.md/yolo_inference_service/src/*/build/

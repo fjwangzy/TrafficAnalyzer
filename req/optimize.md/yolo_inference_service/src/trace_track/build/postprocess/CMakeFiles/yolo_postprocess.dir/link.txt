@@ -1,2 +1,0 @@
-/usr/bin/ar qc libyolo_postprocess.a CMakeFiles/yolo_postprocess.dir/config.cpp.o CMakeFiles/yolo_postprocess.dir/dfl_decode.cpp.o CMakeFiles/yolo_postprocess.dir/nms.cpp.o CMakeFiles/yolo_postprocess.dir/decode_outputs.cpp.o CMakeFiles/yolo_postprocess.dir/postprocess_worker.cpp.o
-/usr/bin/ranlib libyolo_postprocess.a

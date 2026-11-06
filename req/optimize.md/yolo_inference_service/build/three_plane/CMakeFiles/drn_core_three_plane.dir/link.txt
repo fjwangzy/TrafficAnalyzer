@@ -1,2 +1,0 @@
-/usr/bin/ar qc libdrn_core_three_plane.a CMakeFiles/drn_core_three_plane.dir/src/protocol.cpp.o CMakeFiles/drn_core_three_plane.dir/src/control_plane_server.cpp.o CMakeFiles/drn_core_three_plane.dir/src/update_publisher.cpp.o CMakeFiles/drn_core_three_plane.dir/src/data_plane_server.cpp.o
-/usr/bin/ranlib libdrn_core_three_plane.a

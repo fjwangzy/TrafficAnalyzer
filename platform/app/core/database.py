@@ -140,9 +140,8 @@ async def validate_database() -> bool:
     """Production startup checks only; deployment runs migrations explicitly."""
     if await database_revision() != await asyncio.to_thread(_alembic_head):
         raise RuntimeError("Database migrations are not current; run deploy init-db")
-    if settings.app_runtime_profile == "replay_v2":
-        if await replay_v2_database_revision() != await asyncio.to_thread(_replay_v2_alembic_head):
-            raise RuntimeError("Replay V2 migrations are not current; run deploy init-db")
+    if await replay_v2_database_revision() != await asyncio.to_thread(_replay_v2_alembic_head):
+        raise RuntimeError("Fixed-Topic receipt/replay migrations are not current; run deploy init-db")
     async with engine.connect() as connection:
         actual = (await connection.execute(text("SELECT current_database(), current_schema()"))).one()
         if tuple(actual) != (settings.db_name, settings.db_schema):

@@ -6,6 +6,7 @@
   T-201: roads_activity 改为动态数组 [{"id": 1, "activity": 4.2}, ...]
   T-203: congestion_index 改为多因子计算 (车辆密度 + 排队 + 低速比例)
 """
+
 import base64
 import logging
 import math
@@ -14,7 +15,7 @@ import re
 import time
 import uuid
 from collections import Counter
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from json import dumps
 
 import cv2
@@ -27,6 +28,7 @@ from nodes.ReliableKafkaPublisher import ReliableKafkaPublisher, kafka_compressi
 from services.MissionTrajectoryArchive import MissionTrajectoryArchive
 from utils_local.coordinates import enu_to_gcj02, normalize_telemetry_position
 from utils_local.replay_topics import build_replay_v2_topics
+from utils_local.runtime_logging import stage
 from utils_local.track_lifecycle import active_tracks_of, mature_tracks_of
 from utils_local.utils import profile_time
 
@@ -49,7 +51,11 @@ class KafkaProducerNode:
         config_kafka = config["kafka_producer_node"]
         bootstrap_servers = config_kafka["bootstrap_servers"]
         self.camera_id = config_kafka["camera_id"]
-        self.drone_id = config_kafka.get("drone_id") or os.environ.get("DRONE_ID") or f"drone_{self.camera_id}"
+        self.drone_id = (
+            config_kafka.get("drone_id")
+            or os.environ.get("DRONE_ID")
+            or f"drone_{self.camera_id}"
+        )
         self.storage_profile = os.environ.get("TRAJECTORY_STORAGE_PROFILE", "live")
         self.source_profile_id = os.environ.get("SOURCE_PROFILE_ID")
         (
@@ -68,10 +74,12 @@ class KafkaProducerNode:
         )
         self.how_often_sec = config_kafka["how_often_sec"]
         self.last_send_time = None
+        from utils_local.kafka_topic_preflight import check_fixed_topics
+        check_fixed_topics(bootstrap_servers, kafka_security_options())
         self.kafka_producer = KafkaProducer(
             bootstrap_servers=bootstrap_servers,
             **kafka_security_options(),
-            value_serializer=lambda x: dumps(x).encode("utf-8"),
+            value_serializer=lambda x: dumps(x, separators=(",", ":")).encode("utf-8"),
             # 增加重试和超时配置以提高可靠性
             retries=3,
             request_timeout_ms=5000,
@@ -94,14 +102,18 @@ class KafkaProducerNode:
             os.path.join(spool_dir, spool_name),
             queue_size=int(config_kafka.get("send_queue_size", 200)),
         )
-        self.shutdown_drain_timeout_sec = float(config_kafka.get("shutdown_drain_timeout_sec", 120.0))
+        self.shutdown_drain_timeout_sec = float(
+            config_kafka.get("shutdown_drain_timeout_sec", 120.0)
+        )
         self.trajectory_archive = None
         self._last_replay_frame = None
         self._replay_source_start_sec = None
         self._replay_start_published = False
         if self.storage_profile == "replay_v2":
             if not self.mission_id:
-                raise ValueError("MISSION_ID is required for replay_v2 trajectory archive")
+                raise ValueError(
+                    "MISSION_ID is required for replay_v2 trajectory archive"
+                )
             archive_root = os.environ.get(
                 "TRAJECTORY_ARCHIVE_SPOOL_DIR",
                 "/private/tmp/traffic-analyzer-replay-v2-spool",
@@ -109,14 +121,37 @@ class KafkaProducerNode:
             detector_config = config.get("detection_node", {})
             self.trajectory_archive = MissionTrajectoryArchive(
                 archive_root,
+                sampling_policy=(
+                    {
+                        **dict(config.get("history_sampling", {})),
+                        "enabled": bool(
+                            config.get("history_sampling", {}).get(
+                                "enabled",
+                                os.environ.get(
+                                    "HISTORY_SAMPLING_ENABLED", "false"
+                                ).lower()
+                                == "true",
+                            )
+                        ),
+                    }
+                    if bool(config.get("pipeline", {}).get("egress_enabled", False))
+                    or os.environ.get("HISTORY_SAMPLING_ENABLED", "false").lower()
+                    == "true"
+                    else None
+                ),
                 appearance_model_path=(
                     os.environ.get("REPLAY_V2_APPEARANCE_MODEL_PATH")
                     or detector_config.get("weight_pth")
                 ),
             )
 
+        if self.trajectory_archive is not None:
+            from services.IncrementalTrajectoryArchive import relation_worker
+            relation_worker(self).start()
+
         self.buffer_analytics_sec = (
-            config["general"]["buffer_analytics"] * 60 + config["general"]["min_time_life_track"]
+            config["general"]["buffer_analytics"] * 60
+            + config["general"]["min_time_life_track"]
         )  # 这是缓冲区积累的时间，过早输出统计信息还为时过早
 
         # ── FPS 计算（基于wall-clock滑动窗口）──
@@ -161,7 +196,9 @@ class KafkaProducerNode:
             )
         )
         self._active_trajectory_tail_points = int(
-            config.get("kafka_producer_node", {}).get("active_trajectory_tail_points", 30)
+            config.get("kafka_producer_node", {}).get(
+                "active_trajectory_tail_points", 30
+            )
         )
         self._realtime_trajectory_max_tracks = max(
             1,
@@ -172,10 +209,14 @@ class KafkaProducerNode:
             ),
         )
         self._event_snapshot_congestion_threshold = float(
-            config.get("kafka_producer_node", {}).get("event_snapshot_congestion_threshold", 4.0)
+            config.get("kafka_producer_node", {}).get(
+                "event_snapshot_congestion_threshold", 4.0
+            )
         )
         self._event_snapshot_consecutive_samples = int(
-            config.get("kafka_producer_node", {}).get("event_snapshot_consecutive_samples", 30)
+            config.get("kafka_producer_node", {}).get(
+                "event_snapshot_consecutive_samples", 30
+            )
         )
         self._congestion_snapshot_count = 0
 
@@ -186,10 +227,10 @@ class KafkaProducerNode:
         if not value or len(value) > 64 or not re.fullmatch(r"[A-Za-z0-9_-]+", value):
             raise ValueError("camera_id contains unsupported Topic characters")
         return (
-            f"uav_statistics_{value}",
-            f"uav_track_complete_{value}",
-            f"uav_conflicts_{value}",
-            f"uav_telemetry_{value}",
+            "uav_statistics",
+            "uav_track_complete",
+            "uav_conflicts",
+            "uav_telemetry",
         )
 
     @staticmethod
@@ -200,7 +241,9 @@ class KafkaProducerNode:
     ) -> tuple[str, str, str, str, str | None]:
         if storage_profile == "replay_v2":
             if not source_profile_id:
-                raise ValueError("SOURCE_PROFILE_ID is required for replay_v2 Kafka Topics")
+                raise ValueError(
+                    "SOURCE_PROFILE_ID is required for replay_v2 Kafka Topics"
+                )
             topics = build_replay_v2_topics(source_profile_id)
             return (
                 topics.statistics,
@@ -218,12 +261,14 @@ class KafkaProducerNode:
     ) -> str:
         if storage_profile == "replay_v2":
             if not source_profile_id:
-                raise ValueError("SOURCE_PROFILE_ID is required for replay_v2 enforcement Topic")
-            return f"uav_replay_v2_enforcement_clues_{source_profile_id}"
+                raise ValueError(
+                    "SOURCE_PROFILE_ID is required for replay_v2 enforcement Topic"
+                )
+            return "uav_enforcement_clues"
         value = str(camera_id)
         if not value or len(value) > 64 or not re.fullmatch(r"[A-Za-z0-9_-]+", value):
             raise ValueError("camera_id contains unsupported Topic characters")
-        return f"uav_enforcement_clues_{value}"
+        return "uav_enforcement_clues"
 
     def _canonical_envelope(
         self,
@@ -254,7 +299,10 @@ class KafkaProducerNode:
             else getattr(self, "quality_status", "unverified")
         )
         payload_quality = data.get("tracking_quality")
-        if isinstance(payload_quality, str) and payload_quality in {"degraded", "unverified"}:
+        if isinstance(payload_quality, str) and payload_quality in {
+            "degraded",
+            "unverified",
+        }:
             dynamic_quality = payload_quality
         elif isinstance(payload_quality, dict) and any(
             value in {"degraded", "unverified"} for value in payload_quality.values()
@@ -287,11 +335,19 @@ class KafkaProducerNode:
             if offset_ms < 0:
                 raise RuntimeError("replay_v2 source timestamp precedes Mission start")
             envelope_data["offset_ms"] = offset_ms
+            basis = getattr(self, '_replay_time_basis', None)
+            if basis is None:
+                basis = datetime.fromisoformat(str(occurred_at).replace('Z', '+00:00')) - timedelta(milliseconds=offset_ms)
+                self._replay_time_basis = basis
+            occurred_at = (basis + timedelta(milliseconds=offset_ms)).isoformat()
 
         return {
             "message_id": message_id or str(uuid.uuid4()),
             "msg_type": msg_type,
             "schema_version": f"{msg_type}/v1",
+            "transport_version": "uav-fixed/v2",
+            "storage_profile": getattr(self, "storage_profile", "live"),
+            "deployment_id": os.environ.get("DEPLOYMENT_ID", "local"),
             "occurred_at": occurred_at,
             "produced_at": produced_at.isoformat(),
             "source_system": "uav_traffic_analyzer_ai",
@@ -310,7 +366,15 @@ class KafkaProducerNode:
         }
 
     def _enqueue(self, topic: str, data: dict, *, durable: bool = False):
-        self.publisher.publish(topic, data, durable=durable)
+        from utils_local.track_message_codec import transport_messages
+        archive = getattr(self, 'trajectory_archive', None)
+        if archive is not None:
+            from services.MissionTrajectoryArchive import _atomic_json
+            marker = archive.spool_root / 'fixed-topics-v2.active'
+            if not marker.exists():
+                _atomic_json(marker, {'transport_version': 'uav-fixed/v2'})
+        for message in transport_messages(data):
+            self.publisher.publish(topic, message, durable=durable)
 
     def _delivery_snapshot(self) -> dict:
         publisher = getattr(self, "publisher", None)
@@ -351,7 +415,11 @@ class KafkaProducerNode:
                     continue
                 width = max(float(box[2]) - float(box[0]), 0.0)
                 height = max(float(box[3]) - float(box[1]), 0.0)
-                if width > 0 and height > 0 and width * height <= small_target_max_area_px2:
+                if (
+                    width > 0
+                    and height > 0
+                    and width * height <= small_target_max_area_px2
+                ):
                     counts[str(class_name)] += 1
             return sum(counts.values()), dict(sorted(counts.items()))
 
@@ -387,16 +455,18 @@ class KafkaProducerNode:
             "unassociated_detection_count": max(valid_detections - emitted_tracks, 0),
             "same_frame_track_to_detection_ratio": round(
                 emitted_tracks / valid_detections, 4
-            ) if valid_detections else None,
+            )
+            if valid_detections
+            else None,
             "invalid_detector_geometry_count": int(
                 detection_quality.get("invalid_geometry_count", 0)
             ),
             "small_target_max_area_px2": small_target_max_area_px2,
             "small_yolo_detection_count": small_detections,
             "small_emitted_track_count": small_tracks,
-            "small_track_to_detection_ratio": round(
-                small_tracks / small_detections, 4
-            ) if small_detections else None,
+            "small_track_to_detection_ratio": round(small_tracks / small_detections, 4)
+            if small_detections
+            else None,
             "small_yolo_class_counts": small_detection_classes,
             "small_emitted_track_class_counts": small_track_classes,
         }
@@ -443,6 +513,28 @@ class KafkaProducerNode:
 
     def _encode_annotation_snapshot(self, frame_element: FrameElement) -> dict | None:
         """Return a compact JPEG snapshot for hover-created annotation tasks."""
+        reference = getattr(frame_element, "annotation_snapshot", None)
+        if reference:
+            from pathlib import Path
+            import hashlib
+
+            root = Path(
+                os.environ.get("SURVEY_STORAGE_DIR", ".runtime/survey")
+            ).resolve()
+            path = (root / reference["storage_key"]).resolve()
+            if not path.is_relative_to(root):
+                raise ValueError("unsafe annotation evidence path")
+            content = path.read_bytes()
+            if (
+                len(content) != reference["size_bytes"]
+                or hashlib.sha256(content).hexdigest() != reference["sha256"]
+            ):
+                raise ValueError("annotation snapshot hash mismatch")
+            return {
+                "annotation_snapshot_jpeg": base64.b64encode(content).decode("ascii"),
+                "annotation_snapshot_width": reference["width"],
+                "annotation_snapshot_height": reference["height"],
+            }
         frame = getattr(frame_element, "frame_result", None)
         if frame is None:
             frame = getattr(frame_element, "frame", None)
@@ -518,13 +610,14 @@ class KafkaProducerNode:
                 continue
 
             tail_points = max(getattr(self, "_active_trajectory_tail_points", 30), 1)
-            total_points = len(trajectory_px)
-            tail_start = max(total_points - tail_points, 0)
+            local_count = len(trajectory_px)
+            total_points = int(getattr(track, "trajectory_point_count", local_count))
+            tail_start = max(local_count - tail_points, 0)
+            absolute_tail_start = max(total_points - tail_points, 0)
             trajectory_tail_px = trajectory_px[tail_start:]
 
             px_points = [
-                [round(float(x), 2), round(float(y), 2)]
-                for x, y in trajectory_tail_px
+                [round(float(x), 2), round(float(y), 2)] for x, y in trajectory_tail_px
             ]
             item = {
                 "track_id": track.id,
@@ -548,8 +641,8 @@ class KafkaProducerNode:
                 ),
                 "trajectory_px": px_points,
                 "trajectory_point_count": total_points,
-                "trajectory_tail_start": tail_start,
-                "is_trajectory_tail": tail_start > 0,
+                "trajectory_tail_start": absolute_tail_start,
+                "is_trajectory_tail": absolute_tail_start > 0,
                 "timestamp_first": track.timestamp_first,
                 "timestamp_last": track.timestamp_last,
                 "trajectory_output_eligible": True,
@@ -565,17 +658,13 @@ class KafkaProducerNode:
                 "formal_analytics_eligible": bool(
                     getattr(track, "road_analytics_eligible", False)
                 ),
-                "road_context_status": getattr(
-                    track, "road_context_status", "missing"
-                ),
+                "road_context_status": getattr(track, "road_context_status", "missing"),
                 "quality_status": (
                     "verified"
                     if getattr(track, "road_analytics_eligible", False)
                     else "degraded"
                 ),
-                "quality_reasons": list(
-                    getattr(track, "quality_reasons", None) or []
-                ),
+                "quality_reasons": list(getattr(track, "quality_reasons", None) or []),
             }
             if getattr(track, "association_id", None) is not None:
                 item["association_id"] = int(track.association_id)
@@ -585,12 +674,12 @@ class KafkaProducerNode:
                     for x, y in bbox_center_px[tail_start:]
                 ]
             timestamps = getattr(track, "trajectory_timestamps_sec", None) or []
-            if len(timestamps) == total_points:
+            if len(timestamps) == local_count:
                 item["trajectory_timestamps_sec"] = [
                     round(float(value), 3) for value in timestamps[tail_start:]
                 ]
             frame_nums = getattr(track, "trajectory_frame_nums", None) or []
-            if len(frame_nums) == total_points:
+            if len(frame_nums) == local_count:
                 item["trajectory_frame_nums"] = [
                     int(value) for value in frame_nums[tail_start:]
                 ]
@@ -599,7 +688,7 @@ class KafkaProducerNode:
             # Every ENU point was resolved with the projection of its own source
             # frame in TrackerInfoUpdateNode.  Reprojecting trajectory_px with the
             # latest frame H corrupts history whenever the UAV is moving.
-            if len(trajectory_enu) == total_points:
+            if len(trajectory_enu) == local_count:
                 pts_world = trajectory_enu[tail_start:]
                 world_points = [
                     [round(float(point[0]), 2), round(float(point[1]), 2)]
@@ -608,7 +697,9 @@ class KafkaProducerNode:
                     for point in pts_world
                 ]
                 item["trajectory_enu_m"] = world_points
-                valid_world_points = [point for point in world_points if point is not None]
+                valid_world_points = [
+                    point for point in world_points if point is not None
+                ]
                 if valid_world_points:
                     item["current_point_enu_m"] = valid_world_points[-1]
                 if anchor_gcj02:
@@ -617,7 +708,7 @@ class KafkaProducerNode:
                         round(anchor_gcj02[1], 6),
                     ]
                     stored_gcj02 = getattr(track, "trajectory_gcj02", None) or []
-                    if len(stored_gcj02) == total_points:
+                    if len(stored_gcj02) == local_count:
                         gcj02_tail = stored_gcj02[tail_start:]
                     else:
                         gcj02_tail = [
@@ -639,7 +730,9 @@ class KafkaProducerNode:
                 item["source_lane_id"] = getattr(track, "source_lane_id", None)
                 item["matched_link_id"] = getattr(track, "matched_link_id", None)
                 item["movement_key"] = getattr(track, "movement_key", None)
-                item["map_match_confidence"] = getattr(track, "map_match_confidence", None)
+                item["map_match_confidence"] = getattr(
+                    track, "map_match_confidence", None
+                )
             elif trajectory_enu:
                 item["tracking_quality"] = "degraded"
                 item["quality_reasons"] = ["trajectory_point_alignment_mismatch"]
@@ -658,14 +751,27 @@ class KafkaProducerNode:
     def _build_candidate_trajectories(self, frame_element: FrameElement) -> list[dict]:
         """Serialize only the bounded candidate preview contract for realtime BEV."""
         scalar_keys = (
-            "track_id", "association_id", "tracking_method", "tracking_quality",
-            "quality_status", "formal_analytics_eligible", "quality_reasons",
-            "flight_phase", "flight_segment_id", "anchor_gcj02",
-            "vehicle_class", "yolo_class_id", "yolo_class_name",
+            "track_id",
+            "association_id",
+            "tracking_method",
+            "tracking_quality",
+            "quality_status",
+            "formal_analytics_eligible",
+            "quality_reasons",
+            "flight_phase",
+            "flight_segment_id",
+            "anchor_gcj02",
+            "vehicle_class",
+            "yolo_class_id",
+            "yolo_class_name",
         )
         sequence_keys = (
-            "trajectory_px", "trajectory_bbox_center_px", "trajectory_enu_m",
-            "trajectory_gcj02", "trajectory_timestamps_sec", "trajectory_frame_nums",
+            "trajectory_px",
+            "trajectory_bbox_center_px",
+            "trajectory_enu_m",
+            "trajectory_gcj02",
+            "trajectory_timestamps_sec",
+            "trajectory_frame_nums",
         )
         tail_points = max(getattr(self, "_active_trajectory_tail_points", 30), 1)
         result = []
@@ -675,7 +781,7 @@ class KafkaProducerNode:
             item = {key: candidate[key] for key in scalar_keys if key in candidate}
             for key in sequence_keys:
                 values = candidate.get(key)
-                if isinstance(values, list):
+                if isinstance(values, (list, tuple)):
                     item[key] = values[-tail_points:]
             result.append(item)
         limit = max(getattr(self, "_realtime_trajectory_max_tracks", 200), 1)
@@ -690,14 +796,12 @@ class KafkaProducerNode:
             archive = getattr(self, "trajectory_archive", None)
             if archive is None:
                 raise RuntimeError("replay_v2 trajectory archive is not configured")
+            published = 0
             for track in completed_tracks:
-                archive.record_segment(
-                    mission_id=self.mission_id,
-                    source_profile_id=self.source_profile_id,
-                    intersection_id=self.intersection_id,
-                    segment=track,
-                )
-            return 0
+                from services.IncrementalTrajectoryArchive import publish_segment
+                with stage("egress.publish_segment"):
+                    published += publish_segment(self, frame_element, track)
+            return published
         published = 0
         for track in completed_tracks:
             termination_reason = track.get("termination_reason")
@@ -743,55 +847,80 @@ class KafkaProducerNode:
         archive = getattr(self, "trajectory_archive", None)
         if archive is None or not self.mission_topic:
             raise RuntimeError("replay_v2 mission publisher is not configured")
-        manifest = archive.begin_mission(
-            mission_id=self.mission_id,
-            source_profile_id=self.source_profile_id,
-            intersection_id=self.intersection_id,
-            source_timestamp_sec=frame_element.timestamp,
-        )
-        self._replay_source_start_sec = float(manifest["observed_start_source_sec"])
-        sealed = archive.seal_mission(
-            self.mission_id,
-            termination_reason=termination_reason,
-        )
-        for journey in sealed["journeys"]:
-            deterministic_id = str(
-                uuid.uuid5(
-                    uuid.NAMESPACE_URL,
-                    "traffic-analyzer:uav-replay-v2:"
-                    f"{self.mission_id}:{journey['track_id']}",
+        from services.IncrementalTrajectoryArchive import publish_manifest
+        return publish_manifest(self, frame_element, termination_reason)
+
+    def _seal_sampled_outbox(self, frame, archive, reason):
+        import json
+
+        directory = archive._mission_dir(self.mission_id)
+        cache = directory / "sealed-outbox.json"
+        if cache.exists():
+            messages = json.loads(cache.read_text())
+        else:
+            clock = self._canonical_envelope("uav_replay_mission", {}, frame)
+            sealed = archive.seal_mission(
+                self.mission_id,
+                termination_reason=reason,
+                ended_at=clock["occurred_at"],
+            )
+            messages = []
+            for journey in sealed["journeys"]:
+                identity = str(
+                    uuid.uuid5(
+                        uuid.NAMESPACE_URL,
+                        f"traffic-analyzer:uav-replay-v2:{self.mission_id}:{journey['track_id']}",
+                    )
                 )
-            )
-            message = self._canonical_envelope(
-                "uav_track_complete",
-                {
-                    "intersection_id": self.intersection_id,
-                    "archive_schema_version": sealed["schema_version"],
-                    **journey,
-                },
-                frame_element,
-                message_id=deterministic_id,
-            )
-            message["schema_version"] = "uav_track_complete/replay-v2"
-            self._enqueue(self.track_complete_topic, message, durable=True)
-        mission_message = self._canonical_envelope(
-            "uav_replay_mission",
-            {
-                key: value
-                for key, value in sealed.items()
-                if key not in {"journeys"}
-            },
-            frame_element,
-            message_id=str(
+                message = self._canonical_envelope(
+                    "uav_track_complete",
+                    {
+                        "intersection_id": self.intersection_id,
+                        "archive_schema_version": sealed["schema_version"],
+                        **journey,
+                    },
+                    frame,
+                    message_id=identity,
+                )
+                message["schema_version"] = "uav_track_complete/replay-v2"
+                messages.append([self.track_complete_topic, message])
+            identity = str(
                 uuid.uuid5(
                     uuid.NAMESPACE_URL,
                     f"traffic-analyzer:uav-replay-v2-mission:{self.mission_id}:sealed",
                 )
-            ),
-        )
-        mission_message["schema_version"] = "uav_replay_mission/v2"
-        self._enqueue(self.mission_topic, mission_message, durable=True)
-        return len(sealed["journeys"])
+            )
+            message = self._canonical_envelope(
+                "uav_replay_mission",
+                {k: v for k, v in sealed.items() if k != "journeys"},
+                frame,
+                message_id=identity,
+            )
+            message["schema_version"] = "uav_replay_mission/v2"
+            messages.append([self.mission_topic, message])
+            for topic, message in messages:
+                message["occurred_at"] = sealed["ended_at_utc"]
+                message["produced_at"] = sealed["ended_at_utc"]
+                message["trace_id"] = str(
+                    uuid.uuid5(uuid.NAMESPACE_URL, message["message_id"] + ":trace")
+                )
+            from utils_local.track_message_codec import pack_track_message
+
+            messages = [
+                [topic, pack_track_message(message)] for topic, message in messages
+            ]
+            temporary = cache.with_suffix(".tmp")
+            fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w") as f:
+                json.dump(messages, f, ensure_ascii=False)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(temporary, cache)
+        for topic, message in messages:
+            if str(message["data"].get("mission_id")) != str(self.mission_id):
+                raise ValueError("sealed outbox Mission mismatch")
+            self._enqueue(topic, message, durable=True)
+        return len(messages) - 1
 
     def publish_replay_mission_started(
         self,
@@ -826,8 +955,12 @@ class KafkaProducerNode:
                 "accuracy": {
                     key: "not_evaluated"
                     for key in (
-                        "idf1", "hota", "id_switch", "position_rmse",
-                        "speed_mae", "reid_accuracy",
+                        "idf1",
+                        "hota",
+                        "id_switch",
+                        "position_rmse",
+                        "speed_mae",
+                        "reid_accuracy",
                     )
                 },
             },
@@ -883,8 +1016,12 @@ class KafkaProducerNode:
                 "accuracy": {
                     key: "not_evaluated"
                     for key in (
-                        "idf1", "hota", "id_switch", "position_rmse",
-                        "speed_mae", "reid_accuracy",
+                        "idf1",
+                        "hota",
+                        "id_switch",
+                        "position_rmse",
+                        "speed_mae",
+                        "reid_accuracy",
                     )
                 },
             },
@@ -909,12 +1046,20 @@ class KafkaProducerNode:
         if isinstance(frame_element, VideoEndBreakElement):
             publisher = getattr(self, "publisher", None)
             if publisher is not None:
-                final_delivery = publisher.close(timeout_sec=getattr(self, "shutdown_drain_timeout_sec", 120.0))
+                final_delivery = publisher.close(
+                    timeout_sec=getattr(self, "shutdown_drain_timeout_sec", 120.0)
+                )
                 logger.info("Kafka publisher closed: %s", final_delivery)
                 if final_delivery.get("durable_pending", 0):
                     raise RuntimeError(
                         f"Kafka EOF drain incomplete: {final_delivery['durable_pending']} durable messages remain in spool"
                     )
+            archive = getattr(self, "trajectory_archive", None)
+            if (
+                archive is not None
+                and getattr(archive, "sampling_policy", None) is not None
+            ):
+                pass  # incremental archives remain until database receipt and retention
             return frame_element
 
         if getattr(self, "storage_profile", "live") == "replay_v2":
@@ -930,29 +1075,45 @@ class KafkaProducerNode:
             self._replay_source_start_sec = float(manifest["observed_start_source_sec"])
             self._last_replay_frame = frame_element
             self.publish_replay_mission_started(frame_element, manifest)
+            from services.IncrementalTrajectoryArchive import relation_worker
+            relation_worker(self).observe(
+                (getattr(frame_element, 'active_tracks', None) or {}).values(),
+                source_time=float(frame_element.timestamp),
+                closing=getattr(frame_element, 'completed_tracks', None) or ())
 
-        current_time = time.time()
+        current_time = getattr(frame_element, "fact_wall_time", None) or time.time()
         timestamp = frame_element.timestamp
-        current_fps = self._compute_fps()
+        current_fps = getattr(frame_element, "pipeline_fps", None)
+        if current_fps is None:
+            current_fps = self._compute_fps()
 
         if self.last_send_time is None or frame_element.frame_num == 1:
             self.last_send_time = current_time
 
-        if current_time - self.last_send_time > self.how_often_sec or self.last_send_time == current_time:
+        if (
+            current_time - self.last_send_time > self.how_often_sec
+            or self.last_send_time == current_time
+        ):
             cars_amount = frame_element.info.get("cars_amount")
             roads_activity = frame_element.info.get("roads_activity") or {}
-            formal_eligible = bool(
-                getattr(frame_element, "formal_analytics_eligible", False)
-            ) if getattr(frame_element, "geo_reference_quality", None) is not None else True
+            formal_eligible = (
+                bool(getattr(frame_element, "formal_analytics_eligible", False))
+                if getattr(frame_element, "geo_reference_quality", None) is not None
+                else True
+            )
 
             # T-201: 动态道路数 — 从 roads_activity dict 构建数组
             roads_array = []
             for road_id in sorted(roads_activity.keys()):
                 val = roads_activity[road_id]
-                roads_array.append({
-                    "id": road_id,
-                    "activity": round(val, 2) if timestamp >= self.buffer_analytics_sec else None,
-                })
+                roads_array.append(
+                    {
+                        "id": road_id,
+                        "activity": round(val, 2)
+                        if timestamp >= self.buffer_analytics_sec
+                        else None,
+                    }
+                )
 
             # Congestion is derived from generic vehicle, direction and speed
             # facts.  Missing lane/link matching must not suppress it.
@@ -972,6 +1133,11 @@ class KafkaProducerNode:
             realtime_limit = max(
                 getattr(self, "_realtime_trajectory_max_tracks", 200), 1
             )
+            # The configured limit covers active + candidate together.  Leaving the
+            # active list uncapped lets a dense scene push the stats message past
+            # the ~950KB Kafka transport budget, and the detector then dies with
+            # "logical trajectory requires chunking" instead of shedding tracks.
+            active_trajectories = active_trajectories[:realtime_limit]
             candidate_trajectories = candidate_trajectories[
                 : max(0, realtime_limit - len(active_trajectories))
             ]
@@ -1002,9 +1168,13 @@ class KafkaProducerNode:
                 ),
                 "inference_context": inference_context or None,
                 "recognition_diagnostics": self._recognition_diagnostics(frame_element),
-                "source_capture_time": getattr(frame_element, "source_capture_time", None),
+                "source_capture_time": getattr(
+                    frame_element, "source_capture_time", None
+                ),
                 "source_drop_count": getattr(frame_element, "source_drop_count", 0),
-                "source_drop_reason": getattr(frame_element, "source_drop_reason", None),
+                "source_drop_reason": getattr(
+                    frame_element, "source_drop_reason", None
+                ),
                 "active_tracks": len(active_tracks_of(frame_element)),
                 "eligible_active_tracks": eligible_active_track_count,
                 "candidate_tracks": candidate_source_count,
@@ -1046,16 +1216,26 @@ class KafkaProducerNode:
             # tails stay on Kafka/WebSocket for the current Pipeline's live BEV.
             # Sealed historical points still have one durable path through the
             # MissionTrajectoryArchive.
-            snapshot_threshold = getattr(self, "_event_snapshot_congestion_threshold", 4.0)
+            snapshot_threshold = getattr(
+                self, "_event_snapshot_congestion_threshold", 4.0
+            )
             snapshot_samples = getattr(self, "_event_snapshot_consecutive_samples", 30)
             if congestion_index is not None and congestion_index > snapshot_threshold:
-                self._congestion_snapshot_count = getattr(self, "_congestion_snapshot_count", 0) + 1
+                self._congestion_snapshot_count = (
+                    getattr(self, "_congestion_snapshot_count", 0) + 1
+                )
                 if self._congestion_snapshot_count == snapshot_samples:
                     snapshot = self._encode_annotation_snapshot(frame_element)
                     if snapshot:
-                        data["event_snapshot_jpeg"] = snapshot["annotation_snapshot_jpeg"]
-                        data["event_snapshot_width"] = snapshot["annotation_snapshot_width"]
-                        data["event_snapshot_height"] = snapshot["annotation_snapshot_height"]
+                        data["event_snapshot_jpeg"] = snapshot[
+                            "annotation_snapshot_jpeg"
+                        ]
+                        data["event_snapshot_width"] = snapshot[
+                            "annotation_snapshot_width"
+                        ]
+                        data["event_snapshot_height"] = snapshot[
+                            "annotation_snapshot_height"
+                        ]
                     data["event_rule"] = {
                         "rule_id": "congestion.sustained.v1",
                         "threshold": snapshot_threshold,
@@ -1068,7 +1248,9 @@ class KafkaProducerNode:
             for road_id in range(1, max(len(roads_activity) + 1, 6)):
                 val = roads_activity.get(road_id)
                 data[f"road_{road_id}"] = (
-                    round(val, 2) if (val is not None and timestamp >= self.buffer_analytics_sec) else None
+                    round(val, 2)
+                    if (val is not None and timestamp >= self.buffer_analytics_sec)
+                    else None
                 )
 
             # 扩展字段：方向流量统计（始终输出）
@@ -1085,9 +1267,7 @@ class KafkaProducerNode:
                     if isinstance(speed, (int, float)):
                         all_speeds.append(float(speed))
                 data["avg_speed_kmh"] = (
-                    round(sum(all_speeds) / len(all_speeds), 1)
-                    if all_speeds
-                    else None
+                    round(sum(all_speeds) / len(all_speeds), 1) if all_speeds else None
                 )
 
             # 扩展字段：车道级统计 — 向下兼容统一输出
@@ -1109,7 +1289,9 @@ class KafkaProducerNode:
                         "avg_speed_kmh": v.get("avg_speed_kmh", 0),
                         "queue_length_m": v.get("queue_length_m", 0),
                         "stopped_count": v.get("stopped_count", 0),
-                        "headway_sec": round(60.0 / v["count"], 1) if v.get("count", 0) > 0 else None,
+                        "headway_sec": round(60.0 / v["count"], 1)
+                        if v.get("count", 0) > 0
+                        else None,
                     }
                     for lid, v in lane_stats.items()
                 ]
@@ -1180,8 +1362,13 @@ class KafkaProducerNode:
                     data.update(snapshot)
 
             # T-101: 异步发送（替代同步 .get(timeout=1)）
-            self._enqueue(self.topic_name, self._canonical_envelope("uav_stats", data, frame_element))
-            logger.info(f"KAFKA enqueued stats: topic={self.topic_name} cars={cars_amount}")
+            self._enqueue(
+                self.topic_name,
+                self._canonical_envelope("uav_stats", data, frame_element),
+            )
+            logger.info(
+                f"KAFKA enqueued stats: topic={self.topic_name} cars={cars_amount}"
+            )
             self.last_send_time = current_time
             frame_element.send_to_kafka = True
 
@@ -1195,7 +1382,9 @@ class KafkaProducerNode:
         if conflict_events:
             for event in conflict_events:
                 event_msg = {"intersection_id": self.intersection_id, **event}
-                event_msg = self._canonical_envelope("uav_conflict", event_msg, frame_element)
+                event_msg = self._canonical_envelope(
+                    "uav_conflict", event_msg, frame_element
+                )
                 pending_tcc_envelopes.append(event_msg)
         frame_element.pending_tcc_envelopes = pending_tcc_envelopes
 
@@ -1203,15 +1392,22 @@ class KafkaProducerNode:
         for clue in getattr(frame_element, "enforcement_clues", None) or []:
             event_msg = {"intersection_id": self.intersection_id, **clue}
             pending_enforcement_envelopes.append(
-                self._canonical_envelope("uav_enforcement_clue", event_msg, frame_element)
+                self._canonical_envelope(
+                    "uav_enforcement_clue", event_msg, frame_element
+                )
             )
         frame_element.pending_enforcement_envelopes = pending_enforcement_envelopes
 
         # ── T-103: 遥测发布（5Hz 节流） ──
-        telemetry = normalize_telemetry_position(getattr(frame_element, "telemetry", None))
-        if telemetry and (current_time - self._last_telemetry_time > self._telemetry_interval):
+        telemetry = normalize_telemetry_position(
+            getattr(frame_element, "telemetry", None)
+        )
+        if telemetry and (
+            current_time - self._last_telemetry_time > self._telemetry_interval
+        ):
             public_telemetry = {
-                key: value for key, value in telemetry.items()
+                key: value
+                for key, value in telemetry.items()
                 if key not in {"latitude", "longitude", "lat", "lon"}
             }
             tel_msg = {

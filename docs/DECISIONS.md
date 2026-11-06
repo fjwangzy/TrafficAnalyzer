@@ -1158,3 +1158,17 @@ MineMap CSS后加载将画布position改为relative导致高度0；项目用更�
 内网源码版复用固定ARM64镜像中的Python/原生依赖与CANN环境；完整应用代码及Console构建资源采用版本化宿主只读挂载，配置生成内容另放容器可写目录。Platform及init-db必须使用同一版源码。模型、视频、私有env及业务数据保留原独立路径。
 升级先校验SHA/镜像ID/依赖及两套迁移基线和实际数据库版本，再在维护窗口停止两应用、执行预检并重建；失败恢复上一版应用配置。不执行数据库DDL，依赖/迁移/模型运行时变化必须走独立发布，不能以源码回退冒充数据库回退。
 Python统一标准logging，保留控制台、宿主限额轮转日志、级别/PID/Pipeline/logger及异常栈；Platform单点采集检测器三个worker输出，避免多进程同时轮转。阶段日志应在工作完成前就能看到BEGIN/WAIT，覆盖设备执行、CPU后处理、分析归档与队列反压。没有现场证据时不据日志功能交付宣称NPU吞吐已恢复。
+
+## ADR-042：内网Platform与检测器原生完整交付（2026-11-03）
+
+用户确认UOS Server20/aarch64/310P3，仅将Platform及检测器改为宿主原生运行，Console/数据库/Kafka保持现状，模型与视频复用现场。交付完整离线私有Python/CANN/FFmpeg及当前源码，首次traffic start完成导入/门禁/切换，后续手动启停，不注册开机自启，不要求旧排查包或补丁。
+
+不再以现场旧镜像ID或/app源码挂载布局判定可安装性；以新包自身固定运行库、依赖迁移清单和实际数据库两个head校验，普通启动无DDL，init-db为独立显式命令。保留原私有env和应用/代理快照；失败先停本包所有worker，再恢复切换前应用。Linux subreaper及包归属标识支持跨session检测子进程清理。Console经原bridge代理宿主，内部MJPEG仍只监听loopback，认证与canonical消息合同不变。
+
+原生入口不设置单核绑定；数值库默认1线程，记录有效cgroup和各线程亲和，不强改昇腾线程。用户报告的约1FPS尚无本轮现场复现，不能把Docker作为已证实根因，也不能以本机ARM64工具容器宣称UOS/NPU吞吐恢复。Mac原生MPS、生产路网关闭与既有Doris/HG/PG策略保持。操作及验证见NATIVE_DEPLOYMENT.md与NATIVE_DEPLOYMENT_VALIDATION.md。
+
+## ADR-043：四进程归档与完整事实后事件保真采样（2026-11-03）
+
+用户要求同时实施轨迹传输减负和第四进程隔离。原生生产默认reader/detector、tracker/在线业务、show/图像、egress/归档Kafka四worker，Mac/MPS默认不变。显示只读30点视图与权威增量分离，持久ACK/序号hash/双EOF和120秒排空为成功条件，异常保留incomplete且停止全管道。
+
+新Replay V2完整序列先计算业务，再按同时间ENU0.2m/像素2px误差及事件窗口抽稀。冻结完整速度频数和固定UTC五分钟摘要，平台聚合不依赖稀疏点；复用sampling JSON无DDL，新摘要缺失拒绝，不批量重算旧任务。关闭几何采样仍保留v2事实兼容，产生v2后入口禁止降级至旧消费者；详细协议与验证见FOUR_PROCESS_SAMPLING_20261103.md。现场NPU/五分钟FPS及外部真值指标未由合成工程验证替代。

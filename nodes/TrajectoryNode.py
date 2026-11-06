@@ -1,4 +1,5 @@
 import logging
+import os
 import numpy as np
 
 from elements.FrameElement import FrameElement
@@ -22,13 +23,21 @@ class TrajectoryNode:
     def __init__(self, config: dict) -> None:
         cfg = config.get("trajectory", {})
         self.enabled = cfg.get("enabled", True)
+        self.full_sequence = bool(
+            config.get("pipeline", {}).get("egress_enabled", False)
+        ) or (
+            os.environ.get("TRAJECTORY_STORAGE_PROFILE") == "replay_v2"
+        )
         self.min_track_duration_sec = cfg.get("min_track_duration_sec", 2.0)
-        self.turn_thresholds = cfg.get("turn_angle_thresholds", {
-            "straight": 30,
-            "left_turn": [30, 150],
-            "right_turn": [-150, -30],
-            "u_turn": [150, 180],
-        })
+        self.turn_thresholds = cfg.get(
+            "turn_angle_thresholds",
+            {
+                "straight": 30,
+                "left_turn": [30, 150],
+                "right_turn": [-150, -30],
+                "u_turn": [150, 180],
+            },
+        )
         # 环形交叉路口中心坐标（可选，从配置或道路多边形计算）
         self.roundabout_center: tuple | None = None
 
@@ -55,6 +64,12 @@ class TrajectoryNode:
             trajectory_px = ct.get("trajectory_px", [])
             trajectory_timestamps = ct.get("trajectory_timestamps_sec", [])
 
+            # A spooled prefix is reconstructed by P4 before classification;
+            # classifying only the live tail would silently change turn labels.
+            if ct.get('trajectory_history_start', 0):
+                ct['_deferred_turn_classifier'] = {'thresholds':dict(self.turn_thresholds),'roundabout_center':self.roundabout_center}
+                ct['trajectory_length'] = ct['trajectory_history_start'] + len(trajectory_px)
+                continue
             # 转向行为分类
             if not ct.get("turn_behavior"):
                 ct["turn_behavior"] = classify_turning_movement(
@@ -67,7 +82,7 @@ class TrajectoryNode:
             ct["trajectory_length"] = len(trajectory_px)
 
             # 简化轨迹点（降采样以减少Kafka消息体积）
-            if len(trajectory_px) > 50:
+            if len(trajectory_px) > 50 and not self.full_sequence:
                 step = len(trajectory_px) // 50
                 indices = list(range(0, len(trajectory_px), step))
                 ct["trajectory_px"] = [trajectory_px[index] for index in indices]
@@ -97,17 +112,15 @@ class TrajectoryNode:
                 )
                 pts_world = pixel_to_world_compensated(pts_px, H, drone_disp)
                 ct["trajectory_enu_m"] = [
-                    [round(float(p[0]), 2), round(float(p[1]), 2)]
-                    for p in pts_world
+                    [round(float(p[0]), 2), round(float(p[1]), 2)] for p in pts_world
                 ]
 
             if ct.get("trajectory_enu_m") and anchor_gcj02:
                 ct["anchor_gcj02"] = [
-                    round(anchor_gcj02[0], 6), round(anchor_gcj02[1], 6)
+                    round(anchor_gcj02[0], 6),
+                    round(anchor_gcj02[1], 6),
                 ]
-                if len(ct.get("trajectory_gcj02") or []) != len(
-                    ct["trajectory_enu_m"]
-                ):
+                if len(ct.get("trajectory_gcj02") or []) != len(ct["trajectory_enu_m"]):
                     ct["trajectory_gcj02"] = [
                         [round(lon, 8), round(lat, 8)]
                         for lon, lat in (

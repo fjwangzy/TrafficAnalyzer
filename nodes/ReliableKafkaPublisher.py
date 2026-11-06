@@ -17,6 +17,7 @@ from collections import deque
 import time
 import uuid
 from pathlib import Path
+from utils_local.runtime_logging import stage
 from queue import Empty, Full, Queue
 from typing import Any
 
@@ -53,10 +54,7 @@ class ReliableKafkaPublisher:
         self._spool_dir = Path(spool_path)
         self._spool_dir.mkdir(parents=True, exist_ok=True)
         self._spool_lock = threading.Lock()
-        self._pending = deque(sorted(
-            self._spool_dir.glob("*.json"),
-            key=lambda path: (path.stat().st_mtime_ns, path.name),
-        ))
+        self._pending = deque()  # retained for API compatibility; disk is authoritative
         self._transient: Queue[tuple[str, dict]] = Queue(maxsize=queue_size)
         self._delivery_timeout_sec = delivery_timeout_sec
         self._retry_interval_sec = retry_interval_sec
@@ -75,12 +73,17 @@ class ReliableKafkaPublisher:
         )
         self._thread.start()
 
-    def publish(self, topic: str, payload: dict, *, durable: bool = False) -> str | None:
+    def publish(
+        self, topic: str, payload: dict, *, durable: bool = False
+    ) -> str | None:
         """Accept one record; durable records return their spool identifier.
 
         A durable atomic-file write is part of the interface contract and
         therefore raises on failure. Best-effort queue pressure is measured.
         """
+        from utils_local.message_identity import seal_payload
+
+        payload = seal_payload(payload)
         with self._metrics_lock:
             self._expected += 1
         if durable:
@@ -94,13 +97,21 @@ class ReliableKafkaPublisher:
             temporary = self._spool_dir / f".{digest}.{uuid.uuid4().hex}.tmp"
             try:
                 with self._spool_lock:
+                    for existing in (
+                        target,
+                        self._spool_dir / "awaiting-receipt" / target.name,
+                    ):
+                        if existing.exists():
+                            old = json.loads(existing.read_text())
+                            if old["payload"] != payload or old["topic"] != topic:
+                                raise ValueError("durable message identity conflict")
                     if not target.exists():
                         with temporary.open("xb") as handle:
                             handle.write(encoded)
                             handle.flush()
                             os.fsync(handle.fileno())
                         os.replace(temporary, target)
-                        self._pending.append(target)
+                        pass
             except OSError:
                 temporary.unlink(missing_ok=True)
                 logger.exception("durable Kafka spool write failed")
@@ -172,32 +183,56 @@ class ReliableKafkaPublisher:
                 self._record_drop("best_effort_delivery_failed")
 
     def _deliver_durable(self) -> bool:
-        pending = self._pending_files()
-        if not pending:
-            return False
-        path = pending[0]
-        try:
-            with path.open("r", encoding="utf-8") as handle:
-                record = json.load(handle)
-            self._send(record["topic"], record["payload"])
-            with self._spool_lock:
-                path.unlink(missing_ok=True)
-                self._pending.popleft()
-            self._record_actual()
-        except Exception as exc:
-            logger.warning("durable Kafka delivery deferred: %s", exc)
-            self._wake.wait(timeout=self._retry_interval_sec)
-            self._wake.clear()
-        return True
+        from utils_local.spool_lock import spool_lock
+
+        for path in self._pending_files():
+            with spool_lock(self._spool_dir, path.name) as acquired:
+                if not acquired:
+                    continue
+                try:
+                    with path.open("r", encoding="utf-8") as handle:
+                        record = json.load(handle)
+                    self._send(record["topic"], record["payload"])
+                    with self._spool_lock:
+                        if record["payload"].get("msg_type") in {
+                            "uav_track_complete",
+                            "uav_track_chunk",
+                            "uav_track_relation",
+                            "uav_replay_mission",
+                        }:
+                            waiting = self._spool_dir / "awaiting-receipt"
+                            waiting.mkdir(exist_ok=True)
+                            os.replace(path, waiting / path.name)
+                        else:
+                            path.unlink(missing_ok=True)
+                    self._record_actual()
+                except FileNotFoundError:
+                    # A previous owner already advanced/retired this immutable fact.
+                    pass
+                except Exception as exc:
+                    logger.warning("durable Kafka delivery deferred: %s", exc)
+                    self._wake.wait(timeout=self._retry_interval_sec)
+                    self._wake.clear()
+                return True
+        return False
 
     def _pending_files(self) -> list[Path]:
         with self._spool_lock:
-            return list(self._pending)
+            import itertools
+
+            return list(itertools.islice(self._spool_dir.glob("*.json"), 200))
 
     def _send(self, topic: str, payload: dict) -> None:
-        future = self._producer.send(topic, value=payload)
-        if hasattr(future, "get"):
-            future.get(timeout=self._delivery_timeout_sec)
+        with stage("egress.kafka_delivery", topic=topic):
+            data = payload.get("data") or {}
+            key = (
+                data.get("mission_id")
+                or payload.get("drone_id")
+                or payload.get("camera_id")
+            )
+            future = self._producer.send(topic, value=payload, key=str(key).encode())
+            if hasattr(future, "get"):
+                future.get(timeout=self._delivery_timeout_sec)
 
     def _record_actual(self) -> None:
         with self._metrics_lock:

@@ -10,16 +10,18 @@ from typing import Protocol
 
 from sqlalchemy import and_, exists, func, or_, select, tuple_
 from sqlalchemy.orm import aliased
+from utils_local.trajectory_sampling import public_sampling
 
 from app.models.replay_v2 import (
-    ReplayV2Episode,
     ReplayV2ConflictEvent,
+    ReplayV2Episode,
     ReplayV2Maneuver,
     ReplayV2Mission,
     ReplayV2TrackEvent,
     ReplayV2TrackPoint,
+    ReplayV2TrackRelation,
+    ReplayV2TrackGroup,
 )
-
 
 _CARDINAL_LABELS = {"east": "东", "south": "南", "west": "西", "north": "北"}
 _TURN_LABELS = {
@@ -38,7 +40,9 @@ _INFERRED_EXIT_BY_TURN = {
 
 
 class ReplayRepository(Protocol):
-    async def list_missions(self, intersection_id: str, *, include_incomplete: bool) -> list[dict]: ...
+    async def list_missions(
+        self, intersection_id: str, *, include_incomplete: bool
+    ) -> list[dict]: ...
 
     async def replay(
         self,
@@ -70,6 +74,15 @@ def _mission_summary(mission: dict) -> dict:
         "pipeline_id": mission.get("pipeline_id"),
         "run_id": mission.get("run_id"),
         "status": mission.get("status"),
+        "completeness": "complete" if mission.get("status") == "sealed" else "partial",
+        "committed_segment_count": int(
+            mission.get("committed_segment_count", mission.get("journey_count", len(journeys)))
+        ),
+        "associated_vehicle_count": int(
+            mission.get("associated_vehicle_count", mission.get("journey_count", len(journeys)))
+        ),
+        "available_start_ms": int(mission.get("available_start_ms") or 0),
+        "available_end_ms": int(mission.get("available_end_ms", mission.get("duration_ms")) or 0),
         "started_at": mission.get("started_at"),
         "duration_ms": int(mission.get("duration_ms") or 0),
         "coordinate_coverage_ratio": float(mission.get("coordinate_coverage_ratio") or 0.0),
@@ -143,11 +156,7 @@ def _physical_movement(journey: dict) -> tuple[str, str] | None:
 
 
 def _movement_label_from_key(key: str) -> str:
-    parts = dict(
-        part.split(":", 1)
-        for part in key.split("|")
-        if ":" in part
-    )
+    parts = dict(part.split(":", 1) for part in key.split("|") if ":" in part)
     approach = parts.get("approach")
     exit_ = parts.get("exit")
     if approach in _CARDINAL_LABELS and exit_ in _CARDINAL_LABELS:
@@ -170,6 +179,7 @@ def _journey_movement(journey: dict) -> tuple[str, str, str]:
 
 
 def _with_movement(journey: dict) -> dict:
+    journey = {**journey, "sampling": public_sampling(journey.get("sampling"))}
     if journey.get("movement_label") and journey.get("movement_source"):
         return journey
     key, label, source = _journey_movement(journey)
@@ -217,15 +227,20 @@ def _mission_analysis(mission: dict) -> dict:
         )
     ranking.sort(
         key=lambda item: (
-            0 if item["movement_source"] == "road_context" else
-            1 if item["movement_source"] == "trajectory_quadrant_inferred" else 2,
+            0
+            if item["movement_source"] == "road_context"
+            else 1
+            if item["movement_source"] == "trajectory_quadrant_inferred"
+            else 2,
             -item["vehicle_count"],
             item["movement_key"],
         )
     )
     return {
         "quality": {
-            "status": "complete" if journeys else "empty",
+            "status": ("complete" if mission.get("status") == "sealed" else "partial")
+            if journeys
+            else "empty",
             "total_tracks": len(journeys),
             "replayable_tracks": len(journeys),
             "spatial_coverage_ratio": float(mission.get("coordinate_coverage_ratio") or 0.0),
@@ -235,12 +250,13 @@ def _mission_analysis(mission: dict) -> dict:
         "movement_ranking": ranking,
         "class_summary": {
             "business": [
-                {"class_name": name, "count": count}
-                for name, count in sorted(business.items())
+                {"class_name": name, "count": count} for name, count in sorted(business.items())
             ],
             "yolo": [
                 {"class_id": class_id, "class_name": name, "count": count, "model_id": None}
-                for (class_id, name), count in sorted(yolo.items(), key=lambda item: (str(item[0][0]), item[0][1]))
+                for (class_id, name), count in sorted(
+                    yolo.items(), key=lambda item: (str(item[0][0]), item[0][1])
+                )
             ],
             "unknown_yolo_name_count": sum(
                 count for (class_id, name), count in yolo.items() if name == "unknown"
@@ -308,8 +324,7 @@ def _point_record(point: ReplayV2TrackPoint) -> dict:
             "ema_kmh": point.ema_speed_kmh,
             "enu_vector_mps": (
                 [point.velocity_east_mps, point.velocity_north_mps]
-                if point.velocity_east_mps is not None
-                and point.velocity_north_mps is not None
+                if point.velocity_east_mps is not None and point.velocity_north_mps is not None
                 else None
             ),
             "quality": point.speed_quality,
@@ -343,9 +358,11 @@ class InMemoryReplayRepository:
             _mission_summary(mission)
             for mission in self._missions.values()
             if mission.get("inter_id") == intersection_id
-            and (include_incomplete or mission.get("status") == "sealed")
+            and (include_incomplete or mission.get("status") == "sealed" or mission.get("journeys"))
         ]
-        return sorted(rows, key=lambda row: (row.get("started_at") or "", row["mission_id"]), reverse=True)
+        return sorted(
+            rows, key=lambda row: (row.get("started_at") or "", row["mission_id"]), reverse=True
+        )
 
     async def replay(
         self,
@@ -366,7 +383,7 @@ class InMemoryReplayRepository:
         mission = self._missions.get(mission_id)
         if mission is None or mission.get("inter_id") != intersection_id:
             raise LookupError("sealed replay Mission not found")
-        if mission.get("status") != "sealed":
+        if mission.get("status") != "sealed" and not mission.get("journeys"):
             raise LookupError("Mission is not sealed")
         duration_ms = int(mission.get("duration_ms") or 0)
         cursor_ms = min(max(cursor_ms, 0), duration_ms)
@@ -446,12 +463,44 @@ class PostgresReplayRepository:
         self._session_maker = session_maker
 
     async def list_missions(self, intersection_id: str, *, include_incomplete: bool) -> list[dict]:
-        statement = select(ReplayV2Mission).where(ReplayV2Mission.inter_id == intersection_id)
+        actual = (
+            select(func.count())
+            .select_from(ReplayV2TrackEvent)
+            .where(ReplayV2TrackEvent.mission_id == ReplayV2Mission.id)
+            .correlate(ReplayV2Mission)
+            .scalar_subquery()
+        )
+        groups = (
+            select(func.count(func.distinct(ReplayV2TrackGroup.root_track_id)))
+            .where(ReplayV2TrackGroup.mission_id == ReplayV2Mission.id)
+            .correlate(ReplayV2Mission)
+            .scalar_subquery()
+        )
+        first = (
+            select(func.min(ReplayV2TrackEvent.started_offset_ms))
+            .where(ReplayV2TrackEvent.mission_id == ReplayV2Mission.id)
+            .correlate(ReplayV2Mission)
+            .scalar_subquery()
+        )
+        last = (
+            select(func.max(ReplayV2TrackEvent.ended_offset_ms))
+            .where(ReplayV2TrackEvent.mission_id == ReplayV2Mission.id)
+            .correlate(ReplayV2Mission)
+            .scalar_subquery()
+        )
+        statement = select(ReplayV2Mission, actual, groups, first, last).where(
+            ReplayV2Mission.inter_id == intersection_id
+        )
         if not include_incomplete:
-            statement = statement.where(ReplayV2Mission.status == "sealed")
+            statement = statement.where(
+                or_(
+                    ReplayV2Mission.status == "sealed",
+                    exists(select(1).where(ReplayV2TrackEvent.mission_id == ReplayV2Mission.id)),
+                )
+            )
         statement = statement.order_by(ReplayV2Mission.started_at.desc(), ReplayV2Mission.id.desc())
         async with self._session_maker() as session:
-            rows = (await session.execute(statement)).scalars().all()
+            rows = (await session.execute(statement)).all()
         return [
             _mission_summary(
                 {
@@ -463,13 +512,17 @@ class PostgresReplayRepository:
                     "started_at": row.started_at.isoformat() if row.started_at else None,
                     "duration_ms": row.duration_ms,
                     "coordinate_coverage_ratio": row.coordinate_coverage_ratio,
-                    "journey_count": row.journey_count,
+                    "journey_count": count,
+                    "committed_segment_count": count,
+                    "associated_vehicle_count": group_count or count,
+                    "available_start_ms": first_ms,
+                    "available_end_ms": last_ms,
                     "behavior_count": row.behavior_count,
                     "algorithm_versions": row.algorithm_versions,
                     "accuracy": row.accuracy,
                 }
             )
-            for row in rows
+            for row, count, group_count, first_ms, last_ms in rows
         ]
 
     async def replay(self, intersection_id: str, **kwargs) -> dict:
@@ -484,33 +537,69 @@ class PostgresReplayRepository:
             )
             if mission is None:
                 raise LookupError("sealed replay Mission not found")
-            if mission.status != "sealed":
+            if mission.status != "sealed" and not mission.journey_count:
                 raise LookupError("Mission is not sealed")
 
+            relation_rows = (
+                (
+                    await session.execute(
+                        select(ReplayV2TrackRelation).where(
+                            ReplayV2TrackRelation.mission_id == mission_id,
+                            ReplayV2TrackRelation.state == "applied",
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            relations = [
+                {
+                    "predecessor_id": row.predecessor_id,
+                    "successor_id": row.successor_id,
+                    "evidence": row.evidence,
+                }
+                for row in relation_rows
+            ]
             event_rows = (
-                await session.execute(
-                    select(ReplayV2TrackEvent)
-                    .where(ReplayV2TrackEvent.mission_id == mission_id)
-                    .order_by(ReplayV2TrackEvent.track_id)
+                (
+                    await session.execute(
+                        select(ReplayV2TrackEvent)
+                        .where(ReplayV2TrackEvent.mission_id == mission_id)
+                        .order_by(ReplayV2TrackEvent.track_id)
+                    )
                 )
-            ).scalars().all()
+                .scalars()
+                .all()
+            )
             episode_rows = (
-                await session.execute(
-                    select(ReplayV2Episode).where(ReplayV2Episode.mission_id == mission_id)
+                (
+                    await session.execute(
+                        select(ReplayV2Episode).where(ReplayV2Episode.mission_id == mission_id)
+                    )
                 )
-            ).scalars().all()
+                .scalars()
+                .all()
+            )
             maneuver_rows = (
-                await session.execute(
-                    select(ReplayV2Maneuver).where(ReplayV2Maneuver.mission_id == mission_id)
+                (
+                    await session.execute(
+                        select(ReplayV2Maneuver).where(ReplayV2Maneuver.mission_id == mission_id)
+                    )
                 )
-            ).scalars().all()
+                .scalars()
+                .all()
+            )
             conflict_rows = (
-                await session.execute(
-                    select(ReplayV2ConflictEvent)
-                    .where(ReplayV2ConflictEvent.mission_id == mission_id)
-                    .order_by(ReplayV2ConflictEvent.offset_ms, ReplayV2ConflictEvent.id)
+                (
+                    await session.execute(
+                        select(ReplayV2ConflictEvent)
+                        .where(ReplayV2ConflictEvent.mission_id == mission_id)
+                        .order_by(ReplayV2ConflictEvent.offset_ms, ReplayV2ConflictEvent.id)
+                    )
                 )
-            ).scalars().all()
+                .scalars()
+                .all()
+            )
 
             point_bounds = (
                 select(
@@ -535,24 +624,28 @@ class PostgresReplayRepository:
                 .subquery()
             )
             boundary_rows = (
-                await session.execute(
-                    select(ReplayV2TrackPoint)
-                    .join(
-                        point_bounds,
-                        and_(
-                            ReplayV2TrackPoint.track_id == point_bounds.c.track_id,
-                            or_(
-                                ReplayV2TrackPoint.point_seq == point_bounds.c.first_seq,
-                                ReplayV2TrackPoint.point_seq == point_bounds.c.last_seq,
-                                ReplayV2TrackPoint.point_seq == point_bounds.c.first_world_seq,
-                                ReplayV2TrackPoint.point_seq == point_bounds.c.last_world_seq,
+                (
+                    await session.execute(
+                        select(ReplayV2TrackPoint)
+                        .join(
+                            point_bounds,
+                            and_(
+                                ReplayV2TrackPoint.track_id == point_bounds.c.track_id,
+                                or_(
+                                    ReplayV2TrackPoint.point_seq == point_bounds.c.first_seq,
+                                    ReplayV2TrackPoint.point_seq == point_bounds.c.last_seq,
+                                    ReplayV2TrackPoint.point_seq == point_bounds.c.first_world_seq,
+                                    ReplayV2TrackPoint.point_seq == point_bounds.c.last_world_seq,
+                                ),
                             ),
-                        ),
+                        )
+                        .where(ReplayV2TrackPoint.mission_id == mission_id)
+                        .order_by(ReplayV2TrackPoint.track_id, ReplayV2TrackPoint.point_seq)
                     )
-                    .where(ReplayV2TrackPoint.mission_id == mission_id)
-                    .order_by(ReplayV2TrackPoint.track_id, ReplayV2TrackPoint.point_seq)
                 )
-            ).scalars().all()
+                .scalars()
+                .all()
+            )
 
         episodes_by_track: dict[str, list[dict]] = defaultdict(list)
         maneuvers_by_track: dict[str, list[dict]] = defaultdict(list)
@@ -571,7 +664,7 @@ class PostgresReplayRepository:
                     "source_runtime_track_ids": event.source_runtime_track_ids,
                     "source_point_count": event.source_point_count,
                     "retained_point_count": event.retained_point_count,
-                    "sampling": event.sampling,
+                    "sampling": public_sampling(event.sampling),
                     "vehicle_class": event.vehicle_class,
                     "yolo_class_id": event.yolo_class_id,
                     "yolo_class_name": event.yolo_class_name,
@@ -600,9 +693,7 @@ class PostgresReplayRepository:
                 movement_key=kwargs.get("movement_key"),
             )
         ]
-        matching_by_track = {
-            str(journey["track_id"]): journey for journey in matching_journeys
-        }
+        matching_by_track = {str(journey["track_id"]): journey for journey in matching_journeys}
 
         duration_ms = int(mission.duration_ms or 0)
         cursor_ms = min(max(int(kwargs["cursor_ms"]), 0), duration_ms)
@@ -702,12 +793,11 @@ class PostgresReplayRepository:
             "conflicts": conflicts,
         }
         analysis = _mission_analysis(mission_document)
-        analysis["quality"].update(
-            {"truncated": truncated, "returned_tracks": len(tracks)}
-        )
+        analysis["quality"].update({"truncated": truncated, "returned_tracks": len(tracks)})
         return {
             "schema_version": "uav.trajectory-replay/v1",
             "mission": _mission_summary(mission_document),
+            "relations": relations,
             "cursor": {
                 "offset_ms": cursor_ms,
                 "window_start_ms": start_ms,

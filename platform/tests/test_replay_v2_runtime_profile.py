@@ -17,8 +17,7 @@ def test_replay_v2_runtime_profile_uses_v2_topics_with_full_control_plane():
 
     assert settings.kafka_consumer_group == "uav-platform-replay-v2"
     assert settings.kafka_topics_pattern == (
-        r"^uav_replay_v2_(?:statistics|track_complete|conflicts|telemetry|mission)_"
-        r"[A-Za-z0-9._-]+$"
+        r"^(?:uav_statistics|uav_track_complete|uav_conflicts|uav_telemetry|uav_missions|uav_track_relations|uav_enforcement_clues|uav_system_metrics)$"
     )
     assert settings.control_plane_writes_enabled is True
     assert settings.lane_annotation_auto_tasks_enabled is True
@@ -71,7 +70,7 @@ def test_replay_v2_pipeline_children_use_v2_storage_profile(monkeypatch, tmp_pat
 
     assert manager._executor._extra_env["TRAJECTORY_STORAGE_PROFILE"] == "replay_v2"
     assert manager._topic_for_runtime(None, 10, "SRC-REPLAY-V2") == (
-        "uav_replay_v2_statistics_SRC-REPLAY-V2"
+        "uav_statistics"
     )
 
 

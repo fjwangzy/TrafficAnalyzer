@@ -84,7 +84,7 @@ def copy_delivery_files(target):
     files.extend(ROOT / "deploy/intranet" / name for name in (
         "Dockerfile", "base-images.json", "compose.yaml", "compose.postgres.yaml",
         "database/Dockerfile", "database/init-extensions.sh", "database/base-image.json", "backup-db.sh", "HIGHGO_CUTOVER.md", "production.env.example", "CHECK_TOOLS.md", "db_readonly_checks.sql",
-        "runtime_check.py", "diagnose_live.py", "init_db.py", "deploy.py", "topic_acl.py", "compose-bootstrap.sh", "docker-compose",
+        "runtime_check.py", "diagnose_live.py", "init_db.py", "init_kafka.py", "deploy.py", "topic_acl.py", "compose-bootstrap.sh", "docker-compose",
         "hotfix-compose-environment.sh",
         "hotfix-highgo-version.py", "hotfix-highgo-version.sh",
         "repair-highgo.sh.in",
@@ -507,8 +507,8 @@ def copy_app_sources(target):
     shutil.copy2(ROOT / "configs/app_config.yaml", target / "configs/app_config.yaml")
     tools = target / "deploy/intranet"
     tools.mkdir(parents=True)
-    for name in ("runtime_check.py", "init_db.py", "seed_sources.py", "test-sources.json", "topic_acl.py",
-                 "source_check.py", "run_logged.py"):
+    for name in ("runtime_check.py", "init_db.py", "init_kafka.py", "seed_sources.py", "test-sources.json", "topic_acl.py",
+                 "source_check.py", "run_logged.py", "TEST_SOURCE_TOPIC_ACL.json"):
         shutil.copy2(ROOT / "deploy/intranet" / name, tools / name)
 
 

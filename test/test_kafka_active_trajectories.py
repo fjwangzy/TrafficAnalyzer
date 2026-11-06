@@ -18,10 +18,10 @@ class KafkaActiveTrajectoriesTest(unittest.TestCase):
 
     def _producer_without_kafka(self):
         producer = object.__new__(KafkaProducerNode)
-        producer.topic_name = "uav_statistics_7"
-        producer.track_complete_topic = "uav_track_complete_7"
-        producer.conflicts_topic = "uav_conflicts_7"
-        producer.telemetry_topic = "uav_telemetry_7"
+        producer.topic_name = "uav_statistics"
+        producer.track_complete_topic = "uav_track_complete"
+        producer.conflicts_topic = "uav_conflicts"
+        producer.telemetry_topic = "uav_telemetry"
         producer.intersection_id = "INT_camera_7"
         producer.camera_id = 7
         producer.pipeline_id = "pipeline-test-7"
@@ -94,7 +94,7 @@ class KafkaActiveTrajectoriesTest(unittest.TestCase):
         self.assertIs(out, frame_element)
         self.assertEqual(
             topics,
-            ["uav_statistics_7", "uav_track_complete_7", "uav_telemetry_7"],
+            ["uav_statistics", "uav_track_complete", "uav_telemetry"],
         )
         stats = sent[0][1]
         self.assertEqual(stats["msg_type"], "uav_stats")
@@ -201,7 +201,7 @@ class KafkaActiveTrajectoriesTest(unittest.TestCase):
     def test_topic_builder_rejects_unsafe_camera_id(self):
         self.assertEqual(
             KafkaProducerNode._canonical_topics("10"),
-            ("uav_statistics_10", "uav_track_complete_10", "uav_conflicts_10", "uav_telemetry_10"),
+            ("uav_statistics", "uav_track_complete", "uav_conflicts", "uav_telemetry"),
         )
         with self.assertRaises(ValueError):
             KafkaProducerNode._canonical_topics("../10")
@@ -455,7 +455,7 @@ class KafkaActiveTrajectoriesTest(unittest.TestCase):
         producer._enqueue = lambda topic, data, **_kwargs: sent.append((topic, data))
         producer.process(frame_element)
 
-        stats = next(message for topic, message in sent if topic.startswith("uav_statistics_"))
+        stats = next(message for topic, message in sent if topic == "uav_statistics")
         self.assertEqual(
             stats["data"]["candidate_trajectories"],
             [{
@@ -565,7 +565,7 @@ class KafkaActiveTrajectoriesTest(unittest.TestCase):
 
         producer.process(frame)
 
-        stats = next(payload for topic, payload in sent if topic == "uav_statistics_7")
+        stats = next(payload for topic, payload in sent if topic == "uav_statistics")
         self.assertEqual(stats["data"]["congestion_index"], 0.0)
         self.assertEqual(stats["data"]["cars"], 0)
         self.assertEqual(stats["data"]["eligible_active_tracks"], 0)
@@ -606,7 +606,7 @@ class KafkaActiveTrajectoriesTest(unittest.TestCase):
 
         producer.process(frame_element)
 
-        stats = next(payload for topic, payload in sent if topic == "uav_statistics_7")
+        stats = next(payload for topic, payload in sent if topic == "uav_statistics")
         self.assertEqual(len(stats["data"]["active_trajectories"]), 200)
         self.assertEqual(stats["data"]["active_trajectories_truncated"], 200)
         self.assertLess(len(json.dumps(stats).encode("utf-8")), 1_000_000)
@@ -628,13 +628,14 @@ class KafkaActiveTrajectoriesTest(unittest.TestCase):
         producer = self._producer_without_kafka()
         producer.storage_profile = "replay_v2"
         producer.trajectory_archive = Mock()
+        producer._streaming_relations = Mock()
         producer.trajectory_archive.begin_mission.return_value = {
             "observed_start_source_sec": 2.0,
         }
         producer.mission_id = "MSN-1"
         producer.source_profile_id = "SRC-1"
         producer._replay_start_published = True
-        producer.topic_name = "uav_replay_v2_statistics_SRC-1"
+        producer.topic_name = "uav_statistics"
         sent = []
         producer._enqueue = lambda topic, data, **_kwargs: sent.append((topic, data))
 

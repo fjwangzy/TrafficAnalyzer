@@ -75,6 +75,12 @@ class KafkaConsumerService:
 
     async def _create_consumer(self) -> AIOKafkaConsumer | None:
         """Create and start an AIOKafkaConsumer. Returns None if broker unavailable."""
+        from utils_local.kafka_topic_preflight import check_fixed_topics
+        try:
+            await asyncio.to_thread(check_fixed_topics, self._bootstrap, self._security_options if self._security_options is not None else kafka_security_options())
+        except Exception:
+            logger.warning('FIXED_TOPIC_PREFLIGHT_DEFERRED', exc_info=True)
+            return None
         consumer = AIOKafkaConsumer(
             bootstrap_servers=self._bootstrap,
             **(self._security_options if self._security_options is not None else kafka_security_options()),
@@ -97,10 +103,9 @@ class KafkaConsumerService:
             pattern = re.compile(self._topics_pattern)
             consumer.subscribe(pattern=pattern)
             logger.info(f"Kafka consumer subscribing to pattern: {self._topics_pattern}")
-        except Exception:
-            topics = ["uav_statistics_1", "uav_statistics_2"]
-            consumer.subscribe(topics=topics)
-            logger.info(f"Kafka consumer subscribing to topics: {topics}")
+        except Exception as error:
+            await consumer.stop()
+            raise ValueError("invalid fixed Kafka topic subscription") from error
 
         try:
             await asyncio.wait_for(consumer.start(), timeout=15)
@@ -242,10 +247,14 @@ class KafkaConsumerService:
         if self._metric_store is None:
             raise RuntimeError("MetricStore is required before Kafka consumption")
         envelope = MessageEnvelope(data, topic, partition, offset)
+        store = self._metric_store
         try:
-            result = await self._metric_store.persist(envelope)
+            from app.services.routed_metric_store import RoutedMetricStore
+            if isinstance(store, RoutedMetricStore):
+                store = store.for_payload(data)
+            result = await store.persist(envelope)
         except MetricContractError as error:
-            dead_letter_id = await self._metric_store.quarantine(envelope, error)
+            dead_letter_id = await store.quarantine(envelope, error)
             logger.error(
                 "Kafka record quarantined: dead_letter_id=%s topic=%s partition=%s offset=%s reason=%s",
                 dead_letter_id,
@@ -259,7 +268,7 @@ class KafkaConsumerService:
             return
         normalized = result.normalized_payload
         if not self._dispatch_realtime:
-            await self._metric_store.mark_dispatched(
+            await store.mark_dispatched(
                 normalized.get("source_system", "uav_traffic_analyzer_ai"),
                 result.message_id,
             )
@@ -306,11 +315,11 @@ class KafkaConsumerService:
             else:
                 raise ValueError(f"Unsupported persisted msg_type: {msg_type}")
         except Exception as error:
-            await self._metric_store.mark_dispatch_failed(
+            await store.mark_dispatch_failed(
                 normalized["source_system"], result.message_id, error
             )
             raise
-        await self._metric_store.mark_dispatched(
+        await store.mark_dispatched(
             normalized["source_system"], result.message_id
         )
 
@@ -542,17 +551,6 @@ class KafkaConsumerService:
         })
 
     def _extract_intersection(self, topic: str) -> str:
-        """Extract intersection ID from topic name."""
-        for prefix in (
-            "uav_statistics_", "uav_track_complete_", "uav_conflicts_",
-            "uav_enforcement_clues_",
-        ):
-            if topic.startswith(prefix):
-                cam_id = topic[len(prefix):]
-                return f"INT_camera_{cam_id}"
-        for prefix in ("uav_telemetry_",):
-            if topic.startswith(prefix):
-                return topic[len(prefix):]
-        if topic == "uav_system_metrics":
-            return "uav_system"
-        raise ValueError(f"unsupported canonical topic: {topic}")
+        if topic == 'uav_system_metrics':
+            return 'uav_system'
+        raise ValueError('intersection identity must be present in event attributes')

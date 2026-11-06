@@ -195,6 +195,7 @@ def test_every_publisher_receives_sasl_credentials(monkeypatch, name):
     monkeypatch.setenv("KAFKA_SASL_PASSWORD", "private")
     monkeypatch.delenv("TRAJECTORY_STORAGE_PROFILE", raising=False)
     monkeypatch.setattr(target, "KafkaProducer", producer)
+    monkeypatch.setattr("utils_local.kafka_topic_preflight.check_fixed_topics",lambda *args,**kwargs: [])
     config = {"kafka_producer_node": {"bootstrap_servers": "broker:9093", "camera_id": 1, "how_often_sec": 1}}
     with pytest.raises(Captured):
         getattr(target, name)(config)

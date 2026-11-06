@@ -13,8 +13,8 @@ def main():
     from utils_local.runtime_logging import RuntimeFormatter, log_level_from_text, rotating_log_handler
 
     arguments = sys.argv[1:]
-    if len(arguments) < 2 or arguments[0] not in {"platform", "init-db", "preflight", "source-check"}:
-        raise SystemExit("Expected platform/init-db/preflight/source-check and a command")
+    if len(arguments) < 2 or arguments[0] not in {"platform", "init-db", "init-kafka", "preflight", "source-check"}:
+        raise SystemExit("Expected platform/init-db/init-kafka/preflight/source-check and a command")
     name, *command = arguments
     directory = Path(os.environ.get("TRAFFIC_LOG_DIR", "/var/log/traffic-analyzer")) / "containers"
     directory.mkdir(parents=True, exist_ok=True)

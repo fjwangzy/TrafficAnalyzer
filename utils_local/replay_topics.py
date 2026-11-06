@@ -6,14 +6,15 @@ import re
 from dataclasses import astuple, dataclass
 
 
-CANONICAL_CONSUMER_PATTERN = (
-    r"(?:uav_(?:statistics|track_complete|conflicts|telemetry|enforcement_clues)_[A-Za-z0-9._-]+"
-    r"|uav_system_metrics)"
-)
-REPLAY_V2_CONSUMER_PATTERN = (
-    r"uav_replay_v2_(?:statistics|track_complete|conflicts|telemetry|mission)_"
-    r"[A-Za-z0-9._-]+"
-)
+FIXED_TOPICS = {
+    "uav_stats": "uav_statistics", "uav_track_complete": "uav_track_complete",
+    "uav_conflict": "uav_conflicts", "uav_telemetry": "uav_telemetry",
+    "uav_replay_mission": "uav_missions", "uav_track_relation": "uav_track_relations",
+    "uav_enforcement_clue": "uav_enforcement_clues", "uav_system_metrics": "uav_system_metrics",
+    "uav_ingest_receipt": "uav_ingest_receipts",
+}
+CANONICAL_CONSUMER_PATTERN = r"^(?:uav_statistics|uav_track_complete|uav_conflicts|uav_telemetry|uav_missions|uav_track_relations|uav_enforcement_clues|uav_system_metrics)$"
+REPLAY_V2_CONSUMER_PATTERN = r"^(?:uav_statistics|uav_track_complete|uav_conflicts|uav_telemetry|uav_missions|uav_track_relations|uav_enforcement_clues|uav_system_metrics)$"
 REPLAY_V2_CONSUMER_GROUP = "uav-platform-replay-v2"
 
 
@@ -34,11 +35,11 @@ def build_replay_v2_topics(source_key: str) -> ReplayV2Topics:
     value = str(source_key)
     if not value or len(value) > 128 or re.fullmatch(r"[A-Za-z0-9._-]+", value) is None:
         raise ValueError("source_key contains unsupported Kafka Topic characters")
-    prefix = "uav_replay_v2"
+    prefix = "uav"
     return ReplayV2Topics(
-        statistics=f"{prefix}_statistics_{value}",
-        track_complete=f"{prefix}_track_complete_{value}",
-        conflicts=f"{prefix}_conflicts_{value}",
-        telemetry=f"{prefix}_telemetry_{value}",
-        mission=f"{prefix}_mission_{value}",
+        statistics=f"{prefix}_statistics",
+        track_complete=f"{prefix}_track_complete",
+        conflicts=f"{prefix}_conflicts",
+        telemetry=f"{prefix}_telemetry",
+        mission="uav_missions",
     )

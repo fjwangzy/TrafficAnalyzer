@@ -1,4 +1,13 @@
+> 最新累计前后端完整包2026.11.04.1验证与启动说明见[NATIVE_VALIDATION_2026.11.04.1.md](NATIVE_VALIDATION_2026.11.04.1.md)，最终归档重新解压复验通过，完整证据见dist/DELIVERY-native-2026.11.04.1.json。
+
+> 2026-11-03最新原生全量包2026.11.03.3的四进程/采样/最终解压证据见[NATIVE_VALIDATION_2026.11.03.3.md](NATIVE_VALIDATION_2026.11.03.3.md)，生产五分钟FPS与UOS/NPU仍待现场。
+
 # 2026.10.17-intranet.3 同机临时数据库完整发布验证
+
+## 2026-11-03 Platform／检测器原生完整包
+
+完整包及最终归档解压复验结果见[NATIVE_DEPLOYMENT_VALIDATION.md](NATIVE_DEPLOYMENT_VALIDATION.md)。76项聚焦回归、69398项内部SHA和外部SHA通过；断网ARM64运行库、真实三worker显式CPU合成视频自然EOF、OM/PT哈希和缺NPU拒绝、隔离数据库与真实Console/API/媒体/WS/监督进程停止链路通过。最终归档再次解压复验运行库和数据库/Console链路；无UOS/NPU现场吞吐结论。交付清单为dist/DELIVERY-native-2026.11.03.1.json；下列2026-10历史验证保留，不作为本次现场验收。
+
 
 ## 2026-10-20 模型清单变量遗漏修复
 
@@ -411,3 +420,6 @@ Python综合435通过/8跳过/10子测试、补充22及Doris错误7通过；前�
 交付dist/traffic-analyzer-repair-degraded-2026.10.17.sh，16418974字节，SHA256=7fbe05cdae4fcb48d9e0e828be4dd3008258a9f5a576c1cd19293be4980edccc；私有600。
 证据dist/VALIDATION-DEGRADED-2026.10.17.json及README-DEPLOY-DEGRADED-2026.10.17.md。
 生产Doris/此修复整站启动、Kafka业务ACL、内网地图、真实任务性能及无真值精度仍未验收；原大归档封存。
+
+
+2026-11-04现场发现并修复init-kafka包装器白名单遗漏；60项聚焦回归及原.2 ARM64私有Python真实调用链通过。提供带原文件SHA校验、备份、清单同步和中断重跑的小修复包，原完整归档保留，未重做迁移或现场Kafka操作。详见[NATIVE_INIT_KAFKA_FIX_20261104.md](NATIVE_INIT_KAFKA_FIX_20261104.md)。

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import numpy as np
@@ -30,6 +31,15 @@ class GroundTrajectoryTrackerNode:
         self._candidate_tail_points = int(
             tracker_cfg.get("candidate_trajectory_tail_points", 30)
         )
+        # Warp the whole display history of every track with one batched matmul
+        # instead of one tiny warp per track.  ``0``/false/off restores the
+        # historical per-track path for A/B comparison.
+        self._batch_warp = os.environ.get("TRACKER_BATCH_WARP", "1").strip().lower() not in {
+            "0",
+            "false",
+            "no",
+            "off",
+        }
         self._last_timestamp: float | None = None
         self._next_track_id = 1
         self._next_shadow_track_id = 1
@@ -70,6 +80,7 @@ class GroundTrajectoryTrackerNode:
         cfg = self.tracker_cfg
         self.tracker = BYTETracker(
             fps=30,
+            batch_position_gate=bool(cfg.get("batch_position_gate", True)),
             first_track_thresh=cfg["first_track_thresh"],
             second_track_thresh=cfg["second_track_thresh"],
             match_thresh=cfg["match_thresh"],
@@ -99,6 +110,7 @@ class GroundTrajectoryTrackerNode:
             cfg = self.tracker_cfg
             self._shadow_tracker = BYTETracker(
                 fps=30,
+            batch_position_gate=bool(cfg.get("batch_position_gate", True)),
                 first_track_thresh=cfg["first_track_thresh"],
                 second_track_thresh=cfg["second_track_thresh"],
                 match_thresh=cfg["match_thresh"],
@@ -224,6 +236,90 @@ class GroundTrajectoryTrackerNode:
             for point in projected
         ]
 
+    @staticmethod
+    def _validated_warp_matrix(warp) -> np.ndarray | None:
+        """Validate the frame warp once: return a finite (3, 3) matrix or ``None``."""
+        if warp is None:
+            return None
+        matrix = np.asarray(warp, dtype=np.float64)
+        if matrix.shape == (2, 3):
+            matrix = np.vstack([matrix, [0.0, 0.0, 1.0]])
+        if matrix.shape != (3, 3) or not np.isfinite(matrix).all():
+            return None
+        return matrix
+
+    def _batch_warp_display_histories(self, tracks, matrix: np.ndarray | None):
+        """Project every track's existing display trail with one matmul.
+
+        Returns ``index -> warped points | None`` for every track that already
+        has display history.  ``None`` marks "warp failed for this track", which
+        makes the shared result builder clear that track's display history and
+        append only the new point — the same mixed valid/invalid semantics as
+        the historical per-track path.  Returns ``None`` itself only when the
+        inputs cannot be batched (malformed point lists), so the caller can fall
+        back to :meth:`_warp_display_points` unchanged.
+        """
+        offsets: list[int] = []
+        lengths: list[int] = []
+        flattened: list = []
+        for index, track in enumerate(tracks):
+            history = self._image_history.get(int(track.track_id))
+            display = (
+                history["trajectory_display_px"] if history is not None else None
+            )
+            if not display:
+                continue
+            offsets.append(index)
+            lengths.append(len(display))
+            flattened.extend(display)
+        if not lengths:
+            return {}
+        try:
+            coordinates = np.asarray(flattened, dtype=np.float64)
+        except (TypeError, ValueError):
+            return None
+        if coordinates.ndim != 2 or coordinates.shape[1] != 2:
+            return None
+        warped_by_index: dict[int, list[list[float]] | None] = {}
+        if matrix is None:
+            for index in offsets:
+                warped_by_index[index] = None
+            return warped_by_index
+        homogeneous = np.column_stack([coordinates, np.ones(len(coordinates))])
+        projected = homogeneous @ matrix.T
+        denominators = projected[:, 2]
+        point_valid = np.isfinite(projected).all(axis=1) & (
+            np.abs(denominators) >= 1e-9
+        )
+        # Reproduce the historical per-point ``round(x, 2)`` output exactly but
+        # vectorised: scaling by 100 is bit-exact for every value whose exact
+        # midpoint is more than one ulp away, and only those (practically never
+        # hit) ambiguous values fall back to the builtin, so the emitted floats
+        # stay identical to ``[round(float(v), 2) for v in ...]``.
+        with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
+            projected_xy = projected[:, :2] / denominators[:, None]
+            scaled = projected_xy * 100.0
+            nearest = np.rint(scaled)
+            distance_to_midpoint = np.abs((scaled - np.floor(scaled)) - 0.5)
+            ambiguous = (distance_to_midpoint <= np.spacing(np.abs(scaled))) | (
+                ~np.isfinite(scaled)
+            )
+            rounded = (nearest / 100.0).tolist()
+            if ambiguous.any():
+                exact_xy = projected_xy.tolist()
+                rows, columns = np.nonzero(ambiguous)
+                for row, column in zip(rows.tolist(), columns.tolist()):
+                    rounded[row][column] = round(exact_xy[row][column], 2)
+        start = 0
+        for index, length in zip(offsets, lengths):
+            end = start + length
+            if point_valid[start:end].all():
+                warped_by_index[index] = rounded[start:end]
+            else:
+                warped_by_index[index] = None
+            start = end
+        return warped_by_index
+
     def _build_image_trajectories(self, frame_element: FrameElement, tracks) -> list[dict]:
         # Keep history while ByteTrack holds an ID in ``lost_stracks``.  Removing
         # it merely because the ID is not emitted in one frame would make the
@@ -233,8 +329,16 @@ class GroundTrajectoryTrackerNode:
             if track_id not in active_ids:
                 self._image_history.pop(track_id, None)
 
+        warp = getattr(frame_element, "camera_motion_warp", None)
+        # ``None`` means "batch path unavailable/disabled -> use per-track path";
+        # an empty dict means the batch ran and found no history to warp.
+        batched_warps = None
+        if self._batch_warp and tracks:
+            matrix = self._validated_warp_matrix(warp)
+            batched_warps = self._batch_warp_display_histories(tracks, matrix)
+        tail = max(self._candidate_tail_points, 1)
         trajectories = []
-        for track in tracks:
+        for index, track in enumerate(tracks):
             track_id = int(track.track_id)
             bbox = track.tlbr
             ground_contact_point = [
@@ -256,9 +360,10 @@ class GroundTrajectoryTrackerNode:
             )
             history["trajectory_px"].append(ground_contact_point)
             display = history["trajectory_display_px"]
-            warped = self._warp_display_points(
-                display, getattr(frame_element, "camera_motion_warp", None)
-            )
+            if batched_warps is not None:
+                warped = batched_warps.get(index)
+            else:
+                warped = self._warp_display_points(display, warp)
             if warped is not None:
                 display[:] = warped
             elif display:
@@ -266,7 +371,6 @@ class GroundTrajectoryTrackerNode:
             display.append(display_point)
             history["trajectory_timestamps_sec"].append(float(frame_element.timestamp))
             history["trajectory_frame_nums"].append(int(frame_element.frame_num))
-            tail = max(self._candidate_tail_points, 1)
             for key in history:
                 history[key] = history[key][-tail:]
             trajectories.append(
@@ -274,10 +378,10 @@ class GroundTrajectoryTrackerNode:
                     "track_id": track_id,
                     "association_id": track_id,
                     "tracking_method": self.tracking_method,
-                    "trajectory_px": [point.copy() for point in history["trajectory_px"]],
-                    "trajectory_display_px": [
-                        point.copy() for point in history["trajectory_display_px"]
-                    ],
+                    # Point objects are never mutated by readers; a fresh list
+                    # shell is enough (the per-frame trim also replaces shells).
+                    "trajectory_px": list(history["trajectory_px"]),
+                    "trajectory_display_px": list(history["trajectory_display_px"]),
                     "trajectory_timestamps_sec": list(
                         history["trajectory_timestamps_sec"]
                     ),
@@ -362,7 +466,9 @@ class GroundTrajectoryTrackerNode:
                 )
         frame_element.id_list = [int(track.track_id) for track in tracks]
         frame_element.association_id_list = list(frame_element.id_list)
-        frame_element.tracked_xyxy = [list(track.tlbr.astype(int)) for track in tracks]
+        # Use builtin scalar types at the FrameElement boundary: NumPy scalars
+        # make accumulated histories expensive to pickle on every display frame.
+        frame_element.tracked_xyxy = [track.tlbr.astype(int).tolist() for track in tracks]
         frame_element.tracked_cls_ids = [int(track.class_name) for track in tracks]
         frame_element.tracked_cls = [
             self._class_name_by_id.get(

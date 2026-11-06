@@ -68,6 +68,9 @@ class GeoJsonExportNode:
         self.simplify_tolerance_m = cfg.get("simplify_tolerance_m", 0.5)
 
         self._collected_tracks: list[dict] = []
+        if self.enabled and config.get('pipeline',{}).get('egress_enabled',False):
+            from services.SpatialFeatureSpool import SpatialFeatureSpool
+            self._collected_tracks = SpatialFeatureSpool(self.output_dir)
         self._last_export_time = 0.0
         self._anchor_gcj02: tuple[float, float] | None = None
         self._export_count = 0
@@ -256,8 +259,20 @@ class GeoJsonExportNode:
 
         fname = self.filename or self._generate_filename()
         filepath = os.path.join(self.output_dir, fname)
-        with open(filepath, "w", encoding="utf-8") as f:
-            json.dump(geojson, f, indent=2, ensure_ascii=False)
+        import uuid
+        temporary=filepath+'.tmp-'+uuid.uuid4().hex
+        with open(temporary,'x',encoding='utf-8') as f:
+            # JSON output is semantically identical, emitted one feature at a time.
+            f.write('{"type":"FeatureCollection","coordinate_system":"GCJ02","features":[')
+            for index,feature in enumerate(self._collected_tracks):
+                if index:f.write(',')
+                json.dump(feature,f,ensure_ascii=False,separators=(',',':'))
+            f.write('],"metadata":')
+            json.dump(geojson['metadata'],f,ensure_ascii=False)
+            f.write('}')
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(temporary,filepath)
 
         logger.info(
             f"GeoJsonExportNode: 导出 {len(self._collected_tracks)} 条轨迹 → "

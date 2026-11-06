@@ -1,5 +1,15 @@
 # AGENTS.md — Codex 长期协作规则
 
+## 2026-11-03 四进程与历史数据版本
+
+用户授权原生生产每管道四worker：reader/detector、tracker/在线分析、show/图像、egress/Kafka/归档。新增跨节点字段在FrameElement声明；模块内维护增量、持久ACK、显示快照、双EOF和失败清理，不在入口堆业务算法。仅新任务启用事件保真v2；完整计算后冻结均值/P85等统计并与回放几何分离，旧任务/档案不批量重写。当前内网路网开关、Mac/MPS默认、依赖/迁移和认证模型门禁保持。
+
+
+## 2026-11-03 生产原生应用部署例外
+
+按用户授权，内网Platform/检测器可使用完整原生ARM64包，Console/数据库/Kafka保持现有服务。使用deploy/native-platform/控制生命周期；检测仍以main_optimized.py为唯一生产入口，无Docker检测回退或系统Python依赖。首次配置导入与后续手动启停统一traffic入口；不得绕过模型、生产认证或ADR-041依赖/迁移基线。Mac/MPS开发态不改。详见NATIVE_DEPLOYMENT.md。
+
+
 ## 2026-10-19 最新数据优先降级约束
 
 用户明确授权消费异常后以最新数据恢复功能：offset不作身份门禁，inbox保留原始运输位置并用消息ID及哈希去重。
@@ -69,3 +79,8 @@ python scripts/audit_adr019_retirement.py --scope local --strict
 - 禁止恢复无前缀 Topic/`msg_type`/WebSocket channel、旧数据库自动迁移或已退役观测依赖。
 - 禁止使用 `python-jose`，平台鉴权使用 PyJWT。
 - 禁止把旧的 0.9m~1.7m CPA 擦肩事件重新作为默认机非冲突业务口径。
+
+
+## 2026-11-04 增量轨迹与固定Topic改造（工作中）
+
+用户已授权离场片段入库、短窗口重识别关联、手动停止保存中断轨迹、轨迹及必要任务事实的定向补偿，以及按业务类型固定Kafka Topic。该授权更新此前按相机/SourceProfile分Topic及所有消息异常跳过不补的约束；其他历史区间仍不自动补回。实现、验证、未完成项及本机隔离清理事故见[INCREMENTAL_TRAJECTORIES_20261104.md](INCREMENTAL_TRAJECTORIES_20261104.md)。当前未完成整套验收，未发布新包。

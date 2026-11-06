@@ -44,6 +44,8 @@ class ReplayV2Mission(Base):
     algorithm_versions: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     accuracy: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     failure_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    expected_relation_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    segment_manifest_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     sealed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
@@ -91,6 +93,7 @@ class ReplayV2TrackEvent(Base):
     inter_id: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     source_profile_id: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     track_id: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    segment_digest: Mapped[str | None] = mapped_column(String(64), nullable=True)
     source_runtime_track_ids: Mapped[list] = mapped_column(JSON, nullable=False)
     vehicle_class: Mapped[str | None] = mapped_column(String(80), nullable=True)
     yolo_class_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -215,7 +218,9 @@ class ReplayV2TrafficMetricSample(Base):
 
 class _ReplayV2Aggregate:
     id: Mapped[str] = mapped_column(String(120), primary_key=True)
-    window_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    window_start: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
     window_end: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     inter_id: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     source_profile_id: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
@@ -236,7 +241,14 @@ class ReplayV2IntersectionMetric5Min(_ReplayV2Aggregate, Base):
     __tablename__ = "uav_replay_v2_intersection_metrics_5min"
 
     __table_args__ = (
-        UniqueConstraint("window_start", "inter_id", "source_profile_id", "mission_id", "calc_version", name="uq_uav_replay_v2_intersection_5min"),
+        UniqueConstraint(
+            "window_start",
+            "inter_id",
+            "source_profile_id",
+            "mission_id",
+            "calc_version",
+            name="uq_uav_replay_v2_intersection_5min",
+        ),
     )
 
 
@@ -247,8 +259,13 @@ class ReplayV2LinkMetric5Min(_ReplayV2Aggregate, Base):
 
     __table_args__ = (
         UniqueConstraint(
-            "window_start", "inter_id", "source_profile_id", "mission_id",
-            "calc_version", "link_id", name="uq_uav_replay_v2_link_5min",
+            "window_start",
+            "inter_id",
+            "source_profile_id",
+            "mission_id",
+            "calc_version",
+            "link_id",
+            name="uq_uav_replay_v2_link_5min",
         ),
     )
 
@@ -260,8 +277,13 @@ class ReplayV2LaneMetric5Min(_ReplayV2Aggregate, Base):
 
     __table_args__ = (
         UniqueConstraint(
-            "window_start", "inter_id", "source_profile_id", "mission_id",
-            "calc_version", "lane_id", name="uq_uav_replay_v2_lane_5min",
+            "window_start",
+            "inter_id",
+            "source_profile_id",
+            "mission_id",
+            "calc_version",
+            "lane_id",
+            name="uq_uav_replay_v2_lane_5min",
         ),
     )
 
@@ -273,8 +295,13 @@ class ReplayV2TurnMetric5Min(_ReplayV2Aggregate, Base):
 
     __table_args__ = (
         UniqueConstraint(
-            "window_start", "inter_id", "source_profile_id", "mission_id",
-            "calc_version", "movement_key", name="uq_uav_replay_v2_turn_5min",
+            "window_start",
+            "inter_id",
+            "source_profile_id",
+            "mission_id",
+            "calc_version",
+            "movement_key",
+            name="uq_uav_replay_v2_turn_5min",
         ),
     )
 
@@ -296,7 +323,14 @@ class ReplayV2InterEvaluation5MinMM(Base):
     quality_status: Mapped[str] = mapped_column(String(24), nullable=False)
 
     __table_args__ = (
-        UniqueConstraint("inter_id", "source_profile_id", "day_of_week", "step_index", "profile_version", name="uq_uav_replay_v2_inter_mm"),
+        UniqueConstraint(
+            "inter_id",
+            "source_profile_id",
+            "day_of_week",
+            "step_index",
+            "profile_version",
+            name="uq_uav_replay_v2_inter_mm",
+        ),
     )
 
 
@@ -317,3 +351,59 @@ REPLAY_V2_TABLES = (
     ReplayV2TurnMetric5Min.__table__,
     ReplayV2InterEvaluation5MinMM.__table__,
 )
+
+
+class ReplayV2IngestReceipt(Base):
+    __tablename__ = "uav_replay_v2_ingest_receipts"
+    message_id: Mapped[str] = mapped_column(String(160), primary_key=True)
+    message_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    deployment_id: Mapped[str] = mapped_column(String(100), nullable=False)
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default="pending", index=True)
+    committed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class ReplayV2TrackRelation(Base):
+    __tablename__ = "uav_replay_v2_track_relations"
+    id: Mapped[str] = mapped_column(String(100), primary_key=True)
+    mission_id: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
+    predecessor_id: Mapped[str] = mapped_column(String(100), nullable=False)
+    successor_id: Mapped[str] = mapped_column(String(100), nullable=False)
+    evidence: Mapped[dict] = mapped_column(JSON, nullable=False)
+    state: Mapped[str] = mapped_column(String(24), nullable=False, default="pending", index=True)
+    __table_args__ = (
+        UniqueConstraint("mission_id", "predecessor_id", name="uq_uav_relation_predecessor"),
+        UniqueConstraint("mission_id", "successor_id", name="uq_uav_relation_successor"),
+    )
+
+
+class ReplayV2TrackChunk(Base):
+    __tablename__ = "uav_replay_v2_track_chunks"
+    logical_message_id: Mapped[str] = mapped_column(String(160), primary_key=True)
+    chunk_seq: Mapped[int] = mapped_column(Integer, primary_key=True)
+    payload: Mapped[dict] = mapped_column(JSON, nullable=False)
+
+
+class ReplayV2TrackGroup(Base):
+    __tablename__ = "uav_replay_v2_track_groups"
+    mission_id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    track_id: Mapped[str] = mapped_column(String(100), primary_key=True)
+    root_track_id: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+
+
+class ReplayV2TrackWindow(Base):
+    __tablename__ = "uav_replay_v2_track_windows"
+    mission_id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    track_id: Mapped[str] = mapped_column(String(100), primary_key=True)
+    window_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), primary_key=True)
+    __table_args__ = (
+        Index("ix_uav_track_window_lookup", "mission_id", "window_start", "track_id"),
+    )
+
+
+class ReplayV2DirtyWindow(Base):
+    __tablename__ = "uav_replay_v2_dirty_windows"
+    mission_id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    window_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), primary_key=True)
+    generation: Mapped[int] = mapped_column(BigInteger, nullable=False, default=1)
+    processed_generation: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    dirty: Mapped[int] = mapped_column(Integer, nullable=False, default=1, index=True)

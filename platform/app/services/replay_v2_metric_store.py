@@ -8,7 +8,10 @@ import re
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import delete, func, select, text, update
+from sqlalchemy import delete, func, insert, select, text, update
+from utils_local.track_message_codec import unpack_track_message
+from utils_local.trajectory_sampling import VERSION as SAMPLING_V2
+from utils_local.trajectory_sampling import validate_summary
 
 from app.core.config import settings
 from app.models.replay_v2 import (
@@ -32,8 +35,8 @@ from app.services.metric_store import (
     MessageEnvelope,
     MessageIdentityConflict,
     MetricContractError,
-    PostgresMetricStoreAdapter,
     PersistResult,
+    PostgresMetricStoreAdapter,
     _granularity_seconds,
     _period_start,
 )
@@ -42,17 +45,9 @@ from app.services.replay_v2_conflict_evidence import (
     register_replay_v2_conflict_evidence,
 )
 
-
-REPLAY_V2_TOPIC_PATTERN = re.compile(
-    r"uav_replay_v2_(statistics|track_complete|conflicts|telemetry|mission)_([A-Za-z0-9._-]+)"
-)
-EXPECTED_TYPES = {
-    "statistics": "uav_stats",
-    "track_complete": "uav_track_complete",
-    "conflicts": "uav_conflict",
-    "telemetry": "uav_telemetry",
-    "mission": "uav_replay_mission",
-}
+from utils_local.replay_topics import FIXED_TOPICS
+from app.models.replay_v2 import ReplayV2IngestReceipt, ReplayV2TrackRelation
+EXPECTED_TYPES = {topic: kind for kind, topic in FIXED_TOPICS.items()}
 
 
 def _parse_datetime(value: Any) -> datetime:
@@ -82,14 +77,17 @@ def _required_offset_ms(data: dict) -> int:
         offset_ms = int(raw_offset)
     except (TypeError, ValueError) as exc:
         raise MetricContractError("replay timed fact offset_ms is invalid") from exc
-    if offset_ms < 0 or (
-        isinstance(raw_offset, float) and not raw_offset.is_integer()
-    ):
+    if offset_ms < 0 or (isinstance(raw_offset, float) and not raw_offset.is_integer()):
         raise MetricContractError("replay timed fact offset_ms is invalid")
     return offset_ms
 
 
 class ReplayV2MetricStoreAdapter:
+    async def _add_ingest_receipt(self, session, envelope, normalized):
+        from app.services.metric_store import record_ingest_receipt
+
+        await record_ingest_receipt(session, envelope, normalized)
+
     """Replay-v2 MetricStore adapter; it never writes canonical fact tables."""
 
     def __init__(self, session_maker, *, evidence_storage_root: str | None = None) -> None:
@@ -97,17 +95,29 @@ class ReplayV2MetricStoreAdapter:
         self._evidence_storage_root = evidence_storage_root or settings.survey_storage_dir
 
     def _normalize(self, envelope: MessageEnvelope) -> dict:
-        match = REPLAY_V2_TOPIC_PATTERN.fullmatch(envelope.topic)
-        if match is None:
+        from utils_local.message_identity import validate_payload
+        try:
+            validate_payload(envelope.payload)
+        except ValueError as error:
+            raise MetricContractError(str(error)) from error
+        match = envelope.topic in EXPECTED_TYPES
+        if not match:
             raise MetricContractError("unsupported replay-v2 Topic")
-        payload = envelope.payload
+        try:
+            payload = (
+                unpack_track_message(envelope.payload)
+                if isinstance(envelope.payload, dict)
+                else envelope.payload
+            )
+        except (ValueError, OSError, KeyError, TypeError) as error:
+            raise MetricContractError("invalid packed replay track geometry") from error
         if not isinstance(payload, dict) or not isinstance(payload.get("data"), dict):
             raise MetricContractError("replay-v2 message requires an object data field")
         message_id = str(payload.get("message_id") or "")
         if not message_id:
             raise MetricContractError("replay-v2 message_id is required")
         msg_type = str(payload.get("msg_type") or "")
-        if msg_type != EXPECTED_TYPES[match.group(1)]:
+        if msg_type != EXPECTED_TYPES[envelope.topic] and not (envelope.topic == "uav_track_complete" and msg_type == "uav_track_chunk"):
             raise MetricContractError("replay-v2 Topic and msg_type do not match")
         if payload.get("source_system") != "uav_traffic_analyzer_ai":
             raise MetricContractError("replay-v2 source_system is unsupported")
@@ -119,7 +129,7 @@ class ReplayV2MetricStoreAdapter:
             "msg_type": msg_type,
             "produced_at": produced_at,
             "occurred_at": occurred_at,
-            "source_key": match.group(2),
+            "source_key": str(payload["data"].get("source_profile_id") or ""),
         }
 
     async def persist(self, envelope: MessageEnvelope) -> PersistResult:
@@ -163,6 +173,14 @@ class ReplayV2MetricStoreAdapter:
                             received_at=datetime.now(UTC),
                         )
                     )
+                if value['msg_type'] in {'uav_track_complete', 'uav_track_chunk', 'uav_replay_mission', 'uav_track_relation'}:
+                    receipt = await session.get(ReplayV2IngestReceipt, value['message_id'])
+                    if receipt is None:
+                        session.add(ReplayV2IngestReceipt(message_id=value['message_id'],
+                            message_hash=payload_hash, deployment_id=str(value.get('deployment_id') or 'local'),
+                            status='pending', committed_at=datetime.now(UTC)))
+                    else:
+                        receipt.status = 'pending'
         mission_id = str(value["data"].get("mission_id") or "")
         if mission_id and value["msg_type"] in {
             "uav_stats",
@@ -184,10 +202,30 @@ class ReplayV2MetricStoreAdapter:
 
     async def _add_facts(self, session, envelope: MessageEnvelope, value: dict) -> list[str]:
         data = value["data"]
+        if value['msg_type'] == 'uav_track_chunk':
+            return await self._add_chunk(session, envelope, value, data)
         if value["msg_type"] == "uav_replay_mission":
             return await self._add_mission(session, value, data)
         if value["msg_type"] == "uav_track_complete":
-            return self._add_track(session, value, data)
+            await self._ensure_track_mission(session, value, data)
+            references = await self._add_track(session, value, data)
+            if data.get('archive_schema_version') == 'incremental/v1':
+                from app.services.incremental_replay_jobs import register_track
+                mission = await session.scalar(select(ReplayV2Mission).where(ReplayV2Mission.id == data['mission_id']).with_for_update())
+                await register_track(session, mission, data)
+            return references
+        if value["msg_type"] == "uav_track_relation":
+            evidence = data.get('evidence') or {}
+            if (not data.get('mission_id') or not data.get('predecessor_id') or not data.get('successor_id')
+                or str(data['predecessor_id']) == str(data['successor_id'])
+                or not 0 < float(evidence.get('temporal_gap_sec', 0)) <= 2
+                or float(evidence.get('appearance_cosine', 0)) < 0.9
+                or evidence.get('motion_space') not in {'enu_m', 'pixel'}
+                or not 0 <= float(evidence.get('motion_distance', -1)) <= (5 if evidence.get('motion_space') == 'enu_m' else 50)):
+                raise MetricContractError('invalid trajectory relation evidence')
+            session.add(ReplayV2TrackRelation(id=value['message_id'], mission_id=data['mission_id'],
+                predecessor_id=str(data['predecessor_id']), successor_id=str(data['successor_id']), evidence=data['evidence']))
+            return [f"uav_replay_v2_track_relations:{value['message_id']}"]
         if value["msg_type"] == "uav_stats":
             return self._add_stats(session, value, data)
         if value["msg_type"] == "uav_conflict":
@@ -195,6 +233,60 @@ class ReplayV2MetricStoreAdapter:
         if value["msg_type"] == "uav_telemetry":
             return self._add_telemetry(session, value, data)
         raise MetricContractError("unsupported replay-v2 msg_type")
+
+    async def _add_chunk(self, session, envelope, value, data):
+        import base64, gzip, io
+        from app.models.replay_v2 import ReplayV2TrackChunk
+        from utils_local.track_message_codec import MAX_INFLATED
+        logical=str(data.get('logical_message_id') or '')
+        count, seq, size=data.get('chunk_count'),data.get('chunk_seq'),data.get('decoded_bytes')
+        if (not logical or type(count) is not int or not 1<=count<=256 or type(seq) is not int
+            or not 0<=seq<count or type(size) is not int or not 0<size<=MAX_INFLATED
+            or not isinstance(data.get('base64'),str) or len(data['base64'])>550000):
+            raise MetricContractError('invalid trajectory chunk bounds')
+        base64.b64decode(data['base64'],validate=True)
+        old=await session.get(ReplayV2TrackChunk,(logical,seq))
+        if old and old.payload!=data: raise MessageIdentityConflict('trajectory chunk identity conflict')
+        if not old: session.add(ReplayV2TrackChunk(logical_message_id=logical,chunk_seq=seq,payload=data))
+        await session.flush()
+        rows=(await session.execute(select(ReplayV2TrackChunk).where(ReplayV2TrackChunk.logical_message_id==logical).order_by(ReplayV2TrackChunk.chunk_seq))).scalars().all()
+        if len(rows)<count: return [f'uav_replay_v2_track_chunks:{logical}:{seq}']
+        if len(rows)!=count or any(row.chunk_seq!=i or any(row.payload.get(k)!=data.get(k) for k in ('chunk_count','logical_sha256','decoded_bytes','mission_id','source_profile_id')) for i,row in enumerate(rows)):
+            raise MetricContractError('trajectory chunk manifest conflict')
+        compressed=b''.join(base64.b64decode(row.payload['base64'],validate=True) for row in rows)
+        with gzip.GzipFile(fileobj=io.BytesIO(compressed)) as stream: raw=stream.read(size+1)
+        if len(raw)!=size or hashlib.sha256(raw).hexdigest()!=data['logical_sha256']:
+            raise MetricContractError('trajectory logical checksum mismatch')
+        payload=json.loads(raw)
+        if payload.get('message_id')!=logical or payload.get('msg_type')!='uav_track_complete' or payload.get('deployment_id')!=value.get('deployment_id'):
+            raise MetricContractError('trajectory chunk lineage conflict')
+        logical_envelope=MessageEnvelope(payload,envelope.topic,envelope.partition,envelope.offset)
+        normalized=self._normalize(logical_envelope)
+        existing=await session.scalar(select(ReplayV2MessageInbox).where(ReplayV2MessageInbox.message_id==logical))
+        if existing:
+            if existing.message_hash!=_hash(payload): raise MessageIdentityConflict('logical trajectory identity conflict')
+            return list(existing.fact_refs)
+        references=await self._add_facts(session,logical_envelope,normalized)
+        session.add(ReplayV2MessageInbox(id=_fact_id('inbox',logical),message_id=logical,message_hash=_hash(payload),
+            msg_type='uav_track_complete',topic=envelope.topic,partition=envelope.partition,offset=envelope.offset,
+            status='pending',fact_refs=references,received_at=datetime.now(UTC)))
+        return references
+
+    async def _ensure_track_mission(self, session, value, data):
+        mission = await session.scalar(select(ReplayV2Mission).where(ReplayV2Mission.id == data['mission_id']).with_for_update())
+        if mission is None:
+            await self._add_mission(session, value, {
+                **data, 'status': 'running', 'journey_count': 0,
+                'duration_sec': max((p['offset_ms'] for p in data.get('points', [])), default=0)/1000,
+                'source_point_count':0, 'retained_point_count':0, 'behavior_count':0,
+            })
+            await session.flush()
+            mission = await session.scalar(select(ReplayV2Mission).where(ReplayV2Mission.id == data['mission_id']).with_for_update())
+        if mission.inter_id != str(value.get('inter_id') or value.get('intersection_id') or '') or mission.source_profile_id != value['source_key']:
+            raise MetricContractError('trajectory Mission lineage conflict')
+        mission.duration_ms = max(mission.duration_ms or 0, max(p['offset_ms'] for p in data['points']))
+        if mission.status not in {'sealed','finalizing'}:
+            mission.journey_count = (mission.journey_count or 0) + 1
 
     async def _add_mission(self, session, value: dict, data: dict) -> list[str]:
         mission_id = str(data.get("mission_id") or "")
@@ -211,7 +303,7 @@ class ReplayV2MetricStoreAdapter:
             "source_profile_id": source_profile_id,
             "pipeline_id": data.get("pipeline_id"),
             "run_id": data.get("run_id"),
-            "status": str(data.get("status") or "incomplete"),
+            "status": "finalizing" if data.get("status") == "sealed" else str(data.get("status") or "incomplete"),
             "started_at": started_at,
             "ended_at": ended_at,
             "duration_ms": duration_ms,
@@ -224,28 +316,50 @@ class ReplayV2MetricStoreAdapter:
             "accuracy": data.get("accuracy") or {},
             "failure_reason": data.get("failure_reason"),
             "sealed_at": value["produced_at"] if data.get("status") == "sealed" else None,
+            "segment_manifest_hash": data.get("segment_manifest_hash"),
+            "expected_relation_count": data.get("expected_relation_count"),
             "created_at": value["produced_at"],
             "updated_at": value["produced_at"],
         }
-        existing = await session.get(ReplayV2Mission, mission_id)
+        existing = await session.scalar(select(ReplayV2Mission).where(ReplayV2Mission.id==mission_id).with_for_update())
+        if existing is not None and (existing.inter_id != inter_id or existing.source_profile_id != source_profile_id):
+            raise MetricContractError('Mission lifecycle lineage conflict')
+        if existing is not None and row['status']=='running':
+            row['algorithm_versions']={**(existing.algorithm_versions or {}),**row['algorithm_versions']}
         if existing is None:
             session.add(ReplayV2Mission(**row))
-        elif existing.status != "sealed" or row["status"] == "sealed":
+        elif (existing.status != "sealed" or row["status"] == "sealed") and not (row["status"] == "running" and existing.status != "running"):
             # A durable incomplete diagnostic is a recoverable state.  A later
             # natural-EOF seal upgrades the same Mission fact in place; a late
             # incomplete event can never downgrade an already sealed Mission.
             for key, item in row.items():
-                if key not in {"id", "created_at"}:
+                if key not in {"id", "created_at"} and not (row["status"] == "running" and key in {"duration_ms", "journey_count", "started_at", "source_point_count", "retained_point_count", "behavior_count", "coordinate_coverage_ratio"}):
                     setattr(existing, key, item)
         return [f"uav_replay_v2_missions:{mission_id}"]
 
-    def _add_track(self, session, value: dict, data: dict) -> list[str]:
+    async def _add_track(self, session, value: dict, data: dict) -> list[str]:
         mission_id = str(data.get("mission_id") or "")
         track_id = str(data.get("track_id") or "")
         inter_id = str(value.get("inter_id") or value.get("intersection_id") or "")
         points = data.get("points") or []
         if not mission_id or not track_id or not points:
             raise MetricContractError("sealed replay track requires mission, track and points")
+        if data.get('segment_digest') is not None and re.fullmatch(r'[0-9a-f]{64}',str(data['segment_digest'])) is None:
+            raise MetricContractError('invalid source segment digest')
+        version = (data.get("sampling") or {}).get("algorithm_version")
+        if version not in {None, "event-faithful/v1", SAMPLING_V2}:
+            raise MetricContractError("unsupported replay history sampling version")
+        if (data.get("sampling") or {}).get("algorithm_version") == SAMPLING_V2:
+            try:
+                validate_summary(data["sampling"], source_count=data.get("source_point_count"))
+                if (
+                    type(data.get("source_point_count")) is not int
+                    or len(points) != data.get("retained_point_count")
+                    or not 0 < len(points) <= data["source_point_count"]
+                ):
+                    raise ValueError("v2 geometry count mismatch")
+            except (ValueError, KeyError, TypeError) as error:
+                raise MetricContractError("invalid full-sequence sampling summary") from error
         event_id = _fact_id(mission_id, track_id)
         session.add(
             ReplayV2TrackEvent(
@@ -254,7 +368,10 @@ class ReplayV2MetricStoreAdapter:
                 inter_id=inter_id,
                 source_profile_id=str(data.get("source_profile_id") or value["source_key"]),
                 track_id=track_id,
-                source_runtime_track_ids=[str(item) for item in data.get("source_runtime_track_ids") or []],
+                segment_digest=data.get("segment_digest"),
+                source_runtime_track_ids=[
+                    str(item) for item in data.get("source_runtime_track_ids") or []
+                ],
                 vehicle_class=data.get("vehicle_class"),
                 yolo_class_id=data.get("yolo_class_id"),
                 yolo_class_name=data.get("yolo_class_name"),
@@ -272,14 +389,15 @@ class ReplayV2MetricStoreAdapter:
             )
         )
         references = [f"uav_replay_v2_track_events:{event_id}"]
+        point_rows = []
         for index, point in enumerate(points):
             enu = point.get("enu_m")
             gcj02 = point.get("gcj02")
             speed = point.get("speed") or {}
             vector = speed.get("enu_vector_mps")
             point_id = _fact_id(mission_id, track_id, index)
-            session.add(
-                ReplayV2TrackPoint(
+            point_rows.append(
+                dict(
                     id=point_id,
                     mission_id=mission_id,
                     track_id=track_id,
@@ -302,6 +420,11 @@ class ReplayV2MetricStoreAdapter:
                     sampling_boundary=point.get("sampling_boundary") or [],
                 )
             )
+            if len(point_rows) >= 1000:
+                await session.execute(insert(ReplayV2TrackPoint), point_rows)
+                point_rows.clear()
+        if point_rows:
+            await session.execute(insert(ReplayV2TrackPoint), point_rows)
         for kind, model in (("episodes", ReplayV2Episode), ("maneuvers", ReplayV2Maneuver)):
             for index, behavior in enumerate(data.get(kind) or []):
                 behavior_id = _fact_id(mission_id, track_id, kind, index)
@@ -317,7 +440,9 @@ class ReplayV2MetricStoreAdapter:
                         quality_status=str(behavior.get("quality_status") or "estimated"),
                         reason=behavior.get("reason"),
                         evidence=behavior.get("evidence") or {},
-                        algorithm_version=str(behavior.get("algorithm_version") or "trajectory-behavior/v1"),
+                        algorithm_version=str(
+                            behavior.get("algorithm_version") or "trajectory-behavior/v1"
+                        ),
                     )
                 )
                 references.append(f"{model.__tablename__}:{behavior_id}")
@@ -373,9 +498,7 @@ class ReplayV2MetricStoreAdapter:
             statement = statement.where(ReplayV2Mission.pipeline_id == pipeline_id)
         async with self._session_maker() as session:
             rows = (
-                await session.execute(
-                    statement.order_by(ReplayV2TrafficMetricSample.sampled_at)
-                )
+                await session.execute(statement.order_by(ReplayV2TrafficMetricSample.sampled_at))
             ).all()
         summaries = [
             {
@@ -429,15 +552,11 @@ class ReplayV2MetricStoreAdapter:
             .where(ReplayV2ConflictEvent.inter_id == inter_id)
         )
         if source_profile_id:
-            statement = statement.where(
-                ReplayV2Mission.source_profile_id == source_profile_id
-            )
+            statement = statement.where(ReplayV2Mission.source_profile_id == source_profile_id)
         if pipeline_id:
             statement = statement.where(ReplayV2Mission.pipeline_id == pipeline_id)
         if prediction_type:
-            statement = statement.where(
-                ReplayV2ConflictEvent.prediction_type == prediction_type
-            )
+            statement = statement.where(ReplayV2ConflictEvent.prediction_type == prediction_type)
         period_start = _period_start(period)
         async with self._session_maker() as session:
             rows = (
@@ -524,9 +643,7 @@ class ReplayV2MetricStoreAdapter:
                     str(data["motor_id"]) if data.get("motor_id") is not None else None
                 ),
                 non_motor_track_id=(
-                    str(data["non_motor_id"])
-                    if data.get("non_motor_id") is not None
-                    else None
+                    str(data["non_motor_id"]) if data.get("non_motor_id") is not None else None
                 ),
                 distance_m=data.get("distance_m"),
                 conflict_scene=data.get("conflict_scene"),
@@ -571,7 +688,11 @@ class ReplayV2MetricStoreAdapter:
         async with self._session_maker() as session:
             async with session.begin():
                 mission = await session.get(ReplayV2Mission, mission_id)
-                if mission is None or mission.status != "sealed":
+                if mission is None or mission.status not in {"sealed", "finalizing"}:
+                    return
+                if (mission.algorithm_versions or {}).get('archive') == 'incremental/v1':
+                    from app.services.incremental_replay_jobs import IncrementalReplayJobs
+                    await IncrementalReplayJobs.finalize(session, mission)
                     return
                 event_count = int(
                     await session.scalar(
@@ -583,38 +704,61 @@ class ReplayV2MetricStoreAdapter:
                 )
                 if event_count != mission.journey_count:
                     return
+                mission.status = "sealed"
 
                 events = (
-                    await session.execute(
-                        select(ReplayV2TrackEvent)
-                        .where(ReplayV2TrackEvent.mission_id == mission_id)
-                        .order_by(ReplayV2TrackEvent.track_id)
-                    )
-                ).scalars().all()
-                points = (
-                    await session.execute(
-                        select(ReplayV2TrackPoint)
-                        .where(ReplayV2TrackPoint.mission_id == mission_id)
-                        .order_by(ReplayV2TrackPoint.track_id, ReplayV2TrackPoint.point_seq)
-                    )
-                ).scalars().all()
-                episodes = (
-                    await session.execute(
-                        select(ReplayV2Episode).where(ReplayV2Episode.mission_id == mission_id)
-                    )
-                ).scalars().all()
-                maneuvers = (
-                    await session.execute(
-                        select(ReplayV2Maneuver).where(ReplayV2Maneuver.mission_id == mission_id)
-                    )
-                ).scalars().all()
-                samples = (
-                    await session.execute(
-                        select(ReplayV2TrafficMetricSample).where(
-                            ReplayV2TrafficMetricSample.mission_id == mission_id
+                    (
+                        await session.execute(
+                            select(ReplayV2TrackEvent)
+                            .where(ReplayV2TrackEvent.mission_id == mission_id)
+                            .order_by(ReplayV2TrackEvent.track_id)
                         )
                     )
-                ).scalars().all()
+                    .scalars()
+                    .all()
+                )
+                points = (
+                    (
+                        await session.execute(
+                            select(ReplayV2TrackPoint)
+                            .where(ReplayV2TrackPoint.mission_id == mission_id)
+                            .order_by(ReplayV2TrackPoint.track_id, ReplayV2TrackPoint.point_seq)
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
+                episodes = (
+                    (
+                        await session.execute(
+                            select(ReplayV2Episode).where(ReplayV2Episode.mission_id == mission_id)
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
+                maneuvers = (
+                    (
+                        await session.execute(
+                            select(ReplayV2Maneuver).where(
+                                ReplayV2Maneuver.mission_id == mission_id
+                            )
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
+                samples = (
+                    (
+                        await session.execute(
+                            select(ReplayV2TrafficMetricSample).where(
+                                ReplayV2TrafficMetricSample.mission_id == mission_id
+                            )
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
 
                 points_by_track: dict[str, list[dict]] = {}
                 for point in points:
@@ -635,6 +779,8 @@ class ReplayV2MetricStoreAdapter:
                 journeys = [
                     {
                         "track_id": event.track_id,
+                        "sampling": event.sampling,
+                        "source_point_count": event.source_point_count,
                         "started_offset_ms": event.started_offset_ms,
                         "matched_link_id": event.matched_link_id,
                         "matched_lane_key": event.matched_lane_key,
@@ -693,7 +839,11 @@ class ReplayV2MetricStoreAdapter:
                         session.add(
                             model(
                                 id=_fact_id(
-                                    "aggregate", grain, mission_id, row["window_start"], dimension,
+                                    "aggregate",
+                                    grain,
+                                    mission_id,
+                                    row["window_start"],
+                                    dimension,
                                     calc_version,
                                 ),
                                 **row,
@@ -718,13 +868,17 @@ class ReplayV2MetricStoreAdapter:
         """Recompute one source's typical matrix from actual five-minute facts."""
 
         actual = (
-            await session.execute(
-                select(ReplayV2IntersectionMetric5Min).where(
-                    ReplayV2IntersectionMetric5Min.source_profile_id == source_profile_id,
-                    ReplayV2IntersectionMetric5Min.calc_version == calc_version,
+            (
+                await session.execute(
+                    select(ReplayV2IntersectionMetric5Min).where(
+                        ReplayV2IntersectionMetric5Min.source_profile_id == source_profile_id,
+                        ReplayV2IntersectionMetric5Min.calc_version == calc_version,
+                    )
                 )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         grouped: dict[tuple[str, int, int], list] = {}
         for row in actual:
             key = (
@@ -741,12 +895,20 @@ class ReplayV2MetricStoreAdapter:
             )
         )
         for (inter_id, day_of_week, step_index), rows in grouped.items():
-            vehicle_values = [float(row.vehicle_count) for row in rows if row.vehicle_count is not None]
-            speed_values = [float(row.avg_speed_kmh) for row in rows if row.avg_speed_kmh is not None]
+            vehicle_values = [
+                float(row.vehicle_count) for row in rows if row.vehicle_count is not None
+            ]
+            speed_values = [
+                float(row.avg_speed_kmh) for row in rows if row.avg_speed_kmh is not None
+            ]
             session.add(
                 ReplayV2InterEvaluation5MinMM(
                     id=_fact_id(
-                        "typical", source_profile_id, inter_id, day_of_week, step_index,
+                        "typical",
+                        source_profile_id,
+                        inter_id,
+                        day_of_week,
+                        step_index,
                         profile_version,
                     ),
                     inter_id=inter_id,
@@ -755,7 +917,9 @@ class ReplayV2MetricStoreAdapter:
                     step_index=step_index,
                     profile_version=profile_version,
                     sample_days=len({row.window_start.date() for row in rows}),
-                    vehicle_count=(sum(vehicle_values) / len(vehicle_values)) if vehicle_values else None,
+                    vehicle_count=(sum(vehicle_values) / len(vehicle_values))
+                    if vehicle_values
+                    else None,
                     avg_speed_kmh=(sum(speed_values) / len(speed_values)) if speed_values else None,
                     saturation=None,
                     saturation_reason="lane_capacity_unavailable",
@@ -772,7 +936,9 @@ class ReplayV2MetricStoreAdapter:
             )
             await session.commit()
 
-    async def mark_dispatch_failed(self, source_system: str, message_id: str, error: Exception) -> None:
+    async def mark_dispatch_failed(
+        self, source_system: str, message_id: str, error: Exception
+    ) -> None:
         async with self._session_maker() as session:
             await session.execute(
                 update(ReplayV2MessageInbox)
@@ -796,12 +962,18 @@ class ReplayV2MetricStoreAdapter:
                     quarantined_at=datetime.now(UTC),
                 )
             )
+            payload = envelope.payload
+            if payload.get('transport_version') == 'uav-fixed/v2' and payload.get('message_id'):
+                receipt = await session.get(ReplayV2IngestReceipt, payload['message_id'])
+                if receipt is None:
+                    session.add(ReplayV2IngestReceipt(message_id=payload['message_id'], message_hash=_hash(payload),
+                        deployment_id=str(payload.get('deployment_id') or 'local'), status='quarantined', committed_at=datetime.now(UTC)))
             await session.commit()
         return dead_letter_id
 
     async def capabilities(self) -> dict[str, bool]:
         async with self._session_maker() as session:
-            enabled = await session.scalar(text(
-                "SELECT EXISTS (SELECT 1 FROM pg_extension WHERE extname='timescaledb')"
-            ))
+            enabled = await session.scalar(
+                text("SELECT EXISTS (SELECT 1 FROM pg_extension WHERE extname='timescaledb')")
+            )
         return {"postgresql": True, "timescaledb": bool(enabled)}

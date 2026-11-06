@@ -24,7 +24,7 @@ class _Producer:
         self.fail = fail
         self.sent = []
 
-    def send(self, topic, value):
+    def send(self, topic, value, key=None):
         if self.fail:
             return _Future(RuntimeError("kafka unavailable"))
         self.sent.append((topic, value))
@@ -42,7 +42,7 @@ def test_durable_eof_burst_drains_every_accepted_message_before_shutdown(tmp_pat
             assert release.wait(timeout)
 
     class Producer(_Producer):
-        def send(self, topic, value):
+        def send(self, topic, value, key=None):
             self.sent.append((topic, value))
             return Future()
 

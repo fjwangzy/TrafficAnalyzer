@@ -107,9 +107,12 @@ async def lifespan(app: FastAPI):
         if db_available
         else None
     )
+    if db_available:
+        from app.services.routed_metric_store import RoutedMetricStore
+        metric_store = RoutedMetricStore(metric_store, PostgresMetricStoreAdapter(async_session_maker), ReplayV2MetricStoreAdapter(async_session_maker))
     replay_repository = (
         PostgresReplayRepository(async_session_maker)
-        if db_available and replay_profile
+        if db_available
         else None
     )
     audit_service = AuditService(async_session_maker) if db_available else None
@@ -149,6 +152,16 @@ async def lifespan(app: FastAPI):
             logger.warning(f"Kafka consumer degraded: {settings.kafka_bootstrap}")
     except Exception as e:
         logger.warning(f"Kafka consumer failed to start (real-time disabled): {e}")
+
+    recovery_service = None
+    incremental_jobs = None
+    if db_available:
+        from app.services.trajectory_recovery import TrajectoryRecoveryService
+        recovery_service = TrajectoryRecoveryService(async_session_maker, settings.kafka_bootstrap, settings.kafka_security_options)
+        await recovery_service.start()
+        from app.services.incremental_replay_jobs import IncrementalReplayJobs
+        incremental_jobs = IncrementalReplayJobs(async_session_maker)
+        await incremental_jobs.start()
 
     # Pipeline manager (always available — manages detection pipeline processes)
     pipeline_manager = PipelineManager(
@@ -204,6 +217,10 @@ async def lifespan(app: FastAPI):
     await pipeline_manager.stop_all()
     if survey_worker:
         await survey_worker.stop()
+    if incremental_jobs:
+        await incremental_jobs.stop()
+    if recovery_service:
+        await recovery_service.stop()
     if kafka_service:
         await kafka_service.stop()
     await ws_manager.close_all()

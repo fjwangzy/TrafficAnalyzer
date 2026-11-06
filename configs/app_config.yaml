@@ -12,9 +12,28 @@ hydra:
 # ----------------------------------------------- PIPELINE -------------------------------------------------
 
 pipeline:
+  egress_enabled: ${oc.decode:${oc.env:PIPELINE_EGRESS_ENABLED,false}}
+  transport_views_optimized: ${oc.decode:${oc.env:PIPELINE_TRANSPORT_VIEWS_OPTIMIZED,true}}
+  egress_queue_maxsize: 32
+  egress_sqlite_cache_kib: ${oc.decode:${oc.env:PIPELINE_EGRESS_SQLITE_CACHE_KIB,16384}}  # bounded SQLite page-cache budget; 2048 restores prior budget
+  online_history_tail_points: 128  # four-worker cruise with ROAD_FEATURES_ENABLED=false only
+  egress_timeout_sec: 10.0
+  egress_startup_timeout_sec: 120.0
   save_video: False  # 保存处理后的最终视频
   show_in_web: True  # 在Web界面（Flask）中显示视频流处理结果，而不是使用cv2.imshow
   send_info_kafka: True  # 是否将信息发送到Kafka
+
+# Production enables these through the native release environment. Mac defaults stay unchanged.
+history_sampling:
+  enabled: ${oc.decode:${oc.env:HISTORY_SAMPLING_ENABLED,false}}
+  enu_error_m: 0.2
+  pixel_error_px: 2.0
+  moving_interval_sec: 0.5
+  stopped_interval_sec: 2.0
+  event_before_sec: 5.0
+  event_after_sec: 5.0
+  source_gap_sec: 0.5
+  heading_change_deg: 10.0
 
 # Mission-level rollback boundary. Existing records migrated as hover_only_legacy;
 # newly created plans use hover_cruise_v1.
@@ -62,6 +81,7 @@ detection_node:
     telemetry_hold_sec: 2.0
 
 tracking_node:
+  batch_position_gate: ${oc.decode:${oc.env:BATCH_POSITION_GATE,true}}
   # 使用 ByteTrack (https://github.com/ifzhang/ByteTrack)
   first_track_thresh: 0.05  # 初始化新轨迹的阈值；保留低置信度非机动车小目标
   second_track_thresh: 0.01  # 维持已有轨迹的低分匹配阈值

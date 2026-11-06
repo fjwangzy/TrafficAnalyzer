@@ -19,7 +19,7 @@ def test_v2_acceptance_identity_uses_stable_topics_and_unique_runtime_lineage():
     assert first["topics"] == second["topics"]
     assert first["mission_id"] != second["mission_id"]
     assert first["pipeline_id"] != second["pipeline_id"]
-    assert first["topics"][-1] == "uav_replay_v2_mission_SRC-MP4NEW-HY-0625-AM"
+    assert first["topics"][-1] == "uav_missions"
 
 
 def test_v2_acceptance_defaults_to_external_private_tmp_artifacts(monkeypatch):
@@ -76,7 +76,7 @@ def test_canonical_topic_guard_does_not_request_missing_topics(monkeypatch):
             pass
 
         def list_topics(self):
-            return ["uav_conflicts_18101"]
+            return ["uav_conflicts"]
 
         def close(self):
             pass
@@ -100,11 +100,11 @@ def test_canonical_topic_guard_does_not_request_missing_topics(monkeypatch):
 
     result = topic_end_offsets(
         "unused:9092",
-        ["uav_conflicts_18101", "uav_conflicts_18103"],
+        ["uav_conflicts", "uav_missing"],
     )
 
-    assert result == {"uav_conflicts_18101": {0: 3}}
-    assert requested == ["uav_conflicts_18101"]
+    assert result == {"uav_conflicts": {0: 3}}
+    assert requested == ["uav_conflicts"]
 
 
 def test_acceptance_topics_use_the_bounded_local_retention_contract(monkeypatch):
@@ -130,15 +130,15 @@ def test_acceptance_topics_use_the_bounded_local_retention_contract(monkeypatch)
 
     monkeypatch.setattr(acceptance, "KafkaAdminClient", FakeAdmin)
 
-    assert ensure_topics("unused:9092", ["uav_replay_v2_statistics_SRC-1"]) == [
-        "uav_replay_v2_statistics_SRC-1"
+    assert ensure_topics("unused:9092", ["uav_statistics"]) == [
+        "uav_statistics"
     ]
     assert created[0].topic_configs == {
         "retention.ms": "21600000",
         "retention.bytes": "268435456",
         "cleanup.policy": "delete",
     }
-    assert altered[0].name == "uav_replay_v2_statistics_SRC-1"
+    assert altered[0].name == "uav_statistics"
     assert altered[0].configs == created[0].topic_configs
 
 

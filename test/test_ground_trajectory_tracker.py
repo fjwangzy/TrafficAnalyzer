@@ -952,3 +952,26 @@ def test_legacy_timeout_reports_reason_and_completes_mature_track_once():
 
     repeated = accumulator.process(legacy_frame(5.0, False))
     assert repeated.completed_tracks is None
+
+
+def test_tracking_boundary_uses_builtin_coordinates_for_bounded_pickle_cost():
+    import pickle
+    BaseTrack._count = 0
+    tracker = _TrackingPipeline(_config())
+    accumulator = TrackerInfoUpdateNode(_config())
+    for index in range(10):
+        frame = tracker.process(_frame(index * .1, [20 + index, 20, 40 + index, 40]))
+        assert all(type(value) is int for box in frame.tracked_xyxy for value in box)
+        # Also protect the accumulator when an explicit legacy caller provides NumPy boxes.
+        frame.tracked_xyxy = [np.asarray(box, dtype=np.int64) for box in frame.tracked_xyxy]
+        frame = accumulator.process(frame)
+    assert len(frame.buffer_tracks) == 1
+    track = next(iter(frame.buffer_tracks.values()))
+    assert len(track.trajectory_points) == 10
+    assert all(type(value) is float for point in track.trajectory_points for value in point)
+    assert all(type(value) is float for point in track.ground_contact_points_px for value in point)
+    box = frame.tracked_xyxy[0]
+    assert track.trajectory_points[-1] == ((box[0] + box[2]) / 2., (box[1] + box[3]) / 2.)
+    assert track.ground_contact_points_px[-1] == ((box[0] + box[2]) / 2., float(box[3]))
+    restored = pickle.loads(pickle.dumps(frame))
+    assert next(iter(restored.buffer_tracks.values())).trajectory_points == track.trajectory_points

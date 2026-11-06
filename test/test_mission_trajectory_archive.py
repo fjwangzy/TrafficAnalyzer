@@ -51,7 +51,7 @@ def test_archive_only_exposes_natural_eof_missions_and_keeps_real_points_aligned
     assert archive.load_mission("MSN-V2-1")["status"] == "sealed"
 
 
-def test_replay_v2_producer_defers_completed_journeys_until_mission_seal(tmp_path):
+def test_replay_v2_producer_publishes_completed_journeys_before_mission_seal(tmp_path):
     sent = []
     producer = KafkaProducerNode.__new__(KafkaProducerNode)
     producer.storage_profile = "replay_v2"
@@ -87,8 +87,9 @@ def test_replay_v2_producer_defers_completed_journeys_until_mission_seal(tmp_pat
         source_is_realtime=False,
     )
 
-    assert producer.publish_completed_tracks(frame) == 0
-    assert sent == []
+    assert producer.publish_completed_tracks(frame) == 1
+    assert len(sent) == 1
+    assert sent[0][0] == topics.track_complete
 
     assert producer.seal_replay_mission(frame, termination_reason="natural_eof") == 1
     assert [topic for topic, _, _ in sent] == [topics.track_complete, topics.mission]
@@ -97,7 +98,7 @@ def test_replay_v2_producer_defers_completed_journeys_until_mission_seal(tmp_pat
     assert sent[1][1]["message_id"] == str(
         uuid.uuid5(
             uuid.NAMESPACE_URL,
-            "traffic-analyzer:uav-replay-v2-mission:MSN-V2-2:sealed",
+            "traffic-analyzer:MSN-V2-2:sealed",
         )
     )
 

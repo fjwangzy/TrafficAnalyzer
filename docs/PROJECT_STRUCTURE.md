@@ -1,4 +1,23 @@
+> 2026-11-04 新增接收端三版本基准scripts/benchmark_egress_receiver.py、现场吞吐核对scripts/accept_pipeline_fps.py及缓存/批量写入/类别惩罚差分回归；完整.3候选与限制见FPS_RECEIVER_REGRESSION_20261104.md。
+
+> 2026-11-04 新增scripts/benchmark_pipeline_transport.py与benchmark_association_gate.py、对应四进程视图/门控测试；实测与源码SHA记录于output/fps-optimization-20261104和FPS_OPTIMIZATION_LOCAL_VALIDATION_20261104.md。
+
 # PROJECT_STRUCTURE.md — TrafficAnalyzer 当前项目结构
+
+## 2026-11-03 四进程与事件采样模块
+
+services/PipelineEgress.py实现持久增量通道、只读发送帧、轨迹重建和归档worker；elements/RenderSnapshot.py为显示视图；nodes/EgressEvidenceNode.py保留图像owner并交付证据引用；utils_local/trajectory_sampling.py提供时间误差简化和全量统计摘要，track_message_codec.py提供大轨迹点数组的有界gzip传输，pipeline_processes.py管理故障清理。现有MissionTrajectoryArchive负责完整事实优先和最终采样；Platform沿用JSON字段入库、基于摘要聚合。检测入口仍为main_optimized.py；不是新增Platform微服务。测试与完整包说明见FOUR_PROCESS_SAMPLING_20261103.md。
+
+
+## 2026-11-03 原生.2与轨迹IPC优化
+
+GroundTrajectoryTrackerNode／TrackerInfoUpdateNode增加同值builtin坐标边界；test/native_trajectory_ipc_benchmark.py和native_track_scalar_equivalence.py复验完整历史传输及记录等价。新完整包说明/验证为NATIVE_DEPLOYMENT_2026.11.03.2.md、NATIVE_VALIDATION_2026.11.03.2.md；build_host_platform支持显式--readme/--validation-report，旧归档不覆盖。
+
+
+## 2026-11-03 原生应用全量包
+
+`deploy/native-platform/`包含统一traffic入口、现场配置/代理切换/监督进程/回退控制器及三spawn+共享内存runtime_smoke。`scripts/build_host_platform.py --native-release`从固定ARM64运行镜像生成完整独立应用包；`scripts/validate_native_release.py`派生根Compose隔离基础设施，`test/native_release_flow.py`验证原生私有运行库与真实DB/Console链路，控制器回归位于`test/test_native_platform.py`。现场操作见`docs/NATIVE_DEPLOYMENT.md`；不要求安装旧排查包或补丁。
+
 
 ## 2026-10-20 宿主Platform排查包
 
@@ -280,3 +299,10 @@ scripts/build_intranet_repair.py构建含私有Doris配置、离线PyMySQL和当
 
 2026.10.17-intranet.2：deploy/intranet/CHECK_TOOLS.md列出离线校验、导入、预检、初始化、状态/日志与ACL工具；
 db_readonly_checks.sql提供新生产目标ycx_prod.drone的DBA只读检查，topic_acl.py同时进入ARM64镜像。
+
+
+## 2026-11-04 增量轨迹后续工程验证
+
+运行期短窗口关系、按受影响窗口的分页聚合、源片段摘要对账、生产路网关闭四进程的ACK后历史裁剪、GeoJSON落盘导出及固定Topic显式初始化/只读检查已实现。Replay迁移head更新为20261104_rv2_0007，所有运行态需验证共享回执/Replay迁移。普通启动不DDL、不创建Topic；旧数据与旧Topic保留。验证范围、历史隔离清理事故和未完成的现场/故障验收详见[增量轨迹进度](INCREMENTAL_TRAJECTORIES_20261104.md)；完整包按2026.11.04.2验收候选交付，不宣称已达到现场30%FPS目标。
+
+2026-11-05诊断工具：`scripts/run_fps_audit.py`调用真实四进程入口并留存输入/源码清单与进程资源；`scripts/summarize_fps_audit.py`汇总窗口；`utils_local/detection_trace.py`供单进程节点剖析固定检测输入。完整口径见[FPS回归审计](FPS_REGRESSION_AUDIT_20261105.md)。

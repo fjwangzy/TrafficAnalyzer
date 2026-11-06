@@ -1,5 +1,15 @@
 # AGENTS.md
 
+## 2026-11-03 用户授权四进程与事件保真采样
+
+原生生产检测管道新增第四个Kafka/轨迹归档进程，实时分析与显示通过有界增量/快照解耦；main_optimized.py仍为唯一入口，Mac/MPS默认三进程与设备不变。新Replay V2任务先完整计算、冻结统计，再按event-faithful/v2采样（ENU0.2m/像素2px，移动0.5s/静止2s，关键窗口前后5s）。速度/P85聚合从全序列摘要读取，不从精简点重算。普通启动不DDL；数据版本产生后禁止恢复不支持v2摘要的旧消费者。源码/发布与现场验收分开记录，旧归档/数据保留。
+
+
+## 2026-11-03 用户授权生产应用原生部署
+
+用户确认UOS Server20/aarch64/Ascend310P3继续使用，Platform及其main_optimized.py检测子进程改为宿主原生运行；Console、数据库、Kafka及现场模型/视频/私有连接和数据保留。完整离线包统一使用`./traffic start --deployment-root <现有部署根>`首次启动，之后手动启停，不注册自启。此为生产应用运行拓扑例外，不改变Mac/MPS、canonical契约、认证/模型/依赖迁移门禁。普通启动不迁移；独立init-db显式执行。详见docs/NATIVE_DEPLOYMENT.md，现场UOS/NPU/性能未由本机验证替代。
+
+
 ## 2026-10-19 用户确认消费异常时优先最新数据
 
 历史Kafka offset仅作运输审计，不作为消息身份门禁。正式与Replay V2均使用稳定消息ID及内容哈希去重。
@@ -223,3 +233,12 @@ DATA_ROOT/postgres独立持久化，无宿主数据库端口；空目录自动�
 
 生产运行日志统一使用Python标准logging，包含时间/级别/PID/Pipeline/logger及异常栈；检测器输出由Platform单点采集并轮转，保持docker logs可见，宿主日志根为DATA_ROOT/logs。初始化与慢阶段必须有完成前的BEGIN/WAIT证据，禁止只用print或进度条承担运行诊断。
 内网兼容升级使用app-package源码包及app-compose入口，完整应用源码与Console构建资源按版本只读挂宿主，生成配置另放可写目录。保留原私有env、模型、视频、数据库和数据路径；迁移/依赖基线变化必须拒绝源码升级，另行发布。macOS原生MPS默认不变。
+
+
+## 2026-11-04 增量轨迹与固定Topic改造（工作中）
+
+用户已授权离场片段入库、短窗口重识别关联、手动停止保存中断轨迹、轨迹及必要任务事实的定向补偿，以及按业务类型固定Kafka Topic。该授权更新此前按相机/SourceProfile分Topic及所有消息异常跳过不补的约束；其他历史区间仍不自动补回。实现、验证、未完成项及本机隔离清理事故见[INCREMENTAL_TRAJECTORIES_20261104.md](docs/INCREMENTAL_TRAJECTORIES_20261104.md)。当前未完成整套验收，未发布新包。
+
+## 2026-11-04 .2归档接收回归修复候选
+
+新增128点磁盘尾部缓存、按包批量追加及原类别惩罚分块，完整数据/持久ACK/固定Topic及迁移不变。697项合并回归与Mac/ARM64组件基准通过；独立2026.11.04.3完整候选以DELIVERY为准，生产3 FPS与两小时长稳未验收。见docs/FPS_RECEIVER_REGRESSION_20261104.md。

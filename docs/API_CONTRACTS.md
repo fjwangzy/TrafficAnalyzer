@@ -1,4 +1,15 @@
+> 2026-11-04 本机优化保持egress协议1与canonical逻辑字段；P3 Track仅含显示字段和30点像素尾迹，P4事实仍保留原元数据/点数、按水位恢复。共享的是已脱离P2的元数据，归档同步编码后才交接显示；重试序号/hash/原字节、证据和双EOF保持。两项实现开关仅用于同版本新任务对照，不改变v2事实或Kafka消费策略。
+
 # API_CONTRACTS.md — TrafficAnalyzer API 契约
+
+## 2026-11-03 event-faithful/v2及四进程内部协议
+
+既有uav_* Topic、msg_type与信封身份/内容哈希门禁保持。新Replay V2轨迹sampling.algorithm_version=event-faithful/v2，包含固化的时空误差/心跳/事件窗口、geometry_compacted与full_sequence_summary。摘要携带与封存Mission.started_at相同的固定UTC时基、原始/世界/有效速度点数、绝对UTC五分钟桶的0.001km/h精确频数/count/sum；v2缺少、矛盾或时基不匹配不得退回稀疏点重算。旧v1按原语义读取，不批量回填。
+
+密集事件点可能超过原Kafka请求预算，v2 track_complete可将points替换为points_blob（codec=gzip-json/v1、decoded_bytes、count、sha256、base64）。编码缓存固定gzip时钟/信封，消费者有界解压验证长度/hash/点数后恢复逻辑points，入库与分发不暴露编码体；Inbox身份哈希仍按原始运输payload计算，持久重试复用完全相同编码。普通消息无需编码；编码后仍超预算时拒绝并保留原始/待发数据，不能删点通过门禁。回放API的sampling过滤内部full_sequence_summary，其他点字段保持。
+
+内部egress协议与Kafka offset无关：tracker只发送新增点/关闭与事实，show只发送文件描述/完成；32批队列，每批≤1024点。角色/序号/hash校验后写入fsync journal才ACK；缺口/冲突/10s停滞失败，不静默丢轨迹。两路EOF、水位、关闭点数、证据文件均校验后才封存/排空，120s关键消息排空失败不报成功。异常消费仍按已有“最新数据优先”规则处理。
+
 
 ## 2026-10-19 Console任务启动等待
 
@@ -1792,3 +1803,13 @@ DB_TIMESCALE_REQUIRED=false且扩展未启用时/ready的status可为ready、ser
 2026-10-17生产连接更新：瀚高UAV应用目标改为ycx_prod.drone、账号sysdba；
 预检/初始化/权限与版本查询按Settings核对实际目标，不写死旧xinchan.ycx_drone。
 REST/Kafka/WebSocket及Doris只读契约不变，本机road9默认不变。
+
+
+## 2026-11-04 增量轨迹与固定Topic改造（工作中）
+
+用户已授权离场片段入库、短窗口重识别关联、手动停止保存中断轨迹、轨迹及必要任务事实的定向补偿，以及按业务类型固定Kafka Topic。该授权更新此前按相机/SourceProfile分Topic及所有消息异常跳过不补的约束；其他历史区间仍不自动补回。实现、验证、未完成项及本机隔离清理事故见[INCREMENTAL_TRAJECTORIES_20261104.md](INCREMENTAL_TRAJECTORIES_20261104.md)。当前未完成整套验收，未发布新包。
+
+
+## 2026-11-04 增量轨迹后续工程验证
+
+运行期短窗口关系、按受影响窗口的分页聚合、源片段摘要对账、生产路网关闭四进程的ACK后历史裁剪、GeoJSON落盘导出及固定Topic显式初始化/只读检查已实现。Replay迁移head更新为20261104_rv2_0007，所有运行态需验证共享回执/Replay迁移。普通启动不DDL、不创建Topic；旧数据与旧Topic保留。验证范围、历史隔离清理事故和未完成的现场/故障验收详见[增量轨迹进度](INCREMENTAL_TRAJECTORIES_20261104.md)；完整包按2026.11.04.2验收候选交付，不宣称已达到现场30%FPS目标。

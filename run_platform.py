@@ -34,10 +34,12 @@ def configure_environment() -> None:
 
     os.environ.setdefault("KAFKA_BOOTSTRAP", "localhost:9092")
     os.environ.setdefault("KAFKA_CONSUMER_GROUP", "platform-consumer")
-    os.environ.setdefault(
-        "KAFKA_TOPICS_PATTERN",
-        "(uav_(statistics|track_complete|conflicts|telemetry)_.*|uav_system_metrics)",
-    )
+    # Detectors publish the canonical fixed topics; the legacy per-camera
+    # ``uav_statistics_<camera>`` pattern silently dropped every live message and
+    # left the console without metrics.
+    from utils_local.replay_topics import CANONICAL_CONSUMER_PATTERN
+
+    os.environ.setdefault("KAFKA_TOPICS_PATTERN", CANONICAL_CONSUMER_PATTERN)
 
     os.environ.setdefault("JWT_SECRET_KEY", "your-secret-key-change-in-production")
     os.environ.setdefault("JWT_ALGORITHM", "HS256")

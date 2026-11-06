@@ -83,13 +83,13 @@ class MetricStoreContractTest(unittest.IsolatedAsyncioTestCase):
             "data": {},
         }
         with self.assertRaises(MetricContractError):
-            self.adapter._normalize(MessageEnvelope(payload, "uav_statistics_1", 0, 1))
+            self.adapter._normalize(MessageEnvelope(payload, "uav_statistics", 0, 1))
 
     def test_unprefixed_legacy_message_type_is_rejected(self):
         with self.assertRaisesRegex(MetricContractError, "unsupported canonical msg_type"):
             self.adapter._normalize(MessageEnvelope(
                 {"msg_type": "track_complete", "timestamp_last": 12.5, "track_id": 7},
-                "uav_track_complete_1",
+                "uav_track_complete",
                 0,
                 3,
             ))
@@ -99,7 +99,7 @@ class MetricStoreContractTest(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(MetricContractError, "unsupported canonical topic"):
             self.adapter._normalize(MessageEnvelope(payload, "statistics_1", 0, 1))
         with self.assertRaisesRegex(MetricContractError, "unsupported canonical topic"):
-            self.adapter._normalize(MessageEnvelope(payload, "uav_conflicts_1", 0, 2))
+            self.adapter._normalize(MessageEnvelope(payload, "uav_conflicts", 0, 2))
 
     def test_enforcement_clue_uses_its_own_prefixed_topic_and_contract(self):
         now = datetime.now(UTC).isoformat()
@@ -113,7 +113,7 @@ class MetricStoreContractTest(unittest.IsolatedAsyncioTestCase):
             "data": {"source_event_id": "event-1", "track_id": "7", "vehicle_class": "truck", "clue_type": "truck_restriction"},
         }
 
-        normalized = self.adapter._normalize(MessageEnvelope(payload, "uav_enforcement_clues_1", 0, 3))
+        normalized = self.adapter._normalize(MessageEnvelope(payload, "uav_enforcement_clues", 0, 3))
 
         self.assertEqual(normalized["msg_type"], "uav_enforcement_clue")
 
@@ -129,7 +129,7 @@ class MetricStoreContractTest(unittest.IsolatedAsyncioTestCase):
                 "exclusion_result": {},
             },
         }
-        envelope = MessageEnvelope(payload, "uav_enforcement_clues_1", 0, 4)
+        envelope = MessageEnvelope(payload, "uav_enforcement_clues", 0, 4)
         session = _RecordingSession()
 
         self.adapter._add_enforcement_clue(session, envelope, self.adapter._normalize(envelope))
@@ -226,7 +226,7 @@ class MetricStoreContractTest(unittest.IsolatedAsyncioTestCase):
             "event_snapshot_width": 960,
             "event_snapshot_height": 540,
         })
-        envelope = MessageEnvelope(payload, "uav_statistics_1", 0, 4)
+        envelope = MessageEnvelope(payload, "uav_statistics", 0, 4)
         normalized = self.adapter._normalize(envelope)
         session = _RecordingSession()
         stored = SimpleNamespace(
@@ -284,7 +284,7 @@ class MetricStoreContractTest(unittest.IsolatedAsyncioTestCase):
                     ],
                 },
             }
-            envelope = MessageEnvelope(payload, "uav_conflicts_1", 0, 7)
+            envelope = MessageEnvelope(payload, "uav_conflicts", 0, 7)
             normalized = self.adapter._normalize(envelope)
             session = _RecordingSession()
 
@@ -350,7 +350,7 @@ class MetricStoreContractTest(unittest.IsolatedAsyncioTestCase):
                 "trajectory_enu_m": [[0, 0], [1, 1]],
             },
         }
-        envelope = MessageEnvelope(payload, "uav_track_complete_1", 0, 8)
+        envelope = MessageEnvelope(payload, "uav_track_complete", 0, 8)
         normalized = self.adapter._normalize(envelope)
         session = _RecordingSession()
 
@@ -403,7 +403,7 @@ class MetricStoreContractTest(unittest.IsolatedAsyncioTestCase):
                 ],
             },
         }
-        envelope = MessageEnvelope(payload, "uav_conflicts_1", 0, 9)
+        envelope = MessageEnvelope(payload, "uav_conflicts", 0, 9)
         normalized = self.adapter._normalize(envelope)
         session = _RecordingSession()
 
@@ -530,8 +530,8 @@ class MetricStoreContractTest(unittest.IsolatedAsyncioTestCase):
         )
         payload = self._stats_payload("stable-1", 2)
 
-        await service._process_message(payload, "uav_statistics_1", 0, 10)
-        await service._process_message(payload, "uav_statistics_1", 0, 11)
+        await service._process_message(payload, "uav_statistics", 0, 10)
+        await service._process_message(payload, "uav_statistics", 0, 11)
 
         self.assertEqual(len(ws.messages), 1)
         self.assertEqual(ws.messages[0][0], "uav_intersection:INT_camera_1")
@@ -560,13 +560,13 @@ class MetricStoreContractTest(unittest.IsolatedAsyncioTestCase):
 
         service._handle_stats = fail_once
         with self.assertRaisesRegex(RuntimeError, "temporary"):
-            await service._process_message(payload, "uav_statistics_1", 0, 10)
+            await service._process_message(payload, "uav_statistics", 0, 10)
         key = ("uav_traffic_analyzer_ai", "dispatch-retry-1")
         self.assertEqual(store.dispatch_attempts[key], 1)
         self.assertIn("temporary side effect failure", store.dispatch_errors[key])
         self.assertIsNotNone(store.last_dispatch_attempt_at[key])
-        await service._process_message(payload, "uav_statistics_1", 0, 10)
-        await service._process_message(payload, "uav_statistics_1", 0, 10)
+        await service._process_message(payload, "uav_statistics", 0, 10)
+        await service._process_message(payload, "uav_statistics", 0, 10)
 
         self.assertEqual(attempts, 2)
         self.assertEqual(len(ws.messages), 1)
@@ -604,8 +604,8 @@ class MetricStoreContractTest(unittest.IsolatedAsyncioTestCase):
         }
 
         with self.assertRaisesRegex(RuntimeError, "temporary websocket"):
-            await service._process_message(payload, "uav_conflicts_1", 0, 10)
-        await service._process_message(payload, "uav_conflicts_1", 0, 10)
+            await service._process_message(payload, "uav_conflicts", 0, 10)
+        await service._process_message(payload, "uav_conflicts", 0, 10)
 
         self.assertEqual(len(alert_engine.alerts), 1)
 
@@ -627,11 +627,11 @@ class MetricStoreContractTest(unittest.IsolatedAsyncioTestCase):
             "data": {},
         }
 
-        await service._process_message(invalid, "uav_statistics_1", 2, 99)
+        await service._process_message(invalid, "uav_statistics", 2, 99)
 
         self.assertEqual(ws.messages, [])
         self.assertEqual(len(store.dead_letters), 1)
-        dead_letter = store.dead_letters[("uav_statistics_1", 2, 99)]
+        dead_letter = store.dead_letters[("uav_statistics", 2, 99)]
         self.assertEqual(dead_letter["reason_code"], "MetricContractError")
 
     async def test_identity_conflict_is_quarantined(self):
@@ -647,13 +647,13 @@ class MetricStoreContractTest(unittest.IsolatedAsyncioTestCase):
         first = self._stats_payload("stable-2", 2)
         conflicting = {**first, "data": {**first["data"], "cars": 9}}
 
-        await service._process_message(first, "uav_statistics_1", 0, 10)
-        await service._process_message(conflicting, "uav_statistics_1", 0, 11)
+        await service._process_message(first, "uav_statistics", 0, 10)
+        await service._process_message(conflicting, "uav_statistics", 0, 11)
 
         self.assertEqual(len(ws.messages), 1)
         self.assertEqual(len(store.dead_letters), 1)
         self.assertEqual(
-            store.dead_letters[("uav_statistics_1", 0, 11)]["reason_code"],
+            store.dead_letters[("uav_statistics", 0, 11)]["reason_code"],
             "MessageIdentityConflict",
         )
 
@@ -670,8 +670,8 @@ class MetricStoreContractTest(unittest.IsolatedAsyncioTestCase):
         first = self._stats_payload("transport-first", 2)
         reused_offset = self._stats_payload("transport-second", 9)
 
-        await service._process_message(first, "uav_statistics_1", 0, 10)
-        await service._process_message(reused_offset, "uav_statistics_1", 0, 10)
+        await service._process_message(first, "uav_statistics", 0, 10)
+        await service._process_message(reused_offset, "uav_statistics", 0, 10)
 
         self.assertEqual(len(ws.messages), 2)
         self.assertEqual(len(store.dead_letters), 0)

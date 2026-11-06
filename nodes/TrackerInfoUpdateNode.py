@@ -41,7 +41,9 @@ def _normalize_class_name(name: str) -> str:
     return name.strip().lower().replace("_", "-")
 
 
-def _configured_non_motor_sets(classification_cfg: dict | None = None) -> tuple[set[str], set[int]]:
+def _configured_non_motor_sets(
+    classification_cfg: dict | None = None,
+) -> tuple[set[str], set[int]]:
     cfg = classification_cfg or {}
     class_names = cfg.get("non_motor_class_names", DEFAULT_NON_MOTOR_CLASS_NAMES)
     class_ids = cfg.get("non_motor_class_ids", DEFAULT_NON_MOTOR_CLASS_IDS)
@@ -119,7 +121,9 @@ class TrackerInfoUpdateNode:
             del track.class_name_history[:trim]
             del track.vehicle_class_history[:trim]
 
-        voted_class, voted_count = Counter(track.vehicle_class_history).most_common(1)[0]
+        voted_class, voted_count = Counter(track.vehicle_class_history).most_common(1)[
+            0
+        ]
         raw_pairs = Counter(zip(track.class_id_history, track.class_name_history))
         voted_id, voted_name = raw_pairs.most_common(1)[0][0]
         track.current_vehicle_class = current_class
@@ -170,11 +174,13 @@ class TrackerInfoUpdateNode:
         # 如果输入是VideoEndBreakElement而不是FrameElement，则退出处理
         if isinstance(frame_element, VideoEndBreakElement):
             return frame_element
-        assert isinstance(
-            frame_element, FrameElement
-        ), f"TrackerInfoUpdateNode | 输入元素格式错误 {type(frame_element)}"
+        assert isinstance(frame_element, FrameElement), (
+            f"TrackerInfoUpdateNode | 输入元素格式错误 {type(frame_element)}"
+        )
 
-        quality_is_explicit = getattr(frame_element, "geo_reference_quality", None) is not None
+        quality_is_explicit = (
+            getattr(frame_element, "geo_reference_quality", None) is not None
+        )
         trajectory_eligible = bool(
             getattr(frame_element, "trajectory_output_eligible", False)
         )
@@ -209,15 +215,15 @@ class TrackerInfoUpdateNode:
             getattr(frame_element, "previous_formal_track_id_by_association", None)
             or {}
         )
-        tracking_diagnostics = getattr(frame_element, "tracking_diagnostics", None) or {}
+        tracking_diagnostics = (
+            getattr(frame_element, "tracking_diagnostics", None) or {}
+        )
         post_tracking_world_projection = (
             tracking_diagnostics.get("world_projection_stage") == "post_bytetrack"
         )
         association_trajectory_by_id = {
             int(item.get("association_id", item.get("track_id"))): item
-            for item in (
-                getattr(frame_element, "association_trajectories", None) or []
-            )
+            for item in (getattr(frame_element, "association_trajectories", None) or [])
             if item.get("association_id", item.get("track_id")) is not None
         }
 
@@ -232,11 +238,13 @@ class TrackerInfoUpdateNode:
                 )
                 self.buffer_tracks[id].trajectory_output_eligible = True
                 self.buffer_tracks[id].association_id = int(association_id)
-                self.buffer_tracks[id].track_family_id = (
-                    f"association:{int(association_id)}"
-                )
-                self.buffer_tracks[id].previous_track_id = (
-                    previous_formal_id_by_association.get(association_id)
+                self.buffer_tracks[
+                    id
+                ].track_family_id = f"association:{int(association_id)}"
+                self.buffer_tracks[
+                    id
+                ].previous_track_id = previous_formal_id_by_association.get(
+                    association_id
                 )
             else:
                 # 更新最后检测时间
@@ -278,7 +286,9 @@ class TrackerInfoUpdateNode:
                 "geo_status", geo_quality.get("status", "degraded")
             )
             track.quality_reasons = list(
-                dict.fromkeys([*track.quality_reasons, *(geo_quality.get("reasons") or [])])
+                dict.fromkeys(
+                    [*track.quality_reasons, *(geo_quality.get("reasons") or [])]
+                )
             )
             phase = getattr(frame_element, "flight_phase", None)
             if phase and (not track.flight_phases or track.flight_phases[-1] != phase):
@@ -288,24 +298,31 @@ class TrackerInfoUpdateNode:
                 track.flight_segment_ids.append(segment_id)
 
             # 累积轨迹点（bbox中心像素坐标）
+            # Keep the original bbox arithmetic, then normalize scalar storage so
+            # legacy NumPy inputs do not make full-history IPC expensive.
             bbox = frame_element.tracked_xyxy[i]
             track.current_bbox_xyxy = [float(value) for value in bbox]
             track.current_observation_timestamp_sec = float(frame_element.timestamp)
             if frame_element.frame is not None:
                 frame_height, frame_width = frame_element.frame.shape[:2]
                 track.current_frame_size = [int(frame_width), int(frame_height)]
-            cx = (bbox[0] + bbox[2]) / 2.0
-            cy = (bbox[1] + bbox[3]) / 2.0
+            cx = float((bbox[0] + bbox[2]) / 2.0)
+            cy = float((bbox[1] + bbox[3]) / 2.0)
             self.buffer_tracks[id].trajectory_points.append((cx, cy))
-            self.buffer_tracks[id].trajectory_timestamps_sec.append(frame_element.timestamp)
-            self.buffer_tracks[id].trajectory_frame_nums.append(int(frame_element.frame_num))
+            self.buffer_tracks[id].trajectory_timestamps_sec.append(
+                frame_element.timestamp
+            )
+            self.buffer_tracks[id].trajectory_frame_nums.append(
+                int(frame_element.frame_num)
+            )
             if (
                 os.environ.get("TRAJECTORY_STORAGE_PROFILE") == "replay_v2"
                 and frame_element.frame is not None
             ):
                 confidence = float(
                     frame_element.tracked_conf[i]
-                    if getattr(frame_element, "tracked_conf", None) and i < len(frame_element.tracked_conf)
+                    if getattr(frame_element, "tracked_conf", None)
+                    and i < len(frame_element.tracked_conf)
                     else 0.0
                 )
                 if confidence > track.appearance_crop_confidence:
@@ -321,7 +338,9 @@ class TrackerInfoUpdateNode:
                             [int(cv2.IMWRITE_JPEG_QUALITY), 80],
                         )
                         if ok:
-                            track.appearance_crop_jpeg = base64.b64encode(encoded).decode("ascii")
+                            track.appearance_crop_jpeg = base64.b64encode(
+                                encoded
+                            ).decode("ascii")
                             track.appearance_crop_confidence = confidence
             track.point_quality_lineage.append(
                 {
@@ -335,6 +354,19 @@ class TrackerInfoUpdateNode:
                     "tracking_quality": track.tracking_quality,
                 }
             )
+
+            if (
+                os.environ.get("HISTORY_SAMPLING_ENABLED", "false").lower() == "true"
+                or os.environ.get("PIPELINE_EGRESS_ENABLED", "false").lower() == "true"
+            ):
+                track.point_quality_lineage[-1].update(
+                    source_frame_stride=int(
+                        getattr(frame_element, "source_frame_stride", 1)
+                    ),
+                    source_drop_count=int(
+                        getattr(frame_element, "source_drop_count", 0)
+                    ),
+                )
 
             # Canonical trajectory geometry uses the vehicle ground-contact point
             # and is projected with the transform of this exact frame.  Keeping
@@ -358,19 +390,13 @@ class TrackerInfoUpdateNode:
             projected_trajectory = association_trajectory_by_id.get(
                 int(association_id), {}
             )
-            projected_world_history = projected_trajectory.get(
-                "trajectory_enu_m"
-            ) or []
+            projected_world_history = projected_trajectory.get("trajectory_enu_m") or []
             projected_world_point = (
                 projected_world_history[-1] if projected_world_history else None
             )
-            projected_gcj02_history = projected_trajectory.get(
-                "trajectory_gcj02"
-            ) or []
+            projected_gcj02_history = projected_trajectory.get("trajectory_gcj02") or []
             projected_gcj02_point = (
-                projected_gcj02_history[-1]
-                if projected_gcj02_history
-                else None
+                projected_gcj02_history[-1] if projected_gcj02_history else None
             )
             if post_tracking_world_projection and projected_world_point is not None:
                 point_enu = (
@@ -430,14 +456,18 @@ class TrackerInfoUpdateNode:
                 track.trajectory_gcj02.append(None)
 
             # 累积position_history（含时间戳，供SpeedEstimationNode和DirectionFlowNode使用）
-            self.buffer_tracks[id].position_history.append((cx, cy, frame_element.timestamp))
+            self.buffer_tracks[id].position_history.append(
+                (cx, cy, frame_element.timestamp)
+            )
             # 限制position_history大小（SpeedEstimationNode会进一步裁剪到history_frames）
             if len(self.buffer_tracks[id].position_history) > 60:
-                self.buffer_tracks[id].position_history = self.buffer_tracks[id].position_history[-60:]
+                self.buffer_tracks[id].position_history = self.buffer_tracks[
+                    id
+                ].position_history[-60:]
             if len(self.buffer_tracks[id].position_history_enu_m) > 60:
-                self.buffer_tracks[id].position_history_enu_m = (
-                    self.buffer_tracks[id].position_history_enu_m[-60:]
-                )
+                self.buffer_tracks[id].position_history_enu_m = self.buffer_tracks[
+                    id
+                ].position_history_enu_m[-60:]
 
             # 出口道路检测：车辆从一条道路移动到另一条道路时记录exit_road
             current_road = intersects_central_point(
@@ -445,10 +475,12 @@ class TrackerInfoUpdateNode:
                 polygons=frame_element.roads_info,
             )
             track = self.buffer_tracks[id]
-            if (current_road is not None
-                    and track.start_road is not None
-                    and current_road != track.start_road
-                    and track.exit_road is None):
+            if (
+                current_road is not None
+                and track.start_road is not None
+                and current_road != track.start_road
+                and track.exit_road is None
+            ):
                 track.exit_road = current_road
 
             # 寻找与道路多边形的第一次交集
@@ -487,7 +519,9 @@ class TrackerInfoUpdateNode:
                     termination_reason = termination_reason or "association_timeout"
                     keys_to_remove.append(key)
 
-        terminated_track_ids = set(tracking_diagnostics.get("terminated_track_ids") or [])
+        terminated_track_ids = set(
+            tracking_diagnostics.get("terminated_track_ids") or []
+        )
         for key in terminated_track_ids:
             if key in self.buffer_tracks:
                 self.buffer_tracks[key].termination_reason = termination_reason
@@ -505,7 +539,11 @@ class TrackerInfoUpdateNode:
         # 镜头畸变校正数据
         dist_coeffs = getattr(frame_element, "dist_coeffs", None)
         cam_intrinsics = getattr(frame_element, "camera_intrinsics", None)
-        img_size = (frame_element.frame.shape[1], frame_element.frame.shape[0]) if dist_coeffs else None
+        img_size = (
+            (frame_element.frame.shape[1], frame_element.frame.shape[0])
+            if dist_coeffs
+            else None
+        )
 
         completed_tracks = []
         for key in keys_to_remove:
@@ -513,9 +551,8 @@ class TrackerInfoUpdateNode:
             duration = track.timestamp_last - track.timestamp_first
             if (
                 duration >= self.min_track_duration
-                and len(track.trajectory_points) >= self.min_trajectory_points
+                and getattr(track,"trajectory_history_start",0) + len(track.trajectory_points) >= self.min_trajectory_points
                 and bool(track.termination_reason)
-                and int(track.id) not in self._completed_track_ids
             ):
                 completed_track_data = {
                     "track_id": track.id,
@@ -541,6 +578,7 @@ class TrackerInfoUpdateNode:
                     # Canonical pixel geometry uses the same vehicle ground-contact
                     # anchor as ENU/GCJ-02. Bbox centers remain available explicitly
                     # for legacy visualization and diagnostics.
+                    "trajectory_history_start": getattr(track,"trajectory_history_start",0),
                     "trajectory_px": track.ground_contact_points_px,
                     "trajectory_bbox_center_px": track.trajectory_points,
                     "ground_contact_points_px": track.ground_contact_points_px,
@@ -580,11 +618,11 @@ class TrackerInfoUpdateNode:
                     "formal_analytics_eligible": track.road_analytics_eligible,
                 }
                 if track.appearance_crop_jpeg:
-                    completed_track_data["appearance_crop_jpeg"] = track.appearance_crop_jpeg
-                if track.association_id is not None:
-                    completed_track_data["association_id"] = int(
-                        track.association_id
+                    completed_track_data["appearance_crop_jpeg"] = (
+                        track.appearance_crop_jpeg
                     )
+                if track.association_id is not None:
+                    completed_track_data["association_id"] = int(track.association_id)
 
                 completed_track_data["trajectory_enu_m"] = [
                     [round(point[0], 2), round(point[1], 2)]
@@ -614,28 +652,40 @@ class TrackerInfoUpdateNode:
                     and not any(point is not None for point in track.trajectory_enu_m)
                     and not post_tracking_world_projection
                 ):
-                    entry_px = np.array([track.ground_contact_points_px[0]], dtype=np.float64)
-                    exit_px = np.array([track.ground_contact_points_px[-1]], dtype=np.float64)
+                    entry_px = np.array(
+                        [track.ground_contact_points_px[0]], dtype=np.float64
+                    )
+                    exit_px = np.array(
+                        [track.ground_contact_points_px[-1]], dtype=np.float64
+                    )
                     # 镜头畸变校正
                     if dist_coeffs and cam_intrinsics and img_size:
-                        entry_px = undistort_points(entry_px, cam_intrinsics, img_size, dist_coeffs)
-                        exit_px = undistort_points(exit_px, cam_intrinsics, img_size, dist_coeffs)
+                        entry_px = undistort_points(
+                            entry_px, cam_intrinsics, img_size, dist_coeffs
+                        )
+                        exit_px = undistort_points(
+                            exit_px, cam_intrinsics, img_size, dist_coeffs
+                        )
                     entry_world = pixel_to_world_compensated(entry_px, H, drone_disp)[0]
                     exit_world = pixel_to_world_compensated(exit_px, H, drone_disp)[0]
                     completed_track_data["entry_point_enu_m"] = [
-                        round(float(entry_world[0]), 2), round(float(entry_world[1]), 2)
+                        round(float(entry_world[0]), 2),
+                        round(float(entry_world[1]), 2),
                     ]
                     completed_track_data["exit_point_enu_m"] = [
-                        round(float(exit_world[0]), 2), round(float(exit_world[1]), 2)
+                        round(float(exit_world[0]), 2),
+                        round(float(exit_world[1]), 2),
                     ]
                     if anchor_gcj02:
                         completed_track_data["anchor_gcj02"] = [
-                            round(anchor_gcj02[0], 6), round(anchor_gcj02[1], 6)
+                            round(anchor_gcj02[0], 6),
+                            round(anchor_gcj02[1], 6),
                         ]
 
                 completed_tracks.append(completed_track_data)
-                self._completed_track_ids.add(int(track.id))
             self.buffer_tracks.pop(key)  # 从字典中删除元素
+            self._ever_mature_track_ids.discard(int(track.id))
+            self._regressed_candidate_track_ids.discard(int(track.id))
             # A sparse replay can retire thousands of short-lived tracks at EOF.
             # Keep the per-track detail available for diagnostics without flooding
             # the mission subprocess tail and hiding the actual failure traceback.
@@ -648,7 +698,9 @@ class TrackerInfoUpdateNode:
                 "tracking_method": track.tracking_method,
                 "tracking_quality": track.tracking_quality,
                 "trajectory_output_eligible": False,
-                "trajectory_px": [list(point) for point in track.ground_contact_points_px],
+                "trajectory_px": [
+                    list(point) for point in track.ground_contact_points_px
+                ],
                 "trajectory_enu_m": [
                     list(point) if point is not None else None
                     for point in track.trajectory_enu_m
@@ -674,8 +726,7 @@ class TrackerInfoUpdateNode:
         }
         newly_regressed_ids = (
             candidate_track_ids
-            & self._ever_mature_track_ids
-            - self._regressed_candidate_track_ids
+            & self._ever_mature_track_ids - self._regressed_candidate_track_ids
         )
         if newly_regressed_ids:
             self._same_id_mature_to_candidate_count += len(newly_regressed_ids)

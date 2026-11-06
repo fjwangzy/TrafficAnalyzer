@@ -218,3 +218,24 @@ def test_source_overlay_resets_old_mounts_and_keeps_app_and_init_same_version(tm
 def shutil_which_docker():
     import shutil
     return shutil.which("docker")
+
+
+def test_every_native_logged_stage_is_allowed_by_the_real_wrapper():
+    import ast
+    wrapper=ast.parse((ROOT/'deploy/intranet/run_logged.py').read_text())
+    allowed=set()
+    for node in ast.walk(wrapper):
+        if isinstance(node,ast.Compare) and any(isinstance(op,ast.NotIn) for op in node.ops):
+            for value in node.comparators:
+                if isinstance(value,ast.Set) and all(isinstance(item,ast.Constant) and isinstance(item.value,str) for item in value.elts):
+                    allowed.update(item.value for item in value.elts)
+    controller=ast.parse((ROOT/'deploy/native-platform/native_platform.py').read_text())
+    stages={node.args[1].value for node in ast.walk(controller) if isinstance(node,ast.Call) and isinstance(node.func,ast.Name) and node.func.id=='logged' and len(node.args)>1 and isinstance(node.args[1],ast.Constant)}
+    assert stages and stages<=allowed
+
+
+def test_logging_wrapper_does_not_accept_arbitrary_or_path_stage_names(tmp_path):
+    result=subprocess.run([sys.executable,str(ROOT/'deploy/intranet/run_logged.py'),'../../escape',sys.executable,'-c','print("MUST_NOT_RUN")'],
+        env={**os.environ,'PYTHONPATH':str(ROOT),'TRAFFIC_LOG_DIR':str(tmp_path)},capture_output=True,text=True)
+    assert result.returncode!=0 and 'MUST_NOT_RUN' not in result.stdout
+    assert not list(tmp_path.iterdir())

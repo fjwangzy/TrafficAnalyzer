@@ -1,4 +1,6 @@
 import logging
+import math
+import os
 
 import numpy as np
 
@@ -82,6 +84,16 @@ class ConflictDetectionNode:
         self.algorithm_version = str(
             cfg.get("algorithm_version", "tcc-path-intersection/v2")
         )
+        # 空间网格候选预筛开关（默认开启）；关闭时回退逐对枚举，供等价性对照。
+        self.grid_prefilter_enabled = os.environ.get(
+            "CONFLICT_GRID_PREFILTER", "true"
+        ).strip().lower() not in {"0", "false", "no", "off"}
+        # 小场景（候选对少）下网格的建桶/邻格开销高于逐对枚举，故只在
+        # motor×non_motor 预估对数达到阈值时才启用；两条路径逐对判定相同。
+        try:
+            self.grid_min_pairs = int(os.environ.get("CONFLICT_GRID_MIN_PAIRS", "20000"))
+        except ValueError:
+            self.grid_min_pairs = 20000
 
     @profile_time
     def process(self, frame_element: FrameElement) -> FrameElement:
@@ -275,233 +287,47 @@ class ConflictDetectionNode:
         for k in inactive_pairs:
             self._reported_pairs.pop(k, None)
 
-        for motor in motor_tracks:
-            for non_motor in non_motor_tracks:
-                diagnostics["candidate_pairs"] += 1
-                pair_key = (
-                    min(motor["formal_track_id"], non_motor["formal_track_id"]),
-                    max(motor["formal_track_id"], non_motor["formal_track_id"]),
-                )
-                containment = self._bbox_containment(
-                    motor["bbox_xyxy"], non_motor["bbox_xyxy"]
-                )
-                if (
-                    containment is not None
-                    and containment >= self.max_cross_class_bbox_containment
-                ):
-                    diagnostics["nested_cross_class_detection"] += 1
-                    self._record_rejection(
-                        diagnostics, "nested_cross_class_detection"
-                    )
-                    continue
-                # 计算当前世界坐标（无人机相对米制坐标）
-                pts = np.asarray(
-                    [motor["position_enu_m"], non_motor["position_enu_m"]],
-                    dtype=np.float64,
-                )
-
-                # 距离预过滤：两车世界坐标距离 > 阈值，直接跳过
-                pair_dist = float(np.linalg.norm(pts[0] - pts[1]))
-                if pair_dist > self.max_pair_distance_m:
-                    diagnostics["distance_filtered"] += 1
-                    self._record_rejection(diagnostics, "pair_distance_exceeded")
-                    continue
-
-                prediction = self._predict_collision(
-                    pts[0],
-                    pts[1],
-                    motor["velocity_ms"],
-                    non_motor["velocity_ms"],
-                )
-                if prediction is None:
-                    diagnostics["prediction_failed"] += 1
-                    reason = self._last_prediction_rejection_reason
-                    self._record_rejection(diagnostics, reason)
-                    if reason and reason.startswith("high_angle_"):
-                        diagnostics["high_angle_rejected"] += 1
-                    continue
-                diagnostics["prediction_candidates"] += 1
-                is_high_angle = prediction.get("angle_band") == "high_angle_strict"
-                if is_high_angle:
-                    diagnostics["high_angle_candidates"] += 1
-
-                scene = self._classify_scene(
-                    motor["motion_profile"],
-                    non_motor["motion_profile"],
-                    prediction,
-                )
-                if scene is None:
-                    diagnostics["scene_filtered"] += 1
-                    self._record_rejection(diagnostics, "scene_unclassified")
-                    continue
-                if scene == "general_crossing" and min(
-                    float(motor["heading_confidence"]),
-                    float(non_motor["heading_confidence"]),
-                ) < self.min_heading_confidence:
-                    diagnostics["scene_filtered"] += 1
-                    diagnostics["heading_unreliable"] += 1
-                    self._record_rejection(
-                        diagnostics, "general_crossing_heading_unreliable"
-                    )
-                    continue
-                if (
-                    scene == "general_crossing"
-                    and prediction["conflict_angle_deg"]
-                    < self.min_general_crossing_angle_deg
-                ):
-                    diagnostics["scene_filtered"] += 1
-                    diagnostics["general_crossing_angle_too_shallow"] += 1
-                    self._record_rejection(
-                        diagnostics, "general_crossing_angle_too_shallow"
-                    )
-                    continue
-                if is_high_angle and scene != "suspected_unprotected_left_turn":
-                    # 150–170° is visually close to opposing flow.  It is a formal
-                    # crossing only when a measured left-turn arc cuts across the
-                    # other participant; straight opposing tracks are ambiguous.
-                    diagnostics["scene_filtered"] += 1
-                    diagnostics["high_angle_rejected"] += 1
-                    self._record_rejection(
-                        diagnostics, "high_angle_scene_ambiguous"
-                    )
-                    continue
-
-                evidence = self._collect_evidence(
-                    prediction,
-                    motor["motion_profile"],
-                    non_motor["motion_profile"],
-                    scene,
-                )
-                if is_high_angle:
-                    behavior_evidence = {
-                        "hard_deceleration",
-                        "hard_steering",
-                        "stop_or_yield",
-                    }
-                    if not behavior_evidence.intersection(evidence):
-                        diagnostics["evidence_failed"] += 1
-                        diagnostics["high_angle_rejected"] += 1
-                        self._record_rejection(
-                            diagnostics, "high_angle_behavior_missing"
+        pair_budget = len(motor_tracks) * len(non_motor_tracks)
+        grid_cell_size = (
+            self._grid_cell_size()
+            if self.grid_prefilter_enabled and pair_budget >= self.grid_min_pairs
+            else None
+        )
+        if grid_cell_size is not None:
+            near_indices_by_motor = self._candidate_indices_by_motor(
+                motor_tracks, non_motor_tracks, grid_cell_size
+            )
+            for motor, near_indices in zip(motor_tracks, near_indices_by_motor):
+                cursor = 0
+                for candidate_index in near_indices:
+                    if candidate_index > cursor:
+                        self._account_skipped_far_pairs(
+                            diagnostics, candidate_index - cursor
                         )
-                        continue
-                    evidence.append("high_angle_crossing")
-                if not evidence:
-                    diagnostics["evidence_failed"] += 1
-                    self._record_rejection(diagnostics, "evidence_missing")
-                    continue
-                diagnostics["evidence_passed"] += 1
-
-                severity = self._classify_severity(prediction, evidence, scene)
-                if not severity:
-                    diagnostics["severity_filtered"] += 1
-                if severity and self._should_emit_pair(pair_key, severity, now):
-                    event = {
-                        "motor_id": int(motor["track_id"]),
-                        "non_motor_id": int(non_motor["track_id"]),
-                        "prediction_type": prediction["prediction_type"],
-                        "distance_m": round(prediction["distance_m"], 2),
-                        "ttc_sec": round(prediction["ttc_sec"], 2),
-                        "pet_sec": round(prediction["pet_sec"], 2),
-                        "arrival_time_delta_sec": round(
-                            prediction["arrival_time_delta_sec"], 2
-                        ),
-                        "severity": severity,
-                        "conflict_scene": scene,
-                        "conflict_angle_deg": round(prediction["conflict_angle_deg"], 1),
-                        "evidence": evidence,
-                        "risk_score": self._risk_score(prediction, evidence),
-                        "motor_speed_kmh": round(motor["speed_kmh"], 1),
-                        "min_same_time_distance_m": round(
-                            float(prediction["min_same_time_distance_m"]), 3
-                        ),
-                        "motor_velocity_enu_ms": [
-                            round(float(value), 3) for value in motor["velocity_ms"]
-                        ],
-                        "non_motor_velocity_enu_ms": [
-                            round(float(value), 3) for value in non_motor["velocity_ms"]
-                        ],
-                        "motor_heading_confidence": round(
-                            float(motor["heading_confidence"]), 3
-                        ),
-                        "non_motor_heading_confidence": round(
-                            float(non_motor["heading_confidence"]), 3
-                        ),
-                        "projection_quality": self._projection_quality_snapshot(
-                            frame_element
-                        ),
-                        "motion_segment_id": getattr(
-                            frame_element, "flight_segment_id", None
-                        ),
-                        "algorithm_version": self.algorithm_version,
-                        "flight_phase": getattr(frame_element, "flight_phase", None),
-                        "tracking_quality": {
-                            "motor": motor["tracking_quality"],
-                            "non_motor": non_motor["tracking_quality"],
-                        },
-                        "vehicle_class_confidence": {
-                            "motor": round(float(motor["vehicle_class_confidence"]), 3),
-                            "non_motor": round(
-                                float(non_motor["vehicle_class_confidence"]), 3
-                            ),
-                        },
-                        "participant_border_clearance_px": {
-                            "motor": motor["border_clearance_px"],
-                            "non_motor": non_motor["border_clearance_px"],
-                        },
-                    }
-                    if "motor_arrival_ttc_sec" in prediction:
-                        event["motor_arrival_ttc_sec"] = round(
-                            prediction["motor_arrival_ttc_sec"], 2
-                        )
-                    if "non_motor_arrival_ttc_sec" in prediction:
-                        event["non_motor_arrival_ttc_sec"] = round(
-                            prediction["non_motor_arrival_ttc_sec"], 2
-                        )
-
-                    # 预测冲突点世界坐标（含运动补偿）
-                    drone_disp = getattr(frame_element, "drone_displacement_m", None)
-                    anchor_gcj02 = getattr(frame_element, "anchor_gcj02", None)
-                    if drone_disp is not None or (
-                        motor["position_is_absolute"] and non_motor["position_is_absolute"]
-                    ):
-                        offset = (
-                            np.zeros(2, dtype=np.float64)
-                            if motor["position_is_absolute"] and non_motor["position_is_absolute"]
-                            else drone_disp
-                        )
-                        motor_world = prediction["motor_position_enu_m"] + offset
-                        non_motor_world = prediction["non_motor_position_enu_m"] + offset
-                        event["motor_position_enu_m"] = [
-                            round(float(motor_world[0]), 2),
-                            round(float(motor_world[1]), 2),
-                        ]
-                        event["non_motor_position_enu_m"] = [
-                            round(float(non_motor_world[0]), 2),
-                            round(float(non_motor_world[1]), 2),
-                        ]
-                        if anchor_gcj02:
-                            event["anchor_gcj02"] = [
-                                round(anchor_gcj02[0], 6),
-                                round(anchor_gcj02[1], 6),
-                            ]
-                            midpoint = (motor_world + non_motor_world) / 2.0
-                            lon, lat = enu_to_gcj02(midpoint[0], midpoint[1], anchor_gcj02)
-                            event["conflict_position_gcj02"] = [round(lon, 8), round(lat, 8)]
-
-                    conflict_events.append(event)
-                    diagnostics["events_emitted"] += 1
-                    if prediction["prediction_type"] == "path_intersection":
-                        diagnostics["business_events_emitted"] += 1
-                    else:
-                        diagnostics["experimental_events_emitted"] += 1
-                    if is_high_angle:
-                        diagnostics["high_angle_emitted"] += 1
-                    self._reported_pairs[pair_key] = {
-                        "severity": severity, "timestamp": now
-                    }
-                elif severity:
-                    diagnostics["deduplicated"] += 1
+                    cursor = candidate_index + 1
+                    self._evaluate_pair(
+                        frame_element,
+                        diagnostics,
+                        conflict_events,
+                        motor,
+                        non_motor_tracks[candidate_index],
+                        now,
+                    )
+                if cursor < len(non_motor_tracks):
+                    self._account_skipped_far_pairs(
+                        diagnostics, len(non_motor_tracks) - cursor
+                    )
+        else:
+            for motor in motor_tracks:
+                for non_motor in non_motor_tracks:
+                    self._evaluate_pair(
+                        frame_element,
+                        diagnostics,
+                        conflict_events,
+                        motor,
+                        non_motor,
+                        now,
+                    )
 
         frame_element.conflict_events = conflict_events
         if diagnostics["events_emitted"]:
@@ -517,6 +343,314 @@ class ConflictDetectionNode:
         else:
             diagnostics["status"] = "no_events"
         return frame_element
+
+    def _evaluate_pair(
+        self,
+        frame_element: FrameElement,
+        diagnostics: dict,
+        conflict_events: list,
+        motor: dict,
+        non_motor: dict,
+        now: float,
+    ) -> None:
+        """单对机动车/非机动车共享门禁与事件生成；新旧枚举路径共用此实现。"""
+        diagnostics["candidate_pairs"] += 1
+        pair_key = (
+            min(motor["formal_track_id"], non_motor["formal_track_id"]),
+            max(motor["formal_track_id"], non_motor["formal_track_id"]),
+        )
+        containment = self._bbox_containment(
+            motor["bbox_xyxy"], non_motor["bbox_xyxy"]
+        )
+        if (
+            containment is not None
+            and containment >= self.max_cross_class_bbox_containment
+        ):
+            diagnostics["nested_cross_class_detection"] += 1
+            self._record_rejection(
+                diagnostics, "nested_cross_class_detection"
+            )
+            return
+        # 计算当前世界坐标（无人机相对米制坐标）
+        pts = np.asarray(
+            [motor["position_enu_m"], non_motor["position_enu_m"]],
+            dtype=np.float64,
+        )
+
+        # 距离预过滤：两车世界坐标距离 > 阈值，直接跳过
+        pair_dist = float(np.linalg.norm(pts[0] - pts[1]))
+        if pair_dist > self.max_pair_distance_m:
+            diagnostics["distance_filtered"] += 1
+            self._record_rejection(diagnostics, "pair_distance_exceeded")
+            return
+
+        prediction = self._predict_collision(
+            pts[0],
+            pts[1],
+            motor["velocity_ms"],
+            non_motor["velocity_ms"],
+        )
+        if prediction is None:
+            diagnostics["prediction_failed"] += 1
+            reason = self._last_prediction_rejection_reason
+            self._record_rejection(diagnostics, reason)
+            if reason and reason.startswith("high_angle_"):
+                diagnostics["high_angle_rejected"] += 1
+            return
+        diagnostics["prediction_candidates"] += 1
+        is_high_angle = prediction.get("angle_band") == "high_angle_strict"
+        if is_high_angle:
+            diagnostics["high_angle_candidates"] += 1
+
+        scene = self._classify_scene(
+            motor["motion_profile"],
+            non_motor["motion_profile"],
+            prediction,
+        )
+        if scene is None:
+            diagnostics["scene_filtered"] += 1
+            self._record_rejection(diagnostics, "scene_unclassified")
+            return
+        if scene == "general_crossing" and min(
+            float(motor["heading_confidence"]),
+            float(non_motor["heading_confidence"]),
+        ) < self.min_heading_confidence:
+            diagnostics["scene_filtered"] += 1
+            diagnostics["heading_unreliable"] += 1
+            self._record_rejection(
+                diagnostics, "general_crossing_heading_unreliable"
+            )
+            return
+        if (
+            scene == "general_crossing"
+            and prediction["conflict_angle_deg"]
+            < self.min_general_crossing_angle_deg
+        ):
+            diagnostics["scene_filtered"] += 1
+            diagnostics["general_crossing_angle_too_shallow"] += 1
+            self._record_rejection(
+                diagnostics, "general_crossing_angle_too_shallow"
+            )
+            return
+        if is_high_angle and scene != "suspected_unprotected_left_turn":
+            # 150–170° is visually close to opposing flow.  It is a formal
+            # crossing only when a measured left-turn arc cuts across the
+            # other participant; straight opposing tracks are ambiguous.
+            diagnostics["scene_filtered"] += 1
+            diagnostics["high_angle_rejected"] += 1
+            self._record_rejection(
+                diagnostics, "high_angle_scene_ambiguous"
+            )
+            return
+
+        evidence = self._collect_evidence(
+            prediction,
+            motor["motion_profile"],
+            non_motor["motion_profile"],
+            scene,
+        )
+        if is_high_angle:
+            behavior_evidence = {
+                "hard_deceleration",
+                "hard_steering",
+                "stop_or_yield",
+            }
+            if not behavior_evidence.intersection(evidence):
+                diagnostics["evidence_failed"] += 1
+                diagnostics["high_angle_rejected"] += 1
+                self._record_rejection(
+                    diagnostics, "high_angle_behavior_missing"
+                )
+                return
+            evidence.append("high_angle_crossing")
+        if not evidence:
+            diagnostics["evidence_failed"] += 1
+            self._record_rejection(diagnostics, "evidence_missing")
+            return
+        diagnostics["evidence_passed"] += 1
+
+        severity = self._classify_severity(prediction, evidence, scene)
+        if not severity:
+            diagnostics["severity_filtered"] += 1
+        if severity and self._should_emit_pair(pair_key, severity, now):
+            event = {
+                "motor_id": int(motor["track_id"]),
+                "non_motor_id": int(non_motor["track_id"]),
+                "prediction_type": prediction["prediction_type"],
+                "distance_m": round(prediction["distance_m"], 2),
+                "ttc_sec": round(prediction["ttc_sec"], 2),
+                "pet_sec": round(prediction["pet_sec"], 2),
+                "arrival_time_delta_sec": round(
+                    prediction["arrival_time_delta_sec"], 2
+                ),
+                "severity": severity,
+                "conflict_scene": scene,
+                "conflict_angle_deg": round(prediction["conflict_angle_deg"], 1),
+                "evidence": evidence,
+                "risk_score": self._risk_score(prediction, evidence),
+                "motor_speed_kmh": round(motor["speed_kmh"], 1),
+                "min_same_time_distance_m": round(
+                    float(prediction["min_same_time_distance_m"]), 3
+                ),
+                "motor_velocity_enu_ms": [
+                    round(float(value), 3) for value in motor["velocity_ms"]
+                ],
+                "non_motor_velocity_enu_ms": [
+                    round(float(value), 3) for value in non_motor["velocity_ms"]
+                ],
+                "motor_heading_confidence": round(
+                    float(motor["heading_confidence"]), 3
+                ),
+                "non_motor_heading_confidence": round(
+                    float(non_motor["heading_confidence"]), 3
+                ),
+                "projection_quality": self._projection_quality_snapshot(
+                    frame_element
+                ),
+                "motion_segment_id": getattr(
+                    frame_element, "flight_segment_id", None
+                ),
+                "algorithm_version": self.algorithm_version,
+                "flight_phase": getattr(frame_element, "flight_phase", None),
+                "tracking_quality": {
+                    "motor": motor["tracking_quality"],
+                    "non_motor": non_motor["tracking_quality"],
+                },
+                "vehicle_class_confidence": {
+                    "motor": round(float(motor["vehicle_class_confidence"]), 3),
+                    "non_motor": round(
+                        float(non_motor["vehicle_class_confidence"]), 3
+                    ),
+                },
+                "participant_border_clearance_px": {
+                    "motor": motor["border_clearance_px"],
+                    "non_motor": non_motor["border_clearance_px"],
+                },
+            }
+            if "motor_arrival_ttc_sec" in prediction:
+                event["motor_arrival_ttc_sec"] = round(
+                    prediction["motor_arrival_ttc_sec"], 2
+                )
+            if "non_motor_arrival_ttc_sec" in prediction:
+                event["non_motor_arrival_ttc_sec"] = round(
+                    prediction["non_motor_arrival_ttc_sec"], 2
+                )
+
+            # 预测冲突点世界坐标（含运动补偿）
+            drone_disp = getattr(frame_element, "drone_displacement_m", None)
+            anchor_gcj02 = getattr(frame_element, "anchor_gcj02", None)
+            if drone_disp is not None or (
+                motor["position_is_absolute"] and non_motor["position_is_absolute"]
+            ):
+                offset = (
+                    np.zeros(2, dtype=np.float64)
+                    if motor["position_is_absolute"] and non_motor["position_is_absolute"]
+                    else drone_disp
+                )
+                motor_world = prediction["motor_position_enu_m"] + offset
+                non_motor_world = prediction["non_motor_position_enu_m"] + offset
+                event["motor_position_enu_m"] = [
+                    round(float(motor_world[0]), 2),
+                    round(float(motor_world[1]), 2),
+                ]
+                event["non_motor_position_enu_m"] = [
+                    round(float(non_motor_world[0]), 2),
+                    round(float(non_motor_world[1]), 2),
+                ]
+                if anchor_gcj02:
+                    event["anchor_gcj02"] = [
+                        round(anchor_gcj02[0], 6),
+                        round(anchor_gcj02[1], 6),
+                    ]
+                    midpoint = (motor_world + non_motor_world) / 2.0
+                    lon, lat = enu_to_gcj02(midpoint[0], midpoint[1], anchor_gcj02)
+                    event["conflict_position_gcj02"] = [round(lon, 8), round(lat, 8)]
+
+            conflict_events.append(event)
+            diagnostics["events_emitted"] += 1
+            if prediction["prediction_type"] == "path_intersection":
+                diagnostics["business_events_emitted"] += 1
+            else:
+                diagnostics["experimental_events_emitted"] += 1
+            if is_high_angle:
+                diagnostics["high_angle_emitted"] += 1
+            self._reported_pairs[pair_key] = {
+                "severity": severity, "timestamp": now
+            }
+        elif severity:
+            diagnostics["deduplicated"] += 1
+
+    @staticmethod
+    def _grid_cell_key(position, cell_size: float) -> tuple[int, int] | None:
+        """返回 ENU 位置所在网格 (列, 行)；非有限/异常位置返回 None 走保守全量配对。"""
+        try:
+            x = float(position[0])
+            y = float(position[1])
+        except (TypeError, IndexError, ValueError):
+            return None
+        if not (math.isfinite(x) and math.isfinite(y)):
+            return None
+        try:
+            return (math.floor(x / cell_size), math.floor(y / cell_size))
+        except (OverflowError, ValueError):
+            return None
+
+    def _grid_cell_size(self) -> float | None:
+        """网格边长由 max_pair_distance_m 派生：阈值内任意两两必落在相邻 3×3 格内。"""
+        try:
+            distance = float(self.max_pair_distance_m)
+        except (TypeError, ValueError):
+            return None
+        if not np.isfinite(distance) or distance <= 0.0:
+            # 非正/非有限阈值下无法建立有意义的网格，回退逐对枚举以保持语义。
+            return None
+        return distance * (1.0 + 1e-9)
+
+    def _candidate_indices_by_motor(
+        self,
+        motor_tracks: list,
+        non_motor_tracks: list,
+        cell_size: float,
+    ) -> list[list[int]]:
+        """按空间网格返回每个机动车需要进入门禁的非机动车下标（升序、保持原序）。"""
+        buckets: dict[tuple[int, int], list[int]] = {}
+        unbucketed: list[int] = []
+        for index, entry in enumerate(non_motor_tracks):
+            key = self._grid_cell_key(entry.get("position_enu_m"), cell_size)
+            if key is None:
+                unbucketed.append(index)
+            else:
+                buckets.setdefault(key, []).append(index)
+
+        near_indices_by_motor = []
+        for entry in motor_tracks:
+            key = self._grid_cell_key(entry.get("position_enu_m"), cell_size)
+            if key is None:
+                # 当前位置非有限时旧路径的距离比较恒为 False（NaN > 阈值不成立），
+                # 因此该机动车对所有非机动车都必须走逐对门禁，避免语义漂移。
+                near_indices_by_motor.append(list(range(len(non_motor_tracks))))
+                continue
+            column, row = key
+            near: list[int] = []
+            for offset_x in (-1, 0, 1):
+                for offset_y in (-1, 0, 1):
+                    bucket = buckets.get((column + offset_x, row + offset_y))
+                    if bucket is not None:
+                        near.extend(bucket)
+            if unbucketed:
+                near.extend(unbucketed)
+            near.sort()
+            near_indices_by_motor.append(near)
+        return near_indices_by_motor
+
+    def _account_skipped_far_pairs(self, diagnostics: dict, count: int) -> None:
+        """把网格批量跳过的远距对按旧路径逐对语义补记诊断（阈值内无嵌套对）。"""
+        count = int(count)
+        if count <= 0:
+            return
+        diagnostics["candidate_pairs"] += count
+        diagnostics["distance_filtered"] += count
+        self._record_rejection(diagnostics, "pair_distance_exceeded", count)
 
     @staticmethod
     def _bbox_containment(
@@ -1159,11 +1293,16 @@ class ConflictDetectionNode:
         return self.min_conflict_angle_deg <= angle_deg <= effective_max_angle
 
     @staticmethod
-    def _record_rejection(diagnostics: dict, reason: str | None) -> None:
+    def _record_rejection(
+        diagnostics: dict, reason: str | None, count: int = 1
+    ) -> None:
         if not reason:
             return
+        count = int(count)
+        if count <= 0:
+            return
         reasons = diagnostics.setdefault("rejection_reasons", {})
-        reasons[reason] = int(reasons.get(reason, 0)) + 1
+        reasons[reason] = int(reasons.get(reason, 0)) + count
 
     @staticmethod
     def _normalize_angle_deg(angle: float) -> float:

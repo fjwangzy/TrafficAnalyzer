@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 import logging
+import json
+from collections import deque
+from contextlib import nullcontext
 from logging.handlers import RotatingFileHandler
 import os
 from pathlib import Path
@@ -132,6 +135,9 @@ class StageMonitor:
         self.interval_sec = interval_sec
         self.slow_sec = slow_sec
         self._lock = threading.Lock()
+        self._metrics = {}
+        self._metrics_at = time.monotonic()
+        self.audit = os.environ.get("PIPELINE_PERF_AUDIT", "0").lower() in {"1", "true"}
         self._active = []
         self._reported = {}
         self._wait_reported = {}
@@ -165,6 +171,8 @@ class StageMonitor:
             elapsed = time.monotonic() - started
             with self._lock:
                 self._active.remove(token)
+                if self.audit:
+                    self._observe_locked(name, elapsed * 1000)
                 report_slow = elapsed >= self.slow_sec and time.monotonic() - self._reported.get(name, 0) >= self.interval_sec
                 if report_slow:
                     self._reported[name] = time.monotonic()
@@ -176,6 +184,8 @@ class StageMonitor:
     def _watch(self):
         while not self._stop.wait(1.0):
             now = time.monotonic()
+            if self.audit and now - self._metrics_at >= self.interval_sec:
+                self.flush_metrics()
             with self._lock:
                 token = next((item for item in reversed(self._active) if now - item["started"] >= 5.0), None)
                 if token is None or now - self._wait_reported.get(token["name"], now - self.interval_sec) < self.interval_sec:
@@ -187,8 +197,33 @@ class StageMonitor:
                 (time.process_time() - cpu_started) * 1000, details, _cpu_fields(),
             )
 
+    def _observe_locked(self, name, elapsed_ms):
+        metric = self._metrics.setdefault(name, {"count": 0, "total_ms": 0.0, "samples": deque(maxlen=4096)})
+        metric["count"] += 1
+        metric["total_ms"] += elapsed_ms
+        metric["samples"].append(elapsed_ms)
+
+    def observe(self, name, elapsed_ms):
+        if self.audit:
+            with self._lock:
+                self._observe_locked(name, elapsed_ms)
+
+    def flush_metrics(self):
+        with self._lock:
+            metrics, self._metrics = self._metrics, {}
+            elapsed = time.monotonic() - self._metrics_at
+            self._metrics_at = time.monotonic()
+        for name, metric in metrics.items():
+            values = sorted(metric.pop("samples"))
+            for q in (50, 95, 99):
+                metric[f"p{q}_ms"] = values[min(len(values)-1, int((len(values)-1)*q/100))]
+            metric.update(stage=name, window_sec=elapsed, percentile_samples=len(values), pid=os.getpid())
+            logging.getLogger("pipeline.perf").info("PERF_SUMMARY %s", json.dumps(metric, sort_keys=True))
+
     def close(self):
         self._stop.set()
+        if self.audit:
+            self.flush_metrics()
         self._thread.join(timeout=2)
 
 
@@ -207,3 +242,19 @@ def stage(name: str, **fields):
 def run_stage(name, function, *args, **kwargs):
     with stage(name):
         return function(*args, **kwargs)
+
+
+def audit_stage(name, **fields):
+    """Detailed probes are opt-in; normal runs pay no monitor/SQL-loop logging cost."""
+    if os.environ.get("PIPELINE_PERF_AUDIT", "0").lower() not in {"1", "true"}:
+        return nullcontext()
+    return stage(name, **fields)
+
+
+def audit_observe(name, elapsed_ms):
+    if os.environ.get("PIPELINE_PERF_AUDIT", "0").lower() in {"1", "true"}:
+        global _monitor, _monitor_pid
+        if _monitor is None or _monitor_pid != os.getpid():
+            _monitor = StageMonitor()
+            _monitor_pid = os.getpid()
+        _monitor.observe(name, elapsed_ms)

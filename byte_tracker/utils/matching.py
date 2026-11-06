@@ -145,6 +145,29 @@ def embedding_distance(tracks, detections, metric='cosine'):
     return cost_matrix
 
 
+def _batch_position_gate(kf, cost_matrix, tracks, measurements, threshold):
+    # Bound temporary pair arrays; preserve the original project() and the exact
+    # two-row forward-substitution operation order used by gating_distance().
+    block_size = max(1, min(64, 65536 // max(1, len(measurements))))
+    for start in range(0, len(tracks), block_size):
+        block = tracks[start:start + block_size]
+        projected = [kf.project(track.mean, track.covariance) for track in block]
+        means = np.asarray([mean[:2] for mean, covariance in projected])
+        covariances = np.asarray([covariance[:2, :2] for mean, covariance in projected])
+        lower = np.linalg.cholesky(covariances)
+        with stage("bytetrack.position_gate_batch", tracks=len(block), detections=len(measurements)):
+            delta = measurements[None, :, :2] - means[:, None, :]
+            x = delta[:, :, 0] / lower[:, None, 0, 0]
+            y = (delta[:, :, 1] - lower[:, None, 1, 0] * x) / lower[:, None, 1, 1]
+            distance = x * x + y * y
+            # Re-evaluate threshold-neighbour rows through the original path.
+            near = np.any(np.abs(distance - threshold) <= 64 * np.finfo(distance.dtype).eps * max(1.0, threshold), axis=1)
+            for row in np.flatnonzero(near):
+                track = block[row]
+                distance[row] = kf.gating_distance(track.mean, track.covariance, measurements, True)
+            cost_matrix[start:start + len(block)][distance > threshold] = np.inf
+
+
 def gate_cost_matrix(kf, cost_matrix, tracks, detections, only_position=False):
     if cost_matrix.size == 0:
         return cost_matrix
@@ -152,6 +175,17 @@ def gate_cost_matrix(kf, cost_matrix, tracks, detections, only_position=False):
         gating_dim = 2 if only_position else 4
         gating_threshold = kalman_filter.chi2inv95[gating_dim]
         measurements = np.asarray([det.to_xyah() for det in detections])
+        if (only_position and len(tracks) >= 8
+                and type(kf) is kalman_filter.KalmanFilter
+                and getattr(kf, "batch_position_gate_enabled", False)
+                and type(cost_matrix) is np.ndarray
+                and np.issubdtype(cost_matrix.dtype, np.floating)):
+            try:
+                _batch_position_gate(kf, cost_matrix, tracks, measurements, gating_threshold)
+                return cost_matrix
+            except np.linalg.LinAlgError:
+                # Original row path retains its failure semantics on bad inputs.
+                pass
         for row, track in enumerate(tracks):
             with stage("bytetrack.shadow_row", row=row + 1, tracks=len(tracks), detections=len(detections)):
                 gating_distance = kf.gating_distance(

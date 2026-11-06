@@ -1,9 +1,15 @@
+import pytest
 import unittest
 from unittest.mock import patch
 
 from app.kafka.consumer import KafkaConsumerService
 from app.services.alert_engine import AlertEngine
 from app.services.metric_store import PersistResult
+
+
+@pytest.fixture(autouse=True)
+def fixed_topic_metadata_is_mocked_in_consumer_unit_tests(monkeypatch):
+    monkeypatch.setattr('utils_local.kafka_topic_preflight.check_fixed_topics',lambda *args,**kwargs: [])
 
 
 class _RecordingWS:
@@ -140,8 +146,9 @@ class KafkaConsumerStatsTest(unittest.IsolatedAsyncioTestCase):
             ws_manager=_RecordingWS(),
         )
 
-        self.assertEqual(service._extract_intersection("uav_statistics_3"), "INT_camera_3")
-        with self.assertRaisesRegex(ValueError, "unsupported canonical topic"):
+        with self.assertRaises(ValueError):
+            service._extract_intersection("uav_statistics_3")
+        with self.assertRaisesRegex(ValueError, "identity must be present"):
             service._extract_intersection("statistics_3")
 
     async def test_start_failure_closes_consumer_and_enters_degraded_mode(self):

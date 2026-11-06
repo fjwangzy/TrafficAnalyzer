@@ -36,3 +36,18 @@ def test_geojson_export_accepts_canonical_completed_track_without_frame(tmp_path
         [117.093, 36.6628],
         [117.0931, 36.6629],
     ]
+
+
+def test_four_worker_spatial_export_does_not_hold_all_completed_features_in_memory(tmp_path):
+    import json
+    from services.SpatialFeatureSpool import SpatialFeatureSpool
+    node=GeoJsonExportNode({'pipeline':{'egress_enabled':True},'geojson_export':{'output_dir':str(tmp_path)}})
+    assert isinstance(node._collected_tracks,SpatialFeatureSpool)
+    feature={'type':'Feature','geometry':{'type':'LineString','coordinates':[[117,36],[117.1,36.1]]},'properties':{'track_id':1}}
+    for i in range(1000):node._collected_tracks.append({**feature,'properties':{'track_id':i}})
+    path=node._export_geojson('test')
+    data=json.loads(open(path).read())
+    assert data['metadata']['track_count']==1000 and len(data['features'])==1000
+    assert data['features'][0]['properties']['track_id']==0
+    assert data['features'][-1]['properties']['track_id']==999
+    node._collected_tracks.close()

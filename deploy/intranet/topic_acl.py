@@ -1,23 +1,26 @@
 #!/usr/bin/env python3
-"""Print concrete Topic/Group ACL requirements for approved source keys."""
+"""Fixed business Topic/Group requirements; source keys are event attributes."""
 
 import argparse
 import json
 import re
+from pathlib import Path
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--source-key", action="append", required=True)
+    parser.add_argument("--source-key", action="append", default=[])
     args = parser.parse_args()
-    topics = []
-    for source in sorted(set(args.source_key)):
-        if not re.fullmatch(r"[A-Za-z0-9._-]{1,128}", source):
-            parser.error("Unsupported source_key")
-        for kind in ("statistics", "track_complete", "conflicts", "telemetry", "mission", "enforcement_clues"):
-            topics.append({"topic": f"uav_replay_v2_{kind}_{source}",
-                           "operations": ["Write", "Describe"] + ([] if kind == "enforcement_clues" else ["Read"])})
-    print(json.dumps({"topics": topics, "groups": [{"group": "uav-platform-replay-v2", "operations": ["Read", "Describe"]}]}, indent=2))
+    if any(
+        re.fullmatch(r"[A-Za-z0-9._-]{1,128}", source) is None
+        for source in args.source_key
+    ):
+        parser.error("Unsupported source_key")
+    value = json.loads(
+        Path(__file__).with_name("TEST_SOURCE_TOPIC_ACL.json").read_text()
+    )
+    value["source_attributes"] = sorted(set(args.source_key))
+    print(json.dumps(value, indent=2))
 
 
 if __name__ == "__main__":

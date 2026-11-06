@@ -386,7 +386,7 @@ describe('Console2 full prototype', () => {
 
     fireEvent.change(screen.getByLabelText('轨迹任务'), { target: { value: 'all' } })
     await waitFor(() => expect(screen.getByRole('button', { name: '播放历史回放' })).toBeDisabled())
-    expect(await screen.findByText('请选择单个封存 Mission')).toBeInTheDocument()
+    expect(await screen.findByText('请选择单个回放任务')).toBeInTheDocument()
     expect(screen.queryByText('Track #7 识别与运行证据')).not.toBeInTheDocument()
   })
 

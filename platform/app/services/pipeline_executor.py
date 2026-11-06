@@ -18,7 +18,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
 
-from utils_local.runtime_logging import RuntimeFormatter, log_level_from_text, redact_log_text, rotating_log_handler, runtime_log_dir
+from utils_local.runtime_logging import (
+    RuntimeFormatter,
+    log_level_from_text,
+    redact_log_text,
+    rotating_log_handler,
+    runtime_log_dir,
+)
 
 VIDEO_READY_MARKER = "MJPEG_READY"
 
@@ -66,6 +72,8 @@ class ExecutionHandle:
     native_process: Any = field(default=None, repr=False)
     io_tasks: list[asyncio.Task] = field(default_factory=list, repr=False)
     video_ready: asyncio.Event = field(default_factory=asyncio.Event, repr=False)
+    egress_ready: asyncio.Event = field(default_factory=asyncio.Event, repr=False)
+    egress_required: bool = False
     output_logger: Any = field(default=None, repr=False)
     exit_logged: bool = False
 
@@ -117,8 +125,7 @@ class LocalPipelineExecutor:
         if self._imgsz is not None:
             command.append(f"detection_node.imgsz={self._imgsz}")
         command.append(
-            "detection_node.adaptive_imgsz.enabled="
-            f"{'true' if self._adaptive_imgsz else 'false'}"
+            f"detection_node.adaptive_imgsz.enabled={'true' if self._adaptive_imgsz else 'false'}"
         )
         command.extend(self._extra_overrides)
         if spec.telemetry_source:
@@ -129,23 +136,13 @@ class LocalPipelineExecutor:
                 ]
             )
         if spec.telemetry_file_path:
-            command.append(
-                f"telemetry.file_path={hydra_string(spec.telemetry_file_path)}"
-            )
+            command.append(f"telemetry.file_path={hydra_string(spec.telemetry_file_path)}")
         if spec.telemetry_time_offset_sec is not None:
-            command.append(
-                f"telemetry.time_offset_sec={spec.telemetry_time_offset_sec}"
-            )
+            command.append(f"telemetry.time_offset_sec={spec.telemetry_time_offset_sec}")
         if spec.telemetry_sync_tolerance_sec is not None:
-            command.append(
-                "telemetry.sync_tolerance_sec="
-                f"{spec.telemetry_sync_tolerance_sec}"
-            )
+            command.append(f"telemetry.sync_tolerance_sec={spec.telemetry_sync_tolerance_sec}")
         if spec.telemetry_camera_lens_policy is not None:
-            command.append(
-                "telemetry.camera_lens_policy="
-                f"{spec.telemetry_camera_lens_policy}"
-            )
+            command.append(f"telemetry.camera_lens_policy={spec.telemetry_camera_lens_policy}")
         return command
 
     def _environment(self, spec: PipelineLaunchSpec) -> dict[str, str]:
@@ -192,17 +189,23 @@ class LocalPipelineExecutor:
         if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", spec.pipeline_id):
             raise ValueError("pipeline_id contains unsupported log path characters")
         output_logger = logging.Logger(f"detector.{spec.pipeline_id}", logging.INFO)
-        output_logger.addHandler(rotating_log_handler(
-            runtime_log_dir(self._root) / "pipelines" / f"{spec.pipeline_id}.log",
-            pipeline_id=spec.pipeline_id,
-        ))
+        output_logger.addHandler(
+            rotating_log_handler(
+                runtime_log_dir(self._root) / "pipelines" / f"{spec.pipeline_id}.log",
+                pipeline_id=spec.pipeline_id,
+            )
+        )
         console = logging.StreamHandler()
         console.setFormatter(RuntimeFormatter(spec.pipeline_id))
         output_logger.addHandler(console)
         output_logger.info(
             "PIPELINE_LAUNCH startup_contract=20261019.3 device=%s imgsz=%s adaptive_imgsz=%s frame_stride=%s source_kind=%s tracking_profile=%s",
-            self._device or "auto", self._imgsz, self._adaptive_imgsz, spec.frame_stride,
-            "stream" if "://" in spec.video_src else "file", spec.tracking_profile,
+            self._device or "auto",
+            self._imgsz,
+            self._adaptive_imgsz,
+            spec.frame_stride,
+            "stream" if "://" in spec.video_src else "file",
+            spec.tracking_profile,
         )
         try:
             process = await asyncio.create_subprocess_exec(
@@ -223,6 +226,12 @@ class LocalPipelineExecutor:
             pid=process.pid,
             native_process=process,
             output_logger=output_logger,
+            egress_required=str(
+                self._extra_env.get(
+                    "PIPELINE_EGRESS_ENABLED", os.environ.get("PIPELINE_EGRESS_ENABLED", "false")
+                )
+            ).lower()
+            == "true",
         )
         handle.io_tasks = [
             asyncio.create_task(self._drain_stream(process.stdout, handle, "stdout")),
@@ -241,7 +250,9 @@ class LocalPipelineExecutor:
         process = handle.native_process
         loop = asyncio.get_running_loop()
         deadline = loop.time() + self._video_ready_timeout_sec
-        while not handle.video_ready.is_set():
+        while not handle.video_ready.is_set() or (
+            handle.egress_required and not handle.egress_ready.is_set()
+        ):
             if process is not None and process.returncode is not None:
                 handle.returncode = process.returncode
                 raise RuntimeError(
@@ -256,7 +267,11 @@ class LocalPipelineExecutor:
                 )
             try:
                 await asyncio.wait_for(
-                    handle.video_ready.wait(),
+                    (
+                        handle.egress_ready.wait()
+                        if handle.video_ready.is_set() and handle.egress_required
+                        else handle.video_ready.wait()
+                    ),
                     timeout=min(remaining, 0.1),
                 )
             except TimeoutError:
@@ -275,11 +290,16 @@ class LocalPipelineExecutor:
         if process is not None and process.returncode is None:
             try:
                 try:
-                    os.killpg(process.pid, signal.SIGTERM)
+                    if handle.egress_required:
+                        process.terminate()
+                    else:
+                        os.killpg(process.pid, signal.SIGTERM)
                 except ProcessLookupError:
                     process.terminate()
                 try:
-                    await asyncio.wait_for(process.wait(), timeout=10)
+                    await asyncio.wait_for(
+                        process.wait(), timeout=150 if handle.egress_required else 10
+                    )
                 except TimeoutError:
                     try:
                         os.killpg(process.pid, signal.SIGKILL)
@@ -305,14 +325,18 @@ class LocalPipelineExecutor:
                     task.cancel()
         handle.exit_logged = True
         if handle.output_logger is not None:
+
             def finish_log():
                 handle.output_logger.log(
                     logging.INFO if handle.returncode == 0 else logging.ERROR,
-                    "PIPELINE_EXIT child_pid=%s returncode=%s", handle.pid, handle.returncode,
+                    "PIPELINE_EXIT child_pid=%s returncode=%s",
+                    handle.pid,
+                    handle.returncode,
                 )
                 for handler in handle.output_logger.handlers:
                     handler.close()
                 handle.output_logger.handlers.clear()
+
             try:
                 await asyncio.wait_for(asyncio.to_thread(finish_log), timeout=2.0)
             except TimeoutError:
@@ -341,8 +365,11 @@ class LocalPipelineExecutor:
                 combined = handle.stdout_tail + safe
                 if VIDEO_READY_MARKER in combined:
                     handle.video_ready.set()
+                if "ARCHIVER_READY protocol=1" in combined:
+                    handle.egress_ready.set()
                 handle.stdout_tail = combined[-tail_limit:]
             if handle.output_logger is not None and safe.strip():
+
                 def write_lines():
                     nonlocal line_level
                     for line in safe.splitlines():
@@ -350,10 +377,17 @@ class LocalPipelineExecutor:
                         if not handle.output_logger.isEnabledFor(line_level):
                             continue
                         record = handle.output_logger.makeRecord(
-                            f"detector.{handle.execution_id}.{name}", line_level, "", 0, line, (), None,
+                            f"detector.{handle.execution_id}.{name}",
+                            line_level,
+                            "",
+                            0,
+                            line,
+                            (),
+                            None,
                         )
                         record.process = handle.pid
                         handle.output_logger.handle(record)
+
                 await asyncio.to_thread(write_lines)
 
         try:
@@ -367,12 +401,12 @@ class LocalPipelineExecutor:
                     if boundary < 0:
                         continue
                     dropping_oversized_line = False
-                    decoded = decoded[boundary + 1:]
+                    decoded = decoded[boundary + 1 :]
                 pending += decoded
                 boundary = pending.rfind("\n")
                 if boundary >= 0:
-                    await emit(pending[:boundary + 1])
-                    pending = pending[boundary + 1:]
+                    await emit(pending[: boundary + 1])
+                    pending = pending[boundary + 1 :]
                 elif len(pending) > 65536:
                     await emit("WARNING OUTPUT_LINE_TRUNCATED limit_chars=65536\n")
                     pending = ""
@@ -381,4 +415,6 @@ class LocalPipelineExecutor:
             if pending:
                 await emit(pending)
         except Exception:
-            logging.getLogger(__name__).exception("Detector output drain failed pipeline=%s stream=%s", handle.execution_id, name)
+            logging.getLogger(__name__).exception(
+                "Detector output drain failed pipeline=%s stream=%s", handle.execution_id, name
+            )

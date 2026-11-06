@@ -8,10 +8,13 @@ behind this seam.
 
 from __future__ import annotations
 
-from collections import defaultdict
+from collections import Counter, defaultdict
 from datetime import datetime, timedelta
 from math import ceil
 from typing import Any
+
+from utils_local.trajectory_sampling import VERSION as SAMPLING_V2
+from utils_local.trajectory_sampling import validate_summary
 
 
 def _window_start(value: datetime) -> datetime:
@@ -39,6 +42,7 @@ def _empty_bucket() -> dict[str, Any]:
     return {
         "track_ids": set(),
         "speeds": [],
+        "speed_histogram": Counter(),
         "coverage": [],
         "stopped": set(),
         "queues": set(),
@@ -49,10 +53,25 @@ def _empty_bucket() -> dict[str, Any]:
 
 
 def _fact_row(bucket: dict[str, Any]) -> dict[str, Any]:
+    histogram = bucket["speed_histogram"]
+    average = _rounded_mean(bucket["speeds"])
+    p85 = _p85(bucket["speeds"])
+    if histogram:
+        if bucket["speeds"]:
+            raise ValueError("cannot mix sparse-point and full-sequence speed facts")
+        count = sum(histogram.values())
+        average = round(sum(k * n for k, n in histogram.items()) / (1000 * count), 6)
+        rank = (85 * count + 99) // 100
+        cumulative = 0
+        for value, frequency in sorted(histogram.items()):
+            cumulative += frequency
+            if cumulative >= rank:
+                p85 = value / 1000
+                break
     return {
         "vehicle_count": len(bucket["track_ids"]),
-        "avg_speed_kmh": _rounded_mean(bucket["speeds"]),
-        "p85_speed_kmh": _p85(bucket["speeds"]),
+        "avg_speed_kmh": average,
+        "p85_speed_kmh": p85,
         "stopped_count": len(bucket["stopped"]),
         "queue_count": len(bucket["queues"]),
         "release_count": len(bucket["releases"]),
@@ -103,14 +122,13 @@ def build_mission_aggregates(
 
     for journey in journeys:
         track_id = str(journey["track_id"])
-        track_window = _window_start(
-            _at_offset(started_at, journey.get("started_offset_ms"))
-        )
+        track_window = _window_start(_at_offset(started_at, journey.get("started_offset_ms")))
         buckets[track_window]["track_ids"].add(track_id)
         dimensions = {
             "link": journey.get("matched_link_id"),
             "lane": journey.get("matched_lane_key"),
-            "turn": journey.get("movement_key") or (
+            "turn": journey.get("movement_key")
+            or (
                 f"turn_behavior:{journey['turn_behavior']}"
                 if journey.get("turn_behavior")
                 else None
@@ -119,20 +137,42 @@ def build_mission_aggregates(
         for grain, value in dimensions.items():
             if value:
                 road_buckets[grain][(track_window, str(value))]["track_ids"].add(track_id)
-        for point in journey.get("points") or []:
-            speed = (point.get("speed") or {}).get("ema_kmh")
-            if speed is not None:
-                point_window = _window_start(_at_offset(started_at, point.get("offset_ms")))
-                buckets[point_window]["speeds"].append(float(speed))
+        sampling = journey.get("sampling") or {}
+        if (
+            calc_version == "replay-v2-aggregate/v2"
+            and sampling.get("algorithm_version") != SAMPLING_V2
+        ):
+            raise ValueError("v2 Mission requires full-sequence summaries for every journey")
+        if str(sampling.get("algorithm_version", "")).startswith(
+            "event-faithful/"
+        ) and sampling.get("algorithm_version") not in {"event-faithful/v1", SAMPLING_V2}:
+            raise ValueError("unsupported history sampling version")
+        if sampling.get("algorithm_version") == SAMPLING_V2:
+            summary = validate_summary(
+                sampling, time_basis=started_at, source_count=journey.get("source_point_count")
+            )
+            for window in summary["windows"]:
+                point_window = datetime.fromisoformat(window["window_start"])
+                histogram = Counter(dict(window["histogram"]))
+                buckets[point_window]["speed_histogram"].update(histogram)
                 for grain, value in dimensions.items():
                     if value:
-                        road_buckets[grain][(point_window, str(value))]["speeds"].append(
-                            float(speed)
+                        road_buckets[grain][(point_window, str(value))]["speed_histogram"].update(
+                            histogram
                         )
+        else:
+            for point in journey.get("points") or []:
+                speed = (point.get("speed") or {}).get("ema_kmh")
+                if speed is not None:
+                    point_window = _window_start(_at_offset(started_at, point.get("offset_ms")))
+                    buckets[point_window]["speeds"].append(float(speed))
+                    for grain, value in dimensions.items():
+                        if value:
+                            road_buckets[grain][(point_window, str(value))]["speeds"].append(
+                                float(speed)
+                            )
         for behavior in journey.get("episodes") or []:
-            behavior_window = _window_start(
-                _at_offset(started_at, behavior.get("start_offset_ms"))
-            )
+            behavior_window = _window_start(_at_offset(started_at, behavior.get("start_offset_ms")))
             bucket = buckets[behavior_window]
             kind = behavior.get("kind")
             _record_episode(bucket, track_id, kind)
@@ -149,9 +189,7 @@ def build_mission_aggregates(
                 buckets[maneuver_window]["u_turns"].add(track_id)
                 for grain, value in dimensions.items():
                     if value:
-                        road_buckets[grain][(maneuver_window, str(value))]["u_turns"].add(
-                            track_id
-                        )
+                        road_buckets[grain][(maneuver_window, str(value))]["u_turns"].add(track_id)
 
     intersection = []
     for window, bucket in sorted(buckets.items()):

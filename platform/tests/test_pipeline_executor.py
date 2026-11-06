@@ -1,7 +1,7 @@
 import asyncio
-from pathlib import Path
 import re
 import sys
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -125,12 +125,14 @@ async def test_local_executor_waits_until_mjpeg_server_is_ready(tmp_path):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("job_logging", ["stdout", "disabled"])
-async def test_hydra_fork_worker_announces_real_mjpeg_listener(tmp_path, unused_tcp_port, job_logging):
+async def test_hydra_fork_worker_announces_real_mjpeg_listener(
+    tmp_path, unused_tcp_port, job_logging
+):
     import httpx
 
     root = Path(__file__).resolve().parents[2]
     # Import the node before Hydra; disabled also covers a parent retaining its old launch command.
-    (tmp_path / "main_optimized.py").write_text(f'''
+    (tmp_path / "main_optimized.py").write_text(f"""
 import multiprocessing
 import hydra
 from nodes.FlaskServerVideoNode import VideoServer
@@ -144,7 +146,7 @@ def worker():
     }}}})
     server.app_thread.join()
 
-@hydra.main(version_base=None, config_path={str(root / 'configs')!r}, config_name="app_config")
+@hydra.main(version_base=None, config_path={str(root / "configs")!r}, config_name="app_config")
 def main(config):
     configure_runtime_logging()
     process = multiprocessing.get_context("fork").Process(target=worker)
@@ -153,9 +155,11 @@ def main(config):
 
 if __name__ == "__main__":
     main()
-''')
+""")
     executor = LocalPipelineExecutor(
-        tmp_path, sys.executable, extra_env={"PYTHONPATH": str(root)},
+        tmp_path,
+        sys.executable,
+        extra_env={"PYTHONPATH": str(root)},
         extra_overrides=(f"hydra/job_logging={job_logging}",),
         video_ready_timeout_sec=10,
     )
@@ -180,30 +184,43 @@ if __name__ == "__main__":
 
 def test_production_executor_forwards_ascend_om_selection(tmp_path):
     executor = LocalPipelineExecutor(
-        tmp_path, '/usr/bin/python3', device='ascend',
-        extra_env={'ASCEND_MODEL_MANIFEST': '/app/weights/ascend/manifest.json', 'ASCEND_DEVICE_ID': '0'},
+        tmp_path,
+        "/usr/bin/python3",
+        device="ascend",
+        extra_env={
+            "ASCEND_MODEL_MANIFEST": "/app/weights/ascend/manifest.json",
+            "ASCEND_DEVICE_ID": "0",
+        },
     )
     command = executor._command(_spec())
     environment = executor._environment(_spec())
-    assert 'detection_node.device=ascend' in command
-    assert 'detection_node.device=cpu' not in command
-    assert environment['ASCEND_MODEL_MANIFEST'] == '/app/weights/ascend/manifest.json'
-    assert environment['ASCEND_DEVICE_ID'] == '0'
+    assert "detection_node.device=ascend" in command
+    assert "detection_node.device=cpu" not in command
+    assert environment["ASCEND_MODEL_MANIFEST"] == "/app/weights/ascend/manifest.json"
+    assert environment["ASCEND_DEVICE_ID"] == "0"
 
 
 @pytest.mark.asyncio
-async def test_detector_output_persists_redacted_split_chunks_and_keeps_ready_contract(tmp_path, monkeypatch):
-    from app.services.pipeline_executor import ExecutionHandle
-    from utils_local.runtime_logging import rotating_log_handler
+async def test_detector_output_persists_redacted_split_chunks_and_keeps_ready_contract(
+    tmp_path, monkeypatch
+):
     import logging
 
-    chunks = iter([
-        b'MJPEG_RE', b'ADY port=8101\nrtsp://pilot:camera-',
-        b'private@example.test/live\n',
-        b'2026-10-18T08:00:00.100Z DEBUG pid=45 pipeline=pipe-fixture stage noisy-debug\n',
-        b'2026-10-18 08:00:00,100 WARNING pid=45 pipeline=pipe-fixture stage slow\n',
-        b'Traceback (most recent call last):\n  password=db-private\n', b'',
-    ])
+    from utils_local.runtime_logging import rotating_log_handler
+
+    from app.services.pipeline_executor import ExecutionHandle
+
+    chunks = iter(
+        [
+            b"MJPEG_RE",
+            b"ADY port=8101\nrtsp://pilot:camera-",
+            b"private@example.test/live\n",
+            b"2026-10-18T08:00:00.100Z DEBUG pid=45 pipeline=pipe-fixture stage noisy-debug\n",
+            b"2026-10-18 08:00:00,100 WARNING pid=45 pipeline=pipe-fixture stage slow\n",
+            b"Traceback (most recent call last):\n  password=db-private\n",
+            b"",
+        ]
+    )
 
     class Stream:
         async def read(self, _size):
@@ -227,7 +244,9 @@ async def test_detector_output_persists_redacted_split_chunks_and_keeps_ready_co
         assert "noisy-debug" not in output
         assert any("WARNING pid=" in line and "stage slow" in line for line in output.splitlines())
         assert any("ERROR pid=" in line and "Traceback" in line for line in output.splitlines())
-        assert any("ERROR pid=" in line and "password=[redacted]" in line for line in output.splitlines())
+        assert any(
+            "ERROR pid=" in line and "password=[redacted]" in line for line in output.splitlines()
+        )
     finally:
         handler.close()
 
@@ -237,7 +256,9 @@ async def test_detector_output_persists_redacted_split_chunks_and_keeps_ready_co
 async def test_ready_marker_is_detected_before_a_burst_truncates_the_output_tail(ready):
     from app.services.pipeline_executor import ExecutionHandle
 
-    prefix = b"2026-10-19T10:35:00.000Z INFO pid=564 pipeline=pipe-fixture nodes.FlaskServerVideoNode "
+    prefix = (
+        b"2026-10-19T10:35:00.000Z INFO pid=564 pipeline=pipe-fixture nodes.FlaskServerVideoNode "
+    )
     marker = b"MJPEG_READY port=8101\n" if ready else b"initialization still running\n"
     chunks = iter([prefix, marker + b"x" * (4096 - len(marker) - 1) + b"\n", b""])
 
@@ -254,14 +275,18 @@ async def test_ready_marker_is_detected_before_a_burst_truncates_the_output_tail
 
 @pytest.mark.asyncio
 async def test_inspect_persists_exit_code_once(tmp_path):
-    from app.services.pipeline_executor import ExecutionHandle
-    from utils_local.runtime_logging import rotating_log_handler
-    from types import SimpleNamespace
     import logging
+    from types import SimpleNamespace
+
+    from utils_local.runtime_logging import rotating_log_handler
+
+    from app.services.pipeline_executor import ExecutionHandle
 
     log = logging.Logger("fixture.detector", logging.INFO)
     log.addHandler(rotating_log_handler(tmp_path / "exit.log"))
-    handle = ExecutionHandle("pipe-exit", 5678, native_process=SimpleNamespace(returncode=7), output_logger=log)
+    handle = ExecutionHandle(
+        "pipe-exit", 5678, native_process=SimpleNamespace(returncode=7), output_logger=log
+    )
     executor = LocalPipelineExecutor(tmp_path)
     await executor.inspect(handle)
     await executor.inspect(handle)
@@ -273,8 +298,9 @@ async def test_inspect_persists_exit_code_once(tmp_path):
 
 @pytest.mark.asyncio
 async def test_cancelled_output_drain_never_starts_a_disk_write():
-    from app.services.pipeline_executor import ExecutionHandle
     from unittest.mock import AsyncMock
+
+    from app.services.pipeline_executor import ExecutionHandle
 
     waiting = asyncio.Event()
 
@@ -302,8 +328,12 @@ async def test_cancelled_output_drain_never_starts_a_disk_write():
 async def test_oversized_unterminated_output_drops_whole_line_without_leaking_partial_secret():
     from app.services.pipeline_executor import ExecutionHandle
 
-    data = b"rtsp://pilot:" + b"private-password" * 5000 + b"@example.test/live\nMJPEG_READY port=8101\n"
-    chunks = iter([data[index:index + 4096] for index in range(0, len(data), 4096)] + [b""])
+    data = (
+        b"rtsp://pilot:"
+        + b"private-password" * 5000
+        + b"@example.test/live\nMJPEG_READY port=8101\n"
+    )
+    chunks = iter([data[index : index + 4096] for index in range(0, len(data), 4096)] + [b""])
 
     class Stream:
         async def read(self, _size):
@@ -314,3 +344,19 @@ async def test_oversized_unterminated_output_drops_whole_line_without_leaking_pa
     assert "OUTPUT_LINE_TRUNCATED" in handle.stdout_tail
     assert "private-password" not in handle.stdout_tail
     assert handle.video_ready.is_set()
+
+
+@pytest.mark.asyncio
+async def test_four_process_ready_requires_both_video_and_durable_writer(tmp_path):
+    import asyncio
+
+    from app.services.pipeline_executor import ExecutionHandle, LocalPipelineExecutor
+
+    handle = ExecutionHandle("egress-ready-test", None, egress_required=True)
+    handle.video_ready.set()
+    executor = LocalPipelineExecutor(tmp_path, video_ready_timeout_sec=0.5)
+    waiting = asyncio.create_task(executor._wait_until_video_ready(handle))
+    await asyncio.sleep(0.02)
+    assert not waiting.done()
+    handle.egress_ready.set()
+    await waiting

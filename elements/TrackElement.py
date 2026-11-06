@@ -38,6 +38,7 @@ class TrackElement:
         # ── 新增：轨迹 ──
         self.exit_road: int | None = None  # 车辆离开的道路编号
         self.turn_behavior: str | None = None  # 转向行为分类
+        self.trajectory_history_start: int = 0  # durable prefix already held by egress
         self.trajectory_points: list[tuple[float, float]] = []  # [(cx, cy)] 像素坐标序列
         self.ground_contact_points_px: list[tuple[float, float]] = []
         self.trajectory_enu_m: list[tuple[float, float] | None] = []

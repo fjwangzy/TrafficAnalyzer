@@ -1,5 +1,10 @@
 # DATABASE_SCHEMA.md — TrafficAnalyzer 数据库结构
 
+## 2026-11-03 轨迹采样v2（无DDL变更）
+
+沿用uav_replay_v2_track_events.sampling JSON存储版本化全序列摘要及几何采样策略；uav_replay_v2_track_points仅存保留点，source_point_count与retained_point_count分别保留原始数/保留数。五分钟均值/P85使用sampling中的完整速度频数，行为事实在抽稀前冻结，绝不按稀疏点分布重新加权。新任务aggregate计算版本为replay-v2-aggregate/v2；旧记录/旧统计不主动重算。没有新增表、列、迁移或生产自动初始化，依赖/双head门禁保持；Doris只读路网/态势及本机road9/MPS约束不变。
+
+
 ## 2026-10-19 正式inbox同样取消offset门禁
 
 canonical head推进到`20261019_0021`：`uav_message_inbox`的topic/partition/offset唯一约束改普通索引，
@@ -692,3 +697,13 @@ Geo WKT原值使用现有 Shapely解码为GCJ-02/ENU，不要求PostGIS；不向
 2026-10-17用户最新生产目标：瀚高database=ycx_prod、schema=drone、user=sysdba；
 旧xinchan.ycx_drone为历史目标，不自动迁移或复制旧数据。新目标由DBA预建授权；
 运行时按DB_NAME/DB_SCHEMA核对实际会话，版本表及uav_*表均在drone中。Mac本机road9.public不变。
+
+
+## 2026-11-04 增量轨迹与固定Topic改造（工作中）
+
+用户已授权离场片段入库、短窗口重识别关联、手动停止保存中断轨迹、轨迹及必要任务事实的定向补偿，以及按业务类型固定Kafka Topic。该授权更新此前按相机/SourceProfile分Topic及所有消息异常跳过不补的约束；其他历史区间仍不自动补回。实现、验证、未完成项及本机隔离清理事故见[INCREMENTAL_TRAJECTORIES_20261104.md](INCREMENTAL_TRAJECTORIES_20261104.md)。当前未完成整套验收，未发布新包。
+
+
+## 2026-11-04 增量轨迹后续工程验证
+
+运行期短窗口关系、按受影响窗口的分页聚合、源片段摘要对账、生产路网关闭四进程的ACK后历史裁剪、GeoJSON落盘导出及固定Topic显式初始化/只读检查已实现。Replay迁移head更新为20261104_rv2_0007，所有运行态需验证共享回执/Replay迁移。普通启动不DDL、不创建Topic；旧数据与旧Topic保留。验证范围、历史隔离清理事故和未完成的现场/故障验收详见[增量轨迹进度](INCREMENTAL_TRAJECTORIES_20261104.md)；完整包按2026.11.04.2验收候选交付，不宣称已达到现场30%FPS目标。

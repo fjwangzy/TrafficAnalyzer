@@ -124,3 +124,44 @@ def test_configuration_rejects_local_or_system_production_target(monkeypatch, da
     monkeypatch.setattr(config, 'settings', SimpleNamespace(db_name=database, db_schema=schema))
     with pytest.raises(preflight.DiagnosticError, match='CONFIG_DB_TARGET'):
         preflight.configuration()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('reachable', [True, False])
+async def test_native_preflight_checks_advertised_brokers_without_publishing(monkeypatch, reachable):
+    monkeypatch.setattr("utils_local.kafka_topic_preflight.check_fixed_topics",lambda *args,**kwargs: [])
+    import aiokafka
+    import socket
+    seen = []
+    class Consumer:
+        def __init__(self, **kwargs):
+            assert kwargs['group_id'] is None and not kwargs['enable_auto_commit']
+            self._client = SimpleNamespace(cluster=SimpleNamespace(brokers=lambda: [SimpleNamespace(host='advertised.invalid', port=9093)]))
+        async def start(self):
+            pass
+        async def topics(self):
+            return {'uav_system_metrics'}
+        async def stop(self):
+            seen.append('closed')
+    class Connection:
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            pass
+    def probe(address, timeout):
+        seen.append(address)
+        if not reachable:
+            raise OSError('must not reveal a private-password')
+        return Connection()
+    monkeypatch.setenv('TRAFFIC_NATIVE_OWNER', '/native')
+    monkeypatch.setattr(aiokafka, 'AIOKafkaConsumer', Consumer)
+    monkeypatch.setattr(socket, 'create_connection', probe)
+    report = preflight.Report()
+    settings = SimpleNamespace(kafka_bootstrap='bootstrap:9093', kafka_security_options={},
+                               kafka_security_protocol='SASL_PLAINTEXT', kafka_sasl_mechanism='PLAIN')
+    await preflight.kafka_checks(report, settings)
+    assert ('advertised.invalid', 9093) in seen and seen[-1] == 'closed'
+    assert report.failed == (not reachable)
+    if not reachable:
+        assert any(c.get('code') == 'KAFKA_ADVERTISED_UNREACHABLE' for c in report.checks)
+    assert 'private-password' not in json.dumps(report.checks)

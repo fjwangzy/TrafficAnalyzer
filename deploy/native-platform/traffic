@@ -1,0 +1,12 @@
+#!/bin/sh
+set -eu
+root=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+if [ "$(uname -s)" != Linux ] || [ "$(uname -m)" != aarch64 ]; then
+    echo '此包仅支持 Linux aarch64；请在生产主机解压运行。' >&2
+    exit 1
+fi
+if [ ! -x "$root/runtime/usr/lib/aarch64-linux-gnu/ld-linux-aarch64.so.1" ]; then
+    echo '运行库缺失或无执行权限；请检查完整解压及文件系统 noexec 配置。' >&2
+    exit 1
+fi
+exec "$root/bin/python3" "$root/native_platform.py" "$@"

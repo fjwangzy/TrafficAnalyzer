@@ -240,6 +240,7 @@ class BYTETracker(object):
         class_switch_confirm_frames=1,
         large_object_area_px2=None,
         large_object_init_thresh=None,
+        batch_position_gate=True,
     ):
         self.tracked_stracks = []  # type: list[STrack]
         self.lost_stracks = []  # type: list[STrack]
@@ -256,6 +257,7 @@ class BYTETracker(object):
         self.class_group_resolver = class_group_resolver
         self.class_switch_confirm_frames = max(int(class_switch_confirm_frames), 1)
         self.kalman_filter = KalmanFilter()
+        self.kalman_filter.batch_position_gate_enabled = bool(batch_position_gate)
         
         # Thr
         self.first_track_thresh = first_track_thresh
@@ -289,22 +291,19 @@ class BYTETracker(object):
                 [int(detection.class_name) for detection in detections], dtype=np.int64
             )
             detection_groups = [detection.class_group for detection in detections]
-
-            for row, track in enumerate(tracks):
-                class_penalty = np.where(
-                    np.asarray(
-                        [
-                            track.class_group is not None
-                            and group is not None
-                            and track.class_group != group
-                            for group in detection_groups
-                        ],
-                        dtype=bool,
-                    ),
-                    0.16,
-                    np.where(detection_classes != int(track.class_name), 0.08, 0.0),
-                )
-                dists[row] = np.minimum(1.0, dists[row] + class_penalty)
+            detection_groups = np.asarray(detection_groups, dtype=object)
+            detection_known = detection_groups != None  # noqa: E711
+            # Read object properties once, then retain the original .16/.08/0
+            # rule and arithmetic in bounded blocks, including unknown groups.
+            track_classes = np.asarray([int(track.class_name) for track in tracks], dtype=np.int64)
+            track_groups = np.asarray([track.class_group for track in tracks], dtype=object)
+            for start in range(0, len(tracks), 64):
+                end = min(start + 64, len(tracks))
+                groups = track_groups[start:end, None]
+                different_group = (groups != None) & detection_known[None, :] & (groups != detection_groups[None, :])  # noqa: E711
+                class_penalty = np.where(different_group, 0.16,
+                    np.where(track_classes[start:end, None] != detection_classes[None, :], 0.08, 0.0))
+                dists[start:end] = np.minimum(1.0, dists[start:end] + class_penalty)
             return dists
 
     def update(self, output_results, xyxy=True, camera_warp=None, timestamp=None):
@@ -530,7 +529,7 @@ class BYTETracker(object):
         self.lost_stracks = sub_stracks(self.lost_stracks, self.tracked_stracks)
         self.lost_stracks.extend(lost_stracks)
         self.lost_stracks = sub_stracks(self.lost_stracks, self.removed_stracks)
-        self.removed_stracks.extend(removed_stracks)
+        self.removed_stracks = removed_stracks
         self.tracked_stracks, self.lost_stracks = remove_duplicate_stracks(self.tracked_stracks, self.lost_stracks)
         # get scores of lost tracks
         output_stracks = [track for track in self.tracked_stracks if track.is_activated]

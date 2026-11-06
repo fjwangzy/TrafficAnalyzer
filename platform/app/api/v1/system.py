@@ -81,12 +81,8 @@ async def get_kafka_topics(request: Request):
     """Get Kafka topic statistics."""
     kafka = request.app.state.kafka_service
     if kafka:
-        latest = getattr(kafka, "latest_stats", {})
-        topics = []
-        for data in latest.values():
-            camera_id = str(data.get("camera_id", "")).replace("id_", "")
-            if camera_id:
-                topics.append({"name": f"uav_statistics_{camera_id}", "partitions": 1, "tps": 0, "lag": 0})
+        from utils_local.replay_topics import FIXED_TOPICS
+        topics = [{"name": name, "partitions": None, "tps": None, "lag": None, "measurement_status": "not_evaluated"} for name in FIXED_TOPICS.values()]
         return {
             "topics": topics,
             "consumer_group": kafka._group_id,

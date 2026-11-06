@@ -1,6 +1,7 @@
 import time
 
 import numpy as np
+from elements.RenderSnapshot import RenderSnapshot
 
 
 class FrameElement:
@@ -125,6 +126,13 @@ class FrameElement:
         self.source_frame_stride: int = 1
 
         # ── 新增：Kafka发送控制 ──
+        self.egress_frame_seq: int = 0
+        self.egress_closed_ids: list[str] = []
+        self.render_snapshot: RenderSnapshot | None = None  # immutable, owned display snapshot
+        self.fact_wall_time: float | None = None
+        self.pipeline_fps: float | None = None
+        self.annotation_snapshot_requested: bool = False
+        self.annotation_snapshot: dict | None = None
         self.send_to_kafka: bool = False  # 本帧是否已发送到Kafka
 
         # ── 新增：SharedMemory 优化 ──

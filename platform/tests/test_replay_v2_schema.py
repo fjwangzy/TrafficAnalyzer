@@ -35,7 +35,7 @@ def test_replay_v2_uses_an_independent_migration_track_and_fact_tables():
 
     assert (platform_dir / "alembic_replay_v2" / "env.py").is_file()
     assert config.get_main_option("version_table") == "uav_replay_v2_alembic_version"
-    assert ScriptDirectory.from_config(config).get_current_head() == "20261019_rv2_0005"
+    assert ScriptDirectory.from_config(config).get_current_head() == "20261104_rv2_0007"
     assert {
         "uav_replay_v2_missions",
         "uav_replay_v2_message_inbox",

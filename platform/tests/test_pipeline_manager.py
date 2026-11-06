@@ -134,7 +134,7 @@ class PipelineManagerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(captured["env"]["VIDEO_SRC"], str(video_path.resolve()))
         self.assertEqual(captured["env"]["RUNTIME_MAP_BUNDLE_JSON"], '{"schema_version":"uav.runtime-road-map/v1","map_version_id":"CMV-TEST","map_status":"lane_verified","coordinate_system":"GCJ02","anchor_gcj02":[117.0,36.7],"geometry_enu_m":{"lanes":{}}}')
         self.assertNotIn("RUNTIME_GEO_REGISTRATION_JSON", captured["env"])
-        self.assertEqual(captured["env"]["TOPIC_NAME"], "uav_statistics_1700000000")
+        self.assertEqual(captured["env"]["TOPIC_NAME"], "uav_statistics")
         self.assertEqual(captured["env"]["CAMERA_ID"], "1700000000")
         self.assertEqual(captured["env"]["DRONE_ID"], "drone_1")
         self.assertEqual(captured["env"]["INTERSECTION_ID"], "INT_camera_1")
@@ -360,7 +360,7 @@ class PipelineManagerTest(unittest.IsolatedAsyncioTestCase):
             intersection_id="INT_camera_1",
             video_src="rtsps://operator:secret@camera.uat.internal:8554/live?token=private",
             map_version_id="CMV-TEST",
-            topic_name="uav_statistics_10",
+            topic_name="uav_statistics",
             camera_id=10,
         )
 
@@ -377,7 +377,7 @@ class PipelineManagerTest(unittest.IsolatedAsyncioTestCase):
             intersection_id="INT_camera_1",
             video_src="test_videos/test_video.mp4",
             map_version_id="CMV-TEST",
-            topic_name="uav_statistics_10",
+            topic_name="uav_statistics",
             camera_id=10,
             status=PipelineStatus.RUNNING,
             error_message="previous error",
@@ -397,7 +397,7 @@ class PipelineManagerTest(unittest.IsolatedAsyncioTestCase):
             intersection_id="INT_camera_1",
             video_src="test_videos/test_video.mp4",
             map_version_id="CMV-TEST",
-            topic_name="uav_statistics_10",
+            topic_name="uav_statistics",
             camera_id=10,
             status=PipelineStatus.RUNNING,
             stderr_tail="ValueError: boom",

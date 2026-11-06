@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+
 import numpy as np
 
 from elements.FrameElement import FrameElement
@@ -12,6 +14,18 @@ from utils_local.homography import (
 )
 from utils_local.utils import profile_time
 
+# Sentinel used to keep the two projection paths sharing one result assembler
+# without ever writing a null ``trajectory_gcj02`` when no anchor was present.
+_GCJ_NOT_REQUESTED = object()
+_INCREMENTAL_DISABLED_VALUES = frozenset({"0", "false", "no", "off", "disabled"})
+
+
+def _incremental_enabled_from_env() -> bool:
+    raw_value = os.environ.get("WORLD_PROJECTION_INCREMENTAL")
+    if raw_value is None:
+        return True
+    return str(raw_value).strip().lower() not in _INCREMENTAL_DISABLED_VALUES
+
 
 class PostTrackingWorldProjectionNode:
     """Enrich stable image associations with optional world-coordinate facts.
@@ -19,6 +33,12 @@ class PostTrackingWorldProjectionNode:
     The node runs strictly after ``GroundTrajectoryTrackerNode``. Geographic
     or road quality may make one enrichment point null, but neither can change
     the output track identity or terminate its image-trajectory lifecycle.
+
+    ``WORLD_PROJECTION_INCREMENTAL`` (default on) keeps the GCJ-02 tail of each
+    association cached so only the points appended by the current frame are
+    converted.  The cached tail is invalidated whenever ``anchor_gcj02``
+    changes, and ``false`` falls back to converting and copying the whole
+    bounded tail on every frame.
     """
 
     tracking_method = "motion_compensated_image_v2"
@@ -28,16 +48,26 @@ class PostTrackingWorldProjectionNode:
         self._tail_points = int(
             tracker_cfg.get("candidate_trajectory_tail_points", 30)
         )
+        self._incremental = _incremental_enabled_from_env()
         self._next_track_id = 1
         self._track_id_by_association: dict[int, int] = {}
         self._previous_track_id_by_association: dict[int, int] = {}
         self._world_history: dict[int, dict[str, list]] = {}
+        # Number of world facts appended per association: the conversion cache
+        # below stores how many of them are already expressed in GCJ-02.
+        self._append_counts: dict[int, int] = {}
+        self._gcj_tail_cache: dict[int, dict] = {}
         self.last_flush_result: dict | None = None
 
     def _allocate_track_id(self) -> int:
         track_id = self._next_track_id
         self._next_track_id += 1
         return track_id
+
+    def _drop_association_state(self, association_id: int) -> None:
+        self._world_history.pop(association_id, None)
+        self._append_counts.pop(association_id, None)
+        self._gcj_tail_cache.pop(association_id, None)
 
     def _close_tracks(
         self, association_ids: set[int] | None = None
@@ -117,10 +147,163 @@ class PostTrackingWorldProjectionNode:
                 "tracking_quality": "verified" if is_formal else "degraded",
             }
         )
+        self._append_counts[association_id] = (
+            self._append_counts.get(association_id, 0) + 1
+        )
         tail = max(self._tail_points, 1)
         for key in history:
             history[key] = history[key][-tail:]
         return history
+
+    def _legacy_trajectory_fields(
+        self, history: dict[str, list], anchor
+    ) -> tuple[list, list, object]:
+        """Whole-tail copy + conversion; the pre-optimization behaviour."""
+        trajectory_enu_m = [
+            point.copy() if point is not None else None
+            for point in history["trajectory_enu_m"]
+        ]
+        point_quality_lineage = [
+            dict(point) for point in history["point_quality_lineage"]
+        ]
+        if not anchor:
+            return trajectory_enu_m, point_quality_lineage, _GCJ_NOT_REQUESTED
+        trajectory_gcj02 = []
+        for point in history["trajectory_enu_m"]:
+            if point is None:
+                trajectory_gcj02.append(None)
+                continue
+            lon, lat = enu_to_gcj02(point[0], point[1], anchor)
+            trajectory_gcj02.append([round(lon, 8), round(lat, 8)])
+        return trajectory_enu_m, point_quality_lineage, trajectory_gcj02
+
+    def _incremental_gcj_tail(
+        self, association_id: int, history_enu: list, anchor
+    ) -> list:
+        """Convert only the slices appended since the cached conversion."""
+        anchor_key = (anchor[0], anchor[1])
+        converted_count = self._append_counts.get(association_id, 0)
+        length = len(history_enu)
+        cached = self._gcj_tail_cache.get(association_id)
+        if (
+            cached is not None
+            and cached["anchor_key"] == anchor_key
+            and cached["converted_count"] <= converted_count
+        ):
+            cached_points = cached["gcj_tail"]
+            new_points = converted_count - cached["converted_count"]
+            # ``cached_points`` covers the tail as of the last conversion; drop
+            # the entries a bounded-tail trim has pushed out of that overlap.
+            keep = min(length, new_points + len(cached_points)) - new_points
+            if keep < 0:
+                keep = 0
+            gcj_tail = (
+                cached_points[len(cached_points) - keep:] if keep else []
+            )
+            first_new = length - min(new_points, length)
+        else:
+            gcj_tail = []
+            first_new = 0
+
+        def convert(points):
+            converted = []
+            for point in points:
+                if point is None:
+                    converted.append(None)
+                    continue
+                lon, lat = enu_to_gcj02(point[0], point[1], anchor)
+                converted.append([round(lon, 8), round(lat, 8)])
+            return converted
+
+        if len(gcj_tail) + (length - first_new) != length:
+            # The cached prefix no longer lines up with the bounded history (for
+            # example a reset); convert the whole tail instead of emitting a
+            # GCJ list shorter than the ENU list.
+            gcj_tail, first_new = [], 0
+        gcj_tail.extend(convert(history_enu[first_new:]))
+        self._gcj_tail_cache[association_id] = {
+            "anchor_key": anchor_key,
+            "converted_count": converted_count,
+            "gcj_tail": gcj_tail,
+        }
+        return list(gcj_tail)
+
+    def _incremental_trajectory_fields(
+        self, association_id: int, history: dict[str, list], anchor
+    ) -> tuple[list, list, object]:
+        # Copy at the emission boundary only: the emitted outer lists must not
+        # be aliased by the bounded history that the next frame rewrites, while
+        # the point lists / lineage dicts are never mutated after insertion.
+        trajectory_enu_m = list(history["trajectory_enu_m"])
+        point_quality_lineage = list(history["point_quality_lineage"])
+        if not anchor:
+            # Drop the cache so a None -> value transition always rebuilds the
+            # whole tail instead of reusing values from before the outage.
+            self._gcj_tail_cache.pop(association_id, None)
+            return trajectory_enu_m, point_quality_lineage, _GCJ_NOT_REQUESTED
+        return (
+            trajectory_enu_m,
+            point_quality_lineage,
+            self._incremental_gcj_tail(association_id, history["trajectory_enu_m"], anchor),
+        )
+
+    def _assemble_trajectory_item(
+        self,
+        raw: dict,
+        frame_element: FrameElement,
+        association_id: int,
+        track_id: int,
+        is_active: bool,
+        geo_eligible: bool,
+        road_eligible: bool,
+        reasons: list,
+        quality: dict,
+        anchor,
+        trajectory_enu_m: list,
+        point_quality_lineage: list,
+        trajectory_gcj02: object,
+    ) -> dict:
+        """Shared emission contract for both the legacy and incremental paths."""
+        item = dict(raw)
+        item.update(
+            {
+                "track_id": track_id,
+                "association_id": association_id,
+                "trajectory_output_eligible": is_active,
+                "geo_analytics_eligible": geo_eligible,
+                "road_analytics_eligible": road_eligible,
+                "tcc_analytics_eligible": bool(
+                    frame_element.tcc_analytics_eligible
+                ),
+                "tracking_quality": (
+                    (frame_element.tracking_diagnostics or {}).get(
+                        "association_quality", "verified"
+                    )
+                ),
+                "geo_reference_quality": quality.get(
+                    "geo_status", quality.get("status", "degraded")
+                ),
+                "road_match_quality": (
+                    "verified"
+                    if road_eligible
+                    else "missing"
+                    if "lane_verified_map_required"
+                    in (quality.get("reasons") or [])
+                    else "degraded"
+                ),
+                "quality_reasons": reasons,
+                "flight_phase": getattr(frame_element, "flight_phase", None),
+                "flight_segment_id": getattr(
+                    frame_element, "flight_segment_id", None
+                ),
+                "trajectory_enu_m": trajectory_enu_m,
+                "point_quality_lineage": point_quality_lineage,
+            }
+        )
+        if trajectory_gcj02 is not _GCJ_NOT_REQUESTED:
+            item["anchor_gcj02"] = [round(anchor[0], 6), round(anchor[1], 6)]
+            item["trajectory_gcj02"] = trajectory_gcj02
+        return item
 
     def _enrich_trajectories(
         self,
@@ -136,11 +319,13 @@ class PostTrackingWorldProjectionNode:
         )
         for association_id in list(self._world_history):
             if association_id not in association_state_ids:
-                self._world_history.pop(association_id, None)
+                self._drop_association_state(association_id)
 
         quality = getattr(frame_element, "geo_reference_quality", None) or {}
         quality_reasons = list(quality.get("reasons") or [])
         anchor = getattr(frame_element, "anchor_gcj02", None)
+        geo_eligible = bool(frame_element.geo_analytics_eligible)
+        road_analytics_eligible = bool(frame_element.road_analytics_eligible)
         enriched = []
         candidates = []
         for raw in raw_trajectories:
@@ -149,9 +334,8 @@ class PostTrackingWorldProjectionNode:
             if not trajectory_px:
                 continue
             is_active = association_id in active_association_ids
-            geo_eligible = bool(frame_element.geo_analytics_eligible)
             road_eligible = (
-                bool(frame_element.road_analytics_eligible)
+                road_analytics_eligible
                 and association_id in road_association_ids
             )
             history = self._append_world_fact(
@@ -165,57 +349,35 @@ class PostTrackingWorldProjectionNode:
                 reasons.extend(quality.get("road_reasons") or [])
             reasons = list(dict.fromkeys(reasons))
             track_id = self._track_id_by_association.get(association_id, association_id)
-
-            item = dict(raw)
-            item.update(
-                {
-                    "track_id": track_id,
-                    "association_id": association_id,
-                    "trajectory_output_eligible": is_active,
-                    "geo_analytics_eligible": geo_eligible,
-                    "road_analytics_eligible": road_eligible,
-                    "tcc_analytics_eligible": bool(
-                        frame_element.tcc_analytics_eligible
-                    ),
-                    "tracking_quality": (
-                        (frame_element.tracking_diagnostics or {}).get(
-                            "association_quality", "verified"
-                        )
-                    ),
-                    "geo_reference_quality": quality.get(
-                        "geo_status", quality.get("status", "degraded")
-                    ),
-                    "road_match_quality": (
-                        "verified"
-                        if road_eligible
-                        else "missing"
-                        if "lane_verified_map_required" in quality_reasons
-                        else "degraded"
-                    ),
-                    "quality_reasons": reasons,
-                    "flight_phase": getattr(frame_element, "flight_phase", None),
-                    "flight_segment_id": getattr(
-                        frame_element, "flight_segment_id", None
-                    ),
-                    "trajectory_enu_m": [
-                        point.copy() if point is not None else None
-                        for point in history["trajectory_enu_m"]
-                    ],
-                    "point_quality_lineage": [
-                        dict(point) for point in history["point_quality_lineage"]
-                    ],
-                }
+            if self._incremental:
+                (
+                    trajectory_enu_m,
+                    point_quality_lineage,
+                    trajectory_gcj02,
+                ) = self._incremental_trajectory_fields(
+                    association_id, history, anchor
+                )
+            else:
+                (
+                    trajectory_enu_m,
+                    point_quality_lineage,
+                    trajectory_gcj02,
+                ) = self._legacy_trajectory_fields(history, anchor)
+            item = self._assemble_trajectory_item(
+                raw,
+                frame_element,
+                association_id,
+                track_id,
+                is_active,
+                geo_eligible,
+                road_eligible,
+                reasons,
+                quality,
+                anchor,
+                trajectory_enu_m,
+                point_quality_lineage,
+                trajectory_gcj02,
             )
-            if anchor:
-                item["anchor_gcj02"] = [round(anchor[0], 6), round(anchor[1], 6)]
-                trajectory_gcj02 = []
-                for point in history["trajectory_enu_m"]:
-                    if point is None:
-                        trajectory_gcj02.append(None)
-                        continue
-                    lon, lat = enu_to_gcj02(point[0], point[1], anchor)
-                    trajectory_gcj02.append([round(lon, 8), round(lat, 8)])
-                item["trajectory_gcj02"] = trajectory_gcj02
             enriched.append(item)
             if not is_active:
                 candidates.append(item)
@@ -234,6 +396,8 @@ class PostTrackingWorldProjectionNode:
             "termination_reason": reason,
         }
         self._world_history.clear()
+        self._append_counts.clear()
+        self._gcj_tail_cache.clear()
         self.last_flush_result = result
         return result
 

@@ -1,13 +1,14 @@
 """Traffic Platform Monolith — unified configuration."""
-import time
+
 import re
+import time
 from functools import lru_cache
 from typing import Literal
 
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from sqlalchemy.engine import URL
 from sqlalchemy.dialects import registry
+from sqlalchemy.engine import URL
 
 from app.core.pipeline_options import (
     DEFAULT_FRAME_STRIDE,
@@ -20,6 +21,7 @@ registry.register("postgresql.highgo_psycopg", "app.core.highgo_dialect", "HighG
 
 class Settings(BaseSettings):
     """Unified application settings."""
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
@@ -74,8 +76,11 @@ class Settings(BaseSettings):
     @property
     def database_url(self) -> str:
         return URL.create(
-            "postgresql+highgo_psycopg" if self.db_driver == "psycopg" else "postgresql+asyncpg", username=self.db_user,
-            password=self.db_password, host=self.db_host, port=self.db_port,
+            "postgresql+highgo_psycopg" if self.db_driver == "psycopg" else "postgresql+asyncpg",
+            username=self.db_user,
+            password=self.db_password,
+            host=self.db_host,
+            port=self.db_port,
             database=self.db_name,
             query={"application_schema": self.db_schema} if self.db_driver == "psycopg" else {},
         ).render_as_string(hide_password=False)
@@ -89,12 +94,15 @@ class Settings(BaseSettings):
     @property
     def kafka_security_options(self) -> dict:
         from utils_local.kafka_security import kafka_security_options
-        return kafka_security_options({
-            "KAFKA_SECURITY_PROTOCOL": self.kafka_security_protocol,
-            "KAFKA_SASL_MECHANISM": self.kafka_sasl_mechanism,
-            "KAFKA_SASL_USERNAME": self.kafka_sasl_username,
-            "KAFKA_SASL_PASSWORD": self.kafka_sasl_password,
-        })
+
+        return kafka_security_options(
+            {
+                "KAFKA_SECURITY_PROTOCOL": self.kafka_security_protocol,
+                "KAFKA_SASL_MECHANISM": self.kafka_sasl_mechanism,
+                "KAFKA_SASL_USERNAME": self.kafka_sasl_username,
+                "KAFKA_SASL_PASSWORD": self.kafka_sasl_password,
+            }
+        )
 
     # ── Kafka ──
     kafka_bootstrap: str = "kafka:9092"
@@ -103,7 +111,7 @@ class Settings(BaseSettings):
     kafka_sasl_username: str = ""
     kafka_sasl_password: str = ""
     kafka_consumer_group: str = "vision-service"
-    kafka_topics_pattern: str = "(uav_(statistics|track_complete|conflicts|telemetry|enforcement_clues)_.*|uav_system_metrics)"
+    kafka_topics_pattern: str = "^(?:uav_statistics|uav_track_complete|uav_conflicts|uav_telemetry|uav_missions|uav_track_relations|uav_enforcement_clues|uav_system_metrics)$"
 
     # ── JWT ──
     jwt_secret_key: str = "your-secret-key-change-in-production"
@@ -131,6 +139,8 @@ class Settings(BaseSettings):
         ge=MIN_FRAME_STRIDE,
         le=MAX_FRAME_STRIDE,
     )
+    pipeline_egress_enabled: bool = False
+    history_sampling_enabled: bool = False
     pipeline_max_active: int = 4
     pipeline_device: str | None = None
     pipeline_imgsz: int | None = None
@@ -192,8 +202,7 @@ class Settings(BaseSettings):
                 raise ValueError("replay_v2 must use the canonical road9 database")
             self.kafka_consumer_group = "uav-platform-replay-v2"
             self.kafka_topics_pattern = (
-                r"^uav_replay_v2_(?:statistics|track_complete|conflicts|telemetry|mission)_"
-                r"[A-Za-z0-9._-]+$"
+                r"^(?:uav_statistics|uav_track_complete|uav_conflicts|uav_telemetry|uav_missions|uav_track_relations|uav_enforcement_clues|uav_system_metrics)$"
             )
         if self.deployment_mode in {"uat", "production"}:
             insecure_jwt = {

@@ -19,6 +19,7 @@ Deployment modes
 2. **Docker** (future): uses the Docker API to start/stop containers.
    This module currently supports mode 1 only.
 """
+
 import asyncio
 import logging
 import os
@@ -71,7 +72,9 @@ def detector_video_stream_url(video_port: int, base_url: str | None = None) -> s
     if parsed.scheme not in {"http", "https"} or not parsed.hostname:
         raise ValueError("pipeline video stream URL must use http or https")
     if parsed.username or parsed.password or parsed.query or parsed.fragment:
-        raise ValueError("pipeline video stream URL must not contain credentials, query, or fragment")
+        raise ValueError(
+            "pipeline video stream URL must not contain credentials, query, or fragment"
+        )
     if "{video_port}" not in template:
         host = parsed.hostname
         if ":" in host and not host.startswith("["):
@@ -161,9 +164,7 @@ class PipelineInstance:
             "stopped_at": self.stopped_at,
             "error_message": self.error_message,
             "uptime_seconds": (
-                (self.stopped_at or time.time()) - self.started_at
-                if self.started_at
-                else 0
+                (self.stopped_at or time.time()) - self.started_at if self.started_at else 0
             ),
         }
 
@@ -212,6 +213,8 @@ class PipelineManager:
             "KAFKA_SASL_USERNAME": settings.kafka_sasl_username,
             "KAFKA_SASL_PASSWORD": settings.kafka_sasl_password,
         }
+        executor_env["PIPELINE_EGRESS_ENABLED"] = str(settings.pipeline_egress_enabled).lower()
+        executor_env["HISTORY_SAMPLING_ENABLED"] = str(settings.history_sampling_enabled).lower()
         if settings.pipeline_ascend_manifest:
             executor_env["ASCEND_MODEL_MANIFEST"] = settings.pipeline_ascend_manifest
         if settings.pipeline_device == "mps":
@@ -235,7 +238,11 @@ class PipelineManager:
 
     def _resolve_local_asset(self, value: str, *, roots: tuple[Path, ...]) -> str:
         candidate = Path(value)
-        resolved = (self._root / candidate).resolve() if not candidate.is_absolute() else candidate.resolve()
+        resolved = (
+            (self._root / candidate).resolve()
+            if not candidate.is_absolute()
+            else candidate.resolve()
+        )
         if not any(root == resolved or root in resolved.parents for root in roots):
             raise ValueError("pipeline source path is outside the configured allowlist")
         if not resolved.is_file() or not os.access(resolved, os.R_OK):
@@ -244,7 +251,9 @@ class PipelineManager:
 
     def _asset_roots(self) -> tuple[Path, ...]:
         return tuple(
-            (self._root / value).resolve() if not Path(value).is_absolute() else Path(value).resolve()
+            (self._root / value).resolve()
+            if not Path(value).is_absolute()
+            else Path(value).resolve()
             for value in settings.uav_local_asset_roots
         )
 
@@ -259,7 +268,9 @@ class PipelineManager:
             return value
         return self._resolve_local_asset(value, roots=self._asset_roots())
 
-    def _validate_support_file(self, value: str | None, suffixes: tuple[str, ...], *, roots: tuple[Path, ...]) -> str | None:
+    def _validate_support_file(
+        self, value: str | None, suffixes: tuple[str, ...], *, roots: tuple[Path, ...]
+    ) -> str | None:
         if not value:
             return value
         resolved = self._resolve_local_asset(value, roots=roots)
@@ -282,8 +293,8 @@ class PipelineManager:
             if topic_name is not None and topic_name != expected:
                 raise ValueError("topic_name must match the replay_v2 SourceProfile topic")
             return expected
-        topic = topic_name or f"uav_statistics_{camera_id}"
-        if re.fullmatch(r"uav_statistics_[A-Za-z0-9._-]+", topic) is None:
+        topic = topic_name or "uav_statistics"
+        if re.fullmatch(r"uav_statistics", topic) is None:
             raise ValueError("topic_name must be a canonical uav_statistics topic")
         return topic
 
@@ -369,7 +380,9 @@ class PipelineManager:
             ),
             quality_status=(
                 quality_status
-                or ("verified" if map_version_id else "unverified" if candidate_only else "degraded")
+                or (
+                    "verified" if map_version_id else "unverified" if candidate_only else "degraded"
+                )
             ),
         )
         self._pipelines[pipeline_id] = pipeline
@@ -427,7 +440,10 @@ class PipelineManager:
         video_src = self._validate_video_source(video_src)
         if not settings.road_features_enabled:
             runtime_map_bundle = None
-        if runtime_map_bundle is not None and runtime_map_bundle.get("map_status") != "lane_verified":
+        if (
+            runtime_map_bundle is not None
+            and runtime_map_bundle.get("map_status") != "lane_verified"
+        ):
             raise ValueError("runtime_map_bundle must be lane_verified when provided")
         telemetry_file_path = self._validate_support_file(
             telemetry_file_path,
@@ -439,9 +455,7 @@ class PipelineManager:
         self._next_camera_id += 1
         video_port = self._next_video_port
         self._next_video_port += 1
-        topic_name = self._topic_for_runtime(
-            topic_name, camera_id, source_profile_id
-        )
+        topic_name = self._topic_for_runtime(topic_name, camera_id, source_profile_id)
         video_stream_url = detector_video_stream_url(video_port, self._video_public_base)
 
         pipeline = PipelineInstance(
@@ -551,10 +565,7 @@ class PipelineManager:
         return [p.to_dict() for p in self._pipelines.values()]
 
     def get_active_count(self) -> int:
-        return sum(
-            1 for p in self._pipelines.values()
-            if p.status == PipelineStatus.RUNNING
-        )
+        return sum(1 for p in self._pipelines.values() if p.status == PipelineStatus.RUNNING)
 
     # ── Internal ──
 
@@ -599,12 +610,10 @@ class PipelineManager:
 
         stderr_msg = pipeline.stderr_tail[-500:]
         pipeline.status = PipelineStatus.ERROR
-        pipeline.error_message = (
-            f"Process exited with code {return_code}"
-            + (f": {stderr_msg}" if stderr_msg else "")
+        pipeline.error_message = f"Process exited with code {return_code}" + (
+            f": {stderr_msg}" if stderr_msg else ""
         )
         logger.warning(
             f"Pipeline {pipeline.pipeline_id} exited unexpectedly "
-            f"(code={return_code})"
-            + (f" stderr: {stderr_msg}" if stderr_msg else "")
+            f"(code={return_code})" + (f" stderr: {stderr_msg}" if stderr_msg else "")
         )

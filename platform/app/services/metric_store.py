@@ -49,12 +49,12 @@ CANONICAL_TYPES = {
     "uav_enforcement_clue",
 }
 CANONICAL_TOPIC_PATTERNS = {
-    "uav_stats": r"uav_statistics_[A-Za-z0-9._-]+",
-    "uav_track_complete": r"uav_track_complete_[A-Za-z0-9._-]+",
-    "uav_conflict": r"uav_conflicts_[A-Za-z0-9._-]+",
-    "uav_telemetry": r"uav_telemetry_[A-Za-z0-9._-]+",
+    "uav_stats": r"uav_statistics",
+    "uav_track_complete": r"uav_track_complete",
+    "uav_conflict": r"uav_conflicts",
+    "uav_telemetry": r"uav_telemetry",
     "uav_system_metrics": r"uav_system_metrics",
-    "uav_enforcement_clue": r"uav_enforcement_clues_[A-Za-z0-9._-]+",
+    "uav_enforcement_clue": r"uav_enforcement_clues",
 }
 CONFLICT_EVIDENCE_KINDS = (
     "conflict_original_frame",
@@ -92,10 +92,45 @@ class PersistResult:
     dispatch_status: str
 
 
+async def record_ingest_receipt(session, envelope, normalized) -> None:
+    """Mirror a fixed-v2 track_complete message into the replay-v2 receipt table.
+
+    Both concrete adapters must call this; it previously lived only on the
+    ``Protocol`` base, which plain adapter classes do not inherit, so every
+    persisted message raised ``AttributeError`` and the consumer skipped it as a
+    failed record (console metrics stayed empty).
+    """
+    if (
+        normalized.get("transport_version") != "uav-fixed/v2"
+        or normalized.get("msg_type") != "uav_track_complete"
+    ):
+        return
+    from app.models.replay_v2 import ReplayV2IngestReceipt
+    from app.services.replay_v2_metric_store import _hash
+
+    message_id = normalized["message_id"]
+    receipt = await session.get(ReplayV2IngestReceipt, message_id)
+    if receipt is None:
+        session.add(
+            ReplayV2IngestReceipt(
+                message_id=message_id,
+                message_hash=_hash(envelope.payload),
+                deployment_id=str(normalized.get("deployment_id") or "local"),
+                status="pending",
+                committed_at=datetime.now(UTC),
+            )
+        )
+    else:
+        receipt.status = "pending"
+
+
 class MetricStorePort(Protocol):
     async def persist(self, envelope: MessageEnvelope) -> PersistResult: ...
 
     async def quarantine(self, envelope: MessageEnvelope, error: MetricContractError) -> str: ...
+
+    async def _add_ingest_receipt(self, session, envelope, normalized):
+        await record_ingest_receipt(session, envelope, normalized)
 
     async def mark_dispatched(self, source_system: str, message_id: str) -> None: ...
 
@@ -178,6 +213,9 @@ def _granularity_seconds(granularity: str) -> int:
 
 
 class PostgresMetricStoreAdapter:
+    async def _add_ingest_receipt(self, session, envelope, normalized):
+        await record_ingest_receipt(session, envelope, normalized)
+
     """PostgreSQL/TimescaleDB adapter behind the MetricStore port."""
 
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]):
@@ -315,6 +353,7 @@ class PostgresMetricStoreAdapter:
                         raise MessageIdentityConflict(
                             f"message_id {normalized['message_id']} was replayed with a different payload"
                         )
+                    await self._add_ingest_receipt(session, envelope, normalized)
                     return PersistResult(
                         True,
                         inbox.message_id,
@@ -343,6 +382,7 @@ class PostgresMetricStoreAdapter:
                 inbox.status = "processed"
                 inbox.fact_references = references
                 inbox.processed_at = datetime.now(UTC)
+                await self._add_ingest_receipt(session, envelope, normalized)
             return PersistResult(
                 False,
                 normalized["message_id"],
@@ -405,6 +445,11 @@ class PostgresMetricStoreAdapter:
         return (await session.execute(statement)).scalar_one_or_none()
 
     def _normalize(self, envelope: MessageEnvelope) -> dict[str, Any]:
+        from utils_local.message_identity import validate_payload
+        try:
+            validate_payload(envelope.payload)
+        except ValueError as error:
+            raise MetricContractError(str(error)) from error
         raw = envelope.payload
         raw_type = str(raw.get("msg_type") or "")
         if raw_type not in CANONICAL_TYPES:
@@ -1497,6 +1542,9 @@ class PostgresMetricStoreAdapter:
 
 
 class InMemoryMetricStoreAdapter:
+    async def _add_ingest_receipt(self, session, envelope, normalized):
+        await record_ingest_receipt(session, envelope, normalized)
+
     """Test/fixture adapter that exercises the same consumer seam without I/O."""
 
     def __init__(self):

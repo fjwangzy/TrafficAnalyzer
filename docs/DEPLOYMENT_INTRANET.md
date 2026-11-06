@@ -1,4 +1,18 @@
+> 2026-11-04 最新原生累计前后端完整包见[NATIVE_DEPLOYMENT_2026.11.04.1.md](NATIVE_DEPLOYMENT_2026.11.04.1.md)，现有Console服务使用包内新版页面资源。
+
+> 2026-11-03 上一原生完整包为2026.11.03.3，同时包含四进程与event-faithful/v2；启动与数据版本降级门禁见[NATIVE_DEPLOYMENT_2026.11.03.3.md](NATIVE_DEPLOYMENT_2026.11.03.3.md)。以下Compose交付说明保留原有范围。
+
 # TrafficAnalyzer 内网生产部署手册
+
+## 2026-11-03 原生2026.11.03.2累计性能交付
+
+新完整包累计fork绑定、root权限诊断、日志窗口和同值坐标传输优化；不手改受校验源码，不裁剪轨迹或改阈值。操作见[NATIVE_DEPLOYMENT_2026.11.03.2.md](NATIVE_DEPLOYMENT_2026.11.03.2.md)，证据和边界见NATIVE_VALIDATION_2026.11.03.2.md；旧包保持，不把本机IPC基准当作生产FPS。
+
+
+## 2026-11-03 Platform与检测器完整原生包
+
+用户授权仅Platform和检测器脱离Docker，Console/数据库/Kafka及资产目录保留。完整包首次`./traffic start --deployment-root <现有部署根>`自动完成配置导入、预检与切换，后续手动启停，无自启；说明见[NATIVE_DEPLOYMENT.md](NATIVE_DEPLOYMENT.md)，验证边界见[NATIVE_DEPLOYMENT_VALIDATION.md](NATIVE_DEPLOYMENT_VALIDATION.md)。旧宿主排查包保留历史，不作为新包安装前置条件。没有新的现场日志或NPU访问，不将原生部署等同约1FPS问题已解决。
+
 
 ## 2026-10-20 Platform宿主原生对照包
 
@@ -775,3 +789,8 @@ python3 scripts/build_intranet_release.py models --version 新资源版本 \
 在新解压目录运行 `./docker-compose up -d`；旧包与业务资源目录保留，不覆盖现场已有数据。
 若现场现用`.env`曾修改过资源路径或其他连接，升级时保留实际值并核对上述Doris配置。
 生产实机SM3、Kafka业务ACL、内网Doris/MineMap可达性及昇腾推理仍由现场启动预检与业务验收确认。
+
+
+## 2026-11-04 增量轨迹后续工程验证
+
+运行期短窗口关系、按受影响窗口的分页聚合、源片段摘要对账、生产路网关闭四进程的ACK后历史裁剪、GeoJSON落盘导出及固定Topic显式初始化/只读检查已实现。Replay迁移head更新为20261104_rv2_0007，所有运行态需验证共享回执/Replay迁移。普通启动不DDL、不创建Topic；旧数据与旧Topic保留。验证范围、历史隔离清理事故和未完成的现场/故障验收详见[增量轨迹进度](INCREMENTAL_TRAJECTORIES_20261104.md)；完整包按2026.11.04.2验收候选交付，不宣称已达到现场30%FPS目标。

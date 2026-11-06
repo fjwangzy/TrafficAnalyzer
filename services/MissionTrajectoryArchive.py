@@ -12,8 +12,15 @@ import base64
 import json
 import math
 import os
+import re
 from pathlib import Path
 from typing import Any, Callable
+from datetime import datetime, timedelta
+from utils_local.trajectory_sampling import (
+    compact_journey,
+    policy_from_config,
+    VERSION as SAMPLING_V2,
+)
 
 
 ARCHIVE_SCHEMA_VERSION = "uav.trajectory-archive/v2"
@@ -31,18 +38,31 @@ def _json_default(value: Any):
 
 def _atomic_json(path: Path, value: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(f"{path.suffix}.tmp-{os.getpid()}")
+    import uuid
+    temporary = path.with_suffix(f"{path.suffix}.tmp-{uuid.uuid4().hex}")
     temporary.write_text(
         json.dumps(value, ensure_ascii=False, sort_keys=True, default=_json_default),
         encoding="utf-8",
     )
+    with temporary.open('rb') as stream:
+        os.fsync(stream.fileno())
     temporary.replace(path)
+    fd = os.open(path.parent, os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
 
 
 def _segment_id(segment: dict) -> str:
     raw = "|".join(
         str(segment.get(key) or "")
-        for key in ("track_id", "timestamp_first", "timestamp_last", "termination_reason")
+        for key in (
+            "track_id",
+            "timestamp_first",
+            "timestamp_last",
+            "termination_reason",
+        )
     )
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
 
@@ -61,7 +81,9 @@ def _validate_segment(segment: dict) -> int:
         raise ValueError("segment contains no trajectory points")
     mismatched = [name for name, values in arrays.items() if len(values) != count]
     if mismatched:
-        raise ValueError(f"trajectory point arrays are not aligned: {', '.join(mismatched)}")
+        raise ValueError(
+            f"trajectory point arrays are not aligned: {', '.join(mismatched)}"
+        )
     timestamps = [float(value) for value in arrays["trajectory_timestamps_sec"]]
     if any(right <= left for left, right in zip(timestamps, timestamps[1:])):
         raise ValueError("trajectory timestamps must be strictly increasing")
@@ -69,7 +91,11 @@ def _validate_segment(segment: dict) -> int:
 
 
 def _linear_velocity(points: list[dict], end: int) -> tuple[float, float] | None:
-    window = [point for point in points[max(0, end - 14):end + 1] if point["enu_m"] is not None]
+    window = [
+        point
+        for point in points[max(0, end - 14) : end + 1]
+        if point["enu_m"] is not None
+    ]
     if len(window) < 2:
         return None
     times = [point["source_timestamp_sec"] for point in window]
@@ -79,8 +105,20 @@ def _linear_velocity(points: list[dict], end: int) -> tuple[float, float] | None
         return None
     mean_x = sum(point["enu_m"][0] for point in window) / len(window)
     mean_y = sum(point["enu_m"][1] for point in window) / len(window)
-    vx = sum((point["source_timestamp_sec"] - mean_t) * (point["enu_m"][0] - mean_x) for point in window) / denominator
-    vy = sum((point["source_timestamp_sec"] - mean_t) * (point["enu_m"][1] - mean_y) for point in window) / denominator
+    vx = (
+        sum(
+            (point["source_timestamp_sec"] - mean_t) * (point["enu_m"][0] - mean_x)
+            for point in window
+        )
+        / denominator
+    )
+    vy = (
+        sum(
+            (point["source_timestamp_sec"] - mean_t) * (point["enu_m"][1] - mean_y)
+            for point in window
+        )
+        / denominator
+    )
     return vx, vy
 
 
@@ -123,7 +161,12 @@ def _has_tracking_quality_gap(quality: object) -> bool:
     if not isinstance(quality, dict):
         return False
     gap_values = {"gap", "lost", "invalid", "unavailable", "missing"}
-    for key in ("tracking_quality", "trajectory_quality", "association_quality", "data_quality"):
+    for key in (
+        "tracking_quality",
+        "trajectory_quality",
+        "association_quality",
+        "data_quality",
+    ):
         value = quality.get(key)
         if value is not None and str(value).strip().lower() in gap_values:
             return True
@@ -140,7 +183,10 @@ def _annotate_sampling_boundaries(points: list[dict]) -> None:
             point["sampling_boundary"].append("quality_gap_start")
         elif previous_gap and not current_gap:
             point["sampling_boundary"].append("quality_gap_end")
-        if previous_world_available is not None and world_available != previous_world_available:
+        if (
+            previous_world_available is not None
+            and world_available != previous_world_available
+        ):
             point["sampling_boundary"].append("world_coordinate_boundary")
         previous_gap = current_gap
         previous_world_available = world_available
@@ -167,7 +213,13 @@ def _retain_indices(points: list[dict]) -> list[int]:
             last_heading = heading
         stopped = (current["speed"].get("ema_kmh") or 0.0) <= 2.0
         heartbeat = 2.0 if stopped else 0.5
-        if elapsed >= heartbeat or displacement >= 0.5 or heading_change >= 10.0 or coordinate_boundary or quality_boundary:
+        if (
+            elapsed >= heartbeat
+            or displacement >= 0.5
+            or heading_change >= 10.0
+            or coordinate_boundary
+            or quality_boundary
+        ):
             retained.append(index)
     if retained[-1] != len(points) - 1:
         retained.append(len(points) - 1)
@@ -213,10 +265,11 @@ def _derive_episodes(points: list[dict]) -> list[dict]:
             and timestamp - points[window_start - 1]["source_timestamp_sec"] <= 2.0
         ):
             window_start -= 1
-        window = points[window_start:index + 1]
+        window = points[window_start : index + 1]
         enough_history = (
             len(window) >= 2
-            and window[-1]["source_timestamp_sec"] - window[0]["source_timestamp_sec"] >= 2.0
+            and window[-1]["source_timestamp_sec"] - window[0]["source_timestamp_sec"]
+            >= 2.0
         )
         displacement = (
             math.dist(window[0]["enu_m"], window[-1]["enu_m"])
@@ -224,17 +277,18 @@ def _derive_episodes(points: list[dict]) -> list[dict]:
             else math.inf
         )
         ema_kmh = point["speed"].get("ema_kmh")
-        is_stopped = enough_history and displacement <= 1.5 and (ema_kmh is None or ema_kmh <= 2.0)
+        is_stopped = (
+            enough_history
+            and displacement <= 1.5
+            and (ema_kmh is None or ema_kmh <= 2.0)
+        )
         if is_stopped and stopped_start is None:
             stopped_start = window_start
             continue
         instant_kmh = point["speed"].get("instant_kmh")
-        release_detected = (
-            not is_stopped
-            and (
-                (ema_kmh is not None and ema_kmh >= 5.0)
-                or (instant_kmh is not None and instant_kmh >= 5.0)
-            )
+        release_detected = not is_stopped and (
+            (ema_kmh is not None and ema_kmh >= 5.0)
+            or (instant_kmh is not None and instant_kmh >= 5.0)
         )
         if stopped_start is not None and release_detected:
             stopped_end = max(stopped_start, index - 1)
@@ -259,7 +313,10 @@ def _derive_episodes(points: list[dict]) -> list[dict]:
                     "start_offset_ms": point["offset_ms"],
                     "end_offset_ms": points[release_end]["offset_ms"],
                     "confidence": 1.0,
-                    "evidence": {"instant_speed_kmh": instant_kmh, "ema_speed_kmh": ema_kmh},
+                    "evidence": {
+                        "instant_speed_kmh": instant_kmh,
+                        "ema_speed_kmh": ema_kmh,
+                    },
                     "algorithm_version": BEHAVIOR_VERSION,
                 }
             )
@@ -301,20 +358,32 @@ def _derive_maneuvers(points: list[dict]) -> list[dict]:
     if len(segments) < 3:
         return []
     headings = [segment["heading_deg"] for segment in segments]
-    cumulative_turn = sum(_heading_delta(left, right) for left, right in zip(headings, headings[1:]))
+    cumulative_turn = sum(
+        _heading_delta(left, right) for left, right in zip(headings, headings[1:])
+    )
     net_turn = _heading_delta(headings[0], headings[-1])
     turn_start = next(
-        (index for index, value in enumerate(headings) if _heading_delta(headings[0], value) >= 45.0),
+        (
+            index
+            for index, value in enumerate(headings)
+            if _heading_delta(headings[0], value) >= 45.0
+        ),
         None,
     )
     reverse_start = next(
-        (index for index, value in enumerate(headings) if _heading_delta(headings[0], value) >= 135.0),
+        (
+            index
+            for index, value in enumerate(headings)
+            if _heading_delta(headings[0], value) >= 135.0
+        ),
         None,
     )
     if turn_start is None or reverse_start is None:
         return []
     approach_distance = sum(segment["distance_m"] for segment in segments[:turn_start])
-    departure_distance = sum(segment["distance_m"] for segment in segments[reverse_start:])
+    departure_distance = sum(
+        segment["distance_m"] for segment in segments[reverse_start:]
+    )
     reverse_point_index = int(segments[reverse_start]["index"])
     reverse_hold_sec = (
         run[-1]["source_timestamp_sec"]
@@ -353,7 +422,9 @@ def _derive_maneuvers(points: list[dict]) -> list[dict]:
     ]
 
 
-def _journey_from_segment(segment: dict, mission_start: float) -> dict:
+def _journey_from_segment(
+    segment: dict, mission_start: float, full_sequence: bool = False
+) -> dict:
     count = _validate_segment(segment)
     points = []
     for index in range(count):
@@ -379,10 +450,20 @@ def _journey_from_segment(segment: dict, mission_start: float) -> dict:
             }
         )
     _freeze_speeds(points)
+    if full_sequence:
+        for point in points:
+            point["speed"]["algorithm_version"] = "enu-linear-regression-15-ema5/v2"
+            if point["enu_m"] is None:
+                point["speed"].update(
+                    instant_kmh=None,
+                    ema_kmh=None,
+                    enu_vector_mps=None,
+                    quality="world_coordinates_unavailable",
+                )
     episodes = _derive_episodes(points)
     maneuvers = _derive_maneuvers(points)
     _annotate_sampling_boundaries(points)
-    indices = _retain_indices(points)
+    indices = list(range(len(points))) if full_sequence else _retain_indices(points)
     retained = [points[index] for index in indices]
     retained[0]["sampling_boundary"].append("journey_start")
     retained[-1]["sampling_boundary"].append("journey_end")
@@ -427,10 +508,14 @@ def _cosine(left: list[float] | None, right: list[float] | None) -> float | None
 
 
 def _merge_candidate(left: dict, right: dict) -> dict | None:
-    gap = float(right["trajectory_timestamps_sec"][0]) - float(left["trajectory_timestamps_sec"][-1])
+    gap = float(right["trajectory_timestamps_sec"][0]) - float(
+        left["trajectory_timestamps_sec"][-1]
+    )
     if gap <= 0 or gap > 2.0:
         return None
-    appearance = _cosine(left.get("appearance_embedding"), right.get("appearance_embedding"))
+    appearance = _cosine(
+        left.get("appearance_embedding"), right.get("appearance_embedding")
+    )
     if appearance is None or appearance < 0.90:
         return None
     left_world = left["trajectory_enu_m"][-1]
@@ -441,7 +526,9 @@ def _merge_candidate(left: dict, right: dict) -> dict | None:
         if motion_distance > 5.0:
             return None
     else:
-        motion_distance = math.dist(left["trajectory_px"][-1], right["trajectory_px"][0])
+        motion_distance = math.dist(
+            left["trajectory_px"][-1], right["trajectory_px"][0]
+        )
         motion_space = "pixel"
         if motion_distance > 50.0:
             return None
@@ -462,9 +549,17 @@ def _combine_segments(group: list[dict]) -> dict:
     combined = {
         key: first.get(key)
         for key in (
-            "vehicle_class", "yolo_class_id", "yolo_class_name", "termination_reason",
-            "tracking_quality", "quality_status", "turn_behavior", "movement_key",
-            "matched_lane_key", "matched_link_id", "road_match_quality",
+            "vehicle_class",
+            "yolo_class_id",
+            "yolo_class_name",
+            "termination_reason",
+            "tracking_quality",
+            "quality_status",
+            "turn_behavior",
+            "movement_key",
+            "matched_lane_key",
+            "matched_link_id",
+            "road_match_quality",
         )
     }
     runtime_ids = [str(segment.get("track_id")) for segment in group]
@@ -477,16 +572,24 @@ def _combine_segments(group: list[dict]) -> dict:
         bool(segment.get("road_analytics_eligible")) for segment in group
     )
     for key in (
-        "trajectory_px", "trajectory_timestamps_sec", "trajectory_frame_nums",
-        "trajectory_enu_m", "trajectory_gcj02", "point_quality_lineage",
+        "trajectory_px",
+        "trajectory_timestamps_sec",
+        "trajectory_frame_nums",
+        "trajectory_enu_m",
+        "trajectory_gcj02",
+        "point_quality_lineage",
     ):
         combined[key] = [value for segment in group for value in segment[key]]
     combined["source_runtime_track_ids"] = runtime_ids
     return combined
 
 
-def _merge_segments(segments: list[dict], mission_start: float) -> list[dict]:
-    ordered = sorted(segments, key=lambda item: float(item["trajectory_timestamps_sec"][0]))
+def _merge_segments(
+    segments: list[dict], mission_start: float, full_sequence: bool = False
+) -> list[dict]:
+    ordered = sorted(
+        segments, key=lambda item: float(item["trajectory_timestamps_sec"][0])
+    )
     candidates = []
     for left_index, left in enumerate(ordered):
         for right_index in range(left_index + 1, len(ordered)):
@@ -507,8 +610,16 @@ def _merge_segments(segments: list[dict], mission_start: float) -> list[dict]:
         same_right = candidates_by_right[right_index]
         if same_left[0] is not candidate or same_right[0] is not candidate:
             continue
-        left_margin = math.inf if len(same_left) == 1 else evidence["score"] - same_left[1][2]["score"]
-        right_margin = math.inf if len(same_right) == 1 else evidence["score"] - same_right[1][2]["score"]
+        left_margin = (
+            math.inf
+            if len(same_left) == 1
+            else evidence["score"] - same_left[1][2]["score"]
+        )
+        right_margin = (
+            math.inf
+            if len(same_right) == 1
+            else evidence["score"] - same_right[1][2]["score"]
+        )
         if left_margin >= 0.05 and right_margin >= 0.05:
             accepted.append(candidate)
     successor = {left: (right, evidence) for left, right, evidence in accepted}
@@ -525,10 +636,12 @@ def _merge_segments(segments: list[dict], mission_start: float) -> list[dict]:
             if next_index in group_indices:
                 break
             group_indices.append(next_index)
-            evidence_rows.append({key: value for key, value in evidence.items() if key != "score"})
+            evidence_rows.append(
+                {key: value for key, value in evidence.items() if key != "score"}
+            )
         consumed.update(group_indices)
         combined = _combine_segments([ordered[item] for item in group_indices])
-        journey = _journey_from_segment(combined, mission_start)
+        journey = _journey_from_segment(combined, mission_start, full_sequence)
         journey["track_id"] = combined["track_id"]
         journey["source_runtime_track_ids"] = combined["source_runtime_track_ids"]
         journey["reid_evidence"] = evidence_rows
@@ -536,7 +649,7 @@ def _merge_segments(segments: list[dict], mission_start: float) -> list[dict]:
     for index in range(len(ordered)):
         if index not in consumed:
             combined = _combine_segments([ordered[index]])
-            journey = _journey_from_segment(combined, mission_start)
+            journey = _journey_from_segment(combined, mission_start, full_sequence)
             journey["source_runtime_track_ids"] = combined["source_runtime_track_ids"]
             journey["reid_evidence"] = []
             groups.append(journey)
@@ -579,13 +692,19 @@ def _derive_road_queues(journeys: list[dict]) -> None:
                     "evidence": {
                         "matched_lane_key": lane,
                         "matched_link_id": link,
-                        "overlapping_stopped_journeys": len({item[0]["track_id"] for item in stopped}),
+                        "overlapping_stopped_journeys": len(
+                            {item[0]["track_id"] for item in stopped}
+                        ),
                     },
                     "algorithm_version": BEHAVIOR_VERSION,
                 }
             )
             releasing = next(
-                (episode for episode in journey["episodes"] if episode["kind"] == "releasing"),
+                (
+                    episode
+                    for episode in journey["episodes"]
+                    if episode["kind"] == "releasing"
+                ),
                 None,
             )
             if releasing is not None and releasing["start_offset_ms"] >= overlap_start:
@@ -607,7 +726,22 @@ class MissionTrajectoryArchive:
         *,
         appearance_model_path: str | os.PathLike[str] | None = None,
         appearance_encoder: Callable[[list[Any]], list[list[float]]] | None = None,
+        sampling_policy: dict | None = None,
     ) -> None:
+        self.sampling_policy = (
+            {
+                **policy_from_config(sampling_policy),
+                "enabled": sampling_policy.get("enabled", True),
+            }
+            if sampling_policy is not None
+            else None
+        )
+        if (
+            self.sampling_policy is not None
+            and type(self.sampling_policy["enabled"]) is not bool
+        ):
+            raise ValueError("sampling enabled must be a boolean")
+        self.event_windows = {}
         self.spool_root = Path(spool_root).expanduser().resolve()
         self.appearance_model_path = (
             Path(appearance_model_path).expanduser().resolve()
@@ -617,7 +751,9 @@ class MissionTrajectoryArchive:
         self.appearance_encoder = appearance_encoder
 
     def _encode_appearance(self, segments: list[dict]) -> None:
-        selected = [segment for segment in segments if segment.get("appearance_crop_jpeg")]
+        selected = [
+            segment for segment in segments if segment.get("appearance_crop_jpeg")
+        ]
         if not selected:
             return
         try:
@@ -626,7 +762,10 @@ class MissionTrajectoryArchive:
 
             encoder = self.appearance_encoder
             if encoder is None:
-                if self.appearance_model_path is None or not self.appearance_model_path.is_file():
+                if (
+                    self.appearance_model_path is None
+                    or not self.appearance_model_path.is_file()
+                ):
                     return
                 from ultralytics import YOLO
 
@@ -646,9 +785,13 @@ class MissionTrajectoryArchive:
                         for output in outputs
                     ]
 
-            batch_size = max(int(os.environ.get("REPLAY_V2_APPEARANCE_BATCH_SIZE", "32")), 1)
+            self.appearance_encoder = encoder
+
+            batch_size = max(
+                int(os.environ.get("REPLAY_V2_APPEARANCE_BATCH_SIZE", "32")), 1
+            )
             for start in range(0, len(selected), batch_size):
-                batch = selected[start:start + batch_size]
+                batch = selected[start : start + batch_size]
                 crops = [
                     cv2.imdecode(
                         np.frombuffer(
@@ -691,6 +834,19 @@ class MissionTrajectoryArchive:
     ) -> dict:
         mission_dir = self._mission_dir(mission_id)
         manifest_path = mission_dir / "manifest.json"
+        if self.sampling_policy is not None:
+            self.spool_root.mkdir(parents=True, exist_ok=True)
+            marker = self.spool_root / "sampling-v2.active"
+            try:
+                fd = os.open(marker, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            except FileExistsError:
+                if marker.read_text().strip() != SAMPLING_V2:
+                    raise ValueError("unsupported existing archive data contract")
+            else:
+                with os.fdopen(fd, "w") as f:
+                    f.write(SAMPLING_V2 + "\n")
+                    f.flush()
+                    os.fsync(f.fileno())
         if manifest_path.exists():
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         else:
@@ -704,6 +860,19 @@ class MissionTrajectoryArchive:
                 "recorded_segment_count": 0,
                 "recorded_point_count": 0,
             }
+        if manifest.get("sampling_policy") != self.sampling_policy:
+            if manifest_path.exists():
+                raise ValueError(
+                    "Mission sampling policy is immutable; create a new Mission"
+                )
+            manifest["sampling_policy"] = self.sampling_policy
+        if (
+            manifest["source_profile_id"] != source_profile_id
+            or manifest["intersection_id"] != intersection_id
+        ):
+            raise ValueError("Mission archive lineage conflict")
+        if manifest.get("status") == "sealed":
+            return manifest
         if source_timestamp_sec is not None:
             timestamp = float(source_timestamp_sec)
             manifest["observed_start_source_sec"] = min(
@@ -738,8 +907,6 @@ class MissionTrajectoryArchive:
         point_count = _validate_segment(segment)
         mission_dir = self._mission_dir(mission_id)
         segment_id = _segment_id(segment)
-        _atomic_json(mission_dir / "segments" / f"{segment_id}.json", segment)
-        manifest_path = mission_dir / "manifest.json"
         manifest = self.begin_mission(
             mission_id=mission_id,
             source_profile_id=source_profile_id,
@@ -748,17 +915,44 @@ class MissionTrajectoryArchive:
         )
         if manifest.get("status") == "sealed":
             raise ValueError("sealed mission cannot accept more segments")
+        destination = mission_dir / "segments" / f"{segment_id}.json"
+        if self.sampling_policy is not None and destination.exists():
+            old = json.loads(destination.read_text(encoding="utf-8"))
+            if json.dumps(old, sort_keys=True) != json.dumps(
+                segment, sort_keys=True, default=_json_default
+            ):
+                raise ValueError("segment identity content conflict")
+        _atomic_json(destination, segment)
+        manifest_path = mission_dir / "manifest.json"
         if segment_id not in manifest["segments"]:
             manifest["segments"].append(segment_id)
         manifest["recorded_segment_count"] = len(manifest["segments"])
-        manifest["recorded_point_count"] = sum(
-            _validate_segment(json.loads((mission_dir / "segments" / f"{item}.json").read_text(encoding="utf-8")))
-            for item in manifest["segments"]
-        )
+        counts = manifest.get("segment_point_counts")
+        if counts is None:
+            counts = {
+                item: _validate_segment(
+                    json.loads(
+                        (mission_dir / "segments" / f"{item}.json").read_text(
+                            encoding="utf-8"
+                        )
+                    )
+                )
+                for item in manifest["segments"]
+                if item != segment_id
+            }
+        counts[segment_id] = point_count
+        manifest["segment_point_counts"] = counts
+        manifest["recorded_point_count"] = sum(counts.values())
         _atomic_json(manifest_path, manifest)
-        return {"segment_id": segment_id, "point_count": point_count, "status": "incomplete"}
+        return {
+            "segment_id": segment_id,
+            "point_count": point_count,
+            "status": "incomplete",
+        }
 
-    def seal_mission(self, mission_id: str, *, termination_reason: str) -> dict:
+    def seal_mission(
+        self, mission_id: str, *, termination_reason: str, ended_at: str | None = None
+    ) -> dict:
         if termination_reason != "natural_eof":
             raise ValueError("mission can only be sealed after natural_eof")
         mission_dir = self._mission_dir(mission_id)
@@ -770,7 +964,11 @@ class MissionTrajectoryArchive:
         if manifest.get("status") == "sealed" and sealed_path.exists():
             return json.loads(sealed_path.read_text(encoding="utf-8"))
         segments = [
-            json.loads((mission_dir / "segments" / f"{segment_id}.json").read_text(encoding="utf-8"))
+            json.loads(
+                (mission_dir / "segments" / f"{segment_id}.json").read_text(
+                    encoding="utf-8"
+                )
+            )
             for segment_id in manifest["segments"]
         ]
         self._encode_appearance(segments)
@@ -782,8 +980,34 @@ class MissionTrajectoryArchive:
             [float(segment["trajectory_timestamps_sec"][-1]) for segment in segments]
             or [float(manifest.get("observed_end_source_sec", mission_start))]
         )
-        journeys = _merge_segments(segments, mission_start) if segments else []
+        journeys = (
+            _merge_segments(segments, mission_start, self.sampling_policy is not None)
+            if segments
+            else []
+        )
         _derive_road_queues(journeys)
+        fixed_end = None
+        if self.sampling_policy is not None:
+            if ended_at is None:
+                raise ValueError("v2 sampling requires the sealed envelope time basis")
+            fixed_end = datetime.fromisoformat(ended_at.replace("Z", "+00:00"))
+            if fixed_end.tzinfo is None:
+                raise ValueError("sealed envelope time must be timezone-aware")
+            basis = (
+                fixed_end - timedelta(seconds=round(mission_end - mission_start, 3))
+            ).isoformat()
+            for journey in journeys:
+                windows = [
+                    window
+                    for runtime_id in journey["source_runtime_track_ids"]
+                    for window in self.event_windows.get(str(runtime_id), [])
+                ]
+                compact_journey(
+                    journey,
+                    time_basis=basis,
+                    policy=self.sampling_policy,
+                    event_windows=windows,
+                )
         total_points = sum(journey["source_point_count"] for journey in journeys)
         world_points = sum(
             point["enu_m"] is not None
@@ -791,8 +1015,19 @@ class MissionTrajectoryArchive:
             for point in journey["points"]
         )
         retained_points = sum(len(journey["points"]) for journey in journeys)
+        coverage_denominator = retained_points
+        if self.sampling_policy is not None:
+            world_points = sum(
+                j["sampling"]["full_sequence_summary"]["world_point_count"]
+                for j in journeys
+            )
+            coverage_denominator = total_points
         sealed = {
-            **{key: value for key, value in manifest.items() if key != "segments"},
+            **{
+                key: value
+                for key, value in manifest.items()
+                if key not in {"segments", "segment_point_counts", "sampling_policy"}
+            },
             "status": "sealed",
             "termination_reason": termination_reason,
             "started_at_source_sec": mission_start,
@@ -800,24 +1035,40 @@ class MissionTrajectoryArchive:
             "duration_sec": round(mission_end - mission_start, 3),
             "source_point_count": total_points,
             "retained_point_count": retained_points,
-            "coordinate_coverage_ratio": round(world_points / retained_points, 6) if retained_points else 0.0,
+            "coordinate_coverage_ratio": round(world_points / coverage_denominator, 6)
+            if coverage_denominator
+            else 0.0,
             "journey_count": len(journeys),
             "behavior_count": sum(
                 len(journey["episodes"]) + len(journey["maneuvers"])
                 for journey in journeys
             ),
             "algorithm_versions": {
-                "sampling": SAMPLING_VERSION,
-                "speed": SPEED_VERSION,
+                "sampling": SAMPLING_V2
+                if self.sampling_policy is not None
+                else SAMPLING_VERSION,
+                "speed": "enu-linear-regression-15-ema5/v2"
+                if self.sampling_policy is not None
+                else SPEED_VERSION,
                 "behavior": BEHAVIOR_VERSION,
                 "reid": "conservative-motion-appearance/v1",
             },
             "accuracy": {
                 key: "not_evaluated"
-                for key in ("idf1", "hota", "id_switch", "position_rmse", "speed_mae", "reid_accuracy")
+                for key in (
+                    "idf1",
+                    "hota",
+                    "id_switch",
+                    "position_rmse",
+                    "speed_mae",
+                    "reid_accuracy",
+                )
             },
             "journeys": journeys,
         }
+        if fixed_end is not None:
+            sealed["ended_at_utc"] = fixed_end.isoformat()
+            sealed["algorithm_versions"]["aggregate"] = "replay-v2-aggregate/v2"
         _atomic_json(sealed_path, sealed)
         for segment_id, segment in zip(manifest["segments"], segments):
             if segment.pop("appearance_crop_jpeg", None) is not None:
@@ -827,12 +1078,38 @@ class MissionTrajectoryArchive:
         _atomic_json(manifest_path, manifest)
         return sealed
 
+    def cleanup_full_segments(self, mission_id):
+        if self.sampling_policy is None:
+            return
+        directory = self._mission_dir(mission_id)
+        manifest = json.loads((directory / "manifest.json").read_text())
+        if manifest.get("status") != "sealed":
+            raise ValueError("cannot clean incomplete raw segments")
+        sealed = json.loads((directory / "sealed.json").read_text())
+        if (
+            manifest.get("sampling_policy") != self.sampling_policy
+            or sealed.get("algorithm_versions", {}).get("sampling") != SAMPLING_V2
+        ):
+            raise ValueError(
+                "raw cleanup only applies to this v2 policy, never legacy archives"
+            )
+        for segment_id in manifest["segments"]:
+            if not re.fullmatch("[0-9a-f]{24}", segment_id):
+                raise ValueError("invalid owned segment cleanup identity")
+            path = directory / "segments" / (segment_id + ".json")
+            if path.is_symlink():
+                raise ValueError("refusing symlinked raw segment")
+            path.unlink(missing_ok=True)
+
     def load_mission(self, mission_id: str) -> dict:
         mission_dir = self._mission_dir(mission_id)
         manifest_path = mission_dir / "manifest.json"
         if not manifest_path.exists():
             raise FileNotFoundError(f"mission archive not found: {mission_id}")
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        if manifest.get("status") == "sealed" and (mission_dir / "sealed.json").exists():
+        if (
+            manifest.get("status") == "sealed"
+            and (mission_dir / "sealed.json").exists()
+        ):
             return json.loads((mission_dir / "sealed.json").read_text(encoding="utf-8"))
         return manifest

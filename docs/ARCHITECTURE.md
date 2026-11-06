@@ -1,4 +1,32 @@
+> 2026-11-04 .2接收端性能修复：磁盘完整轨迹配128点有界尾部缓存，旧水位回查；同增量包验证后批量落盘，journal/ACK/双EOF不变。关联类别惩罚按64行批量计算。详见FPS_RECEIVER_REGRESSION_20261104.md；现场3 FPS未验收。
+
+> 2026-11-04 本机优化：P2通过freeze_egress_views一次冻结元数据，再分P3最小显示与P4原业务事实视图；P4在P3交接前已同步编码成独立bytes。保持原水位恢复/ACK/双EOF。位置门控仅批量执行同一二维计算，数值边界/异常保留原路径。详见FPS_OPTIMIZATION_LOCAL_VALIDATION_20261104.md。
+
+> 2026-11-04 原生全量包增加console/html、nginx.conf与容器入口资源；Console容器/服务继续使用现场镜像，traffic在原配置快照后自动只读挂载本版资源，运行配置在容器可写目录生成。失败恢复原挂载/入口；Platform及检测器仍原生运行，数据库/消息契约与迁移门禁保持。
+
 # ARCHITECTURE.md — TrafficAnalyzer 系统架构
+
+## 2026-11-03 Mac三进程显示边界有界化
+
+Mac/MPS仍为reader、tracker、show三个worker。tracker完成全部业务计算、GeoJSON与Kafka/归档后，通过PipelineEgress.freeze_display_frame创建独立FrameElement显示快照，沿用图像共享内存及EOF。只复制ShowNode需要的轨迹ID、道路/速度标签、成熟资格、30点像素尾迹及显示association字段；保留帧级冲突/执法待发信封。分析端完整历史及归档不裁剪。四worker的通用freeze_frame仍保留统计所需元数据与坐标尾部；display_only仅供已完成分析的显示边界。详见LOCAL_FPS_REGRESSION_20261103.md。
+
+
+## 2026-11-03 生产四进程与增量/快照边界
+
+main_optimized.py按PIPELINE_EGRESS_ENABLED启用第四worker；生产原生新包默认true，Mac/MPS默认false。services/PipelineEgress.py负责tracker/show两路哈希序号包、fsync持久ACK、每批1024新增点/32批有界队列、事实与证据合流及双EOF。elements/RenderSnapshot.py为独立只读尾迹视图；显示帧不引用实时TrackElement，图像仍走原共享内存。nodes/EgressEvidenceNode.py在图像owner中编码原图/真实Show输出，仅传内容地址描述；第四进程验证文件/hash后发布。后台任何worker故障导致整管道失败，未确认数据不宣称送达，保留journal/incomplete并清理本管道Linux nonce前缀SHM；正常结束须等待归档和关键发送排空。
+
+历史event-faithful/v2在第四进程先完整推导速度/事件/排队，再受时间插值误差约束采样。均值/P85用同UTC五分钟桶的完整速度精确频数摘要，复用TrackEvent.sampling JSON，平台聚合不再读取稀疏点速度，回放接口过滤内部摘要。仅新任务固化策略；消费异常优先最新的策略不变。完整行为与验证见FOUR_PROCESS_SAMPLING_20261103.md。
+
+
+## 2026-11-03 完整轨迹IPC标量规范化
+
+FrameElement的检测框在GroundTrajectoryTrackerNode边界输出Python int，TrackerInfoUpdateNode保留原运算顺序并将持久像素历史结果存为Python float，避免每帧完整历史在Queue feeder中逐NumPy标量归约。没有裁剪历史或改变三进程/数据契约、ID、H/ENU计算和质量门禁。进程级CPU包含后台feeder，阶段名不等同CPU归属；现场日志与队列对照见NATIVE_IPC_PERFORMANCE_20261103.md。
+
+
+## 2026-11-03 生产Platform与检测器原生运行
+
+新的完整原生ARM64包以独立Python3.11/CANN9用户态运行库启动Platform，Platform继续通过LocalPipelineExecutor拉起main_optimized.py三进程管道。native-platform控制器保存现场私有配置、原应用/Console代理快照，使用Linux subreaper监督进程及所有带本包归属标识的检测子进程；跨session停止及崩溃残留检查避免双写。Console仍在原容器，通过共享bridge访问宿主Platform；检测MJPEG只监听127.0.0.1，鉴权API/WS/媒体合同不变。数据库地址每次启动重新解析并核验实际DB_NAME/DB_SCHEMA和两个head；生产普通启动不执行DDL。详见NATIVE_DEPLOYMENT.md；现场NPU与性能待评估。
+
 
 ## 2026-10-20 用户授权的宿主 Platform 对照排查
 
@@ -1141,3 +1169,19 @@ ARM64驱动补充：用户提供`deploy/highgo-reference/libpq.so.5`，已核实
 上述更早部署记录为历史拓扑。`doris_connection.py` 复用 PyMySQL 有界 SELECT、启用版本读取和 Shapely WKT解码；
 `YcxRoadImporter` 保持既有 API/候选几何契约，`DashboardSituationReadModel` 按共同月份/道路版本聚合指标。
 本机 road9/UAV事实、生产瀚高应用数据读写和原生MPS不变，生产关闭路网开关仍有效。
+
+
+## 2026-11-04 增量轨迹与固定Topic改造（工作中）
+
+用户已授权离场片段入库、短窗口重识别关联、手动停止保存中断轨迹、轨迹及必要任务事实的定向补偿，以及按业务类型固定Kafka Topic。该授权更新此前按相机/SourceProfile分Topic及所有消息异常跳过不补的约束；其他历史区间仍不自动补回。实现、验证、未完成项及本机隔离清理事故见[INCREMENTAL_TRAJECTORIES_20261104.md](INCREMENTAL_TRAJECTORIES_20261104.md)。当前未完成整套验收，未发布新包。
+
+
+## 2026-11-04 增量轨迹后续工程验证
+
+运行期短窗口关系、按受影响窗口的分页聚合、源片段摘要对账、生产路网关闭四进程的ACK后历史裁剪、GeoJSON落盘导出及固定Topic显式初始化/只读检查已实现。Replay迁移head更新为20261104_rv2_0007，所有运行态需验证共享回执/Replay迁移。普通启动不DDL、不创建Topic；旧数据与旧Topic保留。验证范围、历史隔离清理事故和未完成的现场/故障验收详见[增量轨迹进度](INCREMENTAL_TRAJECTORIES_20261104.md)；完整包按2026.11.04.2验收候选交付，不宣称已达到现场30%FPS目标。
+
+### 2026-11-05 性能审计边界
+
+`PIPELINE_PERF_AUDIT=1`为显式诊断模式，worker按30秒窗口记录阶段总耗时/计数及最近最多4096个样本的P50/P95/P99；详细SQL/JSON/journal刷盘和合流探针默认关闭。`EGRESS_STATUS.committed`为P4本地业务处理结束水位，tracker/show仍为输入水位，Kafka实际交付和PG事务回执独立。见[FPS_REGRESSION_AUDIT_20261105.md](FPS_REGRESSION_AUDIT_20261105.md)。
+
+2026-11-05页面抖动补充：P4轨迹索引页缓存预算显式配置为`pipeline.egress_sqlite_cache_kib`，默认16384KiB、上限65536KiB，2048可恢复之前预算；仅新连接生效，持久ACK/journal/SQLite同步策略不变。预算不等于整个RSS硬上限。实测及未验收项见[FPS_PAGE_FLUCTUATION_20261105.md](FPS_PAGE_FLUCTUATION_20261105.md)。

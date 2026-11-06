@@ -16,7 +16,7 @@ for candidate in Path(__file__).resolve().parents:
         sys.path[:0] = [str(candidate), str(candidate / "platform")]
         break
 
-from app.core.deployment_diagnostics import DiagnosticError, Report, explain
+from app.core.deployment_diagnostics import DiagnosticError, Report, explain as explain  # noqa: E402 - private app path set above
 
 _step = "initialization"
 
@@ -231,9 +231,25 @@ async def kafka_checks(report, settings):
         async def metadata():
             await consumer.start()
             topics = await consumer.topics()
+            # Native deployments must reach advertised endpoints, not just bootstrap.
+            if os.environ.get("TRAFFIC_NATIVE_OWNER"):
+                import socket
+                brokers = list(consumer._client.cluster.brokers())
+                require(bool(brokers), "KAFKA_ADVERTISED_EMPTY", "Kafka未返回broker地址", "核对Kafka元数据与监听配置。")
+                for broker in brokers:
+                    def probe(broker=broker):
+                        with socket.create_connection((broker.host, broker.port), timeout=5):
+                            pass
+                    try:
+                        await asyncio.to_thread(probe)
+                    except OSError:
+                        raise DiagnosticError("KAFKA_ADVERTISED_UNREACHABLE", "宿主无法访问Kafka公布的broker地址",
+                                              "核对advertised.listeners的宿主DNS、路由和端口；不修改认证或消费offset。") from None
             return {"visible_topics": len(topics), "security_protocol": settings.kafka_security_protocol,
                     "sasl_mechanism": settings.kafka_sasl_mechanism, "publishes_messages": False}
         await report.arun("kafka.authentication_and_metadata", metadata, timeout=30)
+        from utils_local.kafka_topic_preflight import check_fixed_topics
+        await report.arun("kafka.fixed_topics", lambda: asyncio.to_thread(check_fixed_topics,settings.kafka_bootstrap,settings.kafka_security_options), timeout=30)
         report.add("kafka.business_acl", "warning", code="KAFKA_ACL_NOT_EVALUATED",
                    title="只读预检不证明发布、事务及消费者组ACL", action="按Topic/Group清单授权，并在真实任务验收；不会用发测试业务消息验证权限。")
     except Exception as exc:
@@ -278,8 +294,8 @@ def model_checks(report):
             device = int(os.getenv("ASCEND_DEVICE_ID", "0"))
         except ValueError:
             raise DiagnosticError("CONFIG_ASCEND_DEVICE", "ASCEND_DEVICE_ID不是整数", "按设备映射填写非负设备号。") from None
-        require(device >= 0 and Path(f"/dev/davinci{device}").exists(), "ASCEND_DEVICE_MISSING", "检测设备没有映射到容器",
-                "核对ASCEND_DEVICE_ID、ASCEND_DAVINCI_DEVICE和宿主机npu-smi。", {"device_id": device})
+        require(device >= 0 and Path(f"/dev/davinci{device}").exists(), "ASCEND_DEVICE_MISSING", "宿主昇腾设备不可见" if os.environ.get("TRAFFIC_NATIVE_OWNER") else "检测设备没有映射到容器",
+                "核对宿主驱动、设备权限、ASCEND_DEVICE_ID和npu-smi。" if os.environ.get("TRAFFIC_NATIVE_OWNER") else "核对ASCEND_DEVICE_ID、ASCEND_DAVINCI_DEVICE和宿主机npu-smi。", {"device_id": device})
         return AscendDetector(manifest_path, device)
     model = report.run("ascend.device_and_model_load", load)
     if model is None:
